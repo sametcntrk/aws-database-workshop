@@ -1,6 +1,6 @@
 # Temizlik
 
-Kaynaklar silinmezse saatlik ücret sürer (en pahalıları: OpenSearch, DocumentDB, Neptune, NAT gateway'ler, InfluxDB).
+Kaynaklar silinmezse saatlik ücretlendirme devam eder. En pahalıları: OpenSearch, DocumentDB, Neptune, NAT gateway'ler ve InfluxDB.
 
 ## Eğitmen (CloudFormation)
 
@@ -8,27 +8,32 @@ Kaynaklar silinmezse saatlik ücret sürer (en pahalıları: OpenSearch, Documen
 aws cloudformation delete-stack --region eu-central-1 --stack-name dbws-workshop
 ```
 
-S3 bucket'ı stack içindeki küçük bir Lambda boşaltır, ayrıca bir şey yapmanız gerekmez. Silme 20-30 dk sürer.
+S3 bucket'ını stack içindeki küçük bir Lambda fonksiyonu boşaltır. Ayrıca bir şey yapmanız gerekmez. Silme 20-30 dakika sürer.
 
-## Katılımcı (Console) - bu sırayla
+## Katılımcı (Console)
 
-1. **Listener rule'lar ve target group'lar**: `dbws-alb` → HTTPS:443 → kuralları silin; sonra `dbws-tg-*`.
-2. **EC2 instance'lar**: `dbws-app-*` → Terminate.
-3. **Engine'ler** (paralel silebilirsiniz):
+Kaynakları bu sırayla silin. Bir kaynak silinmezse, ona bağlı başka bir kaynak hâlâ duruyordur.
+
+1. **Zero-ETL integration:** RDS → Zero-ETL integrations → `dbws-aurora-to-redshift` → Delete.
+2. **Listener rule'lar ve target group'lar:** `dbws-alb` → HTTPS:443 → kuralları silin. Sonra `dbws-tg-*` target group'larını silin.
+3. **EC2 instance'lar:** `dbws-app-*` → Terminate.
+4. **Engine'ler.** Bunları aynı anda silebilirsiniz:
    - OpenSearch domain `dbws-search`
    - DocumentDB: önce iki instance, sonra cluster `dbws-docdb` (final snapshot almayın)
    - Neptune: önce reader, sonra writer, sonra cluster `dbws-neptune`
-   - Aurora: önce reader, sonra writer, sonra cluster `dbws-aurora` (final snapshot almayın)
+   - Aurora: önce reader, sonra writer, sonra cluster `dbws-aurora` (final snapshot almayın). Sonra parametre grubu `dbws-aurora-zeroetl`.
    - Timestream InfluxDB `dbws-influxdb`
-   - ElastiCache cache `dbws-cache`, sonra user group `dbws-users`, sonra user `dbws-app`
-   - Redshift Serverless workgroup `dbws`, sonra namespace `dbws`
+   - ElastiCache: önce cache `dbws-cache`, sonra user group `dbws-users`, sonra user `dbws-app`
+   - Redshift Serverless: önce workgroup `dbws`, sonra namespace `dbws`
    - Keyspaces keyspace `dbws`
    - DynamoDB tablo `dbws-cart`
-   - S3: bucket'ı **Empty** (bütün sürümler dahil), sonra **Delete**
-4. **Subnet group'lar**: RDS `dbws-aurora`, Neptune `dbws-neptune`, DocumentDB `dbws-docdb`.
-5. **Secrets Manager**: `dbws/redshift`, `dbws/elasticache`, `dbws/influxdb`, `dbws/docdb` → Delete (en kısa bekleme 7 gün; hemen silmek için CLI `--force-delete-without-recovery`). Aurora'nın `rds!cluster-...` secret'ı cluster ile birlikte silinir.
-6. **ALB** `dbws-alb`, **Route 53** kaydı `dbworkshop`, **ACM** sertifikası.
-7. **VPC endpoint'leri** (7 adet), **NAT gateway'ler** (3 adet), sonra **Elastic IP'leri** Release edin.
-8. **Security group'lar** `dbws-sg-*` (önce birbirine referans veren kuralları silmeniz gerekebilir).
-9. **VPC** `dbws-vpc` → Delete VPC (subnet'leri, route table'ları ve internet gateway'i birlikte siler).
-10. **IAM**: `dbws-app-*-eu-central-1` rolleri ve instance profile'ları; launch template `dbws-engine-app`.
+   - S3: bucket'ı **Empty** ile bütün sürümleriyle boşaltın, sonra **Delete**
+5. **Subnet group'lar:** RDS `dbws-aurora`, Neptune `dbws-neptune`, DocumentDB `dbws-docdb`.
+6. **Secrets Manager:** `dbws/admin`, `dbws/redshift`, `dbws/elasticache`, `dbws/influxdb`, `dbws/docdb` → Delete.
+   Konsoldaki en kısa bekleme süresi 7 gündür. Hemen silmek için CLI'da `--force-delete-without-recovery` kullanın.
+   Aurora'nın `rds!cluster-...` secret'ı cluster ile birlikte silinir.
+7. **ALB** `dbws-alb`, **Route 53** kaydı `dbworkshop`, **ACM** sertifikası.
+8. **VPC endpoint'leri** (7 adet) ve **NAT gateway'ler** (3 adet). Sonra **Elastic IP'leri** Release edin.
+9. **Security group'lar** `dbws-sg-*`. Birbirine referans veren kuralları önce silmeniz gerekebilir.
+10. **VPC** `dbws-vpc` → Delete VPC. Bu adım subnet'leri, route table'ları ve internet gateway'i de siler.
+11. **IAM:** `dbws-app-*-eu-central-1` rolleri ve instance profile'ları. Launch template `dbws-engine-app`.

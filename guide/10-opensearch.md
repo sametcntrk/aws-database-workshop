@@ -1,13 +1,17 @@
-# Modül 10 - OpenSearch Service (Unstructured · Text search + Geospatial)
+# Modül 10 - OpenSearch Service (Unstructured, Text search + Geospatial)
 
-**Domain dilimi:** ürün arama ve mağaza konumları. **Read:** yazım hatasına toleranslı `multi_match` (fuzziness) ve `geo_distance` (İstanbul'a 25 km).
-**Bağlantı:** HTTPS 443, OpenSearch REST API, **IAM SigV4** (fine-grained access control, master user = Engine App rolü).
+- **Sitedeki bölüm:** arama (`/search`), üst bardaki arama önerileri ve mağaza bulucu (`/stores`)
+- **Bağlantı:** HTTPS 443, OpenSearch REST API, **IAM SigV4**. Fine-grained access control açıktır, master user Engine App'in IAM rolüdür.
+- **Neden OpenSearch?** Kullanıcılar yazım hatası yapar ve Türkçe karakterleri atlar. OpenSearch metni parçalar, sonuçları alakaya göre
+  sıralar ve coğrafi mesafe sorgularını destekler.
 
-> CloudSearch yeni müşterilere kapalıdır. İnfografikte Geospatial altında Keyspaces geçer ama Keyspaces'te coğrafi sorgu yoktur; workshop OpenSearch `geo_point` kullanır.
+> CloudSearch yeni müşterilere kapalıdır. İnfografikte Geospatial altında Keyspaces geçer, ama Keyspaces'te coğrafi sorgu yoktur.
+> Workshop, OpenSearch'ün `geo_point` alanını kullanır.
 
-## 10.1 Önce IAM rolü (domain bu rolü master user olarak ister)
+## 10.1 Önce IAM rolü
 
-Modül 0 → **E2**'yi şimdi yapın: role `dbws-app-opensearch-eu-central-1`, inline policy:
+Domain, bu rolü master user olarak ister. Bu yüzden Modül 0'daki **E2** adımını şimdi yapın:
+role `dbws-app-opensearch-eu-central-1`, inline policy:
 
 ```json
 {
@@ -15,7 +19,8 @@ Modül 0 → **E2**'yi şimdi yapın: role `dbws-app-opensearch-eu-central-1`, i
   "Statement": [
     { "Effect": "Allow",
       "Action": ["es:ESHttpGet", "es:ESHttpHead", "es:ESHttpPost", "es:ESHttpPut", "es:ESHttpDelete"],
-      "Resource": "arn:aws:es:eu-central-1:<ACCOUNT_ID>:domain/dbws-search/*" }
+      "Resource": "arn:aws:es:eu-central-1:<ACCOUNT_ID>:domain/dbws-search/*" },
+    { "Effect": "Allow", "Action": "secretsmanager:GetSecretValue", "Resource": "<dbws/admin secret ARN>" }
   ]
 }
 ```
@@ -24,7 +29,7 @@ Rol ARN'ini not alın: `arn:aws:iam::<ACCOUNT_ID>:role/dbws-app-opensearch-eu-ce
 
 ## 10.2 DB security group
 
-Name `dbws-sg-db-opensearch`, Inbound: **HTTPS TCP 443**, Source `dbws-sg-app-opensearch` (önce Modül 0 → **E1**).
+Name `dbws-sg-db-opensearch`. Inbound: **HTTPS TCP 443**, kaynak `dbws-sg-app-opensearch`. Önce Modül 0'daki **E1** adımını yapın.
 
 ## 10.3 Domain
 
@@ -34,14 +39,14 @@ Name `dbws-sg-db-opensearch`, Inbound: **HTTPS TCP 443**, Source `dbws-sg-app-op
 |---|---|
 | Domain name | `dbws-search` |
 | Template | Production |
-| Deployment option | **Domain with standby kapalı**, 3-AZ |
+| Deployment option | Domain with standby **kapalı**, 3-AZ |
 | Engine version | OpenSearch **3.5** |
 | Data nodes | `r6g.large.search`, **3** node, EBS gp3 20 GiB |
 | Dedicated master nodes | açık, `m6g.large.search`, **3** node |
-| Network | **VPC access**: `dbws-vpc`, subnet'ler `dbws-data-a/b/c`, security group sadece `dbws-sg-db-opensearch` |
+| Network | **VPC access**: `dbws-vpc`, subnet'ler `dbws-data-a/b/c`, security group yalnızca `dbws-sg-db-opensearch` |
 | Fine-grained access control | açık → **Set IAM ARN as master user** → 10.1'deki rol ARN'i |
-| Access policy | **Configure domain level access policy** → JSON aşağıda |
-| Encryption | Require HTTPS, node-to-node encryption, encryption at rest: hepsi açık; TLS policy `Policy-Min-TLS-1-2-PFS-2023-10` |
+| Access policy | **Configure domain level access policy** → aşağıdaki JSON |
+| Encryption | Require HTTPS, node-to-node encryption ve encryption at rest açık. TLS policy `Policy-Min-TLS-1-2-PFS-2023-10`. |
 
 ```json
 {
@@ -55,8 +60,8 @@ Name `dbws-sg-db-opensearch`, Inbound: **HTTPS TCP 443**, Source `dbws-sg-app-op
 }
 ```
 
-Hesapta ilk VPC domain'iyse konsol `AWSServiceRoleForAmazonOpenSearchService` service-linked role'ünü kendisi oluşturur.
-Oluşturma 20-30 dk. **VPC endpoint**'i not alın: `vpc-dbws-search-xxxx.eu-central-1.es.amazonaws.com` (https:// olmadan).
+Hesaptaki ilk VPC domain'iyse konsol `AWSServiceRoleForAmazonOpenSearchService` adlı service-linked role'ü kendisi oluşturur.
+Oluşturma 20-30 dakika sürer. **VPC endpoint** değerini https:// olmadan not alın: `vpc-dbws-search-xxxx.eu-central-1.es.amazonaws.com`.
 
 ## 10.4 Engine App
 
@@ -66,17 +71,21 @@ Oluşturma 20-30 dk. **VPC endpoint**'i not alın: `vpc-dbws-search-xxxx.eu-cent
 | E2 | 10.1'de yapıldı |
 | E3 | Subnet `dbws-app-c`, IP `10.20.12.11` |
 | E4 | `dbws-tg-opensearch`, health check `/opensearch/health` |
-| E5 | Path `/opensearch`, `/opensearch/*`, öncelik **100** |
+| E5 | Path `/search`, `/stores`, `/opensearch/*`, öncelik **100** |
 
 ```bash
 ENGINE=opensearch
 URL_PREFIX=/opensearch
 AWS_REGION=eu-central-1
 AWS_DEFAULT_REGION=eu-central-1
+ADMIN_SECRET_ARN=<dbws/admin secret ARN>
 OS_HOST=<VPC endpoint>
 ```
 
 ## 10.5 Doğrulama
 
-`/opensearch/` → **Seed** (`products` indeksi `tr_folded` analyzer ile: Türkçe küçük harf + ASCII katlama; `stores` indeksi `geo_point` ile) → **Read**.
-"kablosuz kulaklik" (ı yerine i) aramasının yine de doğru ürünleri bulduğunu ve mağazaların uzaklığa göre sıralandığını görün.
+1. Admin Console'da OpenSearch satırındaki **Seed** düğmesine basın. `products` ve `stores` indeksleri oluşur.
+2. `/search` sayfasında **kulaklk (typo)** örneğine tıklayın. Yazım hatasına rağmen kulaklıklar bulunur.
+3. **Exact words** seçin ve aynı aramayı yapın. Bu kez sonuç çıkmaz.
+4. **standard** analyzer'ı seçin ve "kablosuz kulaklik" arayın. `tr_folded` analyzer'ı ı harfini i'ye çevirdiği için daha çok sonuç bulur.
+5. `/stores` sayfasında haritaya tıklayın. Seçtiğiniz yarıçap içindeki mağazalar en yakından uzağa sıralanır.

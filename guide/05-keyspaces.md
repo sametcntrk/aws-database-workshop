@@ -1,7 +1,9 @@
-# Modül 5 - Amazon Keyspaces (Semi-structured · Wide column)
+# Modül 5 - Amazon Keyspaces (Semi-structured, Wide column)
 
-**Domain dilimi:** kullanıcı aktivite akışı. **Read:** bir kullanıcının son 20 olayı (`WHERE user_id = 'C00001' LIMIT 20`).
-**Bağlantı:** CQL native protokolü, TCP 9142, TLS, IAM SigV4 (şifre yok), **Keyspaces interface endpoint** üzerinden.
+- **Sitedeki bölüm:** aktivite geçmişi (`/account/activity`) ve ürün sayfalarındaki "Recently viewed" şeridi
+- **Bağlantı:** CQL native protokolü, TCP 9142, TLS, IAM SigV4 (şifre yok). Trafik Keyspaces interface endpoint'inden geçer.
+- **Neden Keyspaces?** Her görüntüleme ve satın alma bir olaydır. Olay sayısı çok yüksektir ve hep aynı anahtarla okunur:
+  "bu ziyaretçinin son olayları". Keyspaces bu olayları ziyaretçiye göre gruplar ve zamana göre sıralı saklar.
 
 ## 5.1 Keyspace ve tablo
 
@@ -18,20 +20,23 @@
 | Clustering columns | `event_time` **DESC**, `event_id` ASC |
 | Capacity mode | On-demand |
 | Point-in-time recovery | açık |
+| Time to Live | açık, varsayılan süre **604800 saniye** (7 gün) |
 
-Aynı tablo CQL ile (CQL editor):
+Aynı tabloyu CQL editor ile de oluşturabilirsiniz:
 
 ```sql
 CREATE TABLE dbws.activity_by_user (
   user_id text, event_time timestamp, event_id uuid,
   event_type text, product_id text, detail text,
   PRIMARY KEY ((user_id), event_time, event_id)
-) WITH CLUSTERING ORDER BY (event_time DESC, event_id ASC);
+) WITH CLUSTERING ORDER BY (event_time DESC, event_id ASC)
+  AND default_time_to_live = 604800
+  AND CUSTOM_PROPERTIES = {'ttl': {'status': 'enabled'}};
 ```
 
 ## 5.2 Engine App
 
-DB security group yok. Trafik Modül 0'daki `dbws-vpce-keyspaces` endpoint'inden geçer (`dbws-sg-vpce` 9142'ye izin verir).
+DB security group yoktur. Trafik Modül 0'daki `dbws-vpce-keyspaces` endpoint'inden geçer. `dbws-sg-vpce` grubu 9142 portuna izin verir.
 
 | Adım | Değer |
 |---|---|
@@ -39,7 +44,7 @@ DB security group yok. Trafik Modül 0'daki `dbws-vpce-keyspaces` endpoint'inden
 | E2 role | `dbws-app-keyspaces-eu-central-1` |
 | E3 | Subnet `dbws-app-a`, IP `10.20.10.13` |
 | E4 | `dbws-tg-keyspaces`, health check `/keyspaces/health` |
-| E5 | Path `/keyspaces`, `/keyspaces/*`, öncelik **50** |
+| E5 | Path `/account/activity`, `/keyspaces/*`, öncelik **50** |
 
 ```json
 {
@@ -50,23 +55,29 @@ DB security group yok. Trafik Modül 0'daki `dbws-vpce-keyspaces` endpoint'inden
                    "arn:aws:cassandra:eu-central-1:<ACCOUNT_ID>:/keyspace/dbws/table/activity_by_user"] },
     { "Effect": "Allow", "Action": "cassandra:Select",
       "Resource": "arn:aws:cassandra:eu-central-1:<ACCOUNT_ID>:/keyspace/system*" },
-    { "Effect": "Allow", "Action": ["ec2:DescribeNetworkInterfaces", "ec2:DescribeVpcEndpoints"], "Resource": "*" }
+    { "Effect": "Allow", "Action": ["ec2:DescribeNetworkInterfaces", "ec2:DescribeVpcEndpoints"], "Resource": "*" },
+    { "Effect": "Allow", "Action": "secretsmanager:GetSecretValue", "Resource": "<dbws/admin secret ARN>" }
   ]
 }
 ```
 
-Son iki izin, sürücünün VPC endpoint üzerinden bağlanırken `system.peers` tablosunu doldurabilmesi içindir.
+`ec2:Describe...` izinleri, sürücünün VPC endpoint üzerinden bağlanırken `system.peers` tablosunu doldurabilmesi içindir.
 
 ```bash
 ENGINE=keyspaces
 URL_PREFIX=/keyspaces
 AWS_REGION=eu-central-1
 AWS_DEFAULT_REGION=eu-central-1
+ADMIN_SECRET_ARN=<dbws/admin secret ARN>
 KEYSPACE=dbws
 TABLE_NAME=activity_by_user
 ```
 
 ## 5.3 Doğrulama
 
-`/keyspaces/` → **Seed** → **Read**. CQL editor'de `WHERE` olmadan `SELECT` deneyin; sonra partition anahtarıyla deneyin.
-Keyspaces `TRUNCATE` desteklemez: Seed eski veriyi partition partition `DELETE` ile siler.
+1. Admin Console'da Keyspaces satırındaki **Seed** düğmesine basın. Persona'ların geçmiş olayları yazılır.
+2. Birkaç ürün sayfası açın, sonra `/account/activity` sayfasına gelin. Gezdiğiniz ürünler en yeniden en eskiye sıralı görünür.
+3. **My persona (seeded)** seçin. Persona'nızın geçmişini görün.
+4. **LOCAL_ONE** seçin. Bu okuma üç kopyadan yalnızca birini okur ve yarı maliyetlidir.
+5. **Start the burst** düğmesine basın. Yeni bir on-demand tablo kapasitesini adım adım artırır.
+   Bu yüzden bazı yazmalar geri çekilerek yeniden denenir. Panelde kaç yazmanın yeniden denendiğini görün.

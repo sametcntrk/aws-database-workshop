@@ -1,7 +1,8 @@
-# Modül 4 - ElastiCache Serverless Valkey (Semi-structured · In-memory)
+# Modül 4 - ElastiCache Serverless Valkey (Semi-structured, In-memory)
 
-**Domain dilimi:** oturumlar ve liderlik tablosu. **Read:** `ZREVRANGE ... 0 9 WITHSCORES` ve TTL'li oturum hash'i.
-**Bağlantı:** RESP protokolü, TCP 6379 (okuma için 6380), TLS, ACL kullanıcısı `dbws-app` (şifre `dbws/elasticache` secret'ında).
+- **Sitedeki bölüm:** flaş indirim (`/deals`), canlı liderlik tablosu (`/admin/live`) ve her sayfadaki oturum kaydı
+- **Bağlantı:** RESP protokolü, TCP 6379 (okuma için 6380), TLS. ACL kullanıcısı `dbws-app`, şifresi `dbws/elasticache` secret'ında.
+- **Neden ElastiCache?** Veri bellekte durur ve komutlar mikrosaniyeler sürer. Sayaçlar ve sıralı listeler gibi canlı veriler için uygundur.
 
 ## 4.1 Secret
 
@@ -20,19 +21,18 @@ echo "$PW"
 
 | Alan | Değer |
 |---|---|
-| User ID | `dbws-app` |
-| User name | `dbws-app` |
+| User ID ve User name | `dbws-app` |
 | Engine | **Valkey** |
 | Authentication mode | Password: 4.1'deki şifre |
 | Access string | `on ~* +@all -@dangerous` |
 
 **User groups → Create user group**: User group ID `dbws-users`, Engine **Valkey**, Users: `dbws-app`.
 
-> Valkey'de "default" kullanıcı zorunlu değildir ve şifresiz kullanıcıya izin verilmez.
+> Valkey'de "default" adlı bir kullanıcı zorunlu değildir. Valkey, şifresiz kullanıcıya izin vermez.
 
 ## 4.3 DB security group
 
-Name `dbws-sg-db-elasticache`, Inbound: **TCP 6379** ve **TCP 6380**, Source `dbws-sg-app-elasticache`.
+Name `dbws-sg-db-elasticache`. Inbound: **TCP 6379** ve **TCP 6380**, kaynak `dbws-sg-app-elasticache`.
 
 ## 4.4 Serverless cache
 
@@ -42,12 +42,11 @@ Name `dbws-sg-db-elasticache`, Inbound: **TCP 6379** ve **TCP 6380**, Source `db
 |---|---|
 | Name | `dbws-cache` |
 | Engine version | 8 |
-| VPC / Subnets | `dbws-vpc`, `dbws-data-a`, `dbws-data-b`, `dbws-data-c` |
-| Security groups | sadece `dbws-sg-db-elasticache` |
+| VPC ve subnet'ler | `dbws-vpc`, `dbws-data-a`, `dbws-data-b`, `dbws-data-c` |
+| Security groups | yalnızca `dbws-sg-db-elasticache` |
 | Access control | **User group access control list** → `dbws-users` |
-| Encryption | in transit zorunlu (Serverless'ta her zaman açık) |
 
-Oluşturma 3-5 dk. **Endpoint**'i not alın (`dbws-cache-xxxx.serverless.euc1.cache.amazonaws.com`, port 6379).
+Oluşturma 3-5 dakika sürer. **Endpoint** değerini not alın (port 6379).
 
 ## 4.5 Engine App
 
@@ -57,13 +56,14 @@ Oluşturma 3-5 dk. **Endpoint**'i not alın (`dbws-cache-xxxx.serverless.euc1.ca
 | E2 role | `dbws-app-elasticache-eu-central-1` |
 | E3 | Subnet `dbws-app-b`, IP `10.20.11.13` |
 | E4 | `dbws-tg-elasticache`, health check `/elasticache/health` |
-| E5 | Path `/elasticache`, `/elasticache/*`, öncelik **40** |
+| E5 | Path `/deals`, `/admin/live`, `/elasticache/*`, öncelik **40** |
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
-    { "Effect": "Allow", "Action": "secretsmanager:GetSecretValue", "Resource": "<dbws/elasticache secret ARN>" }
+    { "Effect": "Allow", "Action": "secretsmanager:GetSecretValue", "Resource": "<dbws/elasticache secret ARN>" },
+    { "Effect": "Allow", "Action": "secretsmanager:GetSecretValue", "Resource": "<dbws/admin secret ARN>" }
   ]
 }
 ```
@@ -73,6 +73,7 @@ ENGINE=elasticache
 URL_PREFIX=/elasticache
 AWS_REGION=eu-central-1
 AWS_DEFAULT_REGION=eu-central-1
+ADMIN_SECRET_ARN=<dbws/admin secret ARN>
 CACHE_HOST=<cache endpoint>
 CACHE_PORT=6379
 CACHE_SECRET_ARN=<dbws/elasticache secret ARN>
@@ -80,4 +81,9 @@ CACHE_SECRET_ARN=<dbws/elasticache secret ARN>
 
 ## 4.6 Doğrulama
 
-`/elasticache/` → **Seed** → **Read**. Read'i birkaç dakika arayla tekrarlayın: oturumun kalan TTL'i azalır; 1 saat sonra oturum kendiliğinden silinir.
+1. Admin Console'da ElastiCache satırındaki **Seed** düğmesine basın. Liderlik tablosu dolar ve 50 adetlik flaş indirim başlar.
+2. `/deals` sayfasında **Buy one now** düğmesine basın. Panelde `DECR` komutunu görün.
+3. **Start the rush** düğmesine önce **Atomic DECR**, sonra **Read, then write** seçiliyken basın.
+   İkinci yöntemde mağaza, elinde olmayan ürünleri de satar. Bu bir yarış durumudur (race condition).
+4. Oturum bölümünde TTL'i 30 saniye yapın ve oturumu okuyun. TTL değeri azalır, sıfırda oturum silinir.
+5. `/admin/live` sayfasını açık bırakın ve başka bir sekmede sipariş verin. Persona'nız 5 saniye içinde tabloda yükselir.

@@ -48,7 +48,7 @@ SLOT = [20, 190, 360, 530, 700]          # x of 120px containers inside a subnet
 SUB_W = 1040
 AZ_W = SUB_W + 40
 AZ_X = [VPC_X + 40 + i * (AZ_W + 40) for i in range(3)]
-PUB_H, GAP1, APP_H, GAP2, DATA_H = 260, 120, 230, 70, 250
+PUB_H, GAP1, APP_H, GAP2, DATA_H = 300, 120, 230, 70, 250
 Y_PUB = AZ_Y + 40
 Y_APP = Y_PUB + PUB_H + GAP1
 Y_DATA = Y_APP + APP_H + GAP2
@@ -103,6 +103,12 @@ PROTO = {
     "s3": "HTTPS 443 · S3 API<br>IAM SigV4",
     "keyspaces": "CQL native · TCP 9142<br>TLS · IAM SigV4",
 }
+# Storefront paths per Engine App (same as cloudformation/src/gen_template.py PATHS); the ALB default goes to DocumentDB
+SHOP_PATHS = {
+    "aurora": ["/checkout", "/orders", "/admin/orders"], "redshift": ["/admin/reports"], "dynamodb": ["/cart"],
+    "elasticache": ["/deals", "/admin/live"], "keyspaces": ["/account/activity"], "influxdb": ["/admin/ops"],
+    "neptune": ["/admin/graph"], "docdb": ["/", "/c/*", "/p/*", "/admin"], "s3": ["/seller"], "opensearch": ["/search", "/stores"],
+}
 PASSWORD_APPS = ["aurora", "docdb", "elasticache", "redshift", "influxdb"]   # read a secret at start
 IAM_APPS = ["neptune", "opensearch"]                                          # IAM icon on the app -> engine arrow
 
@@ -116,7 +122,7 @@ def rt(cid, name, rows, x, y, w=270, h=None, parent="1", note=""):
     trs = "".join(f"<tr><td style='padding-right:10px'>{d}</td><td>→ {t}</td></tr>" for d, t in rows)
     body = (f"<b>Route table: {name}</b>" + (f"<br><i>{note}</i>" if note else "")
             + f"<table style='font-size:10px;margin-top:3px'>{trs}</table>")
-    h = h or (34 + 15 * len(rows) + (14 * (1 + len(note) // 44) if note else 0))
+    h = h or (44 + 15 * len(rows) + (14 * (1 + len(note) // 44) if note else 0))
     vertex(cid, body, "rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;fontSize=10;spacing=6;fillColor=none;"
            "strokeColor=#8C4FFF;dashed=1;" + F, x, y, w, h, parent=parent)
 
@@ -265,7 +271,7 @@ def title_block(t, s, width):
 
 def page_architecture():
     cells.clear()
-    title_block("AWS Database Workshop - one Engine App per data type (Frankfurt)",
+    title_block("Lale Market on AWS - ten databases behind one shop (Frankfurt)",
                 f"https://{DOMAIN}/&lt;engine&gt;/ → one HTTPS ALB → ten EC2 Engine Apps. Each app seeds its own e-commerce data into its own Engine, "
                 "reads it back and shows both on a web page.", TOTAL_W)
     group("aws-cloud", "AWS Cloud", "cloud", CLOUD_X, CLOUD_Y, CLOUD_W, CLOUD_H)
@@ -317,14 +323,15 @@ def page_architecture():
     # the ALB is one resource with a node in each public subnet; drawn once in AZ-b
     svc("alb", alb_x, Y_PUB + 40, "net", "application_load_balancer", "dbws-alb (HTTPS 443)",
         f"node b · {ALB_IPS[1]}", "Load balancer", res=False)
-    rules = "".join(f"<tr><td>{prio}</td><td>/{eid}/*</td><td>tg-{eid}</td><td>{lab} App {ip}:8000</td></tr>"
+    rules = "".join(f"<tr><td>{prio}</td><td>{', '.join(SHOP_PATHS[eid] + [f'/{eid}/*']) if eid != 'docdb' else '/docdb/*'}</td>"
+                    f"<td>tg-{eid}</td><td>{lab} App {ip}:8000</td></tr>"
                     for eid, lab, _, _, ip, prio in sorted(APPS, key=lambda a: a[5]))
     vertex("alb-rules", f"<b>ALB listener HTTPS :443 → path rules</b> <i>(HTTP :80 redirects to 443)</i>"
            "<table style='font-size:10px;margin-top:4px' cellpadding='1'>"
            "<tr style='color:#545B64'><td><b>prio</b></td><td><b>path</b></td><td><b>target group</b></td><td><b>target (EC2 IP:port)</b></td></tr>"
-           f"{rules}<tr><td>default</td><td>/</td><td>fixed-response</td><td>Dashboard HTML</td></tr></table>",
+           f"{rules}<tr><td>default</td><td>/, /c/*, /p/*, /admin, others</td><td>tg-docdb</td><td>DocumentDB App {APP['docdb'][4]}:8000</td></tr></table>",
            "rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;fontSize=10;spacing=6;fillColor=none;strokeColor=#8C4FFF;" + F,
-           ax(1, 3), Y_PUB + 24, 500, 228)
+           ax(1, 3) - 20, Y_PUB + 24, 540, 262)
     # Keyspaces interface endpoint next to the Keyspaces App; gateway endpoints under the DynamoDB and S3 Apps
     small_svc("vpce-ks", ax(0, 2), Y_DATA + 40, "net", "endpoints", "Keyspaces", f"{KS_ENI} (+ ENIs b, c)", "Interface endpoint")
     small_svc("gwe-ddb", ax(0, 0), Y_GWE, "net", "endpoints", "DynamoDB", "route target in dbws-rt-app-*", "Gateway endpoint")
@@ -332,7 +339,7 @@ def page_architecture():
 
     # ---------------- regional services (outside the VPC)
     note("reg-title", "<b>Regional services outside the VPC</b> - reached only through VPC endpoints, never through the NAT gateway",
-         ax(0, 3), Y_REG - 34, 900, 20, color="#00A4A6", size=12)
+         ax(0, 3), Y_REG - 40, 900, 30, color="#00A4A6", size=12)
     svc("ddb", ax(0, 0), Y_REG, "db", "dynamodb", "DynamoDB", "dbws-cart", "Key-value DB", res=True)
     svc("s3", ax(0, 1), Y_REG, "storage", "s3", "Amazon S3", "dbws-images-*", "Object store", res=True)
     svc("keyspaces", ax(0, 2), Y_REG, "db", "keyspaces", "Keyspaces", "dbws.activity_by_user", "Wide-column DB", res=True)
@@ -369,10 +376,11 @@ def page_architecture():
             tx = sx
         else:
             edge(f"e-alb-{eid}", "alb", f"app-{eid}", C_IN, ex=(exx, 1), en=(0.5, 0), pts=[(sx, lane), (tx, lane)])
+        label = f"<b>{' '.join(SHOP_PATHS[eid][:2])}</b>"
         if eid == "dynamodb":     # the orange NAT line runs on the right of this arrow
-            note(f"path-{eid}", f"<b>/{eid}/*</b>", tx - 88, Y_APP + 6, 84, 16, color=C_IN, align="right")
+            note(f"path-{eid}", label, tx - 88, Y_APP + 6, 84, 16, color=C_IN, align="right")
         else:
-            note(f"path-{eid}", f"<b>/{eid}/*</b>", tx + 5, Y_APP + 6, 120, 16, color=C_IN)
+            note(f"path-{eid}", label, tx + 5, Y_APP + 6, 150, 16, color=C_IN)
     badge("step-s1-4c", "4c", alb_x - 82, Y_PUB + 168, B_S1)
 
     # Engine App -> data (vertical, protocol label on the right of the line, step badge above the target)
@@ -384,6 +392,14 @@ def page_architecture():
         badge(f"step-s1-5d-{eid}", "5d", cx + 6, Y_DATA + 8, B_S1)
         if eid in IAM_APPS:
             iam(f"iam-{eid}", cx - 13, Y_APP + APP_H + 30)
+    # Aurora -> Redshift zero-ETL integration (Engine to Engine; no Engine App takes part)
+    lane_z = Y_DATA + DATA_H + 15
+    aur_cx, red_cx = ax(0, 3) + 60, ax(2, APP["redshift"][3]) + 60
+    edge("e-zeroetl", "db-aurora", "db-redshift", "#8C4FFF", ex=(0.5, 1), en=(0.5, 1), both=False, dashed=True, width=2,
+         pts=[(aur_cx, lane_z), (red_cx, lane_z)])
+    badge("step-s1-7e", "7e", aur_cx + 8, lane_z - 32, B_S1)
+    note("zeroetl-label", "<b>zero-ETL integration</b>: Aurora change data → Redshift aurora_live, within seconds",
+         ax(1, 0), lane_z - 26, 620, 26, color="#8C4FFF")
     # endpoint -> regional service (6-Con-D), IAM checked by the service
     for src, tgt, slot in (("gwe-ddb", "ddb", 0), ("gwe-s3", "s3", 1), ("vpce-ks", "keyspaces", 2)):
         cx = ax(0, slot) + 60
@@ -428,6 +444,7 @@ def page_architecture():
         ("4c", "ALB path rule to Engine App", "The listener rule matches the path and forwards to that app's target group: /dynamodb/* → tg-dynamodb → DynamoDB App 10.20.10.11:8000. The ALB opens Con-C (HTTP 8000). Cross-zone is on: any ALB node reaches any app. sg-app-&lt;engine&gt; allows 8000 only from sg-alb."),
         ("5d", "Engine App to its Engine", "The app opens Con-D to its own Engine only, with the protocol written on the arrow (PostgreSQL wire, MongoDB wire, RESP, CQL, HTTPS API). Each engine SG allows its port only from that one app's SG. TLS everywhere."),
         ("6d", "Through a VPC endpoint", f"DynamoDB and S3: dbws-rt-app-a pl-dynamodb / pl-s3 → gateway endpoint (no ENI, no IP). Keyspaces: cassandra.eu-central-1.amazonaws.com resolves to {KS_ENI} (interface endpoint ENI a private IP). The service checks the request against the app's IAM role (SigV4)."),
+        ("7e", "Aurora to Redshift (zero-ETL)", "The zero-ETL integration copies every committed change of the Aurora tables to the Redshift database aurora_live. No Engine App takes part, and no pipeline code exists. The sales report reads the new order within seconds."),
     ]
     s2 = [
         ("1a", "Engine App to NAT GW (boot)", f"UserData clones the Engine App code and installs packages: Con-A from 10.20.10.11 (DynamoDB App private IP) to {GH_IP}:443 (github.com, example). dbws-rt-app-a 0/0 → NAT GW a. SNAT by NAT GW: src → {NAT_IPS[0]} (NAT GW a private IP)."),
@@ -448,7 +465,8 @@ def page_architecture():
                  "<b>Connection A (Con-A)</b> = browser ↔ Route 53 (DNS)<br>"
                  "<b>Connection B (Con-B)</b> = browser ↔ ALB (the ALB terminates TLS)<br>"
                  "<b>Connection C (Con-C)</b> = ALB ↔ Engine App (new connection)<br>"
-                 "<b>Connection D (Con-D)</b> = Engine App ↔ its Engine (new connection)",
+                 "<b>Connection D (Con-D)</b> = Engine App ↔ its Engine (new connection)<br>"
+                 "<b>Connection E (Con-E)</b> = Aurora → Redshift zero-ETL (managed by AWS)",
                  s1, B_S1, [("sg", sgtxt, "#666666", 270)], step_h=104)
     key = ("<b>How to read this page</b><br>"
            "• <b>Box titles</b> = resource type: Internet gateway, NAT gateway, Load balancer, Interface endpoint, Gateway endpoint, "
@@ -458,6 +476,8 @@ def page_architecture():
            "• <b style='color:#DD344C'>IAM role icon</b> on a line = the Engine App's IAM role authorizes this call (SigV4); no password.<br>"
            "• <b style='color:#D13212'>Red dashed</b> = secret retrieval through the Secrets Manager interface endpoint of the same AZ.<br>"
            "• SSM endpoints (ssm, ssmmessages, ec2messages) exist in the data subnets for Session Manager but are not drawn.<br>"
+           "• Every Engine App also reads the dbws/admin secret (Admin Console key); these calls are not drawn.<br>"
+           "• <b style='color:#8C4FFF'>Purple dashed</b> = Engine-to-Engine replication (zero-ETL).<br>"
            "• One Engine App talks to exactly one Engine; its IAM role and security group allow nothing else.")
     legend_panel("s2", RP_X, LY, RP_W, LH, "Scenario 2 - Engine App-initiated (outbound, at boot)",
                  "Every Engine App downloads its code at boot (drawn for the DynamoDB App).<br>"
@@ -511,6 +531,13 @@ MAP = [  # (data type, category, shape, cat, engine, sub, Domain slice, Read pat
 TYPE_COLOR = {"Structured": "#248814", "Semi-structured": "#C925D1", "Unstructured": "#147EBA"}
 
 
+def box_h(html_text):
+    """Height for a 400px text box: 12px text wraps at ~62 characters; 'Domain slice' and 'Read' start new lines."""
+    import re
+    lines = sum(1 + len(part) // 54 for part in re.sub(r"<[^>]+>", "", html_text.replace("<br>", "\n")).split("\n"))
+    return 36 + 15 * lines
+
+
 def page_mapping():
     cells.clear()
     ROW, TOP = 150, 260
@@ -548,7 +575,7 @@ def page_mapping():
               f"<b>Domain slice:</b> {slice_}<br><b>Read:</b> {read}"
         vertex(f"slice-{i}", txt, "text;html=1;align=left;verticalAlign=middle;fontSize=12;whiteSpace=wrap;rounded=1;"
                f"strokeColor={'#D13212' if gone else '#545B64'};dashed={1 if gone else 0};fillColor=none;spacing=8;" + F,
-               X_SLICE, y + 30, 400, 60)
+               X_SLICE, y + 60 - box_h(txt) // 2, 400, box_h(txt))
     LX, LYY = X_SLICE + 400 + 60, 150
     LH = TOP + len(MAP) * ROW - LYY
     steps = [
