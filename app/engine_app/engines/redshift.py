@@ -83,14 +83,19 @@ FROM sales GROUP BY 1 ORDER BY revenue DESC LIMIT 24"""
                          "FROM svv_integration",
                          note="svv_integration shows the state of the zero-ETL integration.")
         status = dict(zip(cols, rows[0])) if rows else {}
-        lag = None
-        if status.get("target_database"):
+        lag, connected = None, False
+        try:
             _, r2 = run("SELECT (newest live order)",
                         f"SELECT max(order_date) AS newest, datediff(second, max(order_date), getdate()) AS seconds_ago\n"
-                        f"FROM {LIVE_DB}.public.orders WHERE visitor_id IS NOT NULL")
+                        f"FROM {LIVE_DB}.public.orders WHERE visitor_id IS NOT NULL",
+                        note=f"Reads the zero-ETL copy of the Aurora orders table in the database {LIVE_DB}.")
+            connected = True
             if r2 and r2[0][0]:
                 lag = {"newest": str(r2[0][0]), "seconds_ago": r2[0][1]}
+        except Exception:
+            pass   # the trace entry shows the error: the database is not connected yet
         return jsonify(trace.payload({"integration": {k: str(v) for k, v in status.items()}, "newest_visitor_order": lag,
+                                      "connected": connected,
                                       "integration_id": integration_id()}))
 
     @bp.post("/api/admin/zeroetl")

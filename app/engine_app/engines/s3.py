@@ -45,12 +45,9 @@ def render(product):
     img = Image.new("RGB", (480, 480), PALETTE.get(product["category"], (90, 90, 90)))
     d = ImageDraw.Draw(img)
     seed = int(hashlib.sha1(product["product_id"].encode()).hexdigest()[:8], 16)
-    for k in range(7):
-        x, y, rad = (seed >> k) % 380, (seed >> (k + 4)) % 300, 40 + (seed >> k) % 90
+    for k in range(7):     # a simple pattern, different for each product
+        x, y, rad = (seed >> k) % 360, (seed >> (k + 4)) % 360, 40 + (seed >> k) % 90
         d.ellipse([x, y, x + rad, y + rad], outline=(255, 255, 255), width=4)
-    d.rectangle([0, 380, 480, 480], fill=(255, 255, 255))
-    d.text((20, 398), product["product_id"], fill=(120, 120, 120))
-    d.text((20, 426), ascii_text(product["name"])[:44], fill=(20, 33, 61))
     buf = io.BytesIO()
     img.save(buf, "PNG", optimize=True)
     return buf.getvalue()
