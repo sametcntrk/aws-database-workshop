@@ -70,6 +70,8 @@ def build(size="medium", seed=42):
     for i in range(1, n["products"] + 1):
         cat = cat_names[(i - 1) % len(cat_names)]
         base = rnd.choice(CATEGORIES[cat])
+        if i == 1:      # every size has the product the OpenSearch Read searches for
+            base = "Kablosuz Kulaklık"
         brand = rnd.choice(BRANDS)
         color = rnd.choice(COLORS)
         ds.products.append({
@@ -84,7 +86,7 @@ def build(size="medium", seed=42):
         })
 
     for i in range(1, n["orders"] + 1):
-        cust = rnd.choice(ds.customers)
+        cust = ds.customers[0] if i <= 4 else rnd.choice(ds.customers)   # the sample customer always has orders
         when = now - timedelta(days=rnd.randint(0, 365), minutes=rnd.randint(0, 1439))
         items = []
         for p in rnd.sample(ds.products, rnd.randint(1, 4)):
