@@ -26,6 +26,7 @@ QLDB (destek sonu 31.07.2025), CloudSearch ve Timestream for LiveAnalytics (yeni
 |---|---|
 | `docs/aws-database-workshop.drawio` | Mimari ve veri tipi eşleştirmesi (2 sayfa, düzenlenebilir) |
 | `docs/*.drawio.png` | Aynı diyagramların PNG hali |
+| `docs/KESIF-REHBERI.md` | Siteyi adım adım keşfetmek için öğrenme rehberi: nereye gidilir, neye bakılır, ne anlama gelir |
 | `docs/storefront-spec.md` | Mağazanın tasarım özeti |
 | `docs/adr/` | Mimari kararlar (zero-ETL, sayfaların tarayıcıda birleşmesi) |
 | `cloudformation/workshop.yaml` | Eğitmen için tek parça CloudFormation template |
