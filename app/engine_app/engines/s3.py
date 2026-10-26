@@ -1,13 +1,12 @@
 """Amazon S3 - blob: product images (served to every page), the seller panel upload and the gallery."""
-import hashlib
-import io
 import re
 import time
+from functools import lru_cache
+from pathlib import Path
 
 import boto3
 from botocore.exceptions import ClientError
 from flask import Response, jsonify, request
-from PIL import Image, ImageDraw
 
 from .. import trace
 from ..base import env, region
@@ -17,12 +16,11 @@ from . import page
 META = {
     "id": "s3", "name": "Amazon S3", "data_type": "Unstructured", "category": "Blob", "auth": "IAM role (SigV4)",
     "via": "S3/DynamoDB gateway endpoint → S3", "section": "Seller panel and images",
-    "model": "s3://<bucket>/products/<product_id>.png       Content-Type, x-amz-meta-name, x-amz-meta-category\n"
+    "model": "s3://<bucket>/products/<product_id>.jpg       Content-Type, x-amz-meta-name, -category, -author, -license\n"
              "s3://<bucket>/uploads/<visitor>/<file>        x-amz-meta-product-id   (versioning on)",
 }
 PAGES = [page("seller", "seller", "Seller panel", "/seller")]
-PALETTE = {"Elektronik": (20, 33, 61), "Ev & Yaşam": (27, 138, 143), "Spor": (200, 16, 46), "Kitap": (92, 64, 51),
-           "Moda": (122, 31, 92)}
+PHOTOS = Path(__file__).resolve().parent.parent / "static" / "products"   # Wikimedia Commons photos, see CREDITS.md
 ASCII = str.maketrans("ıİşŞğĞüÜöÖçÇ", "iIsSgGuUoOcC")
 MAX_UPLOAD = 2 * 1024 * 1024
 
@@ -40,17 +38,24 @@ def ascii_text(text):
     return text.translate(ASCII).encode("ascii", "replace").decode()
 
 
-def render(product):
-    """A generated product picture: category colour, a simple shape pattern and the product name."""
-    img = Image.new("RGB", (480, 480), PALETTE.get(product["category"], (90, 90, 90)))
-    d = ImageDraw.Draw(img)
-    seed = int(hashlib.sha1(product["product_id"].encode()).hexdigest()[:8], 16)
-    for k in range(7):     # a simple pattern, different for each product
-        x, y, rad = (seed >> k) % 360, (seed >> (k + 4)) % 360, 40 + (seed >> k) % 90
-        d.ellipse([x, y, x + rad, y + rad], outline=(255, 255, 255), width=4)
-    buf = io.BytesIO()
-    img.save(buf, "PNG", optimize=True)
-    return buf.getvalue()
+def photo_slug(product_type):
+    return product_type.lower().translate(str.maketrans("ıişğüöç ", "iisguoc-"))
+
+
+@lru_cache(maxsize=1)
+def credits():
+    """Product type -> (author, licence) from CREDITS.md, stored as S3 user metadata."""
+    out = {}
+    for line in (PHOTOS / "CREDITS.md").read_text(encoding="utf-8").splitlines():
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) == 4 and cells[0] not in ("Product type", "---"):
+            out[cells[0]] = (cells[2], cells[3])
+    return out
+
+
+def photo(product):
+    """The photo bytes for a product: one Commons photo per product type."""
+    return (PHOTOS / f"{photo_slug(product.get('type', ''))}.jpg").read_bytes()
 
 
 def register(bp):
@@ -59,10 +64,10 @@ def register(bp):
         if not re.fullmatch(r"P\d{4}", pid):
             return Response(status=404)
         try:
-            obj = s3().get_object(Bucket=env("BUCKET_NAME"), Key=f"products/{pid}.png")
+            obj = s3().get_object(Bucket=env("BUCKET_NAME"), Key=f"products/{pid}.jpg")
         except ClientError:
             return Response(status=404)
-        return Response(obj["Body"].read(), mimetype="image/png", headers={"Cache-Control": "public, max-age=300"})
+        return Response(obj["Body"].read(), mimetype="image/jpeg", headers={"Cache-Control": "public, max-age=300"})
 
     @bp.get("/api/gallery")
     def api_gallery():
@@ -101,7 +106,7 @@ def register(bp):
 
     @bp.get("/api/presign/<pid>")
     def api_presign(pid):
-        key = f"products/{pid}.png"
+        key = f"products/{pid}.jpg"
         with trace.call("generate_presigned_url", f"s3.generate_presigned_url('get_object', Params={{'Key': '{key}'}}, ExpiresIn=300)",
                         {"expires_in": "300 s"}) as t:
             url = s3().generate_presigned_url("get_object", Params={"Bucket": env("BUCKET_NAME"), "Key": key}, ExpiresIn=300)
@@ -111,15 +116,25 @@ def register(bp):
 
 
 def seed(ds):
-    with trace.call("PutObject × N", f"{len(ds.products)} × s3.put_object(Key='products/<id>.png', ContentType='image/png', Metadata=...)", {}) as t:
+    bucket = env("BUCKET_NAME")
+    with trace.call("DeleteObjects + PutObject × N",
+                    f"s3.delete_objects(products/*); {len(ds.products)} × s3.put_object(Key='products/<id>.jpg', ContentType='image/jpeg', Metadata=...)",
+                    {}) as t:
+        for pg in s3().get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix="products/"):
+            keys = [{"Key": o["Key"]} for o in pg.get("Contents", [])]
+            if keys:
+                s3().delete_objects(Bucket=bucket, Delete={"Objects": keys, "Quiet": True})
         total = 0
         for p in ds.products:
-            body = render(p)
+            body = photo(p)
             total += len(body)
-            s3().put_object(Bucket=env("BUCKET_NAME"), Key=f"products/{p['product_id']}.png", Body=body, ContentType="image/png",
-                            Metadata={"name": ascii_text(p["name"]), "category": ascii_text(p["category"])})
+            author, licence = credits().get(p.get("type"), ("unknown", "see CREDITS.md"))
+            s3().put_object(Bucket=bucket, Key=f"products/{p['product_id']}.jpg", Body=body, ContentType="image/jpeg",
+                            Metadata={"name": ascii_text(p["name"]), "category": ascii_text(p["category"]),
+                                      "author": ascii_text(author)[:100], "license": ascii_text(licence),
+                                      "source": "Wikimedia Commons"})
         t.result(items=len(ds.products))
-    return [f"Wrote {len(ds.products)} product images ({total // 1024} KB)."]
+    return [f"Wrote {len(ds.products)} product photos ({total // 1024} KB) from Wikimedia Commons, with author and licence metadata."]
 
 
 def reset_visitors():

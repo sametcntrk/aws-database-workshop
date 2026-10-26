@@ -94,7 +94,7 @@ def build(size="medium", seed=42):
         brand = rnd.choice(BRANDS)
         color = "siyah" if i == 1 else rnd.choice(COLORS)   # P0001 matches the DocumentDB Read filter
         ds.products.append({
-            "product_id": f"P{i:04d}", "name": f"{brand} {base} {i}", "category": cat, "brand": brand,
+            "product_id": f"P{i:04d}", "name": f"{brand} {base} {i}", "category": cat, "brand": brand, "type": base,
             "price": round(rnd.uniform(49, 4999), 2), "stock": rnd.randint(0, 500), "color": color,
             "rating": 4.8 if i == 1 else round(rnd.uniform(2.5, 5.0), 1),
             "attributes": {"renk": color, "garanti_ay": rnd.choice([12, 24, 36]),
