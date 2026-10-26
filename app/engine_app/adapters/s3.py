@@ -29,10 +29,18 @@ def render(product):
         d.ellipse([x, y, x + r, y + r], outline=(255, 255, 255), width=3)
     d.rectangle([0, 250, 320, 320], fill=(0, 0, 0))
     d.text((12, 262), product["product_id"], fill=(255, 255, 255))
-    d.text((12, 284), product["name"][:40].encode("latin-1", "replace").decode("latin-1"), fill=(255, 200, 120))
+    d.text((12, 284), ascii_text(product["name"])[:40], fill=(255, 200, 120))
     buf = io.BytesIO()
     img.save(buf, "PNG")
     return buf.getvalue()
+
+
+ASCII = str.maketrans("ıİşŞğĞüÜöÖçÇ", "iIsSgGuUoOcC")
+
+
+def ascii_text(text):
+    """S3 user metadata must be ASCII: transliterate Turkish letters instead of dropping them."""
+    return text.translate(ASCII).encode("ascii", "replace").decode()
 
 
 def slug(category):
@@ -68,7 +76,7 @@ class S3(Adapter):
             self.s3.put_object(Bucket=self.bucket, Key=f"{PREFIX}{slug(p['category'])}/{p['product_id']}.png", Body=body,
                                ContentType="image/png",
                                Metadata={"product-id": p["product_id"], "category": slug(p["category"]),
-                                         "name": p["name"].encode("ascii", "replace").decode()})
+                                         "name": ascii_text(p["name"])})
         return SeedResult(
             summary=[f"{deleted} eski nesne silindi (DeleteObjects)", f"{n} PNG görsel yazıldı, toplam {total // 1024} KB",
                      "Her nesnede Content-Type ve kullanıcı metadata'sı var"],

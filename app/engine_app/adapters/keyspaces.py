@@ -1,5 +1,6 @@
 """Amazon Keyspaces - wide column: user activity feed partitioned by user, clustered by time."""
 import ssl
+import time
 
 import boto3
 from cassandra import ConsistencyLevel
@@ -56,18 +57,33 @@ class Keyspaces(Adapter):
         s = self._s()
         users = sorted({c["customer_id"] for c in ds.customers})
         delete = s.prepare(f"DELETE FROM {self.ks}.{self.table} WHERE user_id = ?")
-        execute_concurrent_with_args(s, delete, [(u,) for u in users], concurrency=50)
+        self._write_all(s, delete, [(u,) for u in users])
         insert = s.prepare(f"INSERT INTO {self.ks}.{self.table} (user_id, event_time, event_id, event_type, product_id, detail) "
                            "VALUES (?, ?, ?, ?, ?, ?)")
         args = [(e["user_id"], e["event_time"], e["event_id"], e["event_type"], e["product_id"], e["detail"]) for e in ds.events]
-        results = execute_concurrent_with_args(s, insert, args, concurrency=100, raise_on_first_error=True)
+        written, retried = self._write_all(s, insert, args)
         return SeedResult(
             summary=[f"{len(users)} kullanıcı partition'ı temizlendi (Keyspaces TRUNCATE desteklemez)",
-                     f"{len(results)} olay yazıldı (LOCAL_QUORUM, 100 eşzamanlı istek)"],
+                     f"{written} olay yazıldı (LOCAL_QUORUM, 32 eşzamanlı istek)",
+                     f"{retried} istek zaman aşımı/kısıtlama sonrası yeniden denendi (yeni on-demand tablo kapasitesini kademeli artırır)"],
             operation=f"DELETE FROM {self.ks}.{self.table} WHERE user_id = ?;\n"
                       f"INSERT INTO {self.ks}.{self.table} (user_id, event_time, event_id, event_type, product_id, detail)\n"
                       "VALUES (?, ?, ?, ?, ?, ?);  -- prepared statement, SigV4 auth, TLS 9142",
-            counts={"events": len(results)})
+            counts={"events": written, "retried": retried})
+
+    @staticmethod
+    def _write_all(session, stmt, args, concurrency=32, attempts=6):
+        """Concurrent writes; rows that time out or are throttled are retried with backoff."""
+        pending, retried = list(args), 0
+        for attempt in range(attempts):
+            results = execute_concurrent_with_args(session, stmt, pending, concurrency=concurrency, raise_on_first_error=False)
+            failed = [a for a, (ok, _) in zip(pending, results) if not ok]
+            if not failed:
+                return len(args), retried
+            retried += len(failed)
+            pending = failed
+            time.sleep(min(2 ** attempt, 10))
+        raise RuntimeError(f"{len(pending)} writes still failing after {attempts} attempts")
 
     def read(self):
         cql = f"SELECT event_time, event_type, product_id, detail FROM {self.ks}.{self.table} WHERE user_id = 'C00001' LIMIT 20"

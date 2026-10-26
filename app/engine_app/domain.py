@@ -73,11 +73,11 @@ def build(size="medium", seed=42):
         if i == 1:      # every size has the product the OpenSearch Read searches for
             base = "Kablosuz Kulaklık"
         brand = rnd.choice(BRANDS)
-        color = rnd.choice(COLORS)
+        color = "siyah" if i == 1 else rnd.choice(COLORS)   # P0001 matches the DocumentDB Read filter
         ds.products.append({
             "product_id": f"P{i:04d}", "name": f"{brand} {base} {i}", "category": cat, "brand": brand,
             "price": round(rnd.uniform(49, 4999), 2), "stock": rnd.randint(0, 500), "color": color,
-            "rating": round(rnd.uniform(2.5, 5.0), 1),
+            "rating": 4.8 if i == 1 else round(rnd.uniform(2.5, 5.0), 1),
             "attributes": {"renk": color, "garanti_ay": rnd.choice([12, 24, 36]),
                            "agirlik_kg": round(rnd.uniform(0.1, 12), 2)},
             "tags": rnd.sample(["yeni", "indirim", "çok satan", "çevreci", "hızlı kargo", "sınırlı"], 2),
