@@ -5,7 +5,7 @@ from opensearchpy import AWSV4SignerAuth, OpenSearch, RequestsHttpConnection, he
 from ..base import Adapter, ReadResult, SeedResult, env, region
 
 MODEL = """\
-index products  { name: text (turkish analyzer), description: text, category: keyword, brand: keyword,
+index products  { name: text (tr_folded analyzer), description: text, category: keyword, brand: keyword,
                   price: float, rating: float }
 index stores    { name: text, city: keyword, location: geo_point }
 
@@ -40,8 +40,12 @@ class OpenSearchAdapter(Adapter):
         for idx in ("products", "stores"):
             if self.client.indices.exists(index=idx):
                 self.client.indices.delete(index=idx)
-        self.client.indices.create(index="products", body={"mappings": {"properties": {
-            "name": {"type": "text", "analyzer": "turkish"}, "description": {"type": "text", "analyzer": "turkish"},
+        # tr_folded: Turkish lowercase (I → ı) + ASCII folding (ı → i, ş → s), so "kulaklik" matches "Kulaklık"
+        self.client.indices.create(index="products", body={"settings": {"analysis": {
+            "filter": {"tr_lower": {"type": "lowercase", "language": "turkish"}},
+            "analyzer": {"tr_folded": {"tokenizer": "standard", "filter": ["tr_lower", "asciifolding"]}}}},
+            "mappings": {"properties": {
+            "name": {"type": "text", "analyzer": "tr_folded"}, "description": {"type": "text", "analyzer": "tr_folded"},
             "category": {"type": "keyword"}, "brand": {"type": "keyword"}, "price": {"type": "float"},
             "rating": {"type": "float"}}}})
         self.client.indices.create(index="stores", body={"mappings": {"properties": {
@@ -55,9 +59,9 @@ class OpenSearchAdapter(Adapter):
                                             for s in ds.stores))
         self.client.indices.refresh(index="products,stores")
         return SeedResult(
-            summary=["products ve stores indeksleri silindi ve yeniden oluşturuldu", f"{n_p} ürün indekslendi (turkish analyzer)",
+            summary=["products ve stores indeksleri silindi ve yeniden oluşturuldu", f"{n_p} ürün indekslendi (tr_folded analyzer: Türkçe küçük harf + ASCII katlama)",
                      f"{n_s} mağaza indekslendi (geo_point)"],
-            operation="PUT products  { mappings: name/description text (turkish), category keyword, ... }\n"
+            operation="PUT products  { analyzer tr_folded (lowercase tr + asciifolding), name/description text, category keyword }\n"
                       "PUT stores    { mappings: location geo_point }\nPOST _bulk  { index: ... } ...",
             counts={"products": n_p, "stores": n_s})
 

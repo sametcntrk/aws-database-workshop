@@ -78,5 +78,5 @@ OS_HOST=<VPC endpoint>
 
 ## 10.5 Doğrulama
 
-`/opensearch/` → **Seed** (`products` indeksi Turkish analyzer ile, `stores` indeksi `geo_point` ile) → **Read**.
+`/opensearch/` → **Seed** (`products` indeksi `tr_folded` analyzer ile: Türkçe küçük harf + ASCII katlama; `stores` indeksi `geo_point` ile) → **Read**.
 "kablosuz kulaklik" (ı yerine i) aramasının yine de doğru ürünleri bulduğunu ve mağazaların uzaklığa göre sıralandığını görün.

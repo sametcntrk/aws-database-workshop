@@ -16,7 +16,7 @@ The relationship is stored as an edge, so "who else bought this" is a traversal,
 (me)-[:BOUGHT]->(p)<-[:BOUGHT]-(other)-[:BOUGHT]->(rec)"""
 
 READ = """\
-MATCH (me:Customer {id: 'C00001'})-[:BOUGHT]->(p:Product)<-[:BOUGHT]-(other:Customer)-[:BOUGHT]->(rec:Product)
+MATCH (me:Customer {`~id`: 'C00001'})-[:BOUGHT]->(p:Product)<-[:BOUGHT]-(other:Customer)-[:BOUGHT]->(rec:Product)
 WHERE other <> me AND NOT (me)-[:BOUGHT]->(rec)
 RETURN rec.id AS product_id, rec.name AS name, rec.category AS category,
        count(DISTINCT other) AS customers_in_common
@@ -52,20 +52,21 @@ class Neptune(Adapter):
 
     def seed(self, ds):
         self._q("MATCH (n) DETACH DELETE n")
-        self._q("UNWIND $rows AS r CREATE (:Customer {id: r.id, name: r.name, city: r.city})",
+        # explicit vertex IDs (~id): edges are then created by ID lookup, the fastest access path in Neptune
+        self._q("UNWIND $rows AS r CREATE (:Customer {`~id`: r.id, id: r.id, name: r.name, city: r.city})",
                 {"rows": [{"id": c["customer_id"], "name": c["name"], "city": c["city"]} for c in ds.customers]})
-        self._q("UNWIND $rows AS r CREATE (:Product {id: r.id, name: r.name, category: r.category})",
+        self._q("UNWIND $rows AS r CREATE (:Product {`~id`: r.id, id: r.id, name: r.name, category: r.category})",
                 {"rows": [{"id": p["product_id"], "name": p["name"], "category": p["category"]} for p in ds.products]})
         edges = [{"c": o["customer_id"], "p": i["product_id"], "o": o["order_id"], "q": i["qty"]}
                  for o in ds.orders if o["status"] != "cancelled" for i in o["items"]]
-        for k in range(0, len(edges), 2000):
-            self._q("UNWIND $rows AS r MATCH (c:Customer {id: r.c}), (p:Product {id: r.p}) "
-                    "CREATE (c)-[:BOUGHT {order_id: r.o, qty: r.q}]->(p)", {"rows": edges[k:k + 2000]})
+        for k in range(0, len(edges), 500):
+            self._q("UNWIND $rows AS r MATCH (c {`~id`: r.c}) MATCH (p {`~id`: r.p}) "
+                    "CREATE (c)-[:BOUGHT {order_id: r.o, qty: r.q}]->(p)", {"rows": edges[k:k + 500]})
         return SeedResult(
             summary=["Graf temizlendi (MATCH (n) DETACH DELETE n)", f"{len(ds.customers)} Customer, {len(ds.products)} Product düğümü",
-                     f"{len(edges)} BOUGHT kenarı (2000'lik UNWIND grupları)"],
-            operation="UNWIND $rows AS r CREATE (:Customer {id: r.id, name: r.name, city: r.city})\n"
-                      "UNWIND $rows AS r MATCH (c:Customer {id: r.c}), (p:Product {id: r.p})\n"
+                     f"{len(edges)} BOUGHT kenarı (500'lük UNWIND grupları, ~id ile eşleşme)"],
+            operation="UNWIND $rows AS r CREATE (:Customer {`~id`: r.id, id: r.id, name: r.name, city: r.city})\n"
+                      "UNWIND $rows AS r MATCH (c {`~id`: r.c}) MATCH (p {`~id`: r.p})\n"
                       "  CREATE (c)-[:BOUGHT {order_id: r.o, qty: r.q}]->(p)\n"
                       "-- HTTPS POST /openCypher, IAM SigV4 (neptune-db)",
             counts={"customers": len(ds.customers), "products": len(ds.products), "edges": len(edges)})
