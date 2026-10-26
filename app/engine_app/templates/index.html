@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ a.title }} · AWS Database Workshop</title>
+  <link rel="stylesheet" href="{{ prefix }}/static/style.css">
+</head>
+<body>
+<header>
+  <a class="home" href="/">← Tüm Engine'ler</a>
+  <div class="kicker">{{ a.data_type }} · {{ a.category }}</div>
+  <h1>{{ a.title }}</h1>
+  <p class="slice">Domain dilimi: <b>{{ a.domain_slice }}</b></p>
+</header>
+
+<main>
+  <section class="card">
+    <h2>Neden bu Engine?</h2>
+    <p>{{ a.why }}</p>
+    <h3>Veri modeli</h3>
+    <pre>{{ a.model }}</pre>
+  </section>
+
+  <section class="card actions">
+    <h2>1 · Seed: veri üret ve yaz</h2>
+    <p>E-ticaret Domain'inden sentetik veri üretir ve <b>sadece bu Engine'e</b> yazar. Tekrar basarsanız eski veri silinip yeniden üretilir.</p>
+    <div class="row">
+      <select id="size">{% for s in sizes %}<option value="{{ s }}" {% if s == 'medium' %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+      <button id="seed">Seed</button>
+    </div>
+    <div id="seed-out" class="out"></div>
+  </section>
+
+  <section class="card actions">
+    <h2>2 · Read: geri oku</h2>
+    <p>Az önce yazılan veriyi bu Engine'e en uygun erişim deseniyle okur.</p>
+    <button id="read">Read</button>
+    <div id="read-out" class="out"></div>
+  </section>
+</main>
+
+<script>
+const prefix = "{{ prefix }}";
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function fail(el, j) { el.innerHTML = `<div class="err"><b>Hata:</b> ${esc(j.error)}<pre>${esc(j.trace || "")}</pre></div>`; }
+
+document.getElementById("seed").onclick = async (ev) => {
+  const el = document.getElementById("seed-out"), btn = ev.target;
+  btn.disabled = true; el.innerHTML = '<div class="wait">Yazılıyor…</div>';
+  try {
+    const r = await fetch(`${prefix}/seed?size=${document.getElementById("size").value}`, {method: "POST"});
+    const j = await r.json();
+    if (!j.ok) return fail(el, j);
+    el.innerHTML = `<div class="meta">${j.size} · ${j.elapsed_ms} ms</div>
+      <ul>${j.summary.map(s => `<li>${esc(s)}</li>`).join("")}</ul>
+      <h3>Çalıştırılan işlemler</h3><pre>${esc(j.operation)}</pre>`;
+  } catch (e) { fail(el, {error: e}); } finally { btn.disabled = false; }
+};
+
+document.getElementById("read").onclick = async (ev) => {
+  const el = document.getElementById("read-out"), btn = ev.target;
+  btn.disabled = true; el.innerHTML = '<div class="wait">Okunuyor…</div>';
+  try {
+    const r = await fetch(`${prefix}/read`);
+    const j = await r.json();
+    if (!j.ok) return fail(el, j);
+    const head = j.columns.map(c => `<th>${esc(c)}</th>`).join("");
+    const body = j.rows.map(r => `<tr>${r.map(v => `<td>${esc(v)}</td>`).join("")}</tr>`).join("");
+    const imgs = (j.images || []).map(src => `<img src="${src}" alt="ürün görseli">`).join("");
+    el.innerHTML = `<div class="meta">${j.rows.length} satır · ${j.elapsed_ms} ms</div>
+      <h3>Sorgu</h3><pre>${esc(j.query)}</pre>
+      ${j.note ? `<p class="note">${esc(j.note)}</p>` : ""}
+      ${imgs ? `<div class="imgs">${imgs}</div>` : ""}
+      <div class="tbl"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+  } catch (e) { fail(el, {error: e}); } finally { btn.disabled = false; }
+};
+</script>
+</body>
+</html>
