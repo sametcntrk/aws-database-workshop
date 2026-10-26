@@ -86,7 +86,7 @@ FROM sales GROUP BY 1 ORDER BY revenue DESC LIMIT 24"""
         lag, connected = None, False
         try:
             _, r2 = run("SELECT (newest live order)",
-                        f"SELECT max(order_date) AS newest, datediff(second, max(order_date), getdate()) AS seconds_ago\n"
+                        f"SELECT max(order_date) AS newest, datediff(second, max(order_date)::timestamp, getdate()) AS seconds_ago\n"
                         f"FROM {LIVE_DB}.public.orders WHERE visitor_id IS NOT NULL",
                         note=f"Reads the zero-ETL copy of the Aurora orders table in the database {LIVE_DB}.")
             connected = True
