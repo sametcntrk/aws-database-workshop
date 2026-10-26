@@ -42,9 +42,12 @@ class DynamoDb(Adapter):
                     break
                 scan["ExclusiveStartKey"] = page["LastEvaluatedKey"]
         price = {p["product_id"]: p for p in ds.products}
-        carts = ds.orders[: len(ds.customers)]          # one open cart per customer, built from order items
+        first_order = {}                                 # one open cart per customer, built from their first order
+        for o in ds.orders:
+            first_order.setdefault(o["customer_id"], o)
+        carts = list(first_order.values())
         written = 0
-        with self.table.batch_writer() as bw:
+        with self.table.batch_writer(overwrite_by_pkeys=["pk", "sk"]) as bw:
             for o in carts:
                 pk = f"CART#{o['customer_id']}"
                 bw.put_item(Item={"pk": pk, "sk": "META", "customer_id": o["customer_id"], "updated_at": o["order_date"]})
@@ -55,7 +58,7 @@ class DynamoDb(Adapter):
                     written += 1
         # the sample customer always has a cart, so Read shows data
         c = sample_customer(ds)
-        with self.table.batch_writer() as bw:
+        with self.table.batch_writer(overwrite_by_pkeys=["pk", "sk"]) as bw:
             for p in ds.products[:3]:
                 bw.put_item(Item={"pk": f"CART#{c['customer_id']}", "sk": f"ITEM#{p['product_id']}", "name": p["name"],
                                   "qty": 1, "unit_price": Decimal(str(p["price"])), "added_at": "now"})

@@ -40,11 +40,14 @@ class Keyspaces(Adapter):
 
     def _s(self):
         if self._session is None:
+            host = f"cassandra.{region()}.amazonaws.com"
             ctx = ssl.create_default_context()          # Amazon Trust Services roots from the OS store
             auth = SigV4AuthProvider(boto3.Session(region_name=region()))
             profile = ExecutionProfile(consistency_level=ConsistencyLevel.LOCAL_QUORUM,
                                        load_balancing_policy=DCAwareRoundRobinPolicy(local_dc=region()))
-            cluster = Cluster([f"cassandra.{region()}.amazonaws.com"], port=9142, ssl_context=ctx, auth_provider=auth,
+            # the driver connects to the endpoint ENI IPs it learns from system.peers, so the certificate
+            # is checked against the service host name instead of the IP
+            cluster = Cluster([host], port=9142, ssl_context=ctx, ssl_options={"server_hostname": host}, auth_provider=auth,
                               execution_profiles={EXEC_PROFILE_DEFAULT: profile}, protocol_version=4)
             self._session = cluster.connect()
         return self._session
