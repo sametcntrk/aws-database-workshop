@@ -1,5 +1,7 @@
 # Lale Market Keşif Rehberi
 
+> **Veritabanı konusunda altyapınız yoksa** önce [Veritabanı 101](VERITABANI-101.md) yazısını okuyun. Bu rehberde geçen her terim orada günlük hayattan örneklerle anlatılıyor.
+
 Bu rehber sizi Lale Market sitesinde adım adım gezdirir. Her durakta üç şey var:
 
 - **Yap:** nereye gidip neye tıklayacağınız
