@@ -792,16 +792,6 @@ ENGINES = r"""
         ExcludePunctuation: true
         RequireEachIncludedType: true
 
-  CacheDefaultUser:
-    Type: AWS::ElastiCache::User
-    Properties:
-      UserId: dbws-default
-      UserName: default
-      Engine: valkey
-      AccessString: off -@all
-      AuthenticationMode:
-        Type: no-password-required
-
   CacheAppUser:
     Type: AWS::ElastiCache::User
     Properties:
@@ -819,7 +809,7 @@ ENGINES = r"""
     Properties:
       UserGroupId: dbws-users
       Engine: valkey
-      UserIds: [!Ref CacheDefaultUser, !Ref CacheAppUser]
+      UserIds: [!Ref CacheAppUser]
 
   Cache:
     Type: AWS::ElastiCache::ServerlessCache
