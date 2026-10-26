@@ -13,7 +13,7 @@ Metadata:
       - Label: {default: Engine Apps}
         Parameters: [AppRepoUrl, AppRepoRef, InstanceType, LatestAmiId]
       - Label: {default: Account prerequisites}
-        Parameters: [CreateOpenSearchServiceLinkedRole]
+        Parameters: [CreateOpenSearchServiceLinkedRole, EnableZeroEtl]
 
 Parameters:
   DomainName:
@@ -44,6 +44,13 @@ Parameters:
   LatestAmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+  EnableZeroEtl:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Create the Aurora to Redshift zero-ETL integration. On an existing stack, first deploy with 'false',
+      reboot the Aurora writer (the cluster parameters are static), then deploy with 'true'.
   CreateOpenSearchServiceLinkedRole:
     Type: String
     Default: 'true'
@@ -52,6 +59,7 @@ Parameters:
 
 Conditions:
   CreateOsSlr: !Equals [!Ref CreateOpenSearchServiceLinkedRole, 'true']
+  ZeroEtl: !Equals [!Ref EnableZeroEtl, 'true']
 
 Resources:
   # ================================================================ Network (Module 0)
@@ -580,19 +588,8 @@ Resources:
       Certificates:
         - CertificateArn: !Ref Certificate
       DefaultActions:
-        - Type: fixed-response
-          FixedResponseConfig:
-            StatusCode: '200'
-            ContentType: text/html
-            MessageBody: >-
-              <html><head><meta charset="utf-8"><title>AWS Database Workshop</title>
-              <style>body{font-family:sans-serif;margin:40px}a{display:block;margin:6px 0}</style></head>
-              <body><h1>AWS Database Workshop</h1><p>Bir Engine App seçin:</p>
-              <a href="/aurora/">Aurora PostgreSQL - Relational</a><a href="/redshift/">Redshift - Columnar</a>
-              <a href="/dynamodb/">DynamoDB - Key-value</a><a href="/elasticache/">ElastiCache - In-memory</a>
-              <a href="/keyspaces/">Keyspaces - Wide column</a><a href="/influxdb/">InfluxDB - Time-series</a>
-              <a href="/neptune/">Neptune - Graph</a><a href="/docdb/">DocumentDB - Document</a>
-              <a href="/s3/">S3 - Blob</a><a href="/opensearch/">OpenSearch - Text search + geo</a></body></html>
+        - Type: forward
+          TargetGroupArn: !Ref TgDocDb
 
   DnsRecord:
     Type: AWS::Route53::RecordSet
@@ -624,6 +621,18 @@ Resources:
         Monitoring:
           Enabled: true
 
+  # ================================================================ Admin Console key
+  AdminSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: dbws/admin
+      Description: Admin Console key of the Lale Market Storefront (instructor only)
+      GenerateSecretString:
+        SecretStringTemplate: '{}'
+        GenerateStringKey: key
+        PasswordLength: 24
+        ExcludePunctuation: true
+
   # ================================================================ Engines
   # ---------------------------------------------------------------- 1 Aurora PostgreSQL (relational)
   AuroraSubnetGroup:
@@ -632,6 +641,18 @@ Resources:
       DBSubnetGroupName: dbws-aurora
       DBSubnetGroupDescription: Aurora - data subnets
       SubnetIds: [!Ref DataSubnetA, !Ref DataSubnetB, !Ref DataSubnetC]
+
+  AuroraZeroEtlParams:
+    Type: AWS::RDS::DBClusterParameterGroup
+    Properties:
+      DBClusterParameterGroupName: dbws-aurora-zeroetl
+      Description: Enhanced logical replication for the zero-ETL integration with Redshift
+      Family: aurora-postgresql17
+      Parameters:
+        rds.logical_replication: '1'
+        aurora.enhanced_logical_replication: '1'
+        aurora.logical_replication_backup: '0'
+        aurora.logical_replication_globaldb: '0'
 
   AuroraCluster:
     Type: AWS::RDS::DBCluster
@@ -642,6 +663,7 @@ Resources:
       Engine: aurora-postgresql
       EngineVersion: '17.9'
       DatabaseName: shop
+      DBClusterParameterGroupName: !Ref AuroraZeroEtlParams
       MasterUsername: dbwsadmin
       ManageMasterUserPassword: true
       StorageEncrypted: true
@@ -695,6 +717,20 @@ Resources:
       DbName: dev
       AdminUsername: dbwsadmin
       AdminUserPassword: !Sub '{{resolve:secretsmanager:${RedshiftSecret}:SecretString:password}}'
+      NamespaceResourcePolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: redshift.amazonaws.com
+            Action: redshift:AuthorizeInboundIntegration
+            Condition:
+              StringEquals:
+                aws:SourceArn: !GetAtt AuroraCluster.DBClusterArn
+          - Effect: Allow
+            Principal:
+              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action: redshift:CreateInboundIntegration
 
   RedshiftWorkgroup:
     Type: AWS::RedshiftServerless::Workgroup
@@ -706,6 +742,20 @@ Resources:
       EnhancedVpcRouting: true
       SubnetIds: [!Ref DataSubnetA, !Ref DataSubnetB, !Ref DataSubnetC]
       SecurityGroupIds: [!Ref DbSgRedshift]
+      ConfigParameters:
+        - ParameterKey: enable_case_sensitive_identifier
+          ParameterValue: 'true'
+
+  # Aurora → Redshift zero-ETL (docs/adr/0001-aurora-to-redshift-zero-etl.md)
+  ZeroEtlIntegration:
+    Type: AWS::RDS::Integration
+    Condition: ZeroEtl
+    DependsOn: [AuroraWriter, RedshiftWorkgroup]
+    Properties:
+      IntegrationName: dbws-aurora-to-redshift
+      SourceArn: !GetAtt AuroraCluster.DBClusterArn
+      TargetArn: !GetAtt RedshiftNamespace.Namespace.NamespaceArn
+      DataFilter: 'include: shop.*.*'
 
   # ---------------------------------------------------------------- 3 DynamoDB (key-value)
   CartTable:
@@ -727,6 +777,9 @@ Resources:
           KeyType: RANGE
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
       SSESpecification:
         SSEEnabled: true
 
@@ -805,6 +858,7 @@ Resources:
       BillingMode:
         Mode: ON_DEMAND
       PointInTimeRecoveryEnabled: true
+      DefaultTimeToLive: 604800
 
   # ---------------------------------------------------------------- 6 Timestream for InfluxDB (time-series)
   InfluxDbSecret:
@@ -1147,6 +1201,9 @@ Resources:
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
                 Resource: !GetAtt AuroraCluster.MasterUserSecret.SecretArn
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref AdminSecret
 
   AppProfileAurora:
     Type: AWS::IAM::InstanceProfile
@@ -1183,7 +1240,9 @@ Resources:
         - Field: path-pattern
           PathPatternConfig:
             Values:
-              - /aurora
+              - /checkout
+              - /orders
+              - /admin/orders
               - /aurora/*
       Actions:
         - Type: forward
@@ -1209,22 +1268,25 @@ Resources:
         - Key: dbws:engine
           Value: aurora
       UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -euxo pipefail
-          cat > /etc/engine-app.env <<'EOF'
-          ENGINE=aurora
-          URL_PREFIX=/aurora
-          AWS_REGION=${AWS::Region}
-          AWS_DEFAULT_REGION=${AWS::Region}
-          DB_HOST=${AuroraCluster.Endpoint.Address}
-          DB_PORT=5432
-          DB_NAME=shop
-          DB_SECRET_ARN=${AuroraCluster.MasterUserSecret.SecretArn}
-          EOF
-          dnf install -y git
-          git clone --depth 1 --branch ${AppRepoRef} ${AppRepoUrl} /opt/engine-app
-          bash /opt/engine-app/app/deploy/bootstrap.sh
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            set -euxo pipefail
+            cat > /etc/engine-app.env <<'EOF'
+            ENGINE=aurora
+            URL_PREFIX=/aurora
+            AWS_REGION=${AWS::Region}
+            AWS_DEFAULT_REGION=${AWS::Region}
+            ADMIN_SECRET_ARN=${AdminSecret}
+            DB_HOST=${AuroraCluster.Endpoint.Address}
+            DB_PORT=5432
+            DB_NAME=shop
+            DB_SECRET_ARN=${AuroraCluster.MasterUserSecret.SecretArn}
+            EOF
+            dnf install -y git
+            git clone --depth 1 --branch ${AppRepoRef} ${AppRepoUrl} /opt/engine-app
+            bash /opt/engine-app/app/deploy/bootstrap.sh
+          - IntegrationArn: !If [ZeroEtl, !Ref ZeroEtlIntegration, none]
 
   # ---------------------------------------------------------------- Engine App: Redshift
   AppSgRedshift:
@@ -1284,6 +1346,9 @@ Resources:
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
                 Resource: !Ref RedshiftSecret
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref AdminSecret
 
   AppProfileRedshift:
     Type: AWS::IAM::InstanceProfile
@@ -1320,7 +1385,7 @@ Resources:
         - Field: path-pattern
           PathPatternConfig:
             Values:
-              - /redshift
+              - /admin/reports
               - /redshift/*
       Actions:
         - Type: forward
@@ -1346,22 +1411,26 @@ Resources:
         - Key: dbws:engine
           Value: redshift
       UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -euxo pipefail
-          cat > /etc/engine-app.env <<'EOF'
-          ENGINE=redshift
-          URL_PREFIX=/redshift
-          AWS_REGION=${AWS::Region}
-          AWS_DEFAULT_REGION=${AWS::Region}
-          DB_HOST=${RedshiftWorkgroup.Workgroup.Endpoint.Address}
-          DB_PORT=5439
-          DB_NAME=dev
-          DB_SECRET_ARN=${RedshiftSecret}
-          EOF
-          dnf install -y git
-          git clone --depth 1 --branch ${AppRepoRef} ${AppRepoUrl} /opt/engine-app
-          bash /opt/engine-app/app/deploy/bootstrap.sh
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            set -euxo pipefail
+            cat > /etc/engine-app.env <<'EOF'
+            ENGINE=redshift
+            URL_PREFIX=/redshift
+            AWS_REGION=${AWS::Region}
+            AWS_DEFAULT_REGION=${AWS::Region}
+            ADMIN_SECRET_ARN=${AdminSecret}
+            DB_HOST=${RedshiftWorkgroup.Workgroup.Endpoint.Address}
+            DB_PORT=5439
+            DB_NAME=dev
+            DB_SECRET_ARN=${RedshiftSecret}
+            INTEGRATION_ARN=${IntegrationArn}
+            EOF
+            dnf install -y git
+            git clone --depth 1 --branch ${AppRepoRef} ${AppRepoUrl} /opt/engine-app
+            bash /opt/engine-app/app/deploy/bootstrap.sh
+          - IntegrationArn: !If [ZeroEtl, !Ref ZeroEtlIntegration, none]
 
   # ---------------------------------------------------------------- Engine App: DynamoDB
   AppSgDynamoDb:
@@ -1409,9 +1478,13 @@ Resources:
                   - dynamodb:Scan
                   - dynamodb:GetItem
                   - dynamodb:PutItem
+                  - dynamodb:UpdateItem
                   - dynamodb:DeleteItem
                   - dynamodb:BatchWriteItem
                 Resource: !GetAtt CartTable.Arn
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref AdminSecret
 
   AppProfileDynamoDb:
     Type: AWS::IAM::InstanceProfile
@@ -1448,7 +1521,7 @@ Resources:
         - Field: path-pattern
           PathPatternConfig:
             Values:
-              - /dynamodb
+              - /cart
               - /dynamodb/*
       Actions:
         - Type: forward
@@ -1474,19 +1547,22 @@ Resources:
         - Key: dbws:engine
           Value: dynamodb
       UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -euxo pipefail
-          cat > /etc/engine-app.env <<'EOF'
-          ENGINE=dynamodb
-          URL_PREFIX=/dynamodb
-          AWS_REGION=${AWS::Region}
-          AWS_DEFAULT_REGION=${AWS::Region}
-          TABLE_NAME=${CartTable}
-          EOF
-          dnf install -y git
-          git clone --depth 1 --branch ${AppRepoRef} ${AppRepoUrl} /opt/engine-app
-          bash /opt/engine-app/app/deploy/bootstrap.sh
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            set -euxo pipefail
+            cat > /etc/engine-app.env <<'EOF'
+            ENGINE=dynamodb
+            URL_PREFIX=/dynamodb
+            AWS_REGION=${AWS::Region}
+            AWS_DEFAULT_REGION=${AWS::Region}
+            ADMIN_SECRET_ARN=${AdminSecret}
+            TABLE_NAME=${CartTable}
+            EOF
+            dnf install -y git
+            git clone --depth 1 --branch ${AppRepoRef} ${AppRepoUrl} /opt/engine-app
+            bash /opt/engine-app/app/deploy/bootstrap.sh
+          - IntegrationArn: !If [ZeroEtl, !Ref ZeroEtlIntegration, none]
 
   # ---------------------------------------------------------------- Engine App: ElastiCache
   AppSgElastiCache:
@@ -1551,6 +1627,9 @@ Resources:
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
                 Resource: !Ref CacheUserSecret
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref AdminSecret
 
   AppProfileElastiCache:
     Type: AWS::IAM::InstanceProfile
@@ -1587,7 +1666,8 @@ Resources:
         - Field: path-pattern
           PathPatternConfig:
             Values:
-              - /elasticache
+              - /deals
+              - /admin/live
               - /elasticache/*
       Actions:
         - Type: forward
@@ -1613,21 +1693,24 @@ Resources:
         - Key: dbws:engine
           Value: elasticache
       UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -euxo pipefail
-          cat > /etc/engine-app.env <<'EOF'
-          ENGINE=elasticache
-          URL_PREFIX=/elasticache
-          AWS_REGION=${AWS::Region}
-          AWS_DEFAULT_REGION=${AWS::Region}
-          CACHE_HOST=${Cache.Endpoint.Address}
-          CACHE_PORT=${Cache.Endpoint.Port}
-          CACHE_SECRET_ARN=${CacheUserSecret}
-          EOF
-          dnf install -y git
-          git clone --depth 1 --branch ${AppRepoRef} ${AppRepoUrl} /opt/engine-app
-          bash /opt/engine-app/app/deploy/bootstrap.sh
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            set -euxo pipefail
+            cat > /etc/engine-app.env <<'EOF'
+            ENGINE=elasticache
+            URL_PREFIX=/elasticache
+            AWS_REGION=${AWS::Region}
+            AWS_DEFAULT_REGION=${AWS::Region}
+            ADMIN_SECRET_ARN=${AdminSecret}
+            CACHE_HOST=${Cache.Endpoint.Address}
+            CACHE_PORT=${Cache.Endpoint.Port}
+            CACHE_SECRET_ARN=${CacheUserSecret}
+            EOF
+            dnf install -y git
+            git clone --depth 1 --branch ${AppRepoRef} ${AppRepoUrl} /opt/engine-app
+            bash /opt/engine-app/app/deploy/bootstrap.sh
+          - IntegrationArn: !If [ZeroEtl, !Ref ZeroEtlIntegration, none]
 
   # ---------------------------------------------------------------- Engine App: Keyspaces
   AppSgKeyspaces:
@@ -1683,6 +1766,9 @@ Resources:
                   - ec2:DescribeNetworkInterfaces
                   - ec2:DescribeVpcEndpoints
                 Resource: '*'
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref AdminSecret
 
   AppProfileKeyspaces:
     Type: AWS::IAM::InstanceProfile
@@ -1719,7 +1805,7 @@ Resources:
         - Field: path-pattern
           PathPatternConfig:
             Values:
-              - /keyspaces
+              - /account/activity
               - /keyspaces/*
       Actions:
         - Type: forward
@@ -1745,20 +1831,23 @@ Resources:
         - Key: dbws:engine
           Value: keyspaces
       UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -euxo pipefail
-          cat > /etc/engine-app.env <<'EOF'
-          ENGINE=keyspaces
-          URL_PREFIX=/keyspaces
-          AWS_REGION=${AWS::Region}
-          AWS_DEFAULT_REGION=${AWS::Region}
-          KEYSPACE=${ActivityKeyspace}
-          TABLE_NAME=activity_by_user
-          EOF
-          dnf install -y git
-          git clone --depth 1 --branch ${AppRepoRef} ${AppRepoUrl} /opt/engine-app
-          bash /opt/engine-app/app/deploy/bootstrap.sh
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            set -euxo pipefail
+            cat > /etc/engine-app.env <<'EOF'
+            ENGINE=keyspaces
+            URL_PREFIX=/keyspaces
+            AWS_REGION=${AWS::Region}
+            AWS_DEFAULT_REGION=${AWS::Region}
+            ADMIN_SECRET_ARN=${AdminSecret}
+            KEYSPACE=${ActivityKeyspace}
+            TABLE_NAME=activity_by_user
+            EOF
+            dnf install -y git
+            git clone --depth 1 --branch ${AppRepoRef} ${AppRepoUrl} /opt/engine-app
+            bash /opt/engine-app/app/deploy/bootstrap.sh
+          - IntegrationArn: !If [ZeroEtl, !Ref ZeroEtlIntegration, none]
 
   # ---------------------------------------------------------------- Engine App: InfluxDB
   AppSgInfluxDb:
@@ -1818,6 +1907,9 @@ Resources:
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
                 Resource: !Ref InfluxDbSecret
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref AdminSecret
 
   AppProfileInfluxDb:
     Type: AWS::IAM::InstanceProfile
@@ -1854,7 +1946,7 @@ Resources:
         - Field: path-pattern
           PathPatternConfig:
             Values:
-              - /influxdb
+              - /admin/ops
               - /influxdb/*
       Actions:
         - Type: forward
@@ -1880,22 +1972,25 @@ Resources:
         - Key: dbws:engine
           Value: influxdb
       UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -euxo pipefail
-          cat > /etc/engine-app.env <<'EOF'
-          ENGINE=influxdb
-          URL_PREFIX=/influxdb
-          AWS_REGION=${AWS::Region}
-          AWS_DEFAULT_REGION=${AWS::Region}
-          INFLUX_URL=https://${InfluxDb.Endpoint}:8086
-          INFLUX_ORG=dbws
-          INFLUX_BUCKET=metrics
-          INFLUX_SECRET_ARN=${InfluxDbSecret}
-          EOF
-          dnf install -y git
-          git clone --depth 1 --branch ${AppRepoRef} ${AppRepoUrl} /opt/engine-app
-          bash /opt/engine-app/app/deploy/bootstrap.sh
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            set -euxo pipefail
+            cat > /etc/engine-app.env <<'EOF'
+            ENGINE=influxdb
+            URL_PREFIX=/influxdb
+            AWS_REGION=${AWS::Region}
+            AWS_DEFAULT_REGION=${AWS::Region}
+            ADMIN_SECRET_ARN=${AdminSecret}
+            INFLUX_URL=https://${InfluxDb.Endpoint}:8086
+            INFLUX_ORG=dbws
+            INFLUX_BUCKET=metrics
+            INFLUX_SECRET_ARN=${InfluxDbSecret}
+            EOF
+            dnf install -y git
+            git clone --depth 1 --branch ${AppRepoRef} ${AppRepoUrl} /opt/engine-app
+            bash /opt/engine-app/app/deploy/bootstrap.sh
+          - IntegrationArn: !If [ZeroEtl, !Ref ZeroEtlIntegration, none]
 
   # ---------------------------------------------------------------- Engine App: Neptune
   AppSgNeptune:
@@ -1959,6 +2054,9 @@ Resources:
                   - neptune-db:WriteDataViaQuery
                   - neptune-db:DeleteDataViaQuery
                 Resource: !Sub arn:${AWS::Partition}:neptune-db:${AWS::Region}:${AWS::AccountId}:${NeptuneCluster.ClusterResourceId}/*
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref AdminSecret
 
   AppProfileNeptune:
     Type: AWS::IAM::InstanceProfile
@@ -1995,7 +2093,7 @@ Resources:
         - Field: path-pattern
           PathPatternConfig:
             Values:
-              - /neptune
+              - /admin/graph
               - /neptune/*
       Actions:
         - Type: forward
@@ -2021,20 +2119,23 @@ Resources:
         - Key: dbws:engine
           Value: neptune
       UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -euxo pipefail
-          cat > /etc/engine-app.env <<'EOF'
-          ENGINE=neptune
-          URL_PREFIX=/neptune
-          AWS_REGION=${AWS::Region}
-          AWS_DEFAULT_REGION=${AWS::Region}
-          NEPTUNE_HOST=${NeptuneCluster.Endpoint}
-          NEPTUNE_PORT=${NeptuneCluster.Port}
-          EOF
-          dnf install -y git
-          git clone --depth 1 --branch ${AppRepoRef} ${AppRepoUrl} /opt/engine-app
-          bash /opt/engine-app/app/deploy/bootstrap.sh
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            set -euxo pipefail
+            cat > /etc/engine-app.env <<'EOF'
+            ENGINE=neptune
+            URL_PREFIX=/neptune
+            AWS_REGION=${AWS::Region}
+            AWS_DEFAULT_REGION=${AWS::Region}
+            ADMIN_SECRET_ARN=${AdminSecret}
+            NEPTUNE_HOST=${NeptuneCluster.Endpoint}
+            NEPTUNE_PORT=${NeptuneCluster.Port}
+            EOF
+            dnf install -y git
+            git clone --depth 1 --branch ${AppRepoRef} ${AppRepoUrl} /opt/engine-app
+            bash /opt/engine-app/app/deploy/bootstrap.sh
+          - IntegrationArn: !If [ZeroEtl, !Ref ZeroEtlIntegration, none]
 
   # ---------------------------------------------------------------- Engine App: DocumentDB
   AppSgDocDb:
@@ -2094,6 +2195,9 @@ Resources:
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
                 Resource: !Ref DocDbSecret
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref AdminSecret
 
   AppProfileDocDb:
     Type: AWS::IAM::InstanceProfile
@@ -2130,7 +2234,6 @@ Resources:
         - Field: path-pattern
           PathPatternConfig:
             Values:
-              - /docdb
               - /docdb/*
       Actions:
         - Type: forward
@@ -2156,21 +2259,24 @@ Resources:
         - Key: dbws:engine
           Value: docdb
       UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -euxo pipefail
-          cat > /etc/engine-app.env <<'EOF'
-          ENGINE=docdb
-          URL_PREFIX=/docdb
-          AWS_REGION=${AWS::Region}
-          AWS_DEFAULT_REGION=${AWS::Region}
-          DB_HOST=${DocDbCluster.Endpoint}
-          DB_PORT=27017
-          DB_SECRET_ARN=${DocDbSecret}
-          EOF
-          dnf install -y git
-          git clone --depth 1 --branch ${AppRepoRef} ${AppRepoUrl} /opt/engine-app
-          bash /opt/engine-app/app/deploy/bootstrap.sh
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            set -euxo pipefail
+            cat > /etc/engine-app.env <<'EOF'
+            ENGINE=docdb
+            URL_PREFIX=/docdb
+            AWS_REGION=${AWS::Region}
+            AWS_DEFAULT_REGION=${AWS::Region}
+            ADMIN_SECRET_ARN=${AdminSecret}
+            DB_HOST=${DocDbCluster.Endpoint}
+            DB_PORT=27017
+            DB_SECRET_ARN=${DocDbSecret}
+            EOF
+            dnf install -y git
+            git clone --depth 1 --branch ${AppRepoRef} ${AppRepoUrl} /opt/engine-app
+            bash /opt/engine-app/app/deploy/bootstrap.sh
+          - IntegrationArn: !If [ZeroEtl, !Ref ZeroEtlIntegration, none]
 
   # ---------------------------------------------------------------- Engine App: S3
   AppSgS3:
@@ -2220,6 +2326,9 @@ Resources:
                   - s3:PutObject
                   - s3:DeleteObject
                 Resource: !Sub ${ImageBucket.Arn}/*
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref AdminSecret
 
   AppProfileS3:
     Type: AWS::IAM::InstanceProfile
@@ -2256,7 +2365,7 @@ Resources:
         - Field: path-pattern
           PathPatternConfig:
             Values:
-              - /s3
+              - /seller
               - /s3/*
       Actions:
         - Type: forward
@@ -2282,19 +2391,22 @@ Resources:
         - Key: dbws:engine
           Value: s3
       UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -euxo pipefail
-          cat > /etc/engine-app.env <<'EOF'
-          ENGINE=s3
-          URL_PREFIX=/s3
-          AWS_REGION=${AWS::Region}
-          AWS_DEFAULT_REGION=${AWS::Region}
-          BUCKET_NAME=${ImageBucket}
-          EOF
-          dnf install -y git
-          git clone --depth 1 --branch ${AppRepoRef} ${AppRepoUrl} /opt/engine-app
-          bash /opt/engine-app/app/deploy/bootstrap.sh
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            set -euxo pipefail
+            cat > /etc/engine-app.env <<'EOF'
+            ENGINE=s3
+            URL_PREFIX=/s3
+            AWS_REGION=${AWS::Region}
+            AWS_DEFAULT_REGION=${AWS::Region}
+            ADMIN_SECRET_ARN=${AdminSecret}
+            BUCKET_NAME=${ImageBucket}
+            EOF
+            dnf install -y git
+            git clone --depth 1 --branch ${AppRepoRef} ${AppRepoUrl} /opt/engine-app
+            bash /opt/engine-app/app/deploy/bootstrap.sh
+          - IntegrationArn: !If [ZeroEtl, !Ref ZeroEtlIntegration, none]
 
   # ---------------------------------------------------------------- Engine App: OpenSearch
   AppSgOpenSearch:
@@ -2359,6 +2471,9 @@ Resources:
                   - es:ESHttpPut
                   - es:ESHttpDelete
                 Resource: !Sub arn:${AWS::Partition}:es:${AWS::Region}:${AWS::AccountId}:domain/dbws-search/*
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref AdminSecret
 
   AppProfileOpenSearch:
     Type: AWS::IAM::InstanceProfile
@@ -2395,7 +2510,8 @@ Resources:
         - Field: path-pattern
           PathPatternConfig:
             Values:
-              - /opensearch
+              - /search
+              - /stores
               - /opensearch/*
       Actions:
         - Type: forward
@@ -2421,19 +2537,22 @@ Resources:
         - Key: dbws:engine
           Value: opensearch
       UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -euxo pipefail
-          cat > /etc/engine-app.env <<'EOF'
-          ENGINE=opensearch
-          URL_PREFIX=/opensearch
-          AWS_REGION=${AWS::Region}
-          AWS_DEFAULT_REGION=${AWS::Region}
-          OS_HOST=${SearchDomain.DomainEndpoint}
-          EOF
-          dnf install -y git
-          git clone --depth 1 --branch ${AppRepoRef} ${AppRepoUrl} /opt/engine-app
-          bash /opt/engine-app/app/deploy/bootstrap.sh
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            set -euxo pipefail
+            cat > /etc/engine-app.env <<'EOF'
+            ENGINE=opensearch
+            URL_PREFIX=/opensearch
+            AWS_REGION=${AWS::Region}
+            AWS_DEFAULT_REGION=${AWS::Region}
+            ADMIN_SECRET_ARN=${AdminSecret}
+            OS_HOST=${SearchDomain.DomainEndpoint}
+            EOF
+            dnf install -y git
+            git clone --depth 1 --branch ${AppRepoRef} ${AppRepoUrl} /opt/engine-app
+            bash /opt/engine-app/app/deploy/bootstrap.sh
+          - IntegrationArn: !If [ZeroEtl, !Ref ZeroEtlIntegration, none]
 
 Outputs:
   WorkshopUrl:
@@ -2443,6 +2562,9 @@ Outputs:
     Value: !GetAtt Alb.DNSName
   VpcId:
     Value: !Ref Vpc
+  AdminKeySecret:
+    Description: Read the Admin Console key from this secret (key field)
+    Value: !Ref AdminSecret
   AuroraAppUrl:
     Description: Aurora Engine App
     Value: !Sub https://${DomainName}/aurora/

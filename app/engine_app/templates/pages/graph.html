@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block main %}
+<div class="section-head"><div><h1>Customer graph</h1><p>The neighbourhood of one customer in Neptune: what they bought, and who else bought the same products.</p></div>
+  <span class="engine-tag">Neptune</span></div>
+<div class="experiments" id="exp"><h3>Experiment</h3>
+  <div class="row"><label>Customer <select id="who"></select></label></div>
+  <p>Compare Lukas (books only) with Ayşe (many categories), and Elif (no orders: an empty graph is the cold-start problem).</p></div>
+<div id="graph" aria-label="Customer graph"></div>
+<p id="legend" class="notice">Red: the customer. Teal: other customers. Navy: products. Each line is a BOUGHT edge.</p>
+{% endblock %}
+{% block scripts %}
+<script src="{{ prefix }}/static/vendor/vis-network.min.js"></script>
+<script>
+(() => {
+  const { api, esc, $ } = lm;
+  $("#who").innerHTML = LM.personas.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
+  $("#who").value = lm.persona()?.id || "C00001";
+  let net;
+  async function load() {
+    try {
+      const d = await api(`/neptune/api/graph?persona=${$("#who").value}`, { label: "Read the graph", source: "#graph" });
+      const nodes = d.nodes.map((n) => ({ id: n.id, label: n.label.length > 28 ? n.label.slice(0, 27) + "…" : n.label,
+        color: n.group === "me" ? "#C8102E" : n.group === "customer" ? "#1B8A8F" : "#14213D", shape: n.group === "me" || n.group === "customer" ? "dot" : "box",
+        font: { color: n.group === "me" || n.group === "customer" ? "#1C1F26" : "#FFFFFF", face: "Instrument Sans" } }));
+      net?.destroy();
+      net = new vis.Network($("#graph"), { nodes, edges: d.edges.map((e) => ({ ...e, color: "#9FB3C8" })) },
+        { physics: { stabilization: true, barnesHut: { springLength: 140 } }, interaction: { hover: true } });
+    } catch (e) { lm.errorBox($("#graph"), e); }
+  }
+  $("#who").addEventListener("change", load);
+  load();
+})();
+</script>
+{% endblock %}

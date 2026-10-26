@@ -3,6 +3,7 @@
 The data is deterministic for a given size, so every Engine models the same customers, products and
 orders. No external dependency (no Faker) so the code runs on a fresh EC2 instance.
 """
+import math
 import random
 import uuid
 from dataclasses import dataclass, field
@@ -36,6 +37,12 @@ EVENT_TYPES = ["view", "search", "add_to_cart", "remove_from_cart", "wishlist", 
 WAREHOUSES = ["IST-1", "ANK-1", "FRA-1", "BER-1"]
 SENSORS = ["temperature", "humidity"]
 
+from .visitor import PERSONAS  # noqa: E402
+
+# How many past orders each Persona has in the medium and large datasets, and the category they prefer.
+PERSONA_ORDERS = {"C00001": 30, "C00002": 12, "C00004": 15, "C00005": 10, "C00006": 8}
+PERSONA_CATEGORY = {"C00004": "Kitap", "C00005": "Moda", "C00006": "Spor"}
+
 
 @dataclass
 class Dataset:
@@ -46,6 +53,7 @@ class Dataset:
     stores: list = field(default_factory=list)
     events: list = field(default_factory=list)
     readings: list = field(default_factory=list)
+    order_rate: list = field(default_factory=list)
 
 
 def build(size="medium", seed=42):
@@ -56,7 +64,18 @@ def build(size="medium", seed=42):
     now = datetime.now(timezone.utc).replace(microsecond=0)
     ds = Dataset(size=size)
 
+    personas = {p["id"]: p for p in PERSONAS}
     for i in range(1, n["customers"] + 1):
+        cid = f"C{i:05d}"
+        if cid in personas:                       # the six Personas are fixed customers
+            p = personas[cid]
+            first, last = p["name"].split(" ", 1)
+            ds.customers.append({
+                "customer_id": cid, "name": p["name"],
+                "email": f"{ascii_name(first)}.{ascii_name(last)}@example.com",
+                "city": p["city"], "segment": p["segment"],
+                "created_at": (now - timedelta(days=20 if cid == "C00003" else 600)).isoformat()})
+            continue
         city = rnd.choice(CITIES)
         first, last = rnd.choice(FIRST), rnd.choice(LAST)
         ds.customers.append({
@@ -85,12 +104,21 @@ def build(size="medium", seed=42):
                            f"{rnd.choice(['dayanıklı', 'hafif', 'şık', 'ekonomik', 'profesyonel'])} bir ürün.",
         })
 
+    by_cat = {c: [p for p in ds.products if p["category"] == c] for c in CATEGORIES}
+    others = [c for c in ds.customers if c["customer_id"] not in personas or c["customer_id"] == "C00001"]
+    plan = PERSONA_ORDERS if n["orders"] >= 1000 else {k: max(1, v // 3) for k, v in PERSONA_ORDERS.items()}
+    queue = [cid for cid, count in plan.items() for _ in range(count)]   # Persona orders first, then random
+    cmap = {c["customer_id"]: c for c in ds.customers}
     for i in range(1, n["orders"] + 1):
-        cust = ds.customers[0] if i <= 4 else rnd.choice(ds.customers)   # the sample customer always has orders
+        cid = queue[i - 1] if i <= len(queue) else rnd.choice(others)["customer_id"]
+        cust = cmap[cid]
         when = now - timedelta(days=rnd.randint(0, 365), minutes=rnd.randint(0, 1439))
+        favourite = PERSONA_CATEGORY.get(cid)
+        pool = by_cat[favourite] if favourite and rnd.random() < 0.85 else ds.products
         items = []
-        for p in rnd.sample(ds.products, rnd.randint(1, 4)):
-            items.append({"product_id": p["product_id"], "qty": rnd.randint(1, 3), "unit_price": p["price"],
+        for p in rnd.sample(pool, min(len(pool), rnd.randint(1, 4))):
+            qty = rnd.randint(5, 20) if cid == "C00002" else rnd.randint(1, 3)
+            items.append({"product_id": p["product_id"], "qty": qty, "unit_price": p["price"],
                           "category": p["category"]})
         ds.orders.append({
             "order_id": f"O{i:06d}", "customer_id": cust["customer_id"], "order_date": when.isoformat(),
@@ -103,9 +131,11 @@ def build(size="medium", seed=42):
                           "city": city, "lat": round(lat + rnd.uniform(-0.15, 0.15), 5),
                           "lon": round(lon + rnd.uniform(-0.15, 0.15), 5)})
 
-    hot_users = ds.customers[:20]
+    hot_users = [c for c in ds.customers[:20] if c["customer_id"] != "C00003"]
+    heavy = next(c for c in ds.customers if c["customer_id"] == "C00005")      # Zeynep browses a lot
     for _ in range(n["events"]):
-        cust = rnd.choice(hot_users) if rnd.random() < 0.3 else rnd.choice(ds.customers)
+        r = rnd.random()
+        cust = heavy if r < 0.08 else rnd.choice(hot_users) if r < 0.35 else rnd.choice(ds.customers)
         prod = rnd.choice(ds.products)
         ds.events.append({
             "user_id": cust["customer_id"], "event_time": now - timedelta(minutes=rnd.randint(0, 60 * 24 * 30)),
@@ -121,7 +151,16 @@ def build(size="medium", seed=42):
                 t = now - timedelta(minutes=5 * (per_series - k))
                 ds.readings.append({"warehouse": wh, "sensor": sensor, "time": t,
                                     "value": round(base + 3 * rnd.random() + (k % 288) / 96, 2)})
+    for k in range(24 * 60):                                  # orders per minute, last 24 hours
+        t = now - timedelta(minutes=24 * 60 - k)
+        hour = t.hour + 3                                     # Türkiye time drives the daily curve
+        base = 20 + 60 * max(0.0, math.sin((hour % 24 - 6) / 18 * math.pi))
+        ds.order_rate.append({"time": t, "orders": max(0, int(rnd.gauss(base, base * 0.15)))})
     return ds
+
+
+def ascii_name(text):
+    return text.lower().translate(str.maketrans("ıişğüöç", "iisguoc")).encode("ascii", "ignore").decode()
 
 
 def sample_customer(ds):

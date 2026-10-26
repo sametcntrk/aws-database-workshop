@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ prefix }}/static/vendor/leaflet/leaflet.css">{% endblock %}
+{% block main %}
+<div class="section-head"><div><h1>Find a store</h1><p>Click the map. OpenSearch finds the stores inside the radius and sorts them by distance.</p></div>
+  <span class="engine-tag">OpenSearch geo_point</span></div>
+<div class="experiments" id="exp">
+  <h3>Experiment</h3>
+  <div class="row"><span>Radius</span>
+    <span class="seg" id="exp-km"><button type="button" data-value="10" aria-pressed="false">10 km</button><button type="button" data-value="25" aria-pressed="true">25 km</button><button type="button" data-value="100" aria-pressed="false">100 km</button></span>
+    <button class="quiet" data-city="41.0082,28.9784">İstanbul</button><button class="quiet" data-city="39.9334,32.8597">Ankara</button>
+    <button class="quiet" data-city="50.1109,8.6821">Frankfurt</button></div>
+</div>
+<div class="two">
+  <div id="map" aria-label="Map"></div>
+  <div class="panel"><table><thead><tr><th>Store</th><th>City</th><th class="num">Distance</th></tr></thead><tbody id="stores"></tbody></table></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ prefix }}/static/vendor/leaflet/leaflet.js"></script>
+<script>
+(() => {
+  const { api, esc, segmented, $ } = lm;
+  L.Icon.Default.imagePath = "{{ prefix }}/static/vendor/leaflet/images/";
+  let center = [41.0082, 28.9784];
+  const map = L.map("map").setView(center, 10);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18, attribution: "© OpenStreetMap" }).addTo(map);
+  const layer = L.layerGroup().addTo(map);
+  const getKm = segmented($("#exp-km"), find);
+  map.on("click", (e) => { center = [e.latlng.lat, e.latlng.lng]; find(); });
+  document.querySelectorAll("[data-city]").forEach((b) => b.addEventListener("click", () => { center = b.dataset.city.split(",").map(Number); map.setView(center, 9); find(); }));
+  async function find() {
+    try {
+      const rows = await api(`/opensearch/api/stores?lat=${center[0]}&lon=${center[1]}&km=${getKm()}`, { label: "Find stores", source: "#map" });
+      layer.clearLayers();
+      L.circle(center, { radius: getKm() * 1000, color: "#1B8A8F", weight: 1, fillOpacity: .06 }).addTo(layer);
+      rows.forEach((s) => L.marker([s.location.lat, s.location.lon]).bindPopup(`${esc(s.name)}<br>${s.distance_km} km`).addTo(layer));
+      $("#stores").innerHTML = rows.map((s) => `<tr><td>${esc(s.name)}</td><td>${esc(s.city)}</td><td class="num">${s.distance_km} km</td></tr>`).join("")
+        || `<tr><td colspan="3">No store in ${getKm()} km. Make the radius larger.</td></tr>`;
+    } catch (e) { lm.errorBox($("#stores"), e); }
+  }
+  find();
+})();
+</script>
+{% endblock %}

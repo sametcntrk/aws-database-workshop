@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block main %}
+<div class="section-head"><div><h1>Order report</h1><p>An operational report straight from Aurora: revenue by customer segment and the orders placed in this workshop.</p></div>
+  <span class="engine-tag">Aurora</span></div>
+<div class="experiments" id="exp"><h3>Experiment</h3>
+  <label><input type="checkbox" id="exp-explain"> Show the query plan (EXPLAIN ANALYZE)</label>
+  <p>The plan shows how PostgreSQL joins the tables and how long each step takes.</p></div>
+<div class="two">
+  <div class="panel" id="seg"><h2>Revenue by segment</h2><div class="chart-box"><canvas id="c-seg"></canvas></div></div>
+  <div class="panel" id="ws"><h2>Workshop orders per hour</h2><div class="chart-box"><canvas id="c-ws"></canvas></div></div>
+</div>
+<div class="panel" id="plan-wrap" hidden><h2>Query plan</h2><pre id="plan" style="white-space:pre-wrap;font-family:var(--mono);font-size:.8rem"></pre></div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ prefix }}/static/vendor/chart.umd.min.js"></script>
+<script>
+(() => {
+  const { api, $ } = lm;
+  Chart.defaults.font.family = "Instrument Sans";
+  let c1, c2;
+  async function load() {
+    try {
+      const d = await api(`/aurora/api/report?explain=${$("#exp-explain").checked ? "on" : "off"}`, { label: "Order report", source: "#seg, #ws" });
+      c1?.destroy(); c2?.destroy();
+      c1 = new Chart($("#c-seg"), { type: "bar", data: { labels: d.segments.map((s) => s.segment),
+        datasets: [{ label: "Revenue (TRY)", data: d.segments.map((s) => s.revenue), backgroundColor: "#14213D" }] }, options: { maintainAspectRatio: false } });
+      c2 = new Chart($("#c-ws"), { type: "line", data: { labels: d.workshop.map((h) => new Date(h.hour).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" })),
+        datasets: [{ label: "Orders", data: d.workshop.map((h) => h.orders), borderColor: "#C8102E", tension: .3 }] }, options: { maintainAspectRatio: false } });
+      $("#plan-wrap").hidden = !d.plan; $("#plan").textContent = d.plan || "";
+    } catch (e) { lm.errorBox($("#seg"), e); }
+  }
+  $("#exp-explain").addEventListener("change", load);
+  load();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block main %}
+<div class="section-head"><div><h1>Your cart</h1><p>One DynamoDB partition per Visitor. The items expire after 24 hours (TTL).</p></div>
+  <span class="engine-tag">DynamoDB</span></div>
+
+<div class="experiments" id="exp">
+  <h3>Experiment</h3>
+  <div class="row"><span>Read consistency</span>
+    <span class="seg" id="exp-consistent"><button type="button" data-value="true" aria-pressed="true">Strongly consistent</button><button type="button" data-value="false" aria-pressed="false">Eventually consistent</button></span></div>
+  <p>Compare the read request units (RRU) in the panel. An eventually consistent read costs half.</p>
+</div>
+
+<div class="panel" id="cart">
+  <table><thead><tr><th>Product</th><th class="num">Price</th><th class="num">Quantity</th><th class="num">Line total</th><th>Expires</th><th></th></tr></thead>
+    <tbody id="rows"></tbody>
+    <tfoot><tr><th colspan="3">Total</th><th class="num" id="total"></th><th colspan="2"></th></tr></tfoot></table>
+  <p style="margin-top:1rem"><a class="btn" href="/checkout" id="go-checkout">Go to checkout</a></p>
+</div>
+
+<div class="panel" id="sim">
+  <h2>Load Simulation: a burst of shoppers</h2>
+  <p>The DynamoDB Engine App sends many add-to-cart writes in parallel from 200 synthetic shoppers. DynamoDB on-demand mode needs no capacity plan for this.
+     The limit is 2,000 requests per run and 3 runs per hour.</p>
+  <label>Requests <select id="sim-n"><option>500</option><option selected>1000</option><option>2000</option></select></label>
+  <button class="btn secondary" type="button" id="sim-run">Start the simulation</button>
+  <div id="sim-out"></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const { api, esc, tl, segmented, $ } = lm;
+  const getConsistent = segmented($("#exp-consistent"), load);
+  function render(d) {
+    $("#rows").innerHTML = d.items.map((i) => `<tr><td><a href="/p/${i.product_id}">${esc(i.name)}</a></td><td class="num">${tl(i.unit_price)}</td>
+      <td class="num">${i.qty}</td><td class="num">${tl(i.qty * i.unit_price)}</td>
+      <td>${i.expires_at ? new Date(i.expires_at * 1000).toLocaleString("tr-TR") : "-"}</td>
+      <td><button class="quiet" data-del="${i.product_id}">Remove</button></td></tr>`).join("")
+      || '<tr><td colspan="6">The cart is empty. <a href="/search">Find a product</a>.</td></tr>';
+    const total = d.items.reduce((s, i) => s + i.qty * i.unit_price, 0);
+    $("#total").textContent = tl(total);
+    lm.setCartCount(d.items.reduce((s, i) => s + i.qty, 0));
+    $("#go-checkout").hidden = d.items.length === 0;
+    document.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", async () => {
+      render(await api(`/dynamodb/api/cart/items/${b.dataset.del}`, { method: "DELETE", label: "Remove an item", source: "#cart" }));
+    }));
+  }
+  async function load() {
+    try { render(await api(`/dynamodb/api/cart?consistent=${getConsistent()}`, { label: "Read the cart", source: "#cart" })); }
+    catch (e) { lm.errorBox($("#rows"), e); }
+  }
+  $("#sim-run").addEventListener("click", async () => {
+    $("#sim-run").disabled = true; $("#sim-out").innerHTML = "<p>The simulation runs. It takes a few seconds.</p>";
+    try {
+      const s = await api("/dynamodb/api/simulate", { body: { requests: Number($("#sim-n").value) }, label: "Load Simulation", source: "#sim" });
+      $("#sim-out").innerHTML = `<div class="stats"><div class="stat"><b>${s.requests}</b><span>writes</span></div>
+        <div class="stat"><b>${s.per_second}</b><span>writes per second</span></div><div class="stat"><b>${s.p50_ms} ms</b><span>median latency</span></div>
+        <div class="stat"><b>${s.p95_ms} ms</b><span>95th percentile</span></div><div class="stat"><b>${s.p99_ms} ms</b><span>99th percentile</span></div></div>`;
+    } catch (e) { lm.errorBox($("#sim-out"), e); }
+    $("#sim-run").disabled = false;
+  });
+  load();
+})();
+</script>
+{% endblock %}

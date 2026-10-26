@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block main %}
+<div class="section-head"><div><h1>Checkout</h1><p>Placing an order touches six Engines. The browser calls each Engine App in turn, so you can see every step.</p></div>
+  <span class="engine-tag">Aurora + 5 more</span></div>
+
+<div class="experiments" id="exp">
+  <h3>Experiment</h3>
+  <label><input type="checkbox" id="exp-fail"> Make the payment fail after the stock update</label>
+  <p>Aurora then rolls back the transaction: the stock comes back and no order exists. Watch BEGIN, UPDATE and ROLLBACK in the panel.</p>
+</div>
+
+<div class="two">
+  <div class="panel" id="summary"><h2>Order summary</h2><table><tbody id="lines"></tbody></table>
+    <p class="price" id="total" style="margin-top:.75rem"></p>
+    <button class="btn" type="button" id="place">Place the order</button></div>
+  <div class="panel" id="flow"><h2>What happens</h2>
+    <ol class="steps" id="steps">
+      <li data-step="aurora"><span>Aurora: one transaction updates the stock and writes the order</span><span></span></li>
+      <li data-step="dynamodb"><span>DynamoDB: empty the cart</span><span></span></li>
+      <li data-step="elasticache"><span>ElastiCache: add the amount to the live leaderboard</span><span></span></li>
+      <li data-step="keyspaces"><span>Keyspaces: record a purchase event</span><span></span></li>
+      <li data-step="influxdb"><span>InfluxDB: count one order for the operations chart</span><span></span></li>
+      <li data-step="neptune"><span>Neptune: add BOUGHT edges for recommendations</span><span></span></li>
+    </ol>
+    <p class="notice">A production system sends these updates as events through a queue (for example SQS or EventBridge). Here the browser makes the calls one by one, so the panel can show each of them.</p>
+    <div id="result" role="status"></div></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(async () => {
+  const { api, esc, tl, $ } = lm;
+  let items = [];
+  try {
+    const d = await api("/dynamodb/api/cart?consistent=true", { label: "Read the cart", source: "#summary" });
+    items = d.items;
+    $("#lines").innerHTML = items.map((i) => `<tr><td>${esc(i.name)} × ${i.qty}</td><td class="num">${tl(i.qty * i.unit_price)}</td></tr>`).join("")
+      || '<tr><td>The cart is empty. <a href="/search">Find a product</a>.</td></tr>';
+    $("#total").textContent = tl(d.total);
+    $("#place").disabled = items.length === 0;
+  } catch (e) { lm.errorBox($("#lines"), e); }
+
+  const mark = (step, ok, text) => { const li = document.querySelector(`[data-step="${step}"]`); li.className = ok ? "ok" : "fail"; li.lastElementChild.textContent = text; };
+  $("#place").addEventListener("click", async () => {
+    $("#place").disabled = true;
+    document.querySelectorAll("#steps li").forEach((li) => { li.className = ""; li.lastElementChild.textContent = ""; });
+    let order;
+    try {
+      order = await api("/aurora/api/orders", { body: { items: items.map((i) => ({ product_id: i.product_id, qty: i.qty, unit_price: i.unit_price })),
+        fail_after_stock: $("#exp-fail").checked }, label: "Place the order (Aurora transaction)", source: "#flow" });
+    } catch (e) { mark("aurora", false, "error"); lm.errorBox($("#result"), e); $("#place").disabled = false; return; }
+    if (order.result !== "committed") {
+      mark("aurora", false, "rolled back");
+      $("#result").innerHTML = `<div class="notice bad">${esc(order.message)} The transaction rolled back. Nothing else ran, and your cart is unchanged.</div>`;
+      $("#place").disabled = false;
+      return;
+    }
+    mark("aurora", true, order.order_id);
+    const total = order.total;
+    const steps = [
+      ["dynamodb", () => api("/dynamodb/api/cart", { method: "DELETE", label: "Empty the cart", source: "#flow" })],
+      ["elasticache", () => api("/elasticache/api/leaderboard/add", { body: { amount: total }, label: "Update the leaderboard", source: "#flow" })],
+      ["keyspaces", () => api("/keyspaces/api/events", { body: { type: "purchase", product_id: items[0].product_id, detail: `Order ${order.order_id} · ${tl(total)}` }, label: "Record the purchase event", source: "#flow" })],
+      ["influxdb", () => api("/influxdb/api/orders-metric", { body: { count: 1 }, label: "Count the order", source: "#flow" })],
+      ["neptune", () => api("/neptune/api/purchase", { body: { order_id: order.order_id, products: items.map((i) => i.product_id) }, label: "Add graph edges", source: "#flow" })],
+    ];
+    for (const [step, fn] of steps) {
+      try { await fn(); mark(step, true, "done"); } catch (e) { mark(step, false, "failed"); }
+    }
+    lm.setCartCount(0);
+    $("#result").innerHTML = `<div class="notice good">Order ${esc(order.order_id)} is placed. <a href="/orders">See your orders</a> or
+      <a href="/admin/reports">open the sales report</a>: zero-ETL copies the order to Redshift within seconds.</div>`;
+  });
+})();
+</script>
+{% endblock %}

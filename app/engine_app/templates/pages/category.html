@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block main %}
+<div class="section-head"><div><h1 id="cat-title">{{ args.category }}</h1><p id="cat-sub">Products from the catalog in DocumentDB.</p></div>
+  <span class="engine-tag">DocumentDB</span></div>
+
+<div class="experiments" id="exp">
+  <h3>Experiment</h3>
+  <div class="row">
+    <span>Index</span>
+    <span class="seg" id="exp-index"><button type="button" data-value="on" aria-pressed="true">Use the index</button><button type="button" data-value="off" aria-pressed="false">Collection scan</button></span>
+    <label>Colour <select id="color"><option value="">All</option></select></label>
+    <label>Sort <select id="sort"><option value="rating">Rating</option><option value="price">Price</option></select></label>
+  </div>
+  <p>Compare "docs examined" in the panel. With the index DocumentDB reads only the matching documents. Without it, it reads the full collection.</p>
+</div>
+<div class="grid" id="products"></div>
+{% endblock %}
+{% block scripts %}
+<script>
+(async () => {
+  const { api, esc, productCard, segmented, $ } = lm;
+  const cat = LM.args.category;
+  const getIndex = segmented($("#exp-index"), load);
+  $("#color").addEventListener("change", load);
+  $("#sort").addEventListener("change", load);
+  let colorsLoaded = false;
+  async function load() {
+    const qs = new URLSearchParams({ category: cat, index: getIndex(), sort: $("#sort").value });
+    if ($("#color").value) qs.set("color", $("#color").value);
+    try {
+      const d = await api(`/docdb/api/products?${qs}`, { label: `List ${cat}`, source: "#products" });
+      $("#products").innerHTML = d.items.map((p) => productCard(p)).join("") || "<p>No product matches this filter.</p>";
+      $("#cat-sub").textContent = `${d.items.length} products from the catalog in DocumentDB.`;
+      if (!colorsLoaded) { $("#color").innerHTML += d.colors.map((c) => `<option>${esc(c)}</option>`).join(""); colorsLoaded = true; }
+    } catch (e) { lm.errorBox($("#products"), e); }
+  }
+  load();
+})();
+</script>
+{% endblock %}

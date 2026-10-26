@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block main %}
+<div class="section-head"><div><h1>My activity</h1><p>Every view and purchase is one row in Keyspaces. Your browser id is the partition key, so your history is one read.</p></div>
+  <span class="engine-tag">Keyspaces</span></div>
+<div class="experiments" id="exp"><h3>Experiments</h3>
+  <div class="row">
+    <span>Whose history</span>
+    <span class="seg" id="exp-who"><button type="button" data-value="visitor" aria-pressed="true">This browser</button><button type="button" data-value="persona" aria-pressed="false">My persona (seeded)</button></span>
+    <span>Read consistency</span>
+    <span class="seg" id="exp-cl"><button type="button" data-value="LOCAL_QUORUM" aria-pressed="true">LOCAL_QUORUM</button><button type="button" data-value="LOCAL_ONE" aria-pressed="false">LOCAL_ONE</button></span>
+  </div>
+  <p>LOCAL_ONE reads one of the three replicas and costs half. LOCAL_QUORUM reads two, so it always returns your last write.</p></div>
+<div class="panel" id="feed"><table><thead><tr><th>Time</th><th>Event</th><th>Product</th></tr></thead><tbody id="rows"></tbody></table></div>
+<div class="panel" id="sim"><h2>Load Simulation: clickstream burst</h2>
+  <p>500 synthetic shoppers send view events. Keyspaces accepts them all; writes that the new table cannot take yet are retried with backoff. Limit: 2,000 per run.</p>
+  <label>Events <select id="sim-n"><option>500</option><option selected>1000</option><option>2000</option></select></label>
+  <button class="btn secondary" type="button" id="sim-run">Start the burst</button><div id="sim-out"></div></div>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const { api, esc, segmented, $ } = lm;
+  const getWho = segmented($("#exp-who"), load), getCl = segmented($("#exp-cl"), load);
+  async function load() {
+    try {
+      const rows = await api(`/keyspaces/api/activity?who=${getWho()}&consistency=${getCl()}`, { label: "Read the activity", source: "#feed" });
+      $("#rows").innerHTML = rows.map((r) => `<tr><td>${new Date(r.event_time).toLocaleString("tr-TR")}</td><td>${esc(r.type)}</td>
+        <td>${r.product_id ? `<a href="/p/${r.product_id}">${esc(r.detail)}</a>` : esc(r.detail)}</td></tr>`).join("")
+        || '<tr><td colspan="3">No event yet. Open a few products, then come back.</td></tr>';
+    } catch (e) { lm.errorBox($("#rows"), e); }
+  }
+  $("#sim-run").addEventListener("click", async () => {
+    $("#sim-run").disabled = true;
+    try { const s = await api("/keyspaces/api/simulate", { body: { requests: Number($("#sim-n").value) }, label: "Load Simulation", source: "#sim" });
+      $("#sim-out").innerHTML = `<div class="stats"><div class="stat"><b>${s.requests}</b><span>events</span></div><div class="stat"><b>${s.per_second}</b><span>events per second</span></div>
+        <div class="stat"><b>${s.retried}</b><span>writes retried</span></div><div class="stat"><b>${s.seconds} s</b><span>duration</span></div></div>`;
+    } catch (e) { lm.errorBox($("#sim-out"), e); }
+    $("#sim-run").disabled = false;
+  });
+  document.addEventListener("lm:persona", load);
+  load();
+})();
+</script>
+{% endblock %}

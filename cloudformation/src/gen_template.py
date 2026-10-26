@@ -24,6 +24,12 @@ APPS = [
     ("opensearch", "OpenSearch", 2, 100, [443]),
 ]
 AZ = ["A", "B", "C"]
+# Storefront paths that each Engine App serves (docs/storefront-spec.md). The ALB default action goes to DocumentDB.
+PATHS = {
+    "aurora": ["/checkout", "/orders", "/admin/orders"], "redshift": ["/admin/reports"], "dynamodb": ["/cart"],
+    "elasticache": ["/deals", "/admin/live"], "keyspaces": ["/account/activity"], "influxdb": ["/admin/ops"],
+    "neptune": ["/admin/graph"], "docdb": [], "s3": ["/seller"], "opensearch": ["/search", "/stores"],
+}
 # fixed Engine App IPs (same as the architecture diagram)
 IPS = {"dynamodb": "10.20.10.11", "s3": "10.20.10.12", "keyspaces": "10.20.10.13", "aurora": "10.20.10.14",
        "neptune": "10.20.11.11", "docdb": "10.20.11.12", "elasticache": "10.20.11.13",
@@ -41,7 +47,7 @@ ENV = {
     "aurora": ["DB_HOST=${AuroraCluster.Endpoint.Address}", "DB_PORT=5432", "DB_NAME=shop",
                "DB_SECRET_ARN=${AuroraCluster.MasterUserSecret.SecretArn}"],
     "redshift": ["DB_HOST=${RedshiftWorkgroup.Workgroup.Endpoint.Address}", "DB_PORT=5439", "DB_NAME=dev",
-                 "DB_SECRET_ARN=${RedshiftSecret}"],
+                 "DB_SECRET_ARN=${RedshiftSecret}", "INTEGRATION_ARN=${IntegrationArn}"],
     "dynamodb": ["TABLE_NAME=${CartTable}"],
     "elasticache": ["CACHE_HOST=${Cache.Endpoint.Address}", "CACHE_PORT=${Cache.Endpoint.Port}",
                     "CACHE_SECRET_ARN=${CacheUserSecret}"],
@@ -72,6 +78,7 @@ POLICY = {
     - dynamodb:Scan
     - dynamodb:GetItem
     - dynamodb:PutItem
+    - dynamodb:UpdateItem
     - dynamodb:DeleteItem
     - dynamodb:BatchWriteItem
   Resource: !GetAtt CartTable.Arn""",
@@ -202,6 +209,9 @@ def app_blocks():
             Version: '2012-10-17'
             Statement:
 {ind(POLICY[eid], 14)}
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref AdminSecret
 
   AppProfile{C}:
     Type: AWS::IAM::InstanceProfile
@@ -238,8 +248,7 @@ def app_blocks():
         - Field: path-pattern
           PathPatternConfig:
             Values:
-              - /{eid}
-              - /{eid}/*
+{ind(chr(10).join(f"- {x}" for x in PATHS[eid] + [f"/{eid}/*"]), 14)}
       Actions:
         - Type: forward
           TargetGroupArn: !Ref Tg{C}
@@ -264,19 +273,22 @@ def app_blocks():
         - Key: dbws:engine
           Value: {eid}
       UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -euxo pipefail
-          cat > /etc/engine-app.env <<'EOF'
-          ENGINE={eid}
-          URL_PREFIX=/{eid}
-          AWS_REGION=${{AWS::Region}}
-          AWS_DEFAULT_REGION=${{AWS::Region}}
-{ind(chr(10).join(ENV[eid]), 10)}
-          EOF
-          dnf install -y git
-          git clone --depth 1 --branch ${{AppRepoRef}} ${{AppRepoUrl}} /opt/engine-app
-          bash /opt/engine-app/app/deploy/bootstrap.sh
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            set -euxo pipefail
+            cat > /etc/engine-app.env <<'EOF'
+            ENGINE={eid}
+            URL_PREFIX=/{eid}
+            AWS_REGION=${{AWS::Region}}
+            AWS_DEFAULT_REGION=${{AWS::Region}}
+            ADMIN_SECRET_ARN=${{AdminSecret}}
+{ind(chr(10).join(ENV[eid]), 12)}
+            EOF
+            dnf install -y git
+            git clone --depth 1 --branch ${{AppRepoRef}} ${{AppRepoUrl}} /opt/engine-app
+            bash /opt/engine-app/app/deploy/bootstrap.sh
+          - IntegrationArn: !If [ZeroEtl, !Ref ZeroEtlIntegration, none]
 """)
     return "".join(out)
 
@@ -296,7 +308,7 @@ Metadata:
       - Label: {default: Engine Apps}
         Parameters: [AppRepoUrl, AppRepoRef, InstanceType, LatestAmiId]
       - Label: {default: Account prerequisites}
-        Parameters: [CreateOpenSearchServiceLinkedRole]
+        Parameters: [CreateOpenSearchServiceLinkedRole, EnableZeroEtl]
 
 Parameters:
   DomainName:
@@ -327,6 +339,13 @@ Parameters:
   LatestAmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+  EnableZeroEtl:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Create the Aurora to Redshift zero-ETL integration. On an existing stack, first deploy with 'false',
+      reboot the Aurora writer (the cluster parameters are static), then deploy with 'true'.
   CreateOpenSearchServiceLinkedRole:
     Type: String
     Default: 'true'
@@ -335,6 +354,7 @@ Parameters:
 
 Conditions:
   CreateOsSlr: !Equals [!Ref CreateOpenSearchServiceLinkedRole, 'true']
+  ZeroEtl: !Equals [!Ref EnableZeroEtl, 'true']
 
 Resources:
   # ================================================================ Network (Module 0)
@@ -627,19 +647,8 @@ EDGE = r"""
       Certificates:
         - CertificateArn: !Ref Certificate
       DefaultActions:
-        - Type: fixed-response
-          FixedResponseConfig:
-            StatusCode: '200'
-            ContentType: text/html
-            MessageBody: >-
-              <html><head><meta charset="utf-8"><title>AWS Database Workshop</title>
-              <style>body{font-family:sans-serif;margin:40px}a{display:block;margin:6px 0}</style></head>
-              <body><h1>AWS Database Workshop</h1><p>Bir Engine App seçin:</p>
-              <a href="/aurora/">Aurora PostgreSQL - Relational</a><a href="/redshift/">Redshift - Columnar</a>
-              <a href="/dynamodb/">DynamoDB - Key-value</a><a href="/elasticache/">ElastiCache - In-memory</a>
-              <a href="/keyspaces/">Keyspaces - Wide column</a><a href="/influxdb/">InfluxDB - Time-series</a>
-              <a href="/neptune/">Neptune - Graph</a><a href="/docdb/">DocumentDB - Document</a>
-              <a href="/s3/">S3 - Blob</a><a href="/opensearch/">OpenSearch - Text search + geo</a></body></html>
+        - Type: forward
+          TargetGroupArn: !Ref TgDocDb
 
   DnsRecord:
     Type: AWS::Route53::RecordSet
@@ -673,6 +682,18 @@ EDGE = r"""
 """
 
 ENGINES = r"""
+  # ================================================================ Admin Console key
+  AdminSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: dbws/admin
+      Description: Admin Console key of the Lale Market Storefront (instructor only)
+      GenerateSecretString:
+        SecretStringTemplate: '{}'
+        GenerateStringKey: key
+        PasswordLength: 24
+        ExcludePunctuation: true
+
   # ================================================================ Engines
   # ---------------------------------------------------------------- 1 Aurora PostgreSQL (relational)
   AuroraSubnetGroup:
@@ -681,6 +702,18 @@ ENGINES = r"""
       DBSubnetGroupName: dbws-aurora
       DBSubnetGroupDescription: Aurora - data subnets
       SubnetIds: [!Ref DataSubnetA, !Ref DataSubnetB, !Ref DataSubnetC]
+
+  AuroraZeroEtlParams:
+    Type: AWS::RDS::DBClusterParameterGroup
+    Properties:
+      DBClusterParameterGroupName: dbws-aurora-zeroetl
+      Description: Enhanced logical replication for the zero-ETL integration with Redshift
+      Family: aurora-postgresql17
+      Parameters:
+        rds.logical_replication: '1'
+        aurora.enhanced_logical_replication: '1'
+        aurora.logical_replication_backup: '0'
+        aurora.logical_replication_globaldb: '0'
 
   AuroraCluster:
     Type: AWS::RDS::DBCluster
@@ -691,6 +724,7 @@ ENGINES = r"""
       Engine: aurora-postgresql
       EngineVersion: '17.9'
       DatabaseName: shop
+      DBClusterParameterGroupName: !Ref AuroraZeroEtlParams
       MasterUsername: dbwsadmin
       ManageMasterUserPassword: true
       StorageEncrypted: true
@@ -744,6 +778,20 @@ ENGINES = r"""
       DbName: dev
       AdminUsername: dbwsadmin
       AdminUserPassword: !Sub '{{resolve:secretsmanager:${RedshiftSecret}:SecretString:password}}'
+      NamespaceResourcePolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: redshift.amazonaws.com
+            Action: redshift:AuthorizeInboundIntegration
+            Condition:
+              StringEquals:
+                aws:SourceArn: !GetAtt AuroraCluster.DBClusterArn
+          - Effect: Allow
+            Principal:
+              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action: redshift:CreateInboundIntegration
 
   RedshiftWorkgroup:
     Type: AWS::RedshiftServerless::Workgroup
@@ -755,6 +803,20 @@ ENGINES = r"""
       EnhancedVpcRouting: true
       SubnetIds: [!Ref DataSubnetA, !Ref DataSubnetB, !Ref DataSubnetC]
       SecurityGroupIds: [!Ref DbSgRedshift]
+      ConfigParameters:
+        - ParameterKey: enable_case_sensitive_identifier
+          ParameterValue: 'true'
+
+  # Aurora → Redshift zero-ETL (docs/adr/0001-aurora-to-redshift-zero-etl.md)
+  ZeroEtlIntegration:
+    Type: AWS::RDS::Integration
+    Condition: ZeroEtl
+    DependsOn: [AuroraWriter, RedshiftWorkgroup]
+    Properties:
+      IntegrationName: dbws-aurora-to-redshift
+      SourceArn: !GetAtt AuroraCluster.DBClusterArn
+      TargetArn: !GetAtt RedshiftNamespace.Namespace.NamespaceArn
+      DataFilter: 'include: shop.*.*'
 
   # ---------------------------------------------------------------- 3 DynamoDB (key-value)
   CartTable:
@@ -776,6 +838,9 @@ ENGINES = r"""
           KeyType: RANGE
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
       SSESpecification:
         SSEEnabled: true
 
@@ -854,6 +919,7 @@ ENGINES = r"""
       BillingMode:
         Mode: ON_DEMAND
       PointInTimeRecoveryEnabled: true
+      DefaultTimeToLive: 604800
 
   # ---------------------------------------------------------------- 6 Timestream for InfluxDB (time-series)
   InfluxDbSecret:
@@ -1148,6 +1214,9 @@ Outputs:
     Value: !GetAtt Alb.DNSName
   VpcId:
     Value: !Ref Vpc
+  AdminKeySecret:
+    Description: Read the Admin Console key from this secret (key field)
+    Value: !Ref AdminSecret
 """
 for eid, label, *_ in APPS:
     OUTPUTS += f"""  {cap(eid)}AppUrl:

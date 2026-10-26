@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block main %}
+<section class="hero" id="hero">
+  <div>
+    <h1>Ten databases. One shop.</h1>
+    <p>Lale Market sells 200 products to thousands of shoppers. Each part of this shop runs on a different AWS database. Open the panel on the right to see every call.</p>
+    <p><button class="btn" type="button" id="start-journey">Start the guided journey</button>
+       <a class="btn secondary" href="/search?q=kablosuz%20kulaklik">Search the catalog</a></p>
+  </div>
+  <a class="deal" href="/deals" id="hero-deal" aria-label="Today's flash deal">
+    <img id="deal-img" src="" alt="" width="110" height="110">
+    <div><span class="engine-tag">ElastiCache</span><h3 id="deal-name">Today's flash deal</h3>
+      <span class="price" id="deal-price"></span><p class="countdown" id="deal-stock"></p></div>
+  </a>
+</section>
+
+<div class="section-head"><div><h2>Categories</h2><p>One aggregation in DocumentDB counts the products in each category.</p></div>
+  <span class="engine-tag">DocumentDB</span></div>
+<div class="cats" id="cats"></div>
+
+<div class="section-head"><div><h2>Top rated</h2><p>A find with a projection returns only the fields that a product card needs.</p></div>
+  <span class="engine-tag">DocumentDB</span></div>
+<div class="grid" id="featured"></div>
+
+<section class="strip" id="recent-wrap" hidden>
+  <div class="section-head"><div><h2>Recently viewed</h2><p>Your activity partition in Keyspaces, newest first.</p></div><span class="engine-tag">Keyspaces</span></div>
+  <div class="grid" id="recent"></div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+(async () => {
+  const { api, esc, tl, productCard, $ } = lm;
+  $("#start-journey").addEventListener("click", lm.startJourney);
+  try {
+    const d = await api("/docdb/api/home", { label: "Load the home page", source: "#cats, #featured" });
+    $("#cats").innerHTML = d.categories.map((c) => `<a href="/c/${encodeURIComponent(c.name)}"><strong>${esc(c.name)}</strong><span>${c.products} products, from ${tl(c.from_price)}</span></a>`).join("");
+    $("#featured").innerHTML = d.featured.map((p) => productCard(p)).join("");
+  } catch (e) { lm.errorBox($("#featured"), e); }
+  api("/elasticache/api/deal", { label: "Flash deal", source: "#hero-deal" }).then((d) => {
+    if (!d.product_id) return;
+    $("#deal-img").src = `/s3/api/img/${d.product_id}`;
+    $("#deal-name").textContent = d.name;
+    $("#deal-price").innerHTML = `${tl(d.price)} <del>${tl(d.old_price)}</del>`;
+    $("#deal-stock").textContent = `${d.stock} pieces left`;
+  }).catch(() => {});
+  api("/keyspaces/api/recent", { label: "Recently viewed", source: "#recent-wrap" }).then((rows) => {
+    if (!rows.length) return;
+    $("#recent-wrap").hidden = false;
+    $("#recent").innerHTML = rows.map((r) => productCard({ product_id: r.product_id, name: r.detail.split(" · ")[0] })).join("");
+  }).catch(() => {});
+})();
+</script>
+{% endblock %}

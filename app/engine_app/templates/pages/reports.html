@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block main %}
+<div class="section-head"><div><h1>Sales reports</h1><p>Analytics in Redshift Serverless. "Live" reads the Aurora tables that zero-ETL copies into Redshift, so new orders appear within seconds.</p></div>
+  <span class="engine-tag">Redshift</span></div>
+<div class="experiments" id="exp"><h3>Experiments</h3>
+  <div class="row">
+    <span>Data</span>
+    <span class="seg" id="exp-src"><button type="button" data-value="history" aria-pressed="true">History (seeded)</button><button type="button" data-value="live" aria-pressed="false">Live from Aurora (zero-ETL)</button></span>
+    <span>Group by</span>
+    <span class="seg" id="exp-dim"><button type="button" data-value="month" aria-pressed="true">Month</button><button type="button" data-value="category" aria-pressed="false">Category</button><button type="button" data-value="city" aria-pressed="false">City</button></span>
+  </div>
+  <p>Place an order in checkout, then choose "Live". The replication status below shows when Redshift received it.</p></div>
+<div class="panel" id="chart-wrap"><div class="chart-box"><canvas id="chart"></canvas></div></div>
+<div class="two">
+  <div class="panel" id="table-wrap"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
+  <div class="panel" id="repl"><h2>Zero-ETL replication</h2><dl id="repl-dl" style="display:grid;grid-template-columns:max-content 1fr;gap:.25rem 1rem"></dl>
+    <button class="quiet" type="button" id="repl-refresh">Refresh the status</button></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ prefix }}/static/vendor/chart.umd.min.js"></script>
+<script>
+(() => {
+  const { api, esc, tl, segmented, $ } = lm;
+  Chart.defaults.font.family = "Instrument Sans";
+  let chart;
+  const getSrc = segmented($("#exp-src"), load), getDim = segmented($("#exp-dim"), load);
+  async function load() {
+    try {
+      const d = await api(`/redshift/api/report?source=${getSrc()}&dim=${getDim()}`, { label: `Report by ${getDim()} (${getSrc()})`, source: "#chart-wrap, #table-wrap" });
+      $("#thead").innerHTML = `<tr>${d.columns.map((c, i) => `<th class="${i ? "num" : ""}">${esc(c)}</th>`).join("")}</tr>`;
+      $("#tbody").innerHTML = d.rows.map((r) => `<tr>${r.map((v, i) => `<td class="${i ? "num" : ""}">${i === 3 ? tl(Number(v)) : esc(v)}</td>`).join("")}</tr>`).join("");
+      const rows = getDim() === "month" ? [...d.rows].sort((a, b) => String(a[0]).localeCompare(String(b[0]))) : d.rows;
+      chart?.destroy();
+      chart = new Chart($("#chart"), { type: "bar", data: { labels: rows.map((r) => r[0]),
+        datasets: [{ label: "Revenue (TRY)", data: rows.map((r) => Number(r[3])), backgroundColor: getSrc() === "live" ? "#C8102E" : "#14213D" }] },
+        options: { maintainAspectRatio: false } });
+    } catch (e) { lm.errorBox($("#tbody"), e); }
+  }
+  async function repl() {
+    try {
+      const d = await api("/redshift/api/replication", { label: "Zero-ETL status", source: "#repl" });
+      const i = d.integration;
+      $("#repl-dl").innerHTML = `<dt>Integration</dt><dd>${esc(d.integration_id || "-")}</dd><dt>State</dt><dd>${esc(i.state || "not connected")}</dd>
+        <dt>Tables replicated</dt><dd>${esc(i.total_tables_replicated || "-")}</dd><dt>Target database</dt><dd>${esc(i.target_database || "none: connect it in the Admin Console")}</dd>
+        <dt>Newest workshop order</dt><dd>${d.newest_visitor_order ? `${esc(d.newest_visitor_order.newest)} (${d.newest_visitor_order.seconds_ago} s ago)` : "-"}</dd>`;
+    } catch (e) { lm.errorBox($("#repl-dl"), e); }
+  }
+  $("#repl-refresh").addEventListener("click", repl);
+  load(); repl();
+})();
+</script>
+{% endblock %}

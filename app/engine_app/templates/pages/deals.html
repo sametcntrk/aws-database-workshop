@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block main %}
+<div class="section-head"><div><h1>Flash deal</h1><p>Limited stock, many buyers at the same second. An in-memory counter in ElastiCache decides who gets a piece.</p></div>
+  <span class="engine-tag">ElastiCache</span></div>
+
+<div class="pdp" id="deal">
+  <img id="dimg" src="" alt="" width="420" height="420">
+  <div>
+    <h2 id="dname">Loading the deal</h2>
+    <p class="price" id="dprice"></p>
+    <p class="countdown" id="dstock"></p>
+    <button class="btn" type="button" id="buy">Buy one now</button>
+    <div id="buy-msg" role="status"></div>
+  </div>
+</div>
+
+<div class="panel" id="sim" style="margin-top:1rem">
+  <h2>Load Simulation: 300 buyers, 10 pieces</h2>
+  <p>The ElastiCache Engine App starts many buyers in parallel against a private counter. Compare two ways to take one piece.</p>
+  <div class="experiments">
+    <h3>Experiment</h3>
+    <div class="row">
+      <span class="seg" id="exp-mode"><button type="button" data-value="atomic" aria-pressed="true">Atomic DECR</button><button type="button" data-value="naive" aria-pressed="false">Read, then write</button></span>
+      <label>Buyers <select id="buyers"><option>100</option><option selected>300</option><option>1000</option></select></label>
+      <label>Stock <select id="stock"><option>5</option><option selected>10</option><option>50</option></select></label>
+      <button class="btn secondary" type="button" id="sim-run">Start the rush</button>
+    </div>
+    <p>"Read, then write" reads the counter, does some work, then writes the counter. Two buyers can read the same value: the shop then sells pieces it does not have.</p>
+  </div>
+  <div id="sim-out"></div>
+</div>
+
+<div class="panel" id="session"><h2>Your session</h2>
+  <p>Each page refreshes a session hash in ElastiCache with a time to live (TTL). Change the TTL and watch the counter go down.</p>
+  <label>TTL <select id="ttl"><option value="30">30 seconds</option><option value="300">5 minutes</option><option value="1800" selected>30 minutes</option></select></label>
+  <button class="btn secondary" type="button" id="ttl-set">Refresh the session</button>
+  <button class="quiet" type="button" id="ttl-read">Read the session</button>
+  <pre id="sess" style="font-family:var(--mono);font-size:.85rem"></pre>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const { api, esc, tl, segmented, $ } = lm;
+  let deal;
+  async function load() {
+    try {
+      deal = await api("/elasticache/api/deal", { label: "Read the deal", source: "#deal" });
+      $("#dimg").src = `/s3/api/img/${deal.product_id}`;
+      $("#dname").textContent = deal.name;
+      $("#dprice").innerHTML = `${tl(deal.price)} <del>${tl(deal.old_price)}</del>`;
+      $("#dstock").textContent = deal.stock > 0 ? `${deal.stock} pieces left` : "Sold out";
+      $("#buy").disabled = deal.stock <= 0;
+    } catch (e) { lm.errorBox($("#deal"), e); }
+  }
+  $("#buy").addEventListener("click", async () => {
+    try {
+      const r = await api("/elasticache/api/deal/buy", { method: "POST", label: "Take one piece (DECR)", source: "#buy" });
+      $("#buy-msg").innerHTML = r.won ? `<div class="notice good">You got one. ${r.stock} pieces left.
+        <button class="quiet" id="to-cart">Add it to the cart at the deal price</button></div>` : `<div class="notice bad">Sold out. Someone was faster.</div>`;
+      $("#dstock").textContent = r.stock > 0 ? `${r.stock} pieces left` : "Sold out";
+      $("#to-cart")?.addEventListener("click", () => lm.addToCart({ product_id: deal.product_id, name: deal.name, price: Number(deal.price) }, 1, false, "#buy")
+        .then(() => { location.href = "/cart"; }));
+    } catch (e) { lm.errorBox($("#buy-msg"), e); }
+  });
+  const getMode = segmented($("#exp-mode"), () => {});
+  $("#sim-run").addEventListener("click", async () => {
+    $("#sim-run").disabled = true; $("#sim-out").innerHTML = "<p>The rush runs.</p>";
+    try {
+      const s = await api("/elasticache/api/deal/simulate", { body: { mode: getMode(), buyers: Number($("#buyers").value), stock: Number($("#stock").value) },
+        label: `Rush: ${getMode()}`, source: "#sim" });
+      $("#sim-out").innerHTML = `<div class="stats"><div class="stat"><b>${s.buyers}</b><span>buyers</span></div><div class="stat"><b>${s.stock}</b><span>pieces in stock</span></div>
+        <div class="stat"><b>${s.winners}</b><span>buyers who got a piece</span></div><div class="stat"><b style="color:${s.oversold ? "var(--lale)" : "var(--ok)"}">${s.oversold}</b><span>pieces oversold</span></div>
+        <div class="stat"><b>${s.p50_ms} ms</b><span>median command time</span></div></div>
+        <div class="notice ${s.oversold ? "bad" : "good"}">${s.oversold ? `The shop sold ${s.oversold} pieces that it does not have. This is a race condition.` : "Exactly the stock was sold. DECR is atomic."}</div>`;
+    } catch (e) { lm.errorBox($("#sim-out"), e); }
+    $("#sim-run").disabled = false;
+  });
+  async function readSession() { const s = await api("/elasticache/api/session", { label: "Read the session", source: "#session" });
+    $("#sess").textContent = JSON.stringify(s, null, 2); }
+  $("#ttl-set").addEventListener("click", async () => { await api("/elasticache/api/session", { body: { page: "/deals", ttl: Number($("#ttl").value) }, label: "Refresh the session", source: "#session" }); readSession(); });
+  $("#ttl-read").addEventListener("click", readSession);
+  load();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block main %}
+<div class="section-head"><div><h1>Admin Console</h1><p>Load the shared catalog into each Engine, clear Visitor data and control Load Simulation. The instructor key is in the Secrets Manager secret <code>dbws/admin</code>.</p></div></div>
+
+<div class="panel">
+  <label for="key">Admin key</label>
+  <input id="key" type="password" autocomplete="off" size="40">
+  <button class="btn secondary" type="button" id="save-key">Save the key in this browser</button>
+  <label>Dataset <select id="size"><option value="small">small</option><option value="medium" selected>medium</option><option value="large">large</option></select></label>
+  <button class="btn" type="button" id="seed-all">Seed all Engines</button>
+</div>
+
+<div class="panel">
+  <table>
+    <thead><tr><th>Engine</th><th>Status</th><th>Actions</th><th>Result</th></tr></thead>
+    <tbody id="engines"></tbody>
+  </table>
+</div>
+<div class="panel">
+  <h2>Zero-ETL</h2>
+  <p>Connect Redshift to the Aurora integration once, after the first Seed. Redshift then copies every Aurora table and keeps it in step.</p>
+  <button class="btn" type="button" id="zeroetl">Connect zero-ETL</button>
+  <div id="zeroetl-out"></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const { api, esc, $ } = lm;
+  const ENGINES = ["docdb", "opensearch", "neptune", "dynamodb", "aurora", "elasticache", "keyspaces", "s3", "redshift", "influxdb"];
+  const SIM = ["dynamodb", "elasticache", "keyspaces"];
+  $("#key").value = localStorage.getItem("lm_admin_key") || "";
+  $("#save-key").addEventListener("click", () => { localStorage.setItem("lm_admin_key", $("#key").value); refresh(); });
+  const key = () => $("#key").value;
+  $("#engines").innerHTML = ENGINES.map((e) => `<tr data-engine="${e}"><td><strong>${e}</strong></td><td class="st">-</td>
+    <td><button class="btn secondary" data-act="seed">Seed</button> <button class="quiet" data-act="reset">Clear Visitor data</button>
+    ${SIM.includes(e) ? '<label><input type="checkbox" data-act="sim" checked> Load Simulation</label>' : ""}</td><td class="out"></td></tr>`).join("");
+  async function act(engine, action, el) {
+    const row = document.querySelector(`tr[data-engine="${engine}"]`);
+    const out = row.querySelector(".out");
+    out.textContent = "Working...";
+    try {
+      let d;
+      if (action === "seed") d = await api(`/${engine}/api/admin/seed?size=${$("#size").value}`, { method: "POST", adminKey: key(), label: `Seed ${engine}` });
+      if (action === "reset") d = await api(`/${engine}/api/admin/reset-visitors`, { method: "POST", adminKey: key(), label: `Clear Visitor data in ${engine}` });
+      if (action === "sim") d = await api(`/${engine}/api/admin/simulation?enabled=${el.checked}`, { method: "POST", adminKey: key(), label: `Load Simulation ${el.checked ? "on" : "off"}` });
+      out.textContent = d.summary ? d.summary.join(" ") + (d.elapsed_ms ? ` (${d.elapsed_ms} ms)` : "") : (d.enabled ? "Load Simulation is on." : "Load Simulation is off.");
+      refreshOne(engine);
+    } catch (e) { out.innerHTML = `<span class="notice bad">${esc(e.message)}</span>`; }
+  }
+  document.querySelectorAll("[data-act]").forEach((el) => el.addEventListener(el.type === "checkbox" ? "change" : "click",
+    () => act(el.closest("tr").dataset.engine, el.dataset.act, el)));
+  $("#seed-all").addEventListener("click", async () => { for (const e of ENGINES) await act(e, "seed"); });
+  async function refreshOne(engine) {
+    const row = document.querySelector(`tr[data-engine="${engine}"]`);
+    try {
+      const d = await api(`/${engine}/api/admin/status`, { adminKey: key(), label: `Status of ${engine}`, background: true });
+      row.querySelector(".st").textContent = Object.entries(d.engine).map(([k, v]) => `${k}: ${v}`).join(", ");
+      const sim = row.querySelector('[data-act="sim"]');
+      if (sim) sim.checked = d.simulation.enabled;
+    } catch (e) { row.querySelector(".st").textContent = e.message; }
+  }
+  function refresh() { if (key()) ENGINES.forEach(refreshOne); }
+  refresh();
+  $("#zeroetl").addEventListener("click", async () => {
+    try { const d = await api("/redshift/api/admin/zeroetl", { method: "POST", adminKey: key(), label: "Connect zero-ETL" });
+      $("#zeroetl-out").innerHTML = `<div class="notice good">Redshift database ${esc(d.database)} now receives the Aurora tables.</div>`;
+    } catch (e) { lm.errorBox($("#zeroetl-out"), e); }
+  });
+})();
+</script>
+{% endblock %}

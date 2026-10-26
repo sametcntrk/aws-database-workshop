@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block main %}
+<div class="section-head"><div><h1>Live leaderboard</h1><p>A sorted set in ElastiCache keeps customers ordered by revenue at every write. The page refreshes every 5 seconds.</p></div>
+  <span class="engine-tag">ElastiCache</span></div>
+<div class="stats" id="counters">
+  <div class="stat"><b id="orders">-</b><span>orders in this workshop (INCR)</span></div>
+  <div class="stat"><b id="active">-</b><span>Visitors active in the last 5 minutes</span></div>
+</div>
+<div class="panel" id="board"><table><thead><tr><th class="num">Rank</th><th>Customer</th><th class="num">Revenue</th></tr></thead><tbody id="rows"></tbody></table></div>
+<p><label><input type="checkbox" id="auto" checked> Refresh every 5 seconds</label></p>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const { api, esc, tl, $ } = lm;
+  async function load() {
+    try {
+      const d = await api("/elasticache/api/leaderboard", { label: "Read the leaderboard", source: "#board, #counters", background: true });
+      $("#orders").textContent = d.orders_today; $("#active").textContent = d.active_visitors;
+      $("#rows").innerHTML = d.top.map((r) => `<tr><td class="num">${r.rank}</td><td>${esc(r.name)} <small>${esc(r.customer)}</small></td><td class="num">${tl(r.revenue)}</td></tr>`).join("");
+    } catch (e) { lm.errorBox($("#rows"), e); }
+  }
+  load();
+  setInterval(() => { if ($("#auto").checked && !document.hidden) load(); }, 5000);
+})();
+</script>
+{% endblock %}

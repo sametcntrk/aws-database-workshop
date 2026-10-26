@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block main %}
+<div class="experiments" id="exp">
+  <h3>Experiments on this page</h3>
+  <div class="row">
+    <span>Product read</span>
+    <span class="seg" id="exp-proj"><button type="button" data-value="full" aria-pressed="true">Full document</button><button type="button" data-value="card" aria-pressed="false">Card fields only</button></span>
+    <span>Recommendations</span>
+    <span class="seg" id="exp-recs"><button type="button" data-value="product" aria-pressed="true">Bought with this product</button><button type="button" data-value="persona" aria-pressed="false">For my persona</button></span>
+    <label><input type="checkbox" id="exp-limit" checked> Limit 5 per product (conditional write)</label>
+  </div>
+</div>
+
+<article class="pdp" id="pdp">
+  <img id="pimg" src="/s3/api/img/{{ args.pid }}" alt="" width="420" height="420">
+  <div>
+    <span class="engine-tag">DocumentDB</span>
+    <h1 id="pname">Loading the product</h1>
+    <p class="stars" id="prating"></p>
+    <p class="price" id="pprice"></p>
+    <p id="pdesc"></p>
+    <dl id="pattrs"></dl>
+    <div class="qty"><label for="qty">Quantity</label><input id="qty" type="number" min="1" max="5" value="1">
+      <button class="btn" type="button" id="add">Add to cart</button></div>
+    <div id="add-msg" role="status"></div>
+  </div>
+</article>
+
+<section class="strip" id="recs-wrap">
+  <div class="section-head"><div><h2 id="recs-title">Customers who bought this also bought</h2><p id="recs-sub">A graph traversal in Neptune.</p></div>
+    <span class="engine-tag">Neptune</span></div>
+  <div class="grid" id="recs"></div>
+</section>
+
+<section class="strip" id="recent-wrap">
+  <div class="section-head"><div><h2>Recently viewed</h2><p>This page just wrote a "view" event to your partition in Keyspaces.</p></div>
+    <span class="engine-tag">Keyspaces</span></div>
+  <div class="grid" id="recent"></div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+(async () => {
+  const { api, esc, tl, stars, productCard, segmented, $ } = lm;
+  const pid = LM.args.pid;
+  let product;
+  const getProj = segmented($("#exp-proj"), loadProduct);
+  const getRecs = segmented($("#exp-recs"), loadRecs);
+
+  async function loadProduct() {
+    try {
+      product = await api(`/docdb/api/product/${pid}?projection=${getProj()}`, { label: "Read the product", source: "#pdp" });
+      $("#pname").textContent = product.name;
+      $("#prating").textContent = `${stars(product.rating)} ${product.rating} / 5`;
+      $("#pprice").textContent = tl(product.price);
+      $("#pdesc").textContent = product.description || "The card projection does not return the description.";
+      const a = product.attributes || {};
+      $("#pattrs").innerHTML = `<dt>Brand</dt><dd>${esc(product.brand)}</dd><dt>Category</dt><dd>${esc(product.category)}</dd>
+        <dt>Stock</dt><dd>${product.stock ?? "-"}</dd>` + Object.entries(a).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("") +
+        (product.tags ? `<dt>Tags</dt><dd>${product.tags.map((t) => `<span class="pill">${esc(t)}</span>`).join("")}</dd>` : "");
+      document.title = `${product.name} · Lale Market`;
+    } catch (e) { lm.errorBox($("#pdp"), e); }
+  }
+  async function loadRecs() {
+    const mode = getRecs();
+    $("#recs-title").textContent = mode === "persona" ? `Recommended for ${lm.persona()?.name || "you"}` : "Customers who bought this also bought";
+    try {
+      const rows = await api(`/neptune/api/recs?mode=${mode}&product=${pid}`, { label: "Recommendations", source: "#recs-wrap" });
+      $("#recs").innerHTML = rows.map((r) => productCard(r, { extra: `<span class="meta">${r.score} shared customers</span>` })).join("")
+        || "<p>No recommendation yet. A persona with no orders gets nothing personal: this is the cold-start problem.</p>";
+    } catch (e) { lm.errorBox($("#recs"), e); }
+  }
+  async function loadRecent() {
+    try {
+      const rows = await api("/keyspaces/api/recent", { label: "Recently viewed", source: "#recent-wrap" });
+      $("#recent").innerHTML = rows.map((r) => productCard({ product_id: r.product_id, name: r.detail.split(" · ")[0] })).join("");
+    } catch (e) { lm.errorBox($("#recent"), e); }
+  }
+  $("#add").addEventListener("click", async () => {
+    $("#add").disabled = true;
+    try {
+      const d = await lm.addToCart(product, Number($("#qty").value || 1), $("#exp-limit").checked, "#add");
+      $("#add-msg").innerHTML = d.refused ? `<div class="notice bad">${esc(d.refused)}</div>`
+        : `<div class="notice good">Added. <a href="/cart">Go to the cart</a></div>`;
+    } catch (e) { lm.errorBox($("#add-msg"), e); }
+    $("#add").disabled = false;
+  });
+  document.addEventListener("lm:persona", loadRecs);
+  await loadProduct();
+  await api("/keyspaces/api/events", { body: { type: "view", product_id: pid, detail: `${product?.name || pid} · ${product?.category || ""}` },
+    label: "Record a view event", background: true }).catch(() => {});
+  loadRecs();
+  loadRecent();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block main %}
+<div class="section-head"><div><h1>Seller panel</h1><p>Sellers upload product images. S3 stores each file as an object with metadata, and keeps old versions.</p></div>
+  <span class="engine-tag">S3</span></div>
+<div class="two">
+  <form class="panel" id="upload" enctype="multipart/form-data">
+    <h2>Upload an image</h2>
+    <p><label>Product <input type="text" name="product_id" value="P0001" size="8"></label></p>
+    <p><input type="file" name="file" accept="image/png,image/jpeg,image/webp" required></p>
+    <button class="btn" type="submit">Upload</button><div id="up-out"></div>
+  </form>
+  <div class="panel" id="direct"><h2>Download: two ways</h2>
+    <div class="experiments"><h3>Experiment</h3>
+      <div class="row"><button class="btn secondary" type="button" id="via-app">Through the Engine App</button><button class="btn secondary" type="button" id="via-presign">Presigned URL, straight from S3</button></div>
+      <p>The first way sends the bytes through the EC2 instance. The second way only signs a URL; the browser then downloads from S3 itself, and the bucket stays private.</p></div>
+    <img id="preview" alt="" width="200" height="200" hidden><p id="dl-out"></p></div>
+</div>
+<div class="panel" id="gallery-wrap"><div class="section-head"><h2>Objects</h2>
+  <span class="seg" id="exp-src"><button type="button" data-value="products" aria-pressed="true">products/</button><button type="button" data-value="uploads" aria-pressed="false">uploads/</button></span></div>
+  <table><thead><tr><th>Key</th><th class="num">Size</th><th>Type</th><th>Metadata</th><th>Version</th></tr></thead><tbody id="gallery"></tbody></table></div>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const { api, esc, segmented, $ } = lm;
+  const getSrc = segmented($("#exp-src"), gallery);
+  async function gallery() {
+    try { const rows = await api(`/s3/api/gallery?source=${getSrc()}`, { label: "List objects", source: "#gallery-wrap" });
+      $("#gallery").innerHTML = rows.map((o) => `<tr><td>${esc(o.key)}</td><td class="num">${(o.size / 1024).toFixed(1)} KB</td><td>${esc(o.type)}</td>
+        <td>${Object.entries(o.metadata).map(([k, v]) => `<span class="pill">${esc(k)}: ${esc(v)}</span>`).join("")}</td><td><small>${esc(o.version || "-")}</small></td></tr>`).join("")
+        || '<tr><td colspan="5">No object in this prefix yet.</td></tr>';
+    } catch (e) { lm.errorBox($("#gallery"), e); }
+  }
+  $("#upload").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    try { const d = await api("/s3/api/upload", { form: new FormData(ev.target), label: "Upload an image", source: "#upload" });
+      $("#up-out").innerHTML = `<div class="notice good">Stored as ${esc(d.key)}, version ${esc(d.version)}.</div>`;
+      document.querySelector('#exp-src [data-value="uploads"]').click();
+    } catch (e) { lm.errorBox($("#up-out"), e); }
+  });
+  $("#via-app").addEventListener("click", () => { const t0 = performance.now(); $("#preview").hidden = false;
+    $("#preview").onload = () => { $("#dl-out").textContent = `Loaded through the Engine App in ${Math.round(performance.now() - t0)} ms.`; };
+    $("#preview").src = `/s3/api/img/P0001?t=${Date.now()}`; });
+  $("#via-presign").addEventListener("click", async () => {
+    const d = await api("/s3/api/presign/P0001", { label: "Sign a URL", source: "#direct" });
+    const t0 = performance.now(); $("#preview").hidden = false;
+    $("#preview").onload = () => { $("#dl-out").innerHTML = `Loaded from S3 in ${Math.round(performance.now() - t0)} ms. URL host: <code>${esc(new URL(d.url).host)}</code>`; };
+    $("#preview").src = d.url;
+  });
+  gallery();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,121 @@
+"""DocumentDB - document: the product catalog. Owns the home page, category lists, product pages and the Admin Console page."""
+import json
+
+from flask import jsonify, request
+from pymongo import MongoClient
+
+from .. import trace
+from ..base import env, secret
+from . import page
+
+CA_FILE = "/opt/engine-app/certs/global-bundle.pem"
+META = {
+    "id": "docdb", "name": "Amazon DocumentDB", "data_type": "Semi-structured", "category": "Document",
+    "auth": "Password (Secrets Manager)", "via": "DocumentDB cluster endpoint (data subnet, TLS 27017)",
+    "section": "Catalog",
+    "model": '{ "_id": "P0001", "name": "...", "category": "Elektronik", "price": 1299.9,\n'
+             '  "attributes": { "renk": "siyah", "garanti_ay": 24 },  "tags": ["yeni"] }\n'
+             "Indexes: { category: 1, rating: -1 }, { \"attributes.renk\": 1 }",
+}
+PAGES = [
+    page("home", "home", "Lale Market", "/"),
+    page("category", "category", "Category", "/c/<category>"),
+    page("product", "product", "Product", "/p/<pid>"),
+    page("admin", "admin", "Admin Console", "/admin"),
+]
+CARD = {"name": 1, "price": 1, "rating": 1, "category": 1, "brand": 1, "tags": 1, "stock": 1}
+
+_client = None
+
+
+def db():
+    global _client
+    if _client is None:
+        s = secret(env("DB_SECRET_ARN"))
+        _client = MongoClient(host=env("DB_HOST"), port=int(env("DB_PORT", "27017")), username=s["username"],
+                              password=s["password"], tls=True, tlsCAFile=CA_FILE, replicaSet="rs0",
+                              readPreference="secondaryPreferred", retryWrites=False, serverSelectionTimeoutMS=15000)
+    return _client["shop"]
+
+
+def _doc(d):
+    d = dict(d)
+    d["product_id"] = d.pop("_id")
+    return d
+
+
+def register(bp):
+    @bp.get("/api/home")
+    def api_home():
+        pipeline = [{"$group": {"_id": "$category", "products": {"$sum": 1}, "from_price": {"$min": "$price"}}},
+                    {"$sort": {"_id": 1}}]
+        with trace.call("aggregate", "db.products.aggregate([\n  { $group: { _id: '$category', products: { $sum: 1 }, from_price: { $min: '$price' } } },\n  { $sort: { _id: 1 } }\n])", {}) as t:
+            cats = list(db().products.aggregate(pipeline))
+            t.result(items=len(cats), note="One aggregation computes the category menu on the server.")
+        with trace.call("find", "db.products.find({ rating: { $gte: 4.5 } }, <card fields>).sort({ rating: -1 }).limit(8)", {}) as t:
+            featured = [_doc(d) for d in db().products.find({"rating": {"$gte": 4.5}}, CARD).sort("rating", -1).limit(8)]
+            t.result(items=len(featured), note="The projection returns only the fields a product card needs.")
+        return jsonify(trace.payload({"categories": [{"name": c["_id"], "products": c["products"], "from_price": c["from_price"]} for c in cats],
+                                      "featured": featured}))
+
+    @bp.get("/api/products")
+    def api_products():
+        cat = request.args.get("category")
+        color = request.args.get("color")
+        sort = request.args.get("sort", "rating")
+        use_index = request.args.get("index", "on") == "on"
+        flt = {"category": cat} if cat else {}
+        if color:
+            flt["attributes.renk"] = color
+        order = [("price", 1)] if sort == "price" else [("rating", -1)]
+        find = {"find": "products", "filter": flt, "projection": CARD, "sort": dict(order), "limit": 48}
+        if not use_index:
+            find["hint"] = {"$natural": 1}
+        req = (f"db.products.find({json.dumps(flt, ensure_ascii=False)}, <card fields>)"
+               f".sort({json.dumps(dict(order))}).limit(48)" + ("" if use_index else ".hint({ $natural: 1 })  // no index"))
+        with trace.call("find + explain", req, {"index": "on" if use_index else "off (collection scan)"}) as t:
+            cur = db().products.find(flt, CARD).sort(order).limit(48)
+            if not use_index:
+                cur = cur.hint([("$natural", 1)])
+            items = [_doc(d) for d in cur]
+            plan = db().command("explain", find, verbosity="executionStats")
+            stats = plan.get("executionStats", {})
+            stage = json.dumps(plan.get("queryPlanner", {}).get("winningPlan", {}))[:300]
+            t.result(items=len(items), explain=f"docs examined: {stats.get('totalDocsExamined', '?')}, returned: {stats.get('nReturned', '?')}",
+                     note=("The index on { category, rating } finds the documents directly." if use_index else
+                           "Without an index DocumentDB reads every document in the collection (COLLSCAN)."),
+                     plan=stage)
+        colors = db().products.distinct("attributes.renk", {"category": cat} if cat else {})
+        return jsonify(trace.payload({"items": items, "colors": sorted(colors)}))
+
+    @bp.get("/api/product/<pid>")
+    def api_product(pid):
+        full = request.args.get("projection", "full") == "full"
+        with trace.call("find_one", f"db.products.find_one({{ _id: '{pid}' }}{'' if full else ', <card fields>'})",
+                        {"projection": "full document" if full else "card fields"}) as t:
+            d = db().products.find_one({"_id": pid}, None if full else CARD)
+            size = len(json.dumps(d, default=str, ensure_ascii=False).encode()) if d else 0
+            t.result(items=1 if d else 0, note=f"Document size: {size} bytes. Nested attributes come back in one read, with no JOIN.")
+        if not d:
+            return jsonify(ok=False, error=f"Product {pid} does not exist.", trace=trace.payload()["trace"]), 404
+        return jsonify(trace.payload(_doc(d)))
+
+
+def seed(ds):
+    with trace.call("drop + insert_many + create_index", "db.products.drop(); db.products.insert_many([...]); create_index(...)", {}) as t:
+        db().products.drop()
+        docs = [{"_id": p["product_id"], **{k: v for k, v in p.items() if k != "product_id"}} for p in ds.products]
+        db().products.insert_many(docs, ordered=False)
+        db().products.create_index([("category", 1), ("rating", -1)])
+        db().products.create_index([("attributes.renk", 1)])
+        db().products.create_index([("rating", -1)])
+        t.result(items=len(docs))
+    return [f"Wrote {len(docs)} product documents.", "Created indexes on {category, rating}, {attributes.renk} and {rating}."]
+
+
+def reset_visitors():
+    return ["DocumentDB keeps no Visitor data."]
+
+
+def status():
+    return {"products": db().products.estimated_document_count()}

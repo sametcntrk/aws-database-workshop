@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block main %}
+<div class="section-head"><div><h1 id="title">Search</h1><p id="sub">Full-text search in OpenSearch, with typo tolerance and facets.</p></div>
+  <span class="engine-tag">OpenSearch</span></div>
+
+<div class="experiments" id="exp">
+  <h3>Experiments</h3>
+  <div class="row">
+    <label>Query <input type="text" id="q" size="28"></label>
+    <span>Typo tolerance</span>
+    <span class="seg" id="exp-fuzzy"><button type="button" data-value="on" aria-pressed="true">Fuzziness AUTO</button><button type="button" data-value="off" aria-pressed="false">Exact words</button></span>
+    <span>Analyzer</span>
+    <span class="seg" id="exp-analyzer"><button type="button" data-value="folded" aria-pressed="true">tr_folded</button><button type="button" data-value="standard" aria-pressed="false">standard</button></span>
+  </div>
+  <p>Try these queries: <button class="quiet" data-q="kablosuz kulaklik">kablosuz kulaklik</button>
+    <button class="quiet" data-q="kulaklk">kulaklk (typo)</button> <button class="quiet" data-q="kosu ayakkabisi">kosu ayakkabisi</button>
+    <button class="quiet" data-q="veritabani">veritabani</button></p>
+</div>
+
+<div style="display:grid;grid-template-columns:220px 1fr;gap:1.25rem">
+  <aside class="panel" id="facets" aria-label="Filters"><h3>Category</h3><div id="facet-cat"></div><h3 style="margin-top:1rem">Price</h3><div id="facet-price"></div></aside>
+  <div class="grid" id="hits"></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const { api, esc, tl, productCard, segmented, $ } = lm;
+  const params = new URLSearchParams(location.search);
+  $("#q").value = params.get("q") || "kablosuz kulaklik";
+  let category = params.get("category") || "";
+  const getFuzzy = segmented($("#exp-fuzzy"), run);
+  const getAnalyzer = segmented($("#exp-analyzer"), run);
+  $("#q").addEventListener("change", run);
+  document.querySelectorAll("[data-q]").forEach((b) => b.addEventListener("click", () => { $("#q").value = b.dataset.q; category = ""; run(); }));
+  async function run() {
+    const qs = new URLSearchParams({ q: $("#q").value, fuzzy: getFuzzy(), analyzer: getAnalyzer() });
+    if (category) qs.set("category", category);
+    history.replaceState(null, "", `/search?q=${encodeURIComponent($("#q").value)}`);
+    try {
+      const d = await api(`/opensearch/api/search?${qs}`, { label: `Search "${$("#q").value}"`, source: "#hits, #facets" });
+      $("#title").textContent = `${d.total} results for “${$("#q").value}”`;
+      $("#hits").innerHTML = d.hits.map((h) => productCard(h, { extra: `<span class="meta">score ${h.score}</span>` })).join("")
+        || "<p>No product matches. Turn on fuzziness or change the analyzer, then compare the panel.</p>";
+      $("#facet-cat").innerHTML = `<p><button class="quiet" data-cat="">All categories</button></p>` + d.aggs.categories.map((c) =>
+        `<p><button class="quiet" data-cat="${esc(c.name)}" ${c.name === category ? 'style="font-weight:700"' : ""}>${esc(c.name)} (${c.count})</button></p>`).join("");
+      $("#facet-price").innerHTML = d.aggs.price.map((b) => `<p>${esc(b.key.replace("*-", "under ").replace("-*", " and more"))}: ${b.count}</p>`).join("");
+      document.querySelectorAll("[data-cat]").forEach((b) => b.addEventListener("click", () => { category = b.dataset.cat; run(); }));
+    } catch (e) { lm.errorBox($("#hits"), e); }
+  }
+  run();
+})();
+</script>
+{% endblock %}

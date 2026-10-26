@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block main %}
+<div class="section-head"><div><h1>Operations</h1><p>Time-series data in Timestream for InfluxDB: warehouse sensors every 5 minutes and orders every minute.</p></div>
+  <span class="engine-tag">InfluxDB</span></div>
+<div class="experiments" id="exp"><h3>Experiments</h3>
+  <div class="row">
+    <span>Window</span>
+    <span class="seg" id="exp-win"><button type="button" data-value="1m" aria-pressed="false">1 minute</button><button type="button" data-value="15m" aria-pressed="true">15 minutes</button><button type="button" data-value="1h" aria-pressed="false">1 hour</button></span>
+    <span>Range</span>
+    <span class="seg" id="exp-range"><button type="button" data-value="-1h" aria-pressed="false">1 hour</button><button type="button" data-value="-6h" aria-pressed="true">6 hours</button><button type="button" data-value="-24h" aria-pressed="false">24 hours</button></span>
+  </div>
+  <p>A wider window returns fewer points for the same range. The panel shows the point count for each query.</p></div>
+<div class="panel" id="orders-wrap"><h2>Orders</h2><div class="chart-box"><canvas id="c-orders"></canvas></div></div>
+<div class="two">
+  <div class="panel" id="temp-wrap"><h2>Warehouse temperature (°C)</h2><div class="chart-box"><canvas id="c-temp"></canvas></div></div>
+  <div class="panel" id="hum-wrap"><h2>Warehouse humidity (%)</h2><div class="chart-box"><canvas id="c-hum"></canvas></div></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ prefix }}/static/vendor/chart.umd.min.js"></script>
+<script>
+(() => {
+  const { api, segmented, $ } = lm;
+  Chart.defaults.font.family = "Instrument Sans";
+  const COLORS = ["#14213D", "#C8102E", "#1B8A8F", "#B45309", "#5B6472"];
+  const charts = {};
+  const getWin = segmented($("#exp-win"), load), getRange = segmented($("#exp-range"), load);
+  function draw(id, series) {
+    charts[id]?.destroy();
+    const names = Object.keys(series);
+    const labels = (series[names[0]] || []).map((p) => new Date(p.t).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" }));
+    charts[id] = new Chart($(id), { type: "line", data: { labels, datasets: names.map((n, i) => ({ label: n, data: series[n].map((p) => p.v),
+      borderColor: COLORS[i % COLORS.length], pointRadius: 0, tension: .25 })) }, options: { maintainAspectRatio: false, interaction: { mode: "index", intersect: false } } });
+  }
+  async function one(measure, id, source) {
+    try { const d = await api(`/influxdb/api/series?measure=${measure}&window=${getWin()}&range=${getRange()}`, { label: `${measure} per ${getWin()}`, source });
+      draw(id, d.series); } catch (e) { lm.errorBox($(source), e); }
+  }
+  function load() { one("orders", "#c-orders", "#orders-wrap"); one("temperature", "#c-temp", "#temp-wrap"); one("humidity", "#c-hum", "#hum-wrap"); }
+  load();
+})();
+</script>
+{% endblock %}
