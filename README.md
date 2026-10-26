@@ -33,7 +33,7 @@ QLDB (destek sonu 31.07.2025), CloudSearch ve Timestream for LiveAnalytics (yeni
 
 ```bash
 aws cloudformation deploy --region eu-central-1 \
-  --stack-name dbws \
+  --stack-name dbws-workshop \
   --template-file cloudformation/workshop.yaml \
   --s3-bucket <template-yukleme-bucketi> \
   --capabilities CAPABILITY_NAMED_IAM \
@@ -41,7 +41,7 @@ aws cloudformation deploy --region eu-central-1 \
 ```
 
 Kurulum yaklaşık 30-40 dakika sürer (OpenSearch, DocumentDB, Neptune ve Aurora en uzun bekleyenlerdir).
-Sonra `https://dbworkshop.tdsynnexlab.link/` adresini açın. Silmek için: `aws cloudformation delete-stack --stack-name dbws`.
+Sonra `https://dbworkshop.tdsynnexlab.link/` adresini açın. Silmek için: `aws cloudformation delete-stack --stack-name dbws-workshop`.
 
 Template 51.200 baytı geçtiği için CLI ile `--s3-bucket` gerekir; Console'dan yüklerken CloudFormation bunu kendisi yapar.
 Hesapta `AWSServiceRoleForAmazonOpenSearchService` zaten varsa `CreateOpenSearchServiceLinkedRole=false` verin.

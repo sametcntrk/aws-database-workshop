@@ -1057,21 +1057,33 @@ ENGINES = r"""
       Role: !GetAtt BucketCleanerRole.Arn
       Code:
         ZipFile: |
-          import boto3, cfnresponse
+          import json, urllib.request
+          import boto3
+
+          def send(event, context, status, reason=""):
+              body = json.dumps({"Status": status, "Reason": reason or f"See log stream {context.log_stream_name}",
+                                 "PhysicalResourceId": event.get("PhysicalResourceId", context.log_stream_name),
+                                 "StackId": event["StackId"], "RequestId": event["RequestId"],
+                                 "LogicalResourceId": event["LogicalResourceId"], "Data": {}}).encode()
+              req = urllib.request.Request(event["ResponseURL"], data=body, method="PUT",
+                                           headers={"Content-Type": "", "Content-Length": str(len(body))})
+              urllib.request.urlopen(req, timeout=30)
+
           def handler(event, context):
               try:
                   if event["RequestType"] == "Delete":
-                      b = boto3.resource("s3").Bucket(event["ResourceProperties"]["BucketName"])
-                      b.object_versions.delete()
-                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      bucket = boto3.resource("s3").Bucket(event["ResourceProperties"]["BucketName"])
+                      bucket.object_versions.delete()
+                  send(event, context, "SUCCESS")
               except Exception as e:
                   print(e)
-                  cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
+                  send(event, context, "FAILED", str(e))
 
   BucketCleaner:
     Type: Custom::EmptyBucket
     Properties:
       ServiceToken: !GetAtt BucketCleanerFunction.Arn
+      ServiceTimeout: 600
       BucketName: !Ref ImageBucket
 
   # ---------------------------------------------------------------- 10 OpenSearch Service (text search + geo)
