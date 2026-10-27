@@ -1,0 +1,261 @@
+{% extends "e2e/_base.html" %}
+{% import "e2e/_macros.html" as k with context %}
+{% block body %}
+
+<h2 id="goal" data-short="What you will learn"><span class="sec">00</span>What you will learn, and how to use this page</h2>
+<p>Section 01 gives the architect's decision: where Amazon Redshift fits and where it does not. Then the tutorial has two parts.
+   Part 1 teaches how a columnar data warehouse works: facts and dimensions, column storage, zone maps and sort keys, and parallel slices. Part 2 shows the AWS service and how Lale Market uses it.</p>
+<p>The examples come from the sales reports of Lale Market. Sometimes a different example makes an idea easier to see. Then the tutorial uses it: a spreadsheet, a library shelf, a team that counts votes.</p>
+<p>After this tutorial, you can do these tasks:</p>
+<ol>
+  <li>Say for which workloads a data warehouse is the right choice, and why it is not the database of the checkout.</li>
+  <li>Explain why a column store reads less data for a report than a row store.</li>
+  <li>Explain how a sort key and the zone maps let Redshift skip blocks.</li>
+  <li>Select a distribution style and explain what it does to a join.</li>
+  <li>Read a report query on a fact table and say which columns it reads.</li>
+  <li>Explain Redshift Serverless and the zero-ETL integration from Aurora.</li>
+</ol>
+<p>Four kinds of boxes help you. <b>Simulation</b>: press Play or Next step. <b>Predict first</b>: write your answer before you open it.
+   <b>Checkpoint</b>: a question with one right answer. <b>Analogy</b>: a picture from daily life.</p>
+
+<h2 id="architect" data-short="Architect's view: when to use"><span class="sec">01</span>The architect's view: where Redshift fits</h2>
+<p><b>Read this section first.</b> It gives the decision. The sections after it teach how a warehouse works.</p>
+<p><b>In short:</b> Amazon Redshift is a data warehouse. It answers SQL questions over very many rows: "revenue per month per category for two years", "the best 100 customers by city".
+   It stores each column separately, skips blocks that cannot match, and splits the work across many slices that run in parallel. It is the place for reports and analytics, not for the clicks of the shop.</p>
+<p>The key idea is {{ k.term("OLAP") }} (online analytical processing): few queries, each one reads millions of rows but only a few columns. The checkout does {{ k.term("OLTP") }}: many queries, each one reads or writes a few complete rows.</p>
+
+<h3>Signals in a workload that point to Redshift</h3>
+<table class="data">
+  <thead><tr><th>Signal</th><th>What it looks like in a real project</th><th>The feature that answers it</th></tr></thead>
+  <tbody>
+    <tr><td>Questions over all the history</td><td>"Revenue per month for the last two years."</td><td>Column storage and parallel scans (sections 03 and 05)</td></tr>
+    <tr><td>Few columns of wide tables</td><td>A sales table with 60 columns, a report that needs 4.</td><td>Column storage (section 03)</td></tr>
+    <tr><td>Filters on dates</td><td>"Last quarter", "March this year".</td><td>Sort key and zone maps (section 04)</td></tr>
+    <tr><td>Joins of facts with dimensions</td><td>Sales joined with customers, products and dates.</td><td>Star schema and distribution (sections 02 and 05)</td></tr>
+    <tr><td>Data from many sources in one place</td><td>Orders, web events, marketing costs.</td><td>Zero-ETL, COPY from S3, queries on the data lake (section 07)</td></tr>
+    <tr><td>Reports must not slow the shop</td><td>Analysts run heavy queries during the day.</td><td>A separate warehouse, fed by zero-ETL (section 08)</td></tr>
+  </tbody>
+</table>
+
+<h3>Use cases, with the reason and the feature</h3>
+<table class="data">
+  <thead><tr><th>Use case</th><th>Data</th><th>Why a warehouse</th><th>The feature that does the work</th></tr></thead>
+  <tbody>
+    <tr><td>Sales reports (Lale Market)</td><td>Order lines with date, city, category, quantity and amount.</td><td>GROUP BY month, category or city over all orders.</td><td>Column storage, SORTKEY order_date</td></tr>
+    <tr><td>Near-real-time operations dashboard (Lale Market)</td><td>The live Aurora tables.</td><td>Today's orders in a report without an ETL pipeline.</td><td>Zero-ETL integration from Aurora</td></tr>
+    <tr><td>Finance and accounting reports</td><td>Invoices, payments, ledgers.</td><td>Monthly closing over millions of entries.</td><td>SQL, joins, window functions</td></tr>
+    <tr><td>Marketing attribution</td><td>Ad clicks, sessions, orders.</td><td>Join events from many sources by customer.</td><td>Distribution on the join key</td></tr>
+    <tr><td>Business intelligence tools</td><td>Any warehouse tables.</td><td>Dashboards for many users.</td><td>JDBC and ODBC drivers, concurrency scaling</td></tr>
+    <tr><td>Data lake queries</td><td>Parquet files in S3.</td><td>Join warehouse tables with files that stay in S3.</td><td>External tables (Redshift Spectrum)</td></tr>
+    <tr><td>Machine-learning features</td><td>Customer history.</td><td>Calculate aggregates for training data.</td><td>SQL aggregates, Redshift ML</td></tr>
+    <tr><td>Telecom and IoT history</td><td>Billions of call or device records.</td><td>Scans over long periods, compressed.</td><td>Compression per column, zone maps</td></tr>
+  </tbody>
+</table>
+
+<h3>Signals that point away from Redshift</h3>
+<table class="data">
+  <thead><tr><th>Signal in the workload</th><th>Why Redshift is a weak fit</th><th>Better choice</th></tr></thead>
+  <tbody>
+    <tr><td>One small write per click, thousands per second</td><td>Redshift does large loads and scans well, not many small writes.</td><td><a href="/e2etutorial/aurora">Aurora</a>, <a href="/e2etutorial/dynamodb">DynamoDB</a></td></tr>
+    <tr><td>Read one item by its key in milliseconds</td><td>A warehouse query has more start cost than a key lookup.</td><td><a href="/e2etutorial/dynamodb">DynamoDB</a>, <a href="/e2etutorial/elasticache">ElastiCache</a></td></tr>
+    <tr><td>Free-text search with typos</td><td>No analyzers or relevance scores.</td><td><a href="/e2etutorial/opensearch">OpenSearch</a></td></tr>
+    <tr><td>Relations over many hops</td><td>Each hop is one more self-join.</td><td><a href="/e2etutorial/neptune">Neptune</a></td></tr>
+    <tr><td>Metrics every few seconds with automatic expiry</td><td>No retention per measurement.</td><td><a href="/e2etutorial/influxdb">Timestream for InfluxDB</a></td></tr>
+  </tbody>
+</table>
+
+<h3>The questions that an architect asks, in this order</h3>
+<ol>
+  <li><b>Is it a report or a transaction?</b> Reports go to the warehouse. Transactions stay in the operational database.</li>
+  <li><b>How fresh must the report be?</b> Seconds point to zero-ETL. Hours or a day allow a batch load with COPY.</li>
+  <li><b>Which columns and which filters do the reports use?</b> They decide the sort key.</li>
+  <li><b>Which tables join, and on which column?</b> They decide the distribution key. With AUTO, Redshift decides.</li>
+  <li><b>Is the load steady or in bursts?</b> Bursts and idle nights point to Redshift Serverless. A steady, high load can use a provisioned cluster.</li>
+  <li><b>Must the data stay in S3?</b> Then query it with external tables, or with Amazon Athena.</li>
+</ol>
+
+<h3>Redshift and its relatives on AWS</h3>
+<table class="data">
+  <thead><tr><th>Option</th><th>What it is</th><th>Choose it when</th></tr></thead>
+  <tbody>
+    <tr><td>Redshift Serverless</td><td>A workgroup with capacity in Redshift Processing Units (RPUs) that scales with the load.</td><td>Variable load and no cluster to size. Lale Market uses it.</td></tr>
+    <tr><td>Redshift provisioned cluster</td><td>A leader node and compute nodes that you select and size.</td><td>A steady, predictable load.</td></tr>
+    <tr><td>Amazon Athena</td><td>Serverless SQL directly on files in S3. You pay per query.</td><td>Occasional queries on a data lake.</td></tr>
+    <tr><td>Aurora read replica</td><td>A copy of the operational database for reads.</td><td>Small reports on current data, no warehouse.</td></tr>
+  </tbody>
+</table>
+{{ k.fig("redshift-architecture.png", "the Redshift architecture. Clients connect with JDBC, ODBC or the Data API. The compute runs serverless or as a cluster with a leader node and compute nodes, on Redshift managed storage.") }}
+
+<h3>Where Redshift sits in Lale Market</h3>
+<p>The orders live in Aurora PostgreSQL. A zero-ETL integration copies the Aurora tables into the Redshift database <code>aurora_live</code>, and keeps the copy in step within seconds.
+   For the history, the Seed also loads a flat table <code>sales</code>, with one row for each order line that is not cancelled.
+   The admin page "Sales reports" reads from Redshift only. It never sends a report query to the checkout database.</p>
+
+<h3>Simulation: let the requirements choose</h3>
+{{ k.sim("decide_report", "Workload 1: the sales reports") }}
+{{ k.sim("decide_checkout", "Workload 2: the checkout") }}
+
+{{ k.quiz("rs-a1", "A team wants the revenue per day of each of 5,000 stores over three years, joined with the store and product tables. What fits best?",
+   ["Redshift, fed by the order database", "DynamoDB, with the store id as the key", "ElastiCache, with one key per day", "Neptune, with stores as vertices"],
+   0, "The query scans a long history, reads a few columns and joins facts with dimensions. That is the work of a columnar warehouse.") }}
+{{ k.quiz("rs-a2", "A developer wants to write each new order directly into Redshift, with one INSERT per order. What is the main problem?",
+   ["Redshift cannot store dates", "Redshift does large loads and scans well, not many small writes", "Redshift deletes rows after one day", "Redshift has no SQL"],
+   1, "Many small writes are OLTP work. The order goes to Aurora, and zero-ETL copies it into Redshift.") }}
+
+<div class="part"><b>Part 1</b><h2 id="part1" data-short="PART 1: How a warehouse works">How a columnar data warehouse works</h2>
+<p>Facts and dimensions, column storage, zone maps and parallel slices.</p></div>
+
+<h2 id="star" data-short="Facts and dimensions"><span class="sec">02</span>Facts and dimensions: the star schema</h2>
+<p>A warehouse usually stores events in one large {{ k.term("fact table") }}: one row for each sale, with numbers (quantity, amount) and keys.
+   Around it are {{ k.term("dimension table") }}s: customers, products, dates, stores. A dimension describes the keys of the fact table. The drawing looks like a star.</p>
+{{ k.fig("redshift-star-schema.png", "a star schema. One fact table is in the middle, and four dimension tables are around it.") }}
+<p>Lale Market keeps the history in one flat table <code>sales</code>. It already contains the city of the customer and the category of the product, so most reports need no join. These are eight example rows:</p>
+{{ k.sample("rs_sales", "sales: eight example rows", key=["order_id", "product_id"], ref=["customer_id"]) }}
+<p>Identifiers: Aurora owns the order id, the customer id and the product id. The sales table borrows all three. The pair of <code>order_id</code> and <code>product_id</code> identifies one order line.
+   Redshift does not enforce primary keys or foreign keys. It accepts them as information for the planner, so the load process must keep the ids correct.</p>
+{% call k.sql("Q1", "The report of the Lale Market admin page") %}
+<pre><code>SELECT category AS category, count(DISTINCT order_id) AS orders, sum(qty) AS units, sum(amount) AS revenue
+FROM sales GROUP BY 1 ORDER BY revenue DESC LIMIT 24</code></pre>
+<table class="clause">
+  <tr><td>SELECT category AS category</td><td>The group label. The page can also group by month or by city.</td></tr>
+  <tr><td>count(DISTINCT order_id) AS orders</td><td>The number of different orders in the group. One order can have several lines.</td></tr>
+  <tr><td>sum(qty), sum(amount)</td><td>The units and the revenue of the group.</td></tr>
+  <tr><td>GROUP BY 1</td><td>Group by the first column of the SELECT list.</td></tr>
+  <tr><td>ORDER BY revenue DESC LIMIT 24</td><td>The groups with the highest revenue first, at most 24.</td></tr>
+</table>
+{% endcall %}
+{% call k.predict("Which columns of sales does Q1 read? How many of the eight does it not need?") %}
+<p>It reads category, order_id, qty and amount. It does not need order_date, customer_id, city and product_id, four of the eight columns.</p>
+{% endcall %}
+
+<h2 id="columns" data-short="Column storage"><span class="sec">03</span>Column storage: read only what the query needs</h2>
+<p>A row store, like PostgreSQL, puts each complete row in a disk block. That is good for the checkout: one order is one row, and the database reads or writes it in one place.
+   A {{ k.term("column store") }} puts the values of one column together in a block. A report that needs two columns reads two kinds of blocks and leaves the others on disk.</p>
+{% call k.callout("analogy", "Analogy") %}
+<p>Think of a large spreadsheet printed on paper. A row store prints one customer per page with all the fields. To add up one column, you must turn every page.
+   A column store prints one column per page. To add up the amounts, you take the amount page and nothing else.</p>
+{% endcall %}
+{{ k.fig("redshift-row-storage.png", "row storage. Each disk block holds complete rows with all their columns.") }}
+{{ k.fig("redshift-column-storage.png", "column storage. One disk block holds the values of one column for many rows.") }}
+{{ k.sim("rowcol", "SELECT category, sum(amount): row store and column store") }}
+<p>A second gain is compression. A column holds values of one type and often with repeats, for example the same city many times. Redshift selects a compression encoding for each column, so the same data uses fewer blocks.</p>
+{{ k.quiz("rs-q1", "A table has 50 columns. A query reads 2 of them over all rows. Approximately what share of the data does a column store read?",
+   ["All of it", "About half", "About 2 of 50 columns", "Only the first row"],
+   2, "A column store reads the blocks of the 2 columns. The blocks of the other 48 columns stay on disk.") }}
+
+<h2 id="zonemaps" data-short="Sort keys and zone maps"><span class="sec">04</span>Sort keys and zone maps: skip the blocks that cannot match</h2>
+<p>Redshift stores each column in 1 MB blocks. For each block, it keeps the smallest and the largest value in memory. This is the {{ k.term("zone map") }}.
+   Before it reads a block, Redshift compares the filter of the query with the zone map. If the range of the block cannot match, Redshift skips it
+   (<a href="https://docs.aws.amazon.com/redshift/latest/dg/c_best-practices-sort-key.html">Choose the best sort key</a>).</p>
+<p>The zone map helps only if the values in each block are close together. The {{ k.term("sort key") }} does this: it stores the rows on disk in the order of one or more columns.</p>
+{% call k.sql("Q2", "A report for one month") %}
+<pre><code>SELECT category, sum(amount) AS revenue
+FROM   sales
+WHERE  order_date BETWEEN '2026-03-01' AND '2026-03-31'
+GROUP  BY category;</code></pre>
+<table class="clause">
+  <tr><td>WHERE order_date BETWEEN ... AND ...</td><td>A range filter on the sort key column. Redshift compares it with the minimum and the maximum of each block.</td></tr>
+  <tr><td>GROUP BY category</td><td>Sum the amounts of the remaining rows per category.</td></tr>
+</table>
+{% endcall %}
+{{ k.sim("zonemap", "March: sorted blocks and unsorted blocks") }}
+{% call k.callout("analogy", "Analogy") %}
+<p>A library shelf with books sorted by year has a label on each shelf: "1990 to 1995". To find books from 1993, you go to one shelf. If the books are in random order, every shelf has books from all years, and the labels do not help.</p>
+{% endcall %}
+
+<h2 id="slices" data-short="Slices and distribution"><span class="sec">05</span>Slices and distribution: many workers in parallel</h2>
+<p>Redshift is an {{ k.term("MPP") }} (massively parallel processing) system. It splits each table across {{ k.term("slice") }}s. Each slice scans its own part, and Redshift combines the results.
+   When a query joins two tables, the matching rows must be on the same slice. If they are not, Redshift moves rows over the network first. The {{ k.term("distribution style") }} of a table decides where its rows go.</p>
+<table class="data">
+  <thead><tr><th>Style</th><th>Where the rows go</th><th>Good for</th></tr></thead>
+  <tbody>
+    <tr><td>KEY</td><td>By the value of one column, the DISTKEY. Equal values are on the same slice.</td><td>A large table that joins on that column.</td></tr>
+    <tr><td>EVEN</td><td>In turn, with no regard to the values.</td><td>A table that does not join.</td></tr>
+    <tr><td>ALL</td><td>A complete copy on every node.</td><td>A small dimension table.</td></tr>
+    <tr><td>AUTO</td><td>Redshift selects and changes the style as the table grows. It is the default.</td><td>Most tables.</td></tr>
+  </tbody>
+</table>
+<p>Source: <a href="https://docs.aws.amazon.com/redshift/latest/dg/c_choosing_dist_sort.html">Distribution styles</a>.</p>
+{% call k.callout("analogy", "Analogy") %}
+<p>Think of a team that counts votes. Each person counts one pile at the same time, and at the end the team adds up the piles. If one person must look up names on a list that another person has, they must pass papers across the table. That is slow. Give each person the papers and the list for the same names.</p>
+{% endcall %}
+{{ k.sim("dist", "JOIN customers: KEY and EVEN distribution") }}
+{{ k.quiz("rs-q2", "The sales table joins with customers on customer_id in most reports. Which setting avoids the movement of rows?",
+   ["DISTSTYLE EVEN on both tables", "DISTKEY customer_id on both tables", "SORTKEY customer_id on sales only", "No setting can avoid it"],
+   1, "With the same DISTKEY, matching rows are on the same slice, so the join runs locally.") }}
+
+<div class="part"><b>Part 2</b><h2 id="part2" data-short="PART 2: Amazon Redshift">Amazon Redshift: the AWS service</h2>
+<p>Serverless capacity, managed storage, and zero-ETL from Aurora.</p></div>
+
+<h2 id="service" data-short="Serverless and storage"><span class="sec">06</span>Redshift Serverless and managed storage</h2>
+<p>Redshift Serverless measures capacity in Redshift Processing Units (RPUs). One RPU provides 16 GB of memory, and the default base capacity is 128 RPUs
+   (<a href="https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-capacity.html">Compute capacity for Redshift Serverless</a>).
+   The capacity scales up and down with the load. You pay for the RPU-hours that the workloads use, so an idle night costs no compute.</p>
+<p>The data lives in Redshift managed storage, apart from the compute. A provisioned cluster has a leader node that plans the queries and compute nodes that run them, as the architecture image in section 01 shows.</p>
+<table class="data">
+  <thead><tr><th>Task</th><th>Your own warehouse</th><th>Amazon Redshift</th></tr></thead>
+  <tbody>
+    <tr><td>Servers and capacity</td><td>You buy, install and size them.</td><td>Serverless RPUs, or nodes that you select.</td></tr>
+    <tr><td>Storage</td><td>You plan disks for years of growth.</td><td>Managed storage, apart from the compute.</td></tr>
+    <tr><td>Table design</td><td>You tune sort and distribution keys.</td><td>Automatic table optimization with AUTO.</td></tr>
+    <tr><td>Data from Aurora</td><td>You write and run an ETL pipeline.</td><td>Zero-ETL integration.</td></tr>
+    <tr><td>Backups</td><td>You schedule them.</td><td>Automatic recovery points and snapshots.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="zeroetl" data-short="Zero-ETL from Aurora"><span class="sec">07</span>Zero-ETL from Aurora</h2>
+<p>The AWS documentation describes the zero-ETL integration as a managed solution. It makes transactional data available in Redshift "within seconds of being written"
+   (<a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/zero-etl.html">Aurora zero-ETL integrations</a>). You create the integration once. In Redshift, one statement creates a database from it:</p>
+{{ k.fig("redshift-zero-etl.png", "zero-ETL integrations. Aurora source clusters replicate into Redshift data warehouses for analytics and machine learning.") }}
+{% call k.sql("Q3", "Connect Redshift to the integration (Lale Market admin action)") %}
+<pre><code>CREATE DATABASE aurora_live FROM INTEGRATION '&lt;integration id&gt;' DATABASE shop</code></pre>
+<table class="clause">
+  <tr><td>CREATE DATABASE aurora_live</td><td>A new database in Redshift. Its tables are the copies of the Aurora tables.</td></tr>
+  <tr><td>FROM INTEGRATION '&lt;integration id&gt;'</td><td>The zero-ETL integration that AWS runs between the Aurora cluster and the Redshift namespace.</td></tr>
+  <tr><td>DATABASE shop</td><td>The database in Aurora that the integration copies.</td></tr>
+</table>
+{% endcall %}
+{% call k.sql("Q4", "The live report, on the zero-ETL copy") %}
+<pre><code>SELECT p.category AS category, count(DISTINCT o.order_id) AS orders, sum(oi.qty) AS units, sum(oi.qty * oi.unit_price) AS revenue
+FROM aurora_live.public.orders o
+JOIN aurora_live.public.order_items oi ON oi.order_id = o.order_id
+JOIN aurora_live.public.products p ON p.product_id = oi.product_id
+JOIN aurora_live.public.customers c ON c.customer_id = o.customer_id
+WHERE o.status &lt;&gt; 'cancelled'
+GROUP BY 1 ORDER BY revenue DESC LIMIT 24</code></pre>
+<table class="clause">
+  <tr><td>aurora_live.public.orders</td><td>The copy of the Aurora table orders. The name has three parts: database, schema, table.</td></tr>
+  <tr><td>JOIN ... order_items, products, customers</td><td>The same joins as in Aurora. Here they run on the warehouse, not on the checkout database.</td></tr>
+  <tr><td>WHERE o.status &lt;&gt; 'cancelled'</td><td>Do not count cancelled orders.</td></tr>
+  <tr><td>sum(oi.qty * oi.unit_price)</td><td>The revenue, calculated from the order lines.</td></tr>
+</table>
+{% endcall %}
+
+<h2 id="lalemarket" data-short="Redshift in Lale Market"><span class="sec">08</span>Redshift in Lale Market</h2>
+<ul>
+  <li>One Redshift Serverless workgroup in the data subnets. The Redshift Engine App connects on TLS port 5439 with a password from Secrets Manager.</li>
+  <li>The history table <code>sales</code> has DISTKEY customer_id and SORTKEY order_date. The Seed loads it with one row for each order line that is not cancelled.</li>
+  <li>The database <code>aurora_live</code> is the zero-ETL copy of the Aurora database <code>shop</code>. An order from the checkout appears there within seconds, with no pipeline code.</li>
+  <li>The admin page "Sales reports" groups by month, category or city, from the history or from the live copy.</li>
+  <li>Redshift keeps no visitor data of its own. When Aurora deletes visitor orders, zero-ETL deletes the copies.</li>
+</ul>
+
+<h2 id="recall" data-short="Recall test"><span class="sec">09</span>Recall test</h2>
+{{ k.quiz("rs-r1", "Why does a zone map not help on an unsorted column?",
+   ["Zone maps exist only for text columns", "Each block holds a wide range of values, so most blocks can match", "Redshift deletes zone maps of unsorted columns", "Unsorted columns are not compressed"],
+   1, "If the values are in no order, the minimum and maximum of each block cover almost every filter. Redshift must read the block.") }}
+{{ k.quiz("rs-r2", "What does DISTSTYLE ALL do?",
+   ["It puts a complete copy of the table on every node", "It sorts the table by all columns", "It compresses all columns", "It drops the distribution key"],
+   0, "ALL copies a table, usually a small dimension, to every node. Every join with it is then local.") }}
+{{ k.quiz("rs-r3", "How does a new checkout order reach the live report of Lale Market?",
+   ["A nightly COPY from S3", "The zero-ETL integration copies it from Aurora within seconds", "The checkout writes it into Redshift directly", "The report reads Aurora directly"],
+   1, "The checkout writes only to Aurora. The integration copies the change into aurora_live.") }}
+
+<section class="lesson-foot">
+  <h2>Go deeper</h2>
+  <p><b>Primary source:</b> <a href="https://docs.aws.amazon.com/redshift/latest/dg/c_columnar_storage_disk_mem_mgmnt.html">Columnar storage</a>, then
+     <a href="https://docs.aws.amazon.com/redshift/latest/dg/c_designing-tables-best-practices.html">Amazon Redshift best practices for designing tables</a>.</p>
+  <p><b>Use it in the shop:</b> the admin page <a href="/free-e-commerce-app/admin/reports">Sales reports</a> runs Q1 and Q4. Place an order, then open the live report.</p>
+  <p><b>Ask questions.</b> If a part is not clear, ask your instructor or your AI assistant. Bring a report from your project, and select its sort key and distribution key together.</p>
+</section>
+{% endblock %}

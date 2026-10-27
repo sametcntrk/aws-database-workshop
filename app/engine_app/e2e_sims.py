@@ -1475,3 +1475,173 @@ def neptune(lang):
 
 COUNT_TR.update({"edges read": "okunan edge", "vertices reached": "ulaşılan vertex", "similar customers": "benzer müşteri", "levels": "seviye"})
 SIMS["neptune"] = neptune
+
+
+# ================================================================ Redshift (columnar warehouse)
+RS_COLS = ["order_id", "order_date", "customer_id", "city", "category", "product_id", "qty", "amount"]
+RS_ROWS = [["O000003", "2026-01-05", "C00001", "İstanbul", "Spor", "P0178", 3, 2635.86],
+           ["O000054", "2026-01-19", "C00004", "Frankfurt", "Kitap", "P0134", 3, 9188.34],
+           ["O000025", "2026-02-02", "C00001", "İstanbul", "Elektronik", "P0161", 1, 2678.72],
+           ["O000061", "2026-02-21", "C00002", "Ankara", "Kitap", "P0034", 2, 4009.92],
+           ["O000027", "2026-03-04", "C00001", "İstanbul", "Elektronik", "P0176", 3, 2832.03],
+           ["O000070", "2026-03-17", "C00003", "İzmir", "Moda", "P0045", 3, 7842.36],
+           ["O000004", "2026-04-04", "C00004", "Frankfurt", "Elektronik", "P0106", 3, 14649.69],
+           ["O000082", "2026-04-22", "C00002", "Ankara", "Ev & Yaşam", "P0157", 1, 836.15]]
+EXTRA_TABLES["rs_sales"] = {"cols": RS_COLS, "rows": RS_ROWS}
+
+
+def _cat_sums(rows):
+    s = {}
+    for r in rows:
+        s[r[4]] = round(s.get(r[4], 0) + r[7], 2)
+    return [[k, v] for k, v in sorted(s.items(), key=lambda kv: -kv[1])]
+
+
+def rs_rowcol(lang):
+    per = 2
+    blocks = [RS_ROWS[i:i + per] for i in range(0, len(RS_ROWS), per)]
+    rowt = [[f"R{n + 1}", " | ".join(str(v) for v in b[0]), " | ".join(str(v) for v in b[1])] for n, b in enumerate(blocks)]
+    colt = [[c, ", ".join(str(r[i]) for r in RS_ROWS)] for i, c in enumerate(RS_COLS)]
+    need = [RS_COLS.index("category"), RS_COLS.index("amount")]
+    steps = [{"say": T(lang, f"Query: SELECT category, sum(amount) FROM sales GROUP BY category. It needs 2 of the {len(RS_COLS)} columns. The same {len(RS_ROWS)} rows are stored twice: by row (first table) and by column (second table).",
+                       f"Query: SELECT category, sum(amount) FROM sales GROUP BY category. {len(RS_COLS)} kolonun 2'sine ihtiyaç duyar. Aynı {len(RS_ROWS)} row iki kez saklanır: row'a göre (birinci table) ve kolona göre (ikinci table)."),
+              "marks": {}, "out": [], "count": {"values read (row store)": 0, "values read (column store)": 0}}]
+    m, vr = {}, 0
+    for n, b in enumerate(blocks):
+        m[n] = "read"
+        vr += len(b) * len(RS_COLS)
+        steps.append({"say": T(lang, f"Row store: block R{n + 1} holds complete rows. To get category and amount, the database reads the whole block, also the {len(RS_COLS) - 2} columns that the query does not need.",
+                               f"Row store: R{n + 1} bloğu tam row'lar tutar. category ve amount'u almak için database bütün bloğu okur, query'nin ihtiyaç duymadığı {len(RS_COLS) - 2} kolonu da."),
+                      "marks": {"rowt": dict(m)}, "out": [], "count": {"values read (row store)": vr, "values read (column store)": 0}})
+    vc, cm = 0, {}
+    for i in need:
+        cm[i] = "match"
+        vc += len(RS_ROWS)
+        steps.append({"say": T(lang, f"Column store: the block of the column {RS_COLS[i]} holds only its {len(RS_ROWS)} values. The database reads this block.",
+                               f"Column store: {RS_COLS[i]} kolonunun bloğu sadece onun {len(RS_ROWS)} değerini tutar. Database bu bloğu okur."),
+                      "marks": {"rowt": {k: "read" for k in range(len(blocks))}, "colt": dict(cm)}, "out": _cat_sums(RS_ROWS) if len(cm) == 2 else [],
+                      "count": {"values read (row store)": vr, "values read (column store)": vc}})
+    steps.append({"say": T(lang, f"Same result, but the column store read {vc} values and the row store read {vr}. The other {len(RS_COLS) - 2} column blocks stayed on disk. A column holds similar values, so it also compresses well. With 100 columns and a query that needs 3, the difference is much larger.",
+                           f"Sonuç aynı, ama column store {vc} değer, row store {vr} değer okudu. Diğer {len(RS_COLS) - 2} kolon bloğu diskte kaldı. Bir kolon benzer değerler tutar, bu yüzden iyi de sıkışır. 100 kolon ve 3 kolona ihtiyaç duyan bir query'de fark çok daha büyüktür."),
+                  "marks": {"rowt": {k: "read" for k in range(len(blocks))}, "colt": {k: ("match" if k in need else "skip") for k in range(len(RS_COLS))}},
+                  "out": _cat_sums(RS_ROWS), "count": {"values read (row store)": vr, "values read (column store)": vc}})
+    return {"tables": [{"id": "rowt", "name": T(lang, "row store: one block = 2 complete rows", "row store: bir blok = 2 tam row"), "cols": [T(lang, "block", "blok"), T(lang, "row 1", "row 1"), T(lang, "row 2", "row 2")], "rows": rowt, "key": [0], "ref": []},
+                       {"id": "colt", "name": T(lang, "column store: one block = one column", "column store: bir blok = bir kolon"), "cols": [T(lang, "column", "kolon"), T(lang, "values", "değerler")], "rows": colt, "key": [0], "ref": []}],
+            "out": {"name": T(lang, "result", "sonuç"), "cols": ["category", "sum(amount)"]}, "steps": steps}
+
+
+RS_BLOCKS_SORTED = [["B1", "2026-01-01", "2026-01-31"], ["B2", "2026-02-01", "2026-02-28"], ["B3", "2026-03-01", "2026-03-31"],
+                    ["B4", "2026-04-01", "2026-04-30"], ["B5", "2026-05-01", "2026-05-31"], ["B6", "2026-06-01", "2026-06-30"]]
+RS_BLOCKS_UNSORTED = [["U1", "2026-01-03", "2026-06-27"], ["U2", "2026-01-09", "2026-06-12"], ["U3", "2026-02-14", "2026-05-30"],
+                      ["U4", "2026-01-21", "2026-06-30"], ["U5", "2026-01-01", "2026-04-18"], ["U6", "2026-02-02", "2026-06-05"]]
+
+
+def rs_zonemap(lang):
+    lo, hi = "2026-03-01", "2026-03-31"
+    steps = [{"say": T(lang, f"Query: ... WHERE order_date BETWEEN '{lo}' AND '{hi}'. For each 1 MB block, Redshift keeps the smallest and the largest value (the zone map). It compares the range with the zone map before it reads a block.",
+                       f"Query: ... WHERE order_date BETWEEN '{lo}' AND '{hi}'. Redshift her 1 MB'lık blok için en küçük ve en büyük değeri tutar (zone map). Bir bloğu okumadan önce aralığı zone map ile karşılaştırır."),
+              "marks": {}, "out": [], "count": {"blocks read (sorted)": 0, "blocks read (unsorted)": 0}}]
+    out = []
+    res = {}
+    for tid, blocks in (("srt", RS_BLOCKS_SORTED), ("uns", RS_BLOCKS_UNSORTED)):
+        m, n = {}, 0
+        for i, b in enumerate(blocks):
+            hit = not (b[2] < lo or b[1] > hi)
+            m[i] = "read" if hit else "skip"
+            n += hit
+        res[tid] = (m, n)
+    ms, ns = res["srt"]
+    steps.append({"say": T(lang, f"Sorted table (SORTKEY order_date): the blocks hold separate date ranges. Only block B3 can contain March. Redshift skips the other {len(RS_BLOCKS_SORTED) - ns} blocks without reading them.",
+                           f"Sıralı table (SORTKEY order_date): bloklar ayrı tarih aralıkları tutar. Sadece B3 bloğu Mart'ı içerebilir. Redshift diğer {len(RS_BLOCKS_SORTED) - ns} bloğu okumadan atlar."),
+                  "marks": {"srt": ms}, "out": [], "count": {"blocks read (sorted)": ns, "blocks read (unsorted)": 0}})
+    mu, nu = res["uns"]
+    steps.append({"say": T(lang, f"Unsorted table: each block holds dates from many months, so each range overlaps March. The zone map cannot exclude any of them: {nu} of {len(RS_BLOCKS_UNSORTED)} blocks must be read.",
+                           f"Sırasız table: her blok birçok aydan tarih tutar, bu yüzden her aralık Mart ile çakışır. Zone map hiçbirini dışarıda bırakamaz: {len(RS_BLOCKS_UNSORTED)} bloğun {nu}'sı okunmalıdır."),
+                  "marks": {"srt": ms, "uns": mu}, "out": [], "count": {"blocks read (sorted)": ns, "blocks read (unsorted)": nu}})
+    steps.append({"say": T(lang, "The sort key decides the order of the rows on disk. A good sort key is the column that most queries filter on with a range, often a date. The AWS guide says: if recent data is queried most often, make the timestamp column the leading sort key column.",
+                           "Sort key, row'ların diskteki sırasına karar verir. İyi bir sort key, çoğu query'nin bir aralıkla filtrelediği kolondur, çoğunlukla bir tarih. AWS kılavuzu şöyle der: en sık yeni veri sorgulanıyorsa timestamp kolonunu sort key'in ilk kolonu yap."),
+                  "marks": {"srt": ms, "uns": mu}, "out": [], "count": {"blocks read (sorted)": ns, "blocks read (unsorted)": nu}})
+    return {"tables": [{"id": "srt", "name": T(lang, "sorted by order_date: zone map", "order_date'e göre sıralı: zone map"), "cols": [T(lang, "block", "blok"), "min", "max"], "rows": RS_BLOCKS_SORTED, "key": [0], "ref": []},
+                       {"id": "uns", "name": T(lang, "unsorted: zone map", "sırasız: zone map"), "cols": [T(lang, "block", "blok"), "min", "max"], "rows": RS_BLOCKS_UNSORTED, "key": [0], "ref": []}],
+            "out": {"name": T(lang, "result", "sonuç"), "cols": ["-"]}, "steps": steps}
+
+
+def _slice(cid):
+    """A small teaching hash: the customer number modulo 2. Redshift uses its own hash function."""
+    return int(cid[1:]) % 2
+
+
+def rs_dist(lang):
+    rows = [[r[0], r[2], r[7]] for r in RS_ROWS]
+    key = {0: [], 1: []}
+    for r in rows:
+        key[_slice(r[1])].append(r)
+    even = {0: rows[0::2], 1: rows[1::2]}
+    cust = {0: [c for c in ("C00002", "C00004")], 1: [c for c in ("C00001", "C00003")]}
+
+    def tabs(d):
+        return {"s0": deepcopy(d[0]), "s1": deepcopy(d[1])}
+
+    steps = [{"say": T(lang, "Redshift splits each table across slices (parts of the compute nodes) and runs a query on all slices in parallel. The table customers is distributed by customer_id: slice 0 holds C00002 and C00004, slice 1 holds C00001 and C00003.",
+                       "Redshift her table'ı slice'lara (compute node'larının parçaları) böler ve bir query'yi bütün slice'larda paralel çalıştırır. customers table'ı customer_id'ye göre dağıtılmıştır: slice 0 C00002 ve C00004'ü, slice 1 C00001 ve C00003'ü tutar."),
+              "marks": {}, "rows": tabs({0: [], 1: []}), "out": [], "count": {"rows moved": 0}}]
+    steps.append({"say": T(lang, "DISTSTYLE KEY, DISTKEY customer_id: each sales row goes to the slice of its customer_id. The teaching hash here is the customer number modulo 2.",
+                           "DISTSTYLE KEY, DISTKEY customer_id: her sales row'u kendi customer_id'sinin slice'ına gider. Buradaki öğretici hash, müşteri numarasının 2'ye göre modudur."),
+                  "marks": {}, "rows": tabs(key), "out": [], "count": {"rows moved": 0}})
+    steps.append({"say": T(lang, "JOIN customers ON customer_id: on each slice, every sales row finds its customer on the same slice. No row moves between slices. The AWS guide calls this collocation.",
+                           "JOIN customers ON customer_id: her slice'ta her sales row'u kendi müşterisini aynı slice'ta bulur. Hiçbir row slice'lar arasında taşınmaz. AWS kılavuzu buna collocation der."),
+                  "marks": {"s0": {i: "match" for i in range(len(key[0]))}, "s1": {i: "match" for i in range(len(key[1]))}}, "rows": tabs(key), "out": [], "count": {"rows moved": 0}})
+    steps.append({"say": T(lang, "DISTSTYLE EVEN: the rows go to the slices in turn (round robin), with no regard to the customer. The slices hold the same number of rows, but the customer of a row is often on the other slice.",
+                           "DISTSTYLE EVEN: row'lar müşteriye bakılmadan sırayla (round robin) slice'lara gider. Slice'lar aynı sayıda row tutar, ama bir row'un müşterisi çoğunlukla diğer slice'tadır."),
+                  "marks": {}, "rows": tabs(even), "out": [], "count": {"rows moved": 0}})
+    moved, mk = 0, {"s0": {}, "s1": {}}
+    for s in (0, 1):
+        for i, r in enumerate(even[s]):
+            ok = r[1] in cust[s]
+            mk[f"s{s}"][i] = "match" if ok else "bad"
+            moved += 0 if ok else 1
+    steps.append({"say": T(lang, f"The same join with EVEN: {moved} of {len(rows)} sales rows have their customer on the other slice. Redshift must send these rows over the network before the join (redistribution).",
+                           f"EVEN ile aynı join: {len(rows)} sales row'unun {moved}'inin müşterisi diğer slice'tadır. Redshift bu row'ları join'den önce ağ üzerinden göndermelidir (redistribution)."),
+                  "marks": mk, "rows": tabs(even), "out": [], "count": {"rows moved": moved}})
+    steps.append({"say": T(lang, "Rule of the guide: distribute the fact table and its largest joined dimension on their common column. A small dimension can use ALL, a copy on every node. With AUTO, Redshift chooses and changes the style itself.",
+                           "Kılavuzun kuralı: fact table'ı ve en büyük join'lenen dimension'ını ortak kolonlarına göre dağıt. Küçük bir dimension ALL kullanabilir, yani her node'da bir kopya. AUTO ile stili Redshift kendisi seçer ve değiştirir."),
+                  "marks": mk, "rows": tabs(even), "out": [], "count": {"rows moved": moved}})
+    cols = ["order_id", "customer_id", "amount"]
+    return {"tables": [{"id": "s0", "name": "slice 0 (customers: C00002, C00004)", "cols": cols, "rows": [], "key": [0], "ref": [1]},
+                       {"id": "s1", "name": "slice 1 (customers: C00001, C00003)", "cols": cols, "rows": [], "key": [0], "ref": [1]}],
+            "out": {"name": T(lang, "result", "sonuç"), "cols": ["-"]}, "steps": steps}
+
+
+RS_CANDS = ["Redshift", "Aurora PostgreSQL", "DynamoDB", "OpenSearch", "Neptune"]
+
+
+def redshift(lang):
+    w1 = verdicts(RS_CANDS, [
+        V((1, "SQL with joins", "join'li SQL"), (1, "SQL with joins", "join'li SQL"), (0, "no joins", "join yok"), (0, "no joins between indexes", "index'ler arası join yok"), (0, "graph queries, not table joins", "graph query'leri, table join'leri değil")),
+        V((1, "columnar, reads only the needed columns, in parallel", "columnar, sadece gereken kolonları paralel okur"), (0, "row storage reads whole rows", "row storage bütün row'ları okur"),
+          (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi")),
+        V((1, "a separate warehouse, fed by zero-ETL", "zero-ETL ile beslenen ayrı bir warehouse"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi")),
+    ])
+    w2 = verdicts(RS_CANDS, [
+        V((0, "built for large loads and scans, not one small insert per click", "büyük yüklemeler ve taramalar için yapıldı, tıklama başına küçük insert için değil"), (1, "OLTP", "OLTP"), (1, "single-digit ms writes", "tek haneli ms yazmalar"),
+          (0, "a search copy, not the source", "bir arama kopyası, kaynak değil"), (1, "transactional writes", "transactional yazmalar")),
+        V((0, "removed earlier", "daha önce elendi"), (1, "ACID transactions", "ACID transaction'lar"), (1, "TransactWriteItems", "TransactWriteItems"), (0, "removed earlier", "daha önce elendi"), (1, "ACID transactions", "ACID transaction'lar")),
+        V((0, "removed earlier", "daha önce elendi"), (1, "foreign keys, CHECK", "foreign key'ler, CHECK"), (0, "no foreign keys", "foreign key yok"), (0, "removed earlier", "daha önce elendi"), (0, "no foreign keys or CHECK", "foreign key ya da CHECK yok")),
+    ])
+    spec = {
+        "decide_report": decide_generic(lang, ("Monthly revenue by category and city over two years of orders, for the analysts", "Analistler için iki yıllık siparişler üzerinde kategori ve şehre göre aylık gelir"),
+                                        [("SQL with joins of facts and dimensions", "Fact ve dimension'ların join'li SQL'i"),
+                                         ("Scan hundreds of millions of rows in seconds", "Yüz milyonlarca row'u saniyelerde tara"),
+                                         ("Do not slow the checkout database", "Checkout database'ini yavaşlatma")], RS_CANDS, w1),
+        "decide_checkout": decide_generic(lang, ("Write one order per checkout, thousands per second", "Her checkout'ta bir sipariş yaz, saniyede binlerce"),
+                                          [("Many small writes with low latency", "Düşük gecikmeli çok sayıda küçük yazma"),
+                                           ("Several rows change as one unit", "Birkaç row tek bir birim olarak değişir"),
+                                           ("Rules between tables (foreign keys, CHECK)", "Table'lar arası kurallar (foreign key, CHECK)")], RS_CANDS, w2),
+        "rowcol": rs_rowcol(lang), "zonemap": rs_zonemap(lang), "dist": rs_dist(lang),
+    }
+    return {k: _localize(v, lang) for k, v in spec.items()}
+
+
+COUNT_TR.update({"values read (row store)": "okunan değer (row store)", "values read (column store)": "okunan değer (column store)",
+                 "blocks read (sorted)": "okunan blok (sıralı)", "blocks read (unsorted)": "okunan blok (sırasız)", "rows moved": "taşınan row"})
+SIMS["redshift"] = redshift

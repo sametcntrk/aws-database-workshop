@@ -1,0 +1,262 @@
+{% extends "e2e/_base.html" %}
+{% import "e2e/_macros.html" as k with context %}
+{# Turkish version of redshift.html. Terms stay in English; the explanations are Turkish. Keep both files in step. #}
+{% block body %}
+
+<h2 id="goal" data-short="Ne öğreneceksin"><span class="sec">00</span>Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
+<p>Bölüm 01 mimarın kararını verir: Amazon Redshift nereye oturur, nereye oturmaz. Sonra tutorial iki bölümden oluşur.
+   Bölüm 1, columnar bir data warehouse'un nasıl çalıştığını öğretir: fact'ler ve dimension'lar, kolon bazlı saklama, zone map'ler ve sort key'ler, paralel slice'lar. Bölüm 2, AWS servisini ve Lale Market'in onu nasıl kullandığını gösterir.</p>
+<p>Örnekler Lale Market'in satış raporlarından gelir. Bazen başka bir örnek bir fikri daha kolay gösterir. O zaman tutorial onu kullanır: bir hesap tablosu, bir kütüphane rafı, oy sayan bir ekip.</p>
+<p>Bu tutorial'ın sonunda şunları yapabilirsin:</p>
+<ol>
+  <li>Bir data warehouse'un hangi iş yükleri için doğru seçim olduğunu ve neden checkout'un database'i olmadığını söylemek.</li>
+  <li>Bir column store'un bir rapor için neden row store'dan daha az veri okuduğunu açıklamak.</li>
+  <li>Bir sort key'in ve zone map'lerin Redshift'in blokları atlamasını nasıl sağladığını açıklamak.</li>
+  <li>Bir distribution style seçmek ve onun bir join'e ne yaptığını açıklamak.</li>
+  <li>Bir fact table üzerindeki bir rapor query'sini okuyup hangi kolonları okuduğunu söylemek.</li>
+  <li>Redshift Serverless'ı ve Aurora'dan gelen zero-ETL entegrasyonunu açıklamak.</li>
+</ol>
+<p>Dört tür kutu sana yardım eder. <b>Simülasyon</b>: Oynat'a ya da Sonraki adım'a bas. <b>Önce tahmin et</b>: cevabı açmadan önce kendi cevabını yaz.
+   <b>Checkpoint</b>: tek doğru cevabı olan bir soru. <b>Analoji</b>: günlük hayattan bir resim.</p>
+
+<h2 id="architect" data-short="Mimar gözüyle: ne zaman"><span class="sec">01</span>Mimar gözüyle: Redshift nereye oturur</h2>
+<p><b>Önce bu bölümü oku.</b> Kararı bu bölüm verir. Sonraki bölümler bir warehouse'un nasıl çalıştığını öğretir.</p>
+<p><b>Kısaca:</b> Amazon Redshift bir data warehouse'dur. Çok sayıda row üzerinde SQL sorularını cevaplar: "iki yıl boyunca kategori başına aylık gelir", "şehre göre en iyi 100 müşteri".
+   Her kolonu ayrı saklar, eşleşemeyecek blokları atlar ve işi paralel çalışan birçok slice'a böler. Raporların ve analitiğin yeridir, mağazanın tıklamalarının değil.</p>
+<p>Anahtar fikir {{ k.term("OLAP") }}'tır (online analytical processing): az sayıda query, her biri milyonlarca row okur ama sadece birkaç kolon. Checkout ise {{ k.term("OLTP") }} yapar: çok sayıda query, her biri birkaç tam row okur ya da yazar.</p>
+
+<h3>Bir iş yükünde Redshift'i işaret eden sinyaller</h3>
+<table class="data">
+  <thead><tr><th>Sinyal</th><th>Gerçek bir projede nasıl görünür</th><th>Onu cevaplayan özellik</th></tr></thead>
+  <tbody>
+    <tr><td>Bütün geçmiş üzerinde sorular</td><td>"Son iki yılın aylık geliri."</td><td>Kolon bazlı saklama ve paralel taramalar (bölüm 03 ve 05)</td></tr>
+    <tr><td>Geniş table'ların az kolonu</td><td>60 kolonlu bir sales table'ı, 4'üne ihtiyaç duyan bir rapor.</td><td>Kolon bazlı saklama (bölüm 03)</td></tr>
+    <tr><td>Tarihler üzerinde filtreler</td><td>"Geçen çeyrek", "bu yılın Mart'ı".</td><td>Sort key ve zone map'ler (bölüm 04)</td></tr>
+    <tr><td>Fact'lerin dimension'larla join'i</td><td>Müşteriler, ürünler ve tarihlerle join'lenen satışlar.</td><td>Star schema ve dağıtım (bölüm 02 ve 05)</td></tr>
+    <tr><td>Birçok kaynaktan veri tek yerde</td><td>Siparişler, web event'leri, pazarlama maliyetleri.</td><td>Zero-ETL, S3'ten COPY, data lake üzerinde query'ler (bölüm 07)</td></tr>
+    <tr><td>Raporlar mağazayı yavaşlatmamalı</td><td>Analistler gün içinde ağır query'ler çalıştırır.</td><td>Zero-ETL ile beslenen ayrı bir warehouse (bölüm 08)</td></tr>
+  </tbody>
+</table>
+
+<h3>Use case'ler, nedeni ve özelliğiyle</h3>
+<table class="data">
+  <thead><tr><th>Use case</th><th>Veri</th><th>Neden bir warehouse</th><th>İşi yapan özellik</th></tr></thead>
+  <tbody>
+    <tr><td>Satış raporları (Lale Market)</td><td>Tarih, şehir, kategori, miktar ve tutarlı sipariş satırları.</td><td>Bütün siparişler üzerinde ay, kategori ya da şehre göre GROUP BY.</td><td>Kolon bazlı saklama, SORTKEY order_date</td></tr>
+    <tr><td>Neredeyse gerçek zamanlı operasyon dashboard'u (Lale Market)</td><td>Canlı Aurora table'ları.</td><td>Bir ETL pipeline'ı olmadan bugünün siparişleri bir raporda.</td><td>Aurora'dan zero-ETL entegrasyonu</td></tr>
+    <tr><td>Finans ve muhasebe raporları</td><td>Faturalar, ödemeler, defterler.</td><td>Milyonlarca kayıt üzerinde aylık kapanış.</td><td>SQL, join'ler, window function'lar</td></tr>
+    <tr><td>Pazarlama attribution'ı</td><td>Reklam tıklamaları, oturumlar, siparişler.</td><td>Birçok kaynaktan event'leri müşteriye göre join'le.</td><td>Join key'ine göre dağıtım</td></tr>
+    <tr><td>Business intelligence araçları</td><td>Herhangi bir warehouse table'ı.</td><td>Birçok kullanıcı için dashboard'lar.</td><td>JDBC ve ODBC driver'ları, concurrency scaling</td></tr>
+    <tr><td>Data lake query'leri</td><td>S3'teki Parquet dosyaları.</td><td>Warehouse table'larını S3'te kalan dosyalarla join'le.</td><td>External table'lar (Redshift Spectrum)</td></tr>
+    <tr><td>Machine learning feature'ları</td><td>Müşteri geçmişi.</td><td>Eğitim verisi için aggregate'ler hesapla.</td><td>SQL aggregate'leri, Redshift ML</td></tr>
+    <tr><td>Telekom ve IoT geçmişi</td><td>Milyarlarca arama ya da cihaz kaydı.</td><td>Uzun dönemler üzerinde sıkıştırılmış taramalar.</td><td>Kolon başına sıkıştırma, zone map'ler</td></tr>
+  </tbody>
+</table>
+
+<h3>Redshift'ten uzaklaştıran sinyaller</h3>
+<table class="data">
+  <thead><tr><th>İş yükündeki sinyal</th><th>Redshift neden zayıf bir seçim</th><th>Daha iyi seçim</th></tr></thead>
+  <tbody>
+    <tr><td>Tıklama başına küçük bir yazma, saniyede binlerce</td><td>Redshift büyük yüklemeleri ve taramaları iyi yapar, çok sayıda küçük yazmayı değil.</td><td><a href="/e2etutorial/aurora">Aurora</a>, <a href="/e2etutorial/dynamodb">DynamoDB</a></td></tr>
+    <tr><td>Milisaniyelerde key ile tek bir kaydı okuma</td><td>Bir warehouse query'sinin başlangıç maliyeti bir key okumasından fazladır.</td><td><a href="/e2etutorial/dynamodb">DynamoDB</a>, <a href="/e2etutorial/elasticache">ElastiCache</a></td></tr>
+    <tr><td>Yazım hatalı serbest metin arama</td><td>Analyzer ya da relevance score yok.</td><td><a href="/e2etutorial/opensearch">OpenSearch</a></td></tr>
+    <tr><td>Birçok hop üzerinden ilişkiler</td><td>Her hop bir self-join daha demektir.</td><td><a href="/e2etutorial/neptune">Neptune</a></td></tr>
+    <tr><td>Birkaç saniyede bir gelen ve otomatik silinen metrikler</td><td>Ölçüm başına retention yok.</td><td><a href="/e2etutorial/influxdb">Timestream for InfluxDB</a></td></tr>
+  </tbody>
+</table>
+
+<h3>Bir mimarın sorduğu sorular, bu sırayla</h3>
+<ol>
+  <li><b>Bir rapor mu, bir transaction mı?</b> Raporlar warehouse'a gider. Transaction'lar operasyonel database'de kalır.</li>
+  <li><b>Rapor ne kadar taze olmalı?</b> Saniyeler zero-ETL'i işaret eder. Saatler ya da bir gün, COPY ile bir batch yüklemeye izin verir.</li>
+  <li><b>Raporlar hangi kolonları ve hangi filtreleri kullanıyor?</b> Sort key'e bunlar karar verir.</li>
+  <li><b>Hangi table'lar, hangi kolon üzerinden join'leniyor?</b> Distribution key'e bunlar karar verir. AUTO ile Redshift karar verir.</li>
+  <li><b>Yük sabit mi, patlamalı mı?</b> Patlamalar ve boş geceler Redshift Serverless'ı işaret eder. Sabit ve yüksek bir yük provisioned bir cluster kullanabilir.</li>
+  <li><b>Veri S3'te kalmak zorunda mı?</b> O zaman onu external table'larla ya da Amazon Athena ile sorgula.</li>
+</ol>
+
+<h3>AWS'te Redshift ve akrabaları</h3>
+<table class="data">
+  <thead><tr><th>Seçenek</th><th>Nedir</th><th>Ne zaman seç</th></tr></thead>
+  <tbody>
+    <tr><td>Redshift Serverless</td><td>Kapasitesi Redshift Processing Unit (RPU) cinsinden olan ve yükle ölçeklenen bir workgroup.</td><td>Değişken yük ve boyutlandırılacak cluster yok. Lale Market bunu kullanır.</td></tr>
+    <tr><td>Redshift provisioned cluster</td><td>Senin seçip boyutlandırdığın bir leader node ve compute node'lar.</td><td>Sabit, tahmin edilebilir bir yük.</td></tr>
+    <tr><td>Amazon Athena</td><td>Doğrudan S3'teki dosyalar üzerinde serverless SQL. Query başına ödersin.</td><td>Bir data lake üzerinde ara sıra query'ler.</td></tr>
+    <tr><td>Aurora read replica</td><td>Okumalar için operasyonel database'in bir kopyası.</td><td>Güncel veri üzerinde küçük raporlar, warehouse yok.</td></tr>
+  </tbody>
+</table>
+{{ k.fig("redshift-architecture.png", "Redshift mimarisi. Client'lar JDBC, ODBC ya da Data API ile bağlanır. Compute, Redshift managed storage üzerinde serverless olarak ya da bir leader node ve compute node'lu bir cluster olarak çalışır.") }}
+
+<h3>Lale Market'te Redshift'in yeri</h3>
+<p>Siparişler Aurora PostgreSQL'de yaşar. Bir zero-ETL entegrasyonu Aurora table'larını Redshift'teki <code>aurora_live</code> database'ine kopyalar ve kopyayı saniyeler içinde güncel tutar.
+   Geçmiş için Seed ayrıca düz bir <code>sales</code> table'ı yükler; iptal edilmemiş her sipariş satırı için bir row.
+   Admin sayfası "Sales reports" sadece Redshift'ten okur. Checkout database'ine hiçbir zaman rapor query'si göndermez.</p>
+
+<h3>Simülasyon: gereksinimler seçsin</h3>
+{{ k.sim("decide_report", "İş yükü 1: satış raporları") }}
+{{ k.sim("decide_checkout", "İş yükü 2: checkout") }}
+
+{{ k.quiz("rs-a1", "Bir ekip 5.000 mağazanın her birinin üç yıl boyunca günlük gelirini, mağaza ve ürün table'larıyla join'lenmiş olarak istiyor. En iyi ne oturur?",
+   ["Sipariş database'inden beslenen Redshift", "Mağaza id'si key olan DynamoDB", "Gün başına bir key ile ElastiCache", "Mağazaların vertex olduğu Neptune"],
+   0, "Query uzun bir geçmişi tarar, birkaç kolon okur ve fact'leri dimension'larla join'ler. Bu columnar bir warehouse'un işidir.") }}
+{{ k.quiz("rs-a2", "Bir geliştirici her yeni siparişi sipariş başına bir INSERT ile doğrudan Redshift'e yazmak istiyor. Ana sorun nedir?",
+   ["Redshift tarih saklayamaz", "Redshift büyük yüklemeleri ve taramaları iyi yapar, çok sayıda küçük yazmayı değil", "Redshift row'ları bir gün sonra siler", "Redshift'te SQL yok"],
+   1, "Çok sayıda küçük yazma OLTP işidir. Sipariş Aurora'ya gider ve zero-ETL onu Redshift'e kopyalar.") }}
+
+<div class="part"><b>Bölüm 1</b><h2 id="part1" data-short="BÖLÜM 1: Warehouse nasıl çalışır">Columnar bir data warehouse nasıl çalışır</h2>
+<p>Fact'ler ve dimension'lar, kolon bazlı saklama, zone map'ler ve paralel slice'lar.</p></div>
+
+<h2 id="star" data-short="Fact'ler ve dimension'lar"><span class="sec">02</span>Fact'ler ve dimension'lar: star schema</h2>
+<p>Bir warehouse event'leri genellikle büyük bir {{ k.term("fact table") }}'da saklar: her satış için bir row, sayılarla (miktar, tutar) ve key'lerle.
+   Etrafında {{ k.term("dimension table") }}'lar vardır: müşteriler, ürünler, tarihler, mağazalar. Bir dimension, fact table'ın key'lerini tanımlar. Çizim bir yıldıza benzer.</p>
+{{ k.fig("redshift-star-schema.png", "bir star schema. Ortada bir fact table, etrafında dört dimension table vardır.") }}
+<p>Lale Market geçmişi tek bir düz <code>sales</code> table'ında tutar. Müşterinin şehrini ve ürünün kategorisini zaten içerir, bu yüzden çoğu rapor join gerektirmez. Bunlar sekiz örnek row'dur:</p>
+{{ k.sample("rs_sales", "sales: sekiz örnek row", key=["order_id", "product_id"], ref=["customer_id"]) }}
+<p>Identifier'lar: sipariş id'sinin, müşteri id'sinin ve ürün id'sinin sahibi Aurora'dır. sales table'ı üçünü de ödünç alır. <code>order_id</code> ve <code>product_id</code> çifti bir sipariş satırını tanımlar.
+   Redshift primary key'leri ya da foreign key'leri zorlamaz. Onları planner için bilgi olarak kabul eder, bu yüzden yükleme süreci id'leri doğru tutmalıdır.</p>
+{% call k.sql("Q1", "Lale Market admin sayfasının raporu") %}
+<pre><code>SELECT category AS category, count(DISTINCT order_id) AS orders, sum(qty) AS units, sum(amount) AS revenue
+FROM sales GROUP BY 1 ORDER BY revenue DESC LIMIT 24</code></pre>
+<table class="clause">
+  <tr><td>SELECT category AS category</td><td>Grup etiketi. Sayfa ay ya da şehre göre de gruplayabilir.</td></tr>
+  <tr><td>count(DISTINCT order_id) AS orders</td><td>Gruptaki farklı siparişlerin sayısı. Bir siparişin birkaç satırı olabilir.</td></tr>
+  <tr><td>sum(qty), sum(amount)</td><td>Grubun adedi ve geliri.</td></tr>
+  <tr><td>GROUP BY 1</td><td>SELECT listesinin ilk kolonuna göre grupla.</td></tr>
+  <tr><td>ORDER BY revenue DESC LIMIT 24</td><td>En yüksek gelirli gruplar önce, en fazla 24.</td></tr>
+</table>
+{% endcall %}
+{% call k.predict("Q1, sales'in hangi kolonlarını okur? Sekiz kolonun kaçına ihtiyaç duymaz?") %}
+<p>category, order_id, qty ve amount'u okur. order_date, customer_id, city ve product_id'ye, yani sekiz kolonun dördüne ihtiyaç duymaz.</p>
+{% endcall %}
+
+<h2 id="columns" data-short="Kolon bazlı saklama"><span class="sec">03</span>Kolon bazlı saklama: sadece query'nin ihtiyacını oku</h2>
+<p>PostgreSQL gibi bir row store, her tam row'u bir disk bloğuna koyar. Bu checkout için iyidir: bir sipariş bir row'dur ve database onu tek bir yerde okur ya da yazar.
+   Bir {{ k.term("column store") }} ise bir kolonun değerlerini bir blokta bir araya koyar. İki kolona ihtiyaç duyan bir rapor iki tür blok okur ve diğerlerini diskte bırakır.</p>
+{% call k.callout("analogy", "Analoji") %}
+<p>Kâğıda basılmış büyük bir hesap tablosu düşün. Bir row store her sayfaya bütün alanlarıyla bir müşteri basar. Bir kolonu toplamak için her sayfayı çevirmen gerekir.
+   Bir column store her sayfaya bir kolon basar. Tutarları toplamak için tutar sayfasını alırsın, başka hiçbir şeyi değil.</p>
+{% endcall %}
+{{ k.fig("redshift-row-storage.png", "row storage. Her disk bloğu bütün kolonlarıyla tam row'lar tutar.") }}
+{{ k.fig("redshift-column-storage.png", "column storage. Bir disk bloğu birçok row için bir kolonun değerlerini tutar.") }}
+{{ k.sim("rowcol", "SELECT category, sum(amount): row store ve column store") }}
+<p>İkinci kazanç sıkıştırmadır. Bir kolon tek tipte ve çoğunlukla tekrar eden değerler tutar, örneğin aynı şehir birçok kez. Redshift her kolon için bir compression encoding seçer, böylece aynı veri daha az blok kullanır.</p>
+{{ k.quiz("rs-q1", "Bir table'ın 50 kolonu var. Bir query bütün row'lar üzerinde bunların 2'sini okuyor. Bir column store verinin yaklaşık ne kadarını okur?",
+   ["Hepsini", "Yaklaşık yarısını", "50 kolonun yaklaşık 2'sini", "Sadece ilk row'u"],
+   2, "Bir column store 2 kolonun bloklarını okur. Diğer 48 kolonun blokları diskte kalır.") }}
+
+<h2 id="zonemaps" data-short="Sort key ve zone map"><span class="sec">04</span>Sort key'ler ve zone map'ler: eşleşemeyecek blokları atla</h2>
+<p>Redshift her kolonu 1 MB'lık bloklarda saklar. Her blok için en küçük ve en büyük değeri bellekte tutar. Bu {{ k.term("zone map") }}'tir.
+   Bir bloğu okumadan önce Redshift query'nin filtresini zone map ile karşılaştırır. Bloğun aralığı eşleşemiyorsa Redshift onu atlar
+   (<a href="https://docs.aws.amazon.com/redshift/latest/dg/c_best-practices-sort-key.html">Choose the best sort key</a>).</p>
+<p>Zone map sadece her bloktaki değerler birbirine yakınsa yardım eder. Bunu {{ k.term("sort key") }} yapar: row'ları diskte bir ya da daha fazla kolonun sırasıyla saklar.</p>
+{% call k.sql("Q2", "Bir ay için bir rapor") %}
+<pre><code>SELECT category, sum(amount) AS revenue
+FROM   sales
+WHERE  order_date BETWEEN '2026-03-01' AND '2026-03-31'
+GROUP  BY category;</code></pre>
+<table class="clause">
+  <tr><td>WHERE order_date BETWEEN ... AND ...</td><td>Sort key kolonu üzerinde bir aralık filtresi. Redshift onu her bloğun minimum ve maksimumuyla karşılaştırır.</td></tr>
+  <tr><td>GROUP BY category</td><td>Kalan row'ların tutarlarını kategori başına topla.</td></tr>
+</table>
+{% endcall %}
+{{ k.sim("zonemap", "Mart: sıralı bloklar ve sırasız bloklar") }}
+{% call k.callout("analogy", "Analoji") %}
+<p>Kitapları yıla göre sıralı bir kütüphanede her rafın bir etiketi vardır: "1990'dan 1995'e". 1993'ten kitaplar bulmak için tek bir rafa gidersin. Kitaplar rastgele sıradaysa her rafta her yıldan kitap vardır ve etiketler yardım etmez.</p>
+{% endcall %}
+
+<h2 id="slices" data-short="Slice'lar ve dağıtım"><span class="sec">05</span>Slice'lar ve dağıtım: paralel çalışan birçok işçi</h2>
+<p>Redshift bir {{ k.term("MPP") }} (massively parallel processing) sistemidir. Her table'ı {{ k.term("slice") }}'lara böler. Her slice kendi parçasını tarar ve Redshift sonuçları birleştirir.
+   Bir query iki table'ı join'lediğinde eşleşen row'lar aynı slice'ta olmalıdır. Değillerse Redshift önce row'ları ağ üzerinden taşır. Bir table'ın {{ k.term("distribution style") }}'ı row'larının nereye gideceğine karar verir.</p>
+<table class="data">
+  <thead><tr><th>Style</th><th>Row'lar nereye gider</th><th>Ne için iyi</th></tr></thead>
+  <tbody>
+    <tr><td>KEY</td><td>Bir kolonun, yani DISTKEY'in değerine göre. Eşit değerler aynı slice'tadır.</td><td>O kolon üzerinden join'lenen büyük bir table.</td></tr>
+    <tr><td>EVEN</td><td>Değerlere bakılmadan sırayla.</td><td>Join'lenmeyen bir table.</td></tr>
+    <tr><td>ALL</td><td>Her node'da tam bir kopya.</td><td>Küçük bir dimension table.</td></tr>
+    <tr><td>AUTO</td><td>Table büyüdükçe stili Redshift seçer ve değiştirir. Varsayılandır.</td><td>Çoğu table.</td></tr>
+  </tbody>
+</table>
+<p>Kaynak: <a href="https://docs.aws.amazon.com/redshift/latest/dg/c_choosing_dist_sort.html">Distribution styles</a>.</p>
+{% call k.callout("analogy", "Analoji") %}
+<p>Oy sayan bir ekip düşün. Herkes aynı anda bir yığını sayar ve sonunda ekip yığınları toplar. Bir kişi başka birinde olan bir listede isim araması gerekirse masanın üzerinden kâğıt uzatmaları gerekir. Bu yavaştır. Her kişiye aynı isimlerin kâğıtlarını ve listesini ver.</p>
+{% endcall %}
+{{ k.sim("dist", "JOIN customers: KEY ve EVEN dağıtım") }}
+{{ k.quiz("rs-q2", "sales table'ı çoğu raporda customers ile customer_id üzerinden join'leniyor. Hangi ayar row'ların taşınmasını önler?",
+   ["İki table'da da DISTSTYLE EVEN", "İki table'da da DISTKEY customer_id", "Sadece sales'te SORTKEY customer_id", "Hiçbir ayar bunu önleyemez"],
+   1, "Aynı DISTKEY ile eşleşen row'lar aynı slice'tadır, bu yüzden join yerel çalışır.") }}
+
+<div class="part"><b>Bölüm 2</b><h2 id="part2" data-short="BÖLÜM 2: Amazon Redshift">Amazon Redshift: AWS servisi</h2>
+<p>Serverless kapasite, managed storage ve Aurora'dan zero-ETL.</p></div>
+
+<h2 id="service" data-short="Serverless ve storage"><span class="sec">06</span>Redshift Serverless ve managed storage</h2>
+<p>Redshift Serverless kapasiteyi Redshift Processing Unit (RPU) cinsinden ölçer. Bir RPU 16 GB bellek sağlar ve varsayılan base capacity 128 RPU'dur
+   (<a href="https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-capacity.html">Compute capacity for Redshift Serverless</a>).
+   Kapasite yükle birlikte artar ve azalır. İş yüklerinin kullandığı RPU-saatleri için ödersin, bu yüzden boş bir gece compute maliyeti doğurmaz.</p>
+<p>Veri, compute'tan ayrı olarak Redshift managed storage'da yaşar. Provisioned bir cluster'da, bölüm 01'deki mimari görselinin gösterdiği gibi, query'leri planlayan bir leader node ve onları çalıştıran compute node'lar vardır.</p>
+<table class="data">
+  <thead><tr><th>Görev</th><th>Kendi warehouse'un</th><th>Amazon Redshift</th></tr></thead>
+  <tbody>
+    <tr><td>Sunucular ve kapasite</td><td>Sen satın alır, kurar ve boyutlandırırsın.</td><td>Serverless RPU'lar ya da senin seçtiğin node'lar.</td></tr>
+    <tr><td>Storage</td><td>Yıllarca büyüme için diskleri planlarsın.</td><td>Compute'tan ayrı managed storage.</td></tr>
+    <tr><td>Table tasarımı</td><td>Sort ve distribution key'lerini ayarlarsın.</td><td>AUTO ile automatic table optimization.</td></tr>
+    <tr><td>Aurora'dan veri</td><td>Bir ETL pipeline'ı yazar ve çalıştırırsın.</td><td>Zero-ETL entegrasyonu.</td></tr>
+    <tr><td>Yedekler</td><td>Sen zamanlarsın.</td><td>Otomatik recovery point'ler ve snapshot'lar.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="zeroetl" data-short="Aurora'dan zero-ETL"><span class="sec">07</span>Aurora'dan zero-ETL</h2>
+<p>AWS dokümantasyonu zero-ETL entegrasyonunu yönetilen bir çözüm olarak tanımlar. Transactional veriyi Redshift'te "within seconds of being written", yani yazıldıktan saniyeler sonra kullanılabilir yapar
+   (<a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/zero-etl.html">Aurora zero-ETL integrations</a>). Entegrasyonu bir kez oluşturursun. Redshift'te tek bir statement ondan bir database oluşturur:</p>
+{{ k.fig("redshift-zero-etl.png", "zero-ETL entegrasyonları. Aurora kaynak cluster'ları analitik ve machine learning için Redshift data warehouse'larına replike olur.") }}
+{% call k.sql("Q3", "Redshift'i entegrasyona bağla (Lale Market admin işlemi)") %}
+<pre><code>CREATE DATABASE aurora_live FROM INTEGRATION '&lt;integration id&gt;' DATABASE shop</code></pre>
+<table class="clause">
+  <tr><td>CREATE DATABASE aurora_live</td><td>Redshift'te yeni bir database. Table'ları Aurora table'larının kopyalarıdır.</td></tr>
+  <tr><td>FROM INTEGRATION '&lt;integration id&gt;'</td><td>AWS'in Aurora cluster'ı ile Redshift namespace'i arasında çalıştırdığı zero-ETL entegrasyonu.</td></tr>
+  <tr><td>DATABASE shop</td><td>Entegrasyonun kopyaladığı Aurora'daki database.</td></tr>
+</table>
+{% endcall %}
+{% call k.sql("Q4", "Zero-ETL kopyası üzerinde canlı rapor") %}
+<pre><code>SELECT p.category AS category, count(DISTINCT o.order_id) AS orders, sum(oi.qty) AS units, sum(oi.qty * oi.unit_price) AS revenue
+FROM aurora_live.public.orders o
+JOIN aurora_live.public.order_items oi ON oi.order_id = o.order_id
+JOIN aurora_live.public.products p ON p.product_id = oi.product_id
+JOIN aurora_live.public.customers c ON c.customer_id = o.customer_id
+WHERE o.status &lt;&gt; 'cancelled'
+GROUP BY 1 ORDER BY revenue DESC LIMIT 24</code></pre>
+<table class="clause">
+  <tr><td>aurora_live.public.orders</td><td>Aurora'daki orders table'ının kopyası. İsmin üç parçası vardır: database, schema, table.</td></tr>
+  <tr><td>JOIN ... order_items, products, customers</td><td>Aurora'daki join'lerin aynısı. Burada checkout database'inde değil, warehouse'ta çalışırlar.</td></tr>
+  <tr><td>WHERE o.status &lt;&gt; 'cancelled'</td><td>İptal edilmiş siparişleri sayma.</td></tr>
+  <tr><td>sum(oi.qty * oi.unit_price)</td><td>Sipariş satırlarından hesaplanan gelir.</td></tr>
+</table>
+{% endcall %}
+
+<h2 id="lalemarket" data-short="Lale Market'te Redshift"><span class="sec">08</span>Lale Market'te Redshift</h2>
+<ul>
+  <li>Data subnet'lerinde bir Redshift Serverless workgroup'u. Redshift Engine App, Secrets Manager'dan alınan bir şifreyle TLS port 5439 üzerinden bağlanır.</li>
+  <li>Geçmiş table'ı <code>sales</code>'te DISTKEY customer_id ve SORTKEY order_date vardır. Seed onu iptal edilmemiş her sipariş satırı için bir row ile yükler.</li>
+  <li><code>aurora_live</code> database'i, Aurora'daki <code>shop</code> database'inin zero-ETL kopyasıdır. Checkout'tan gelen bir sipariş, pipeline kodu olmadan saniyeler içinde orada görünür.</li>
+  <li>Admin sayfası "Sales reports" geçmişten ya da canlı kopyadan ay, kategori ya da şehre göre gruplar.</li>
+  <li>Redshift kendine ait ziyaretçi verisi tutmaz. Aurora ziyaretçi siparişlerini sildiğinde zero-ETL kopyaları siler.</li>
+</ul>
+
+<h2 id="recall" data-short="Hatırlama testi"><span class="sec">09</span>Hatırlama testi</h2>
+{{ k.quiz("rs-r1", "Zone map neden sırasız bir kolonda yardım etmez?",
+   ["Zone map'ler sadece text kolonlar için vardır", "Her blok geniş bir değer aralığı tutar, bu yüzden çoğu blok eşleşebilir", "Redshift sırasız kolonların zone map'lerini siler", "Sırasız kolonlar sıkıştırılmaz"],
+   1, "Değerler hiçbir sırada değilse her bloğun minimum ve maksimumu neredeyse her filtreyi kapsar. Redshift bloğu okumak zorundadır.") }}
+{{ k.quiz("rs-r2", "DISTSTYLE ALL ne yapar?",
+   ["Table'ın tam bir kopyasını her node'a koyar", "Table'ı bütün kolonlara göre sıralar", "Bütün kolonları sıkıştırır", "Distribution key'i kaldırır"],
+   0, "ALL bir table'ı, genellikle küçük bir dimension'ı, her node'a kopyalar. Onunla yapılan her join böylece yereldir.") }}
+{{ k.quiz("rs-r3", "Yeni bir checkout siparişi Lale Market'in canlı raporuna nasıl ulaşır?",
+   ["S3'ten gecelik bir COPY ile", "Zero-ETL entegrasyonu onu saniyeler içinde Aurora'dan kopyalar", "Checkout onu doğrudan Redshift'e yazar", "Rapor doğrudan Aurora'yı okur"],
+   1, "Checkout sadece Aurora'ya yazar. Entegrasyon değişikliği aurora_live'a kopyalar.") }}
+
+<section class="lesson-foot">
+  <h2>Daha derine in</h2>
+  <p><b>Ana kaynak:</b> <a href="https://docs.aws.amazon.com/redshift/latest/dg/c_columnar_storage_disk_mem_mgmnt.html">Columnar storage</a>, sonra
+     <a href="https://docs.aws.amazon.com/redshift/latest/dg/c_designing-tables-best-practices.html">Amazon Redshift best practices for designing tables</a>.</p>
+  <p><b>Mağazada kullan:</b> admin sayfası <a href="/free-e-commerce-app/admin/reports">Sales reports</a> Q1'i ve Q4'ü çalıştırır. Bir sipariş ver, sonra canlı raporu aç.</p>
+  <p><b>Soru sor.</b> Bir kısım net değilse eğitmenine ya da AI asistanına sor. Projenden bir rapor getir ve onun sort key'ini ve distribution key'ini birlikte seçin.</p>
+</section>
+{% endblock %}
