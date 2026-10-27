@@ -1,0 +1,319 @@
+{% extends "e2e/_base.html" %}
+{% import "e2e/_macros.html" as k with context %}
+{# Turkish version of aurora.html. Terms stay in English; the explanations are Turkish. Keep both files in step. #}
+{% block body %}
+
+<h2 id="goal" data-short="Ne öğreneceksin"><span class="sec">00</span>Ne öğreneceksin</h2>
+<p>Lale Market siparişlerini Amazon Aurora PostgreSQL'de tutar. Her sipariş stoğu değiştirir, bir order header yazar ve order line'ları yazar.
+   Bu yazmaların hepsi birlikte olmalı, ya da hiçbiri olmamalı. Üstelik bunu aynı anda birçok müşteri yapar.</p>
+<p>Bu tutorial'ın sonunda şunları yapabilirsin:</p>
+<ol>
+  <li>Lale Market'in dört table'ını ve onları bağlayan key'leri çizmek.</li>
+  <li>Bir JOIN'i okuyup Engine'in her adımda hangi row'lara dokunduğunu söylemek.</li>
+  <li>Bir query plan okuyup index scan ile full table scan'i ayırt etmek.</li>
+  <li>Bir transaction ve bir row lock'un, mağazanın son ürünü iki kez satmasını nasıl engellediğini açıklamak.</li>
+  <li>Aurora'nın ne zaman doğru Engine olduğunu, ne zaman başka bir Engine'in daha iyi olduğunu söylemek.</li>
+</ol>
+
+<h2 id="model" data-short="Table, row, schema"><span class="sec">01</span>Model: şekli önceden belli table'lar</h2>
+<p>Bir {{ k.term("relational database") }} veriyi table'larda tutar. Bir table'ın column'ları vardır ve her column'un tek bir data type'ı vardır.
+   Table'daki her row, her column için bir değer taşır. Table'ların, column'ların, type'ların ve kuralların listesine {{ k.term("schema") }} denir.
+   Schema'yı ilk row'u yazmadan önce tanımlarsın.</p>
+<p>Bu, Lale Market'in gerçek <code>customers</code> table'ı. 1.000 row'undan üçü:</p>
+<table class="data">
+  <caption>customers (customer_id text PRIMARY KEY, name text NOT NULL, email text, city text, segment text, created_at timestamptz)</caption>
+  <thead><tr><th class="key">customer_id</th><th>name</th><th>email</th><th>city</th><th>segment</th></tr></thead>
+  <tbody>
+    <tr><td class="key mono">C00001</td><td>Ayşe Yılmaz</td><td class="mono">ayse.yilmaz@example.com</td><td>İstanbul</td><td>premium</td></tr>
+    <tr><td class="key mono">C00002</td><td>Mert Doğan</td><td class="mono">mert.dogan@example.com</td><td>Ankara</td><td>kurumsal</td></tr>
+    <tr><td class="key mono">C00003</td><td>Elif Kaya</td><td class="mono">elif.kaya@example.com</td><td>İzmir</td><td>bireysel</td></tr>
+  </tbody>
+</table>
+{% call k.callout("analogy", "Analoji") %}
+<p>Bir table, kutucukları önceden basılmış bir form gibidir. Her müşteri aynı kutucukları doldurur. Şehir kutucuğuna telefon numarası yazamazsın,
+   çünkü database her değerin type'ını kontrol eder. Yeni bir bilgi türü, bütün formlara yeni bir kutucuk eklemeyi gerektirir: <code>ALTER TABLE ... ADD COLUMN</code>.</p>
+{% endcall %}
+<p>Diskte PostgreSQL her table'ı ve her index'i eşit boyutlu page'lerden oluşan bir liste olarak saklar. Bir page genellikle 8 kB'tır
+   (<a href="https://www.postgresql.org/docs/current/storage-page-layout.html">PostgreSQL: Database Page Layout</a>).
+   Bir page'de birçok row bulunur. Tek bir row'u okumak için Engine, o row'un bulunduğu page'in tamamını okur. Bu resmi aklında tut:
+   bir query'nin maliyeti çoğunlukla okuduğu page sayısıdır.</p>
+
+{% call k.query("aurora", "A1", "Her table'da kaç row var?") %}
+<pre><code>SELECT 'customers' AS table_name, count(*) AS rows FROM customers
+UNION ALL SELECT 'products', count(*) FROM products
+UNION ALL SELECT 'orders', count(*) FROM orders
+UNION ALL SELECT 'order_items', count(*) FROM order_items;</code></pre>
+<p>Amaç: query yazmadan önce verinin büyüklüğünü görmek. <code>count(*)</code> row'ları sayar. <code>UNION ALL</code> dört sonucu alt alta koyar.</p>
+{% endcall %}
+
+{% call k.query("aurora", "A2", "Bir müşteriyi primary key ile oku") %}
+<pre><code>SELECT * FROM customers WHERE customer_id = 'C00001';</code></pre>
+<p>Amaç: tam olarak bir row almak. {{ k.term("primary key") }} olan <code>customer_id</code> tektir (unique), bu yüzden sonuç ya sıfır ya bir row'dur.</p>
+{% endcall %}
+
+<h2 id="keys" data-short="Key'ler ve ilişkiler"><span class="sec">02</span>Key'ler: dört table bir siparişi nasıl oluşturur</h2>
+<p>Bir siparişin bir header'ı (kim, ne zaman, durum, toplam) ve bir ya da daha fazla line'ı (hangi ürün, kaç adet, hangi fiyattan) vardır.
+   Lale Market bu bilgileri dört table'a koyar. Table'ları key'ler bağlar:</p>
+<ul>
+  <li><b>Primary key</b> (PK), bir row'u tanımlayan column ya da column'lardır. İki row aynı primary key'e sahip olamaz.</li>
+  <li>{{ k.term("foreign key") }} (FK), başka bir table'daki bir row'un primary key'ini tutan column'dur.
+      PostgreSQL hiçbir row'u göstermeyen bir foreign key değerini reddeder.</li>
+</ul>
+{{ k.fig("aurora-er-diagram.png", "her kutu bir table. PK primary key'i, FK foreign key'i işaretler. Her çizgi bir foreign key'i gösterdiği primary key'e bağlar. Lale Market table'ları aynı fikri dört table ile kullanır.") }}
+<p>Bu, Ayşe Yılmaz'ın <code>O000001</code> numaralı siparişi; PostgreSQL onu bu şekilde saklar. Tek bir sipariş dört table kullanır:</p>
+<table class="data">
+  <caption>orders</caption>
+  <thead><tr><th class="key">order_id (PK)</th><th>customer_id (FK → customers)</th><th>order_date</th><th>status</th><th class="num">total</th></tr></thead>
+  <tbody><tr><td class="key mono">O000001</td><td class="mono hl">C00001</td><td>2026-06-08 13:05</td><td>delivered</td><td class="num">14,988.97</td></tr></tbody>
+</table>
+<table class="data">
+  <caption>order_items (PRIMARY KEY (order_id, product_id))</caption>
+  <thead><tr><th class="key">order_id (FK)</th><th class="key">product_id (FK)</th><th class="num">qty</th><th class="num">unit_price</th></tr></thead>
+  <tbody>
+    <tr><td class="key mono">O000001</td><td class="key mono">P0044</td><td class="num">1</td><td class="num">2,651.39</td></tr>
+    <tr><td class="key mono">O000001</td><td class="key mono">P0095</td><td class="num">1</td><td class="num">2,721.65</td></tr>
+    <tr><td class="key mono">O000001</td><td class="key mono">P0142</td><td class="num">3</td><td class="num">2,693.65</td></tr>
+    <tr><td class="key mono">O000001</td><td class="key mono">P0179</td><td class="num">2</td><td class="num">767.49</td></tr>
+  </tbody>
+</table>
+<table class="data">
+  <caption>products (200 row'dan dördü)</caption>
+  <thead><tr><th class="key">product_id (PK)</th><th>name</th><th>category</th></tr></thead>
+  <tbody>
+    <tr><td class="key mono">P0044</td><td>Kapadokya Bulut Mimarisi 44</td><td>Kitap</td></tr>
+    <tr><td class="key mono">P0095</td><td>Anadolu Yün Kazak 95</td><td>Moda</td></tr>
+    <tr><td class="key mono">P0142</td><td>Ege Hava Temizleyici 142</td><td>Ev &amp; Yaşam</td></tr>
+    <tr><td class="key mono">P0179</td><td>Toros Python ile Veri 179</td><td>Kitap</td></tr>
+  </tbody>
+</table>
+<p>Total, line'ların toplamıdır: 2,651.39 + 2,721.65 + 3 × 2,693.65 + 2 × 767.49 = 14,988.97.</p>
+<p>Neden her line'da müşteri adı ve ürün adı olan tek bir geniş table yok? Çünkü o zaman bir bilginin birçok kopyası olur.
+   Ayşe e-posta adresini değiştirirse, şimdiye kadar verdiği her siparişin her line'ını değiştirmen gerekir. Bir değişiklik başarısız olursa kopyalar birbirini tutmaz.
+   Ayrı table'larla her bilginin tek bir yeri olur. Bu tasarım kuralına {{ k.term("normalization") }} denir.</p>
+<p>Bir kopya bilerek yapılır: <code>order_items.unit_price</code>. <code>products</code> içindeki fiyat yarın değişebilir.
+   Sipariş ise müşterinin ödediği fiyatı korumalıdır. Bu yüzden order line, sipariş anındaki fiyatı saklar.</p>
+
+{% call k.predict("Yarın products table'ında P0142'nin fiyatı değişiyor. O000001 siparişinin total'i değişir mi?") %}
+<p>Hayır. Order line'ın kendi <code>unit_price</code>'ı (2,693.65) var, order row'u da kendi <code>orders.total</code>'ını tutuyor.
+   Yeni fiyatı sadece yeni siparişler kullanır. Bu kopya bir iş kararıdır, kaza değil.</p>
+{% endcall %}
+
+{{ k.quiz("aurora-q1", "Var olmayan bir ürün için order line kaydetmeyi hangi column imkânsız kılar?",
+   ["Foreign key order_items.product_id", "Primary key orders.order_id", "Column order_items.unit_price", "Column products.category"],
+   0, "order_items.product_id, products'a giden bir foreign key'dir. PostgreSQL line'ı kaydetmeden önce ürün row'unun var olduğunu kontrol eder.") }}
+
+<h2 id="join" data-short="Adım adım JOIN"><span class="sec">03</span>JOIN: parçaları yeniden birleştir</h2>
+<p>Depolama bölünmüş durumda, ama mağaza sayfası tek bir resim ister. {{ k.term("JOIN") }}, bir koşulun doğru olduğu yerde iki table'ın row'larını birleştirir.
+   Bu koşul genellikle "foreign key, primary key'e eşittir" koşuludur.</p>
+
+{% call k.predict("O000001 siparişinin 4 line'ı var. orders, customers, order_items ve products'ın JOIN'i bu sipariş için kaç row döner?") %}
+<p>4 row. Her order line bir siparişe, bir müşteriye ve bir ürüne eşleşir. Sipariş ve müşteri column'ları 4 sonuç row'unun her birinde tekrarlanır.
+   Sonuç veriyi tekrarlar, depolama tekrarlamaz.</p>
+{% endcall %}
+
+{% call k.query("aurora", "A3", "O000001 siparişi tek bir sonuç olarak") %}
+<pre><code>SELECT o.order_id, o.order_date::date AS order_date, c.name AS customer,
+       p.name AS product, oi.qty, oi.unit_price, oi.qty * oi.unit_price AS line_total
+FROM orders o
+JOIN customers   c  ON c.customer_id = o.customer_id
+JOIN order_items oi ON oi.order_id   = o.order_id
+JOIN products    p  ON p.product_id  = oi.product_id
+WHERE o.order_id = 'O000001';</code></pre>
+<p>Amaç: bir siparişi müşteri adı ve ürün adlarıyla göstermek. Engine bunu şöyle çalıştırabilir:</p>
+<ol class="steps">
+  <li><code>orders</code> içindeki <code>O000001</code> row'unu primary key index'i ile bul. Bu, table'ın tamamını değil, birkaç page'i okur.</li>
+  <li><code>o.customer_id</code> (C00001) ile <code>customers</code> içinde tek bir row bul; yine primary key index'iyle.</li>
+  <li><code>order_items</code> içinde <code>O000001</code>'in line'larını bul. Primary key (order_id, product_id), order_id ile başladığı için index'i onları bulur.</li>
+  <li>4 line'ın her biri için ürünü <code>product_id</code> ile bul. Sonuç 4 row'dur.</li>
+</ol>
+<p>Bu adımların sırasını ve join yöntemini PostgreSQL'in planner'ı seçer. Yukarıdaki adımlar doğru bir planı gösterir, tek planı değil.</p>
+{% endcall %}
+
+{{ k.quiz("aurora-q2", "Primary key'ler üzerindeki bir JOIN, table'lar büyük olduğunda da neden hızlıdır?",
+   ["Engine önce table'ları belleğe kopyalar", "Her lookup bir index kullanır, az page okur", "Engine join sonucunu diske kaydeder", "PostgreSQL olası her join'i önceden cache'ler"],
+   1, "Primary key'in bir B-tree index'i vardır. Her lookup birkaç page okur ve bu sayı table büyüdükçe çok yavaş artar.") }}
+
+<h2 id="aggregate" data-short="GROUP BY"><span class="sec">04</span>Aggregation: birçok row tek bir sayıya dönüşür</h2>
+<p>Bir mağaza yöneticisi soruyor: "En çok hangi kategori kazandırıyor?" Cevap için tüm order line'ları gerekir, ürünün kategorisine göre gruplanmış hâlde.</p>
+{% call k.query("aurora", "A4", "Kategori başına gelir") %}
+<pre><code>SELECT p.category, count(DISTINCT o.order_id) AS orders,
+       sum(oi.qty) AS pieces, round(sum(oi.qty * oi.unit_price), 2) AS revenue
+FROM order_items oi
+JOIN orders o   ON o.order_id = oi.order_id
+JOIN products p ON p.product_id = oi.product_id
+WHERE o.status &lt;&gt; 'cancelled'
+GROUP BY p.category
+ORDER BY revenue DESC;</code></pre>
+<ol class="steps">
+  <li>Tüm order line'ları oku (yaklaşık 12.500 row), çünkü soru hepsiyle ilgili.</li>
+  <li>Her line'ı siparişine join et ve iptal edilmiş siparişlerin line'larını çıkar.</li>
+  <li>Kategoriyi almak için her line'ı ürününe join et.</li>
+  <li>Line'ları her kategori için bir tane olmak üzere beş gruba koy. Her grubun içinde topla ve say.</li>
+  <li>Beş sonuç row'unu gelire göre sırala.</li>
+</ol>
+{% endcall %}
+<p>Bu query table'ların tamamını okur. Lale Market verisinde bu milisaniyeler sürer. Yıllarca biriken siparişlerde dakikalar sürebilir
+   ve aynı Engine için checkout ile yarışır. <a href="/e2etutorial/redshift">Redshift tutorial</a>'ı, AWS'nin tam bu tür query'ler için yaptığı Engine'i gösterir.</p>
+
+<h2 id="index" data-short="Index ve plan"><span class="sec">05</span>Index'ler ve query plan'ler</h2>
+<p>{{ k.term("index") }}, table'ın yanında duran ikinci bir yapıdır. Bir ya da daha fazla column'un değerlerini sıralı tutar
+   ve her kayıt (entry) row'u gösterir. PostgreSQL'in varsayılan index türü {{ k.term("B-tree") }}'dir
+   (<a href="https://www.postgresql.org/docs/current/indexes-types.html">PostgreSQL: Index Types</a>).
+   Bir primary key otomatik olarak unique bir B-tree index alır
+   (<a href="https://www.postgresql.org/docs/current/ddl-constraints.html">PostgreSQL: Constraints</a>).</p>
+{{ k.fig("aurora-btree.png", "root node 7 ve 16'yı tutar. 12'yi bulmak için Engine ortadaki child'a gider, çünkü 7 < 12 < 16. Bir arama her seviyede bir node okur. Milyonlarca key'i olan bir ağacın sadece birkaç seviyesi vardır.") }}
+{% call k.callout("analogy", "Analoji") %}
+<p>Index, bir kitabın arkasındaki dizin gibidir. "transaction" kelimesini bulmak için bütün sayfaları okumazsın. Sıralı dizine bakarsın, o da sayfa numarasını verir.
+   Kitap table'dır. Sayfa numarası, row'a giden işaretçidir (pointer).</p>
+{% endcall %}
+
+{% call k.query("aurora", "A5", "Hangi index'ler var?") %}
+<pre><code>SELECT tablename, indexname, indexdef
+FROM pg_indexes WHERE schemaname = 'public' ORDER BY tablename, indexname;</code></pre>
+<p>Amaç: her index'i listelemek. Primary key index'lerini (<code>..._pkey</code>) ve <code>orders.customer_id</code> ile <code>orders.visitor_id</code> üzerindeki iki ek index'i görürsün.
+   <code>customers</code> table'ının <code>email</code> column'unun index'i yoktur.</p>
+{% endcall %}
+
+{% call k.predict("Bir müşteriyi önce customer_id ile, sonra email ile arıyorsun. İki query'den hangisi daha fazla page okur?") %}
+<p>email ile olan. <code>customer_id</code>'nin index'i var, bu yüzden PostgreSQL doğrudan tek bir row'a gider (Index Scan).
+   <code>email</code>'in index'i yok, bu yüzden PostgreSQL table'ın her row'unu okur ve filtreyi test eder (Seq Scan). A6 ve A7'yi çalıştır, "Buffers" satırlarını karşılaştır.</p>
+{% endcall %}
+
+{% call k.query("aurora", "A6", "Primary key ile yapılan bir lookup'ın planı") %}
+<pre><code>EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM customers WHERE customer_id = 'C00450';</code></pre>
+<p><code>EXPLAIN ANALYZE</code> query'yi çalıştırır ve planı her adımın gerçek süresiyle gösterir
+   (<a href="https://www.postgresql.org/docs/current/using-explain.html">PostgreSQL: Using EXPLAIN</a>). <code>BUFFERS</code>, adımın okuduğu page sayısını ekler.</p>
+{% endcall %}
+{% call k.query("aurora", "A7", "Index'i olmayan bir column'daki filtrenin planı") %}
+<pre><code>EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM customers WHERE email = 'ayse.yilmaz@example.com';</code></pre>
+<p><code>Seq Scan</code> ve <code>Rows Removed by Filter</code> satırlarına bak. Engine 1 row döndürmek için 1.000 row okudu.</p>
+{% endcall %}
+<p>Index bedava değildir. Her INSERT ve index'li bir column'un her UPDATE'i index'i de değiştirir. Bu yüzden her column'a değil, mağazanın sık çalıştırdığı query'lere index ekle.</p>
+
+{{ k.quiz("aurora-q3", "Bir query'nin planı orders üzerinde Seq Scan ve Rows Removed by Filter: 4,999 gösteriyor. Hangi değişiklik en çok işe yarar?",
+   ["Cluster'a daha fazla Aurora Replica eklemek", "Filtrelenen column'a bir index eklemek", "Column type'ını text olarak değiştirmek", "Query'yi art arda iki kez çalıştırmak"],
+   1, "Çok row'un elendiği bir Seq Scan, filtreye hiçbir index'in yardım etmediğini gösterir. Filtrelenen column'daki bir index, Engine'i doğrudan eşleşen row'lara götürür.") }}
+
+<h2 id="constraints" data-short="Constraint'ler"><span class="sec">06</span>Constraint'ler: database kötü veriyi reddeder</h2>
+<p>Uygulamada bug olabilir. {{ k.term("constraint") }}, schema'daki bir kuraldır; bu yüzden PostgreSQL onu her uygulamadan gelen her yazmada kontrol eder.
+   Lale Market üç tür kullanır: PRIMARY KEY, FOREIGN KEY (<code>REFERENCES</code>) ve CHECK (<code>stock &gt;= 0</code>).
+   Sonraki iki query bir kuralı çiğnemeye çalışır. İkisi de ROLLBACK ile biten bir transaction içinde çalışır, bu yüzden hiçbir değişiklik kalmaz.</p>
+{% call k.query("aurora", "A8", "Var olmayan bir ürün için order line yaz") %}
+<pre><code>BEGIN;
+INSERT INTO order_items VALUES ('O000001', 'P9999', 1, 10.00);   -- P9999 products içinde yok
+ROLLBACK;</code></pre>
+<p>Beklenen: PostgreSQL foreign key violation ile reddeder.</p>
+{% endcall %}
+{% call k.query("aurora", "A9", "Stoğu negatif yap") %}
+<pre><code>BEGIN;
+UPDATE products SET stock = stock - 100000 WHERE product_id = 'P0001';
+ROLLBACK;</code></pre>
+<p>Beklenen: PostgreSQL check constraint violation ile reddeder.</p>
+{% endcall %}
+
+<h2 id="tx" data-short="Transaction ve lock"><span class="sec">07</span>Transaction'lar: ya hepsi ya hiçbiri, sırayla</h2>
+<p>{{ k.term("transaction") }}, statement'ları tek bir birim hâline getirir. PostgreSQL tüm değişikliklerini COMMIT'te görünür yapar, ROLLBACK'te ise hiçbirini
+   (<a href="https://www.postgresql.org/docs/current/tutorial-transactions.html">PostgreSQL: Transactions</a>).
+   Bunlar Lale Market checkout'unun gerçek statement'ları (<code>engines/aurora.py</code> dosyasından):</p>
+<pre><code>BEGIN;
+UPDATE products SET stock = stock - 2 WHERE product_id = 'P0001' AND stock &gt;= 2;  <span class="c">-- sepet line'ı başına bir tane</span>
+INSERT INTO orders VALUES ('W1793...', 'C00001', '&lt;visitor&gt;', now(), 'processing', 6747.68);
+INSERT INTO order_items VALUES ('W1793...', 'P0001', 2, 3373.84);
+COMMIT;</code></pre>
+<p>Ödeme stok UPDATE'inden sonra başarısız olursa uygulama ROLLBACK gönderir. Stok geri gelir ve hiçbir order row'u oluşmaz.
+   Bu atomicity'dir, {{ k.term("ACID") }}'deki "A".</p>
+
+<h3>Son ürün: aynı anda iki checkout</h3>
+<p>P0001 ürününün stoğu 1. Ayşe ve Mert aynı saniyede "Place the order"a tıklıyor. Saf (naive) bir programın adım adım ne yaptığına bak:</p>
+<table class="data">
+  <thead><tr><th>Zaman</th><th>Ayşe (naive program)</th><th>Mert (naive program)</th><th class="num">table'daki stock</th></tr></thead>
+  <tbody>
+    <tr><td>t1</td><td><code>SELECT stock</code> → 1</td><td></td><td class="num">1</td></tr>
+    <tr><td>t2</td><td></td><td><code>SELECT stock</code> → 1</td><td class="num">1</td></tr>
+    <tr><td>t3</td><td>1 ≥ 1, o hâlde <code>UPDATE ... SET stock = 0</code></td><td></td><td class="num">0</td></tr>
+    <tr><td>t4</td><td></td><td>1 ≥ 1, o hâlde <code>UPDATE ... SET stock = 0</code></td><td class="num hl">0 (iki ürün satıldı)</td></tr>
+  </tbody>
+</table>
+<p>İki program da yazmadan önce 1 okudu. Mağaza bir ürünü iki kez sattı. Buna {{ k.term("lost update") }} denir.</p>
+<p>Lale Market testi UPDATE'in içine koyar: <code>SET stock = stock - 1 WHERE ... AND stock &gt;= 1</code>.
+   UPDATE bir row lock alır. Mert'in UPDATE'i, Ayşe'nin transaction'ı bitene kadar bekler. Sonra yeni değeri (0) okur, koşul yanlış olur
+   ve 0 row değiştirir. Uygulama "0 row" görür ve Mert'e stoğun yetmediğini söyler.</p>
+{% call k.query("aurora", "A10", "Checkout'un koşullu UPDATE'i") %}
+<pre><code>BEGIN;
+UPDATE products SET stock = stock - 1
+WHERE product_id = 'P0001' AND stock &gt;= 1
+RETURNING product_id, stock AS stock_after;
+ROLLBACK;</code></pre>
+<p>Amaç: testi ve değişikliği tek bir statement'ta görmek. <code>RETURNING</code> yeni değeri gösterir. ROLLBACK ürünü geri verir.</p>
+{% endcall %}
+{% call k.callout("analogy", "Analoji") %}
+<p>Row lock, bir kafedeki tek kişilik tuvaletin anahtarı gibidir. Anahtarı alan içeri girer. Sıradaki kişi kapıda bekler.
+   Anahtar geri geldiğinde sıradaki kişi içeri girer ve odayı beklemeden önceki hâliyle değil, şimdiki hâliyle görür.</p>
+{% endcall %}
+<p>Okuyanlar yazanları beklemez. PostgreSQL {{ k.term("MVCC") }} kullanır: her statement commit edilmiş verinin bir snapshot'ını görür.
+   Bu yüzden bir SELECT bir UPDATE'i bloklamaz, bir UPDATE de bir SELECT'i bloklamaz
+   (<a href="https://www.postgresql.org/docs/current/mvcc-intro.html">PostgreSQL: MVCC Introduction</a>).</p>
+
+{{ k.quiz("aurora-q4", "Checkout neden AND stock >= 1 koşulunu önceden bir SELECT yapmak yerine UPDATE'in içine koyar?",
+   ["SQL metnini okumayı kısaltır", "Test ve değişiklik tek row lock altında olur", "Transaction içinde SELECT'e izin verilmez", "UPDATE'in primary key index'ini atlamasını sağlar"],
+   1, "Bir SELECT ile sonraki UPDATE arasında başka bir transaction row'u değiştirebilir. Tek bir UPDATE, row lock'u tutarken row'u hem test eder hem değiştirir.") }}
+
+<h2 id="aurora" data-short="Aurora ne ekler"><span class="sec">08</span>Aurora, PostgreSQL'e ne ekler</h2>
+<p>Bu tutorial'daki SQL, PostgreSQL'dir. Aurora PostgreSQL, PostgreSQL engine'ini çalıştırır ama storage katmanını değiştirir.
+   Bir Aurora {{ k.term("DB cluster") }}'ın DB instance'ları ve tek bir cluster volume'u vardır.
+   Primary (writer) instance tüm yazmaları yapar. En fazla 15 Aurora Replica aynı volume'a bağlanır ve okumalara cevap verir.
+   Cluster volume'da verinin kopyaları üç Availability Zone'da bulunur
+   (<a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Overview.html">Aurora DB clusters</a>,
+   <a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Overview.StorageReliability.html">Aurora storage</a>).</p>
+{{ k.fig("aurora-cluster.png", "writer ve iki reader üç Availability Zone'da duruyor, ama üçü de tek bir paylaşılan storage volume kullanıyor. Yeni bir reader için verinin kopyalanması gerekmez. Volume ayrıca Amazon S3'e sürekli backup gönderir.") }}
+<p>Lale Market'te Engine App writer endpoint'e bağlanır, çünkü checkout yazar. Sadece okuyan bir rapor reader endpoint'i kullanabilirdi.</p>
+<table class="data">
+  <thead><tr><th>Soru</th><th>Tek sunucuda PostgreSQL</th><th>Aurora PostgreSQL</th></tr></thead>
+  <tbody>
+    <tr><td>Veri nerede?</td><td>Sunucunun diskinde</td><td>Kopyaları üç Availability Zone'da olan bir cluster volume'da</td></tr>
+    <tr><td>Yeni read replica</td><td>Tüm database'i kopyalar</td><td>Paylaşılan volume'a bağlanır</td></tr>
+    <tr><td>Storage boyutu</td><td>Diski sen seçer ve büyütürsün</td><td>Volume veriyle birlikte büyür</td></tr>
+    <tr><td>SQL, index, constraint</td><td colspan="2">Aynı PostgreSQL özellikleri</td></tr>
+  </tbody>
+</table>
+
+<h2 id="usecases" data-short="Kullanım alanları"><span class="sec">09</span>Ne zaman kullanılır, ne zaman kullanılmaz</h2>
+<table class="data">
+  <thead><tr><th>Uygun</th><th>Neden</th></tr></thead>
+  <tbody>
+    <tr><td>Siparişler, ödemeler, stok (Lale Market checkout'u)</td><td>Birbiriyle ilişkili birçok yazma birlikte commit edilmeli. Constraint'ler kuralları korur.</td></tr>
+    <tr><td>Müşteri hesapları, rezervasyonlar, faturalar</td><td>Yapısı ve ilişkileri net olan veri. Sorular zamanla değişir, SQL yenilerini de cevaplayabilir.</td></tr>
+    <tr><td>Güncel veri üzerinde operasyonel raporlar</td><td>Orta büyüklükteki veride JOIN ve GROUP BY.</td></tr>
+  </tbody>
+</table>
+<table class="data">
+  <thead><tr><th>Zayıf uyum</th><th>Lale Market'te daha iyi Engine</th></tr></thead>
+  <tbody>
+    <tr><td>Dashboard'lar için yılların geçmişini taramak</td><td><a href="/e2etutorial/redshift">Redshift</a> (columnar)</td></tr>
+    <tr><td>Erişim deseni (access pattern) belli, saniyede milyonlarca basit key lookup</td><td><a href="/e2etutorial/dynamodb">DynamoDB</a></td></tr>
+    <tr><td>Yazım hatası toleranslı ve relevance'lı full-text search</td><td><a href="/e2etutorial/opensearch">OpenSearch</a></td></tr>
+    <tr><td>Kayıtlar arasındaki yollarla ilgili sorular ("arkadaşların arkadaşları")</td><td><a href="/e2etutorial/neptune">Neptune</a></td></tr>
+  </tbody>
+</table>
+
+<h2 id="recall" data-short="Recall test"><span class="sec">10</span>Recall test</h2>
+<p>Bölümlere geri bakmadan cevapla. Bilgiyi hafızadan geri çağırmak, onun kalıcı olmasını sağlar.</p>
+{{ k.quiz("aurora-r1", "Bir mağaza her order line'da sadece product_id'yi değil ürün adını da saklıyor. Bu hangi soruna yol açabilir?",
+   ["products'a JOIN imkânsız hâle gelir", "Bir bilginin kopyaları sonra birbirini tutmayabilir", "order_items'ın primary key'i bozulur", "PostgreSQL o table'da text'i reddeder"],
+   1, "Bilgi değişince her kopyanın değişmesi gerekir. Bir değişiklik başarısız olursa kopyalar birbirini tutmaz. Normalization her bilgiyi tek yerde tutar.") }}
+{{ k.quiz("aurora-r2", "Bir Aurora Replica, writer instance ile neyi paylaşır?",
+   ["Verinin bulunduğu aynı cluster volume'u", "Tek bir sunucunun aynı CPU ve belleğini", "Kendi oluşturduğu ayrı bir tam kopyayı", "Hiçbir şey, bir S3 backup'ından okur"],
+   0, "Bir Aurora DB cluster'ının tüm instance'ları tek bir cluster volume kullanır. Yeni bir reader'ın veri kopyasına ihtiyaç duymamasının sebebi budur.") }}
+{{ k.quiz("aurora-r3", "İki transaction aynı anda UPDATE ... WHERE product_id = 'P0001' çalıştırıyor. İkincisi ne yapar?",
+   ["Hemen bir hatayla başarısız olur", "İlk değişikliğin üzerine yazar", "Row lock'u bekler", "Eski bir snapshot okur ve yazar"],
+   2, "İlk UPDATE, COMMIT ya da ROLLBACK'e kadar row lock'u tutar. İkincisi bekler, sonra row'un yeni değeri üzerinde çalışır.") }}
+
+<section class="lesson-foot">
+  <h2>Daha derine in</h2>
+  <p><b>Ana kaynak:</b> <a href="https://www.postgresql.org/docs/current/tutorial-sql.html">PostgreSQL Tutorial: The SQL Language</a>, sonra
+     <a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Overview.html">Amazon Aurora DB clusters</a>.</p>
+  <p><b>Mağazada kullan:</b> <a href="/guided-e-commerce-app/">Guided mission</a>'daki "A failed payment rolls back the order" ve "Place the order" adımları tam olarak bu statement'ları kullanır.
+     <a href="/free-e-commerce-app/admin/orders">Free app'teki Order report</a>'ta EXPLAIN ANALYZE'ı aç.</p>
+  <p><b>Soru sor.</b> Bir kısım net değilse eğitmenine ya da AI asistanına sor. Gördüğün query'yi ve planı ona ver. Kendi sonucun hakkında sorulan bir soru, yeni bir sayfadan daha çok şey öğretir.</p>
+</section>
+{% endblock %}

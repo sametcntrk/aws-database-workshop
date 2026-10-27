@@ -105,6 +105,12 @@ def e2e_images():
     return yaml.safe_load((HERE / "e2e" / "images.yaml").read_text(encoding="utf-8"))
 
 
+@lru_cache(maxsize=None)
+def e2e_ui():
+    """Labels of the E2E tutorial frame in each language (e2e/ui.yaml)."""
+    return yaml.safe_load((HERE / "e2e" / "ui.yaml").read_text(encoding="utf-8"))
+
+
 def page_owner():
     """{page id: Engine id} for all pages."""
     return {pg["id"]: e for e in ENGINE_IDS for pg in catalog.PAGES[e]}
@@ -221,8 +227,11 @@ def create_app():
             if eid not in catalog.META and eid != "glossary":
                 abort(404)
             entry = next((x for x in e2e_index()["lessons"] if x["id"] == eid), None)
-            return render_template(f"e2e/{eid}.html", **ctx(eid=eid, entry=entry,
-                                                              meta=catalog.META.get(eid, {})))
+            has_tr = (HERE / "templates" / "e2e" / f"{eid}.tr.html").exists()
+            lang = "tr" if has_tr and request.args.get("lang") == "tr" else "en"
+            name = f"e2e/{eid}.tr.html" if lang == "tr" else f"e2e/{eid}.html"
+            return render_template(name, **ctx(eid=eid, entry=entry, meta=catalog.META.get(eid, {}),
+                                               lang=lang, has_tr=has_tr, ui=e2e_ui()[lang]))
 
         for mode in MODES.values():
             for e in ENGINE_IDS:

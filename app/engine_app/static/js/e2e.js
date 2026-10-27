@@ -6,6 +6,7 @@
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const engine = document.body.dataset.engine;
+  const T = window.E2E_UI || {};
   const KEY = `e2e_${engine}`;
   const state = (() => { try { return JSON.parse(localStorage.getItem(KEY)) || { quiz: {} }; } catch (e) { return { quiz: {} }; } })();
   const save = () => localStorage.setItem(KEY, JSON.stringify(state));
@@ -35,7 +36,7 @@
     if (d.columns) {
       const rows = d.rows || [];
       body = `<div class="scroll"><table class="data"><thead><tr>${d.columns.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead>
-        <tbody>${rows.map((r) => `<tr>${r.map((v) => `<td>${cell(v)}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="${d.columns.length}">No rows.</td></tr>`}</tbody></table></div>`;
+        <tbody>${rows.map((r) => `<tr>${r.map((v) => `<td>${cell(v)}</td>`).join("")}</tr>`).join("") || `<tr><td colspan="${d.columns.length}">${esc(T.no_rows)}</td></tr>`}</tbody></table></div>`;
     } else if (d.json !== undefined) {
       body = `<pre>${esc(JSON.stringify(d.json, null, 2))}</pre>`;
     } else if (d.text !== undefined) {
@@ -43,16 +44,16 @@
     }
     const t = json.trace || [];
     const engineMs = t.reduce((s, e) => s + (e.ms || 0), 0);
-    out.innerHTML = `<div class="meta"><span>Round trip <b>${ms} ms</b></span><span>Time in the Engine call(s) <b>${Math.round(engineMs * 10) / 10} ms</b></span>
-      ${d.rows ? `<span>Rows <b>${d.rows.length}${d.total !== undefined ? ` of ${d.total}` : ""}</b></span>` : ""}</div>
+    out.innerHTML = `<div class="meta"><span>${esc(T.round_trip)} <b>${ms} ms</b></span><span>${esc(T.engine_time)} <b>${Math.round(engineMs * 10) / 10} ms</b></span>
+      ${d.rows ? `<span>${esc(T.rows)} <b>${d.rows.length}${d.total !== undefined ? ` ${esc(T.of)} ${d.total}` : ""}</b></span>` : ""}</div>
       ${d.note ? `<p class="note">${esc(d.note)}</p>` : ""}${body}
-      ${t.length ? `<details class="tr"><summary>What the Engine App sent (${t.length} call${t.length > 1 ? "s" : ""})</summary>${t.map((e) => `<p><b>${esc(e.op)}</b> · ${e.ms} ms${e.items !== undefined ? ` · ${e.items} item(s)` : ""}${e.capacity ? ` · ${esc(e.capacity)}` : ""}</p>
+      ${t.length ? `<details class="tr"><summary>${esc(T.sent)} (${t.length})</summary>${t.map((e) => `<p><b>${esc(e.op)}</b> · ${e.ms} ms${e.items !== undefined ? ` · ${e.items} item(s)` : ""}${e.capacity ? ` · ${esc(e.capacity)}` : ""}</p>
         <pre>${esc(e.request)}</pre>${e.explain ? `<pre>${esc(typeof e.explain === "string" ? e.explain : JSON.stringify(e.explain, null, 2))}</pre>` : ""}${e.plan ? `<pre>${esc(e.plan)}</pre>` : ""}${e.note ? `<p>${esc(e.note)}</p>` : ""}`).join("")}</details>` : ""}`;
   }
   $$("[data-run]").forEach((box) => {
     const btn = $("button", box), out = $(".run-out", box);
     btn.addEventListener("click", async () => {
-      btn.disabled = true; out.innerHTML = "<p>The query runs on the live Engine.</p>";
+      btn.disabled = true; out.innerHTML = `<p>${esc(T.running)}</p>`;
       const t0 = performance.now();
       let json;
       try {
@@ -60,7 +61,7 @@
         json = await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}: the Engine App did not return JSON.` }));
       } catch (e) { json = { ok: false, error: `The request did not reach the Engine App: ${e.message}` }; }
       render(out, json, Math.round(performance.now() - t0));
-      btn.disabled = false; btn.textContent = "Run again";
+      btn.disabled = false; btn.textContent = T.run_again;
     });
   });
 
@@ -70,7 +71,7 @@
     const el = $("#score");
     if (!el) return;
     const ok = quizzes.filter((q) => state.quiz[q.id] === true).length;
-    el.innerHTML = `Checkpoints: <b>${ok} of ${quizzes.length}</b> correct`;
+    el.innerHTML = T.score.replace("{ok}", ok).replace("{total}", quizzes.length);
   }
   quizzes.forEach((q) => {
     const answer = Number(q.dataset.answer);
@@ -81,7 +82,7 @@
       buttons[k].classList.add(right ? "right" : "wrong");
       if (first && state.quiz[q.id] === undefined) { state.quiz[q.id] = right; save(); }
       if (right) { buttons.forEach((b) => { b.disabled = true; }); q.classList.add("ok"); why.hidden = false; }
-      else { why.hidden = false; why.dataset.keep = why.dataset.keep || why.innerHTML; why.innerHTML = "<b>Not correct.</b> Read the section above again, then try another answer."; }
+      else { why.hidden = false; why.dataset.keep = why.dataset.keep || why.innerHTML; why.innerHTML = T.not_correct; }
       if (right && why.dataset.keep) why.innerHTML = why.dataset.keep;
       score();
     };
@@ -93,6 +94,6 @@
   /* ---------- Predict first, then look */
   $$(".predict").forEach((p) => {
     const btn = $("button", p), ans = $(".answer", p);
-    btn.addEventListener("click", () => { ans.hidden = !ans.hidden; btn.textContent = ans.hidden ? "Show the answer" : "Hide the answer"; });
+    btn.addEventListener("click", () => { ans.hidden = !ans.hidden; btn.textContent = ans.hidden ? T.show : T.hide; });
   });
 })();
