@@ -1778,3 +1778,125 @@ def influxdb(lang):
 COUNT_TR.update({"points": "point", "series": "series", "raw points read": "okunan ham point", "points returned": "dönen point",
                  "shard groups read": "okunan shard group", "shard groups deleted": "silinen shard group"})
 SIMS["influxdb"] = influxdb
+
+
+# ================================================================ Amazon S3 (object storage)
+S3_KEYS = [["products/P0001.jpg", 48213, "image/jpeg"], ["products/P0016.jpg", 51022, "image/jpeg"], ["products/P0044.jpg", 46870, "image/jpeg"],
+           ["uploads/v-3c8d/photo.jpg", 230411, "image/jpeg"], ["uploads/v-7f3a/invoice.pdf", 88120, "application/pdf"], ["uploads/v-7f3a/photo.jpg", 194002, "image/jpeg"]]
+EXTRA_TABLES["s3_keys"] = {"cols": ["key", "size (bytes)", "Content-Type"], "rows": S3_KEYS}
+
+
+def s3_prefix(lang):
+    pre = "uploads/v-7f3a/"
+    steps = [{"say": T(lang, "A bucket is flat: it holds keys and objects, and no folders. A slash in a key is a normal character.",
+                       "Bir bucket düzdür: key'ler ve object'ler tutar, klasör tutmaz. Bir key'deki slash normal bir karakterdir."),
+              "marks": {}, "out": [], "count": {"keys returned": 0, "common prefixes": 0}}]
+    out, m = [], {}
+    for i, (k, size, ct) in enumerate(S3_KEYS):
+        hit = k.startswith(pre)
+        m[i] = "match" if hit else "skip"
+        if hit:
+            out.append([k, size])
+    steps.append({"say": T(lang, f"ListObjectsV2(Prefix='{pre}'): S3 returns only the keys that start with this text. S3 lists keys in sorted order, so all keys with one prefix come together in the list.",
+                           f"ListObjectsV2(Prefix='{pre}'): S3 sadece bu metinle başlayan key'leri döndürür. S3 key'leri sıralı listeler, bu yüzden aynı prefix'e sahip bütün key'ler listede yan yana gelir."),
+                  "marks": {"k": dict(m)}, "out": deepcopy(out), "count": {"keys returned": len(out), "common prefixes": 0}})
+    groups = []
+    for k, _, _ in S3_KEYS:
+        g = k.split("/")[0] + "/"
+        if g not in groups:
+            groups.append(g)
+    steps.append({"say": T(lang, "ListObjectsV2(Delimiter='/') with no prefix: S3 groups the keys up to the first slash. Each group comes back once, as a CommonPrefixes element. This is how the console shows \"folders\".",
+                           "Prefix olmadan ListObjectsV2(Delimiter='/'): S3 key'leri ilk slash'e kadar gruplar. Her grup bir kez, bir CommonPrefixes elemanı olarak döner. Konsol \"klasörleri\" böyle gösterir."),
+                  "marks": {"k": {i: ("read" if k.startswith("products/") else "new") for i, (k, _, _) in enumerate(S3_KEYS)}}, "out": [[g, "CommonPrefixes"] for g in groups], "count": {"keys returned": 0, "common prefixes": len(groups)}})
+    steps.append({"say": T(lang, "Result: a \"folder\" is only the common start of some keys. To delete a folder, you delete every key with that prefix. The Lale Market reset does this for uploads/.",
+                           "Sonuç: bir \"klasör\" sadece bazı key'lerin ortak başlangıcıdır. Bir klasörü silmek için o prefix'e sahip her key'i silersin. Lale Market'in reset'i bunu uploads/ için yapar."),
+                  "marks": {"k": {i: ("match" if k.startswith("uploads/") else "skip") for i, (k, _, _) in enumerate(S3_KEYS)}}, "out": [[g, "CommonPrefixes"] for g in groups], "count": {"keys returned": 0, "common prefixes": len(groups)}})
+    return {"tables": [{"id": "k", "name": T(lang, "keys in the bucket (sorted)", "bucket'taki key'ler (sıralı)"), "cols": ["key", "size", "Content-Type"], "rows": S3_KEYS, "key": [0], "ref": []}],
+            "out": {"name": T(lang, "response", "cevap"), "cols": ["Key / Prefix", T(lang, "size or type", "boyut ya da tür")]}, "steps": steps}
+
+
+def s3_versions(lang):
+    key = "uploads/v-7f3a/photo.jpg"
+    v = []
+    steps = [{"say": T(lang, f"Versioning is on for the bucket. The key {key} has no object yet.", f"Bucket'ta versioning açık. {key} key'inin henüz object'i yok."),
+              "marks": {}, "rows": {"v": []}, "out": [], "count": {"versions": 0}}]
+    v.insert(0, ["3HL4kqtJ", "PUT", "194,002 bytes", T(lang, "yes", "evet")])
+    steps.append({"say": T(lang, "PUT photo.jpg: S3 stores the object and gives it the version id 3HL4kqtJ. It is the current version.",
+                           "PUT photo.jpg: S3 object'i saklar ve ona 3HL4kqtJ version id'sini verir. Güncel version budur."),
+                  "marks": {"v": {0: "new"}}, "rows": {"v": deepcopy(v)}, "out": [["GET " + key, "3HL4kqtJ, 194,002 bytes"]], "count": {"versions": 1}})
+    v[0][3] = T(lang, "no", "hayır")
+    v.insert(0, ["QUpfdndh", "PUT", "201,377 bytes", T(lang, "yes", "evet")])
+    steps.append({"say": T(lang, "The visitor uploads a new photo with the same key. S3 does not overwrite the old object. It adds a new version, QUpfdndh, on top. A GET without a version id returns the newest version.",
+                           "Ziyaretçi aynı key ile yeni bir fotoğraf yükler. S3 eski object'in üstüne yazmaz. Üstüne yeni bir version ekler: QUpfdndh. Version id'siz bir GET en yeni version'ı döndürür."),
+                  "marks": {"v": {0: "new", 1: "read"}}, "rows": {"v": deepcopy(v)}, "out": [["GET " + key, "QUpfdndh, 201,377 bytes"]], "count": {"versions": 2}})
+    v[0][3] = T(lang, "no", "hayır")
+    v.insert(0, ["Uk2a9mcE", "DELETE marker", "-", T(lang, "yes", "evet")])
+    steps.append({"say": T(lang, "DELETE without a version id: S3 deletes nothing. It adds a delete marker as the newest version. A normal GET now returns 404 Not Found.",
+                           "Version id'siz DELETE: S3 hiçbir şey silmez. En yeni version olarak bir delete marker ekler. Normal bir GET artık 404 Not Found döndürür."),
+                  "marks": {"v": {0: "bad"}}, "rows": {"v": deepcopy(v)}, "out": [["GET " + key, "404 Not Found"]], "count": {"versions": 3}})
+    steps.append({"say": T(lang, "GET with versionId=3HL4kqtJ still returns the first photo. To restore it, copy that version to the same key, or delete the delete marker. In Lale Market, a lifecycle rule deletes a version 1 day after it stops being the current version.",
+                           "versionId=3HL4kqtJ ile GET hâlâ ilk fotoğrafı döndürür. Onu geri getirmek için o version'ı aynı key'e kopyala ya da delete marker'ı sil. Lale Market'te bir lifecycle kuralı, bir version'ı güncel olmaktan çıktıktan 1 gün sonra siler."),
+                  "marks": {"v": {0: "bad", 2: "match"}}, "rows": {"v": deepcopy(v)}, "out": [["GET " + key, "404 Not Found"], ["GET ...?versionId=3HL4kqtJ", "3HL4kqtJ, 194,002 bytes"]], "count": {"versions": 3}})
+    return {"tables": [{"id": "v", "name": T(lang, f"versions of {key} (newest first)", f"{key} version'ları (en yeni önce)"), "cols": ["VersionId", T(lang, "request", "istek"), T(lang, "size", "boyut"), "IsLatest"], "rows": [], "key": [0], "ref": []}],
+            "out": {"name": T(lang, "what a reader gets", "bir okuyucunun aldığı"), "cols": [T(lang, "request", "istek"), T(lang, "response", "cevap")]}, "steps": steps}
+
+
+def s3_presign(lang):
+    reqs = [["t = 0 s", T(lang, "the Engine App signs a GET URL with ExpiresIn=300", "Engine App ExpiresIn=300 ile bir GET URL'sini imzalar")],
+            ["t = 12 s", T(lang, "the browser opens the URL", "tarayıcı URL'yi açar")],
+            ["t = 140 s", T(lang, "a second person opens the same URL", "ikinci bir kişi aynı URL'yi açar")],
+            ["t = 410 s", T(lang, "the browser opens the URL again", "tarayıcı URL'yi yeniden açar")]]
+    steps = [{"say": T(lang, "The bucket is private. A browser has no AWS credentials. The Engine App has an IAM role that can read products/P0001.jpg.",
+                       "Bucket private'tır. Bir tarayıcının AWS kimlik bilgisi yoktur. Engine App'in products/P0001.jpg'i okuyabilen bir IAM role'ü vardır."),
+              "marks": {}, "out": [], "count": {"allowed": 0, "refused": 0}}]
+    out = [["t = 0 s", "https://...amazonaws.com/products/P0001.jpg?X-Amz-Expires=300&X-Amz-Signature=..."]]
+    steps.append({"say": T(lang, "The Engine App calls generate_presigned_url. It does not call S3. It calculates a signature with its own credentials and puts it, with the expiry, in the query string of the URL.",
+                           "Engine App generate_presigned_url'i çağırır. S3'ü çağırmaz. Kendi kimlik bilgileriyle bir imza hesaplar ve onu süresiyle birlikte URL'nin query string'ine koyar."),
+                  "marks": {"r": {0: "new"}}, "out": deepcopy(out), "count": {"allowed": 0, "refused": 0}})
+    out.append(["t = 12 s", "200 OK (48,213 bytes)"])
+    steps.append({"say": T(lang, "At 12 seconds, the browser sends GET with the URL. S3 checks the signature and the time. Both are valid, so S3 returns the image. The request uses the permissions of the role that signed it.",
+                           "12. saniyede tarayıcı URL ile GET gönderir. S3 imzayı ve zamanı kontrol eder. İkisi de geçerli, bu yüzden S3 görseli döndürür. İstek, onu imzalayan role'ün izinlerini kullanır."),
+                  "marks": {"r": {0: "read", 1: "match"}}, "out": deepcopy(out), "count": {"allowed": 1, "refused": 0}})
+    out.append(["t = 140 s", "200 OK (48,213 bytes)"])
+    steps.append({"say": T(lang, "At 140 seconds, a second person uses the same URL, and it works too. Anyone who has the URL can use it until it expires. Keep presigned URLs short-lived and do not log them.",
+                           "140. saniyede ikinci bir kişi aynı URL'yi kullanır ve o da çalışır. URL'ye sahip olan herkes onu süresi dolana kadar kullanabilir. Presigned URL'leri kısa ömürlü tut ve log'lama."),
+                  "marks": {"r": {0: "read", 1: "match", 2: "match"}}, "out": deepcopy(out), "count": {"allowed": 2, "refused": 0}})
+    out.append(["t = 410 s", "403 AccessDenied: Request has expired"])
+    steps.append({"say": T(lang, "At 410 seconds, the 300 seconds are over. S3 refuses with AccessDenied, \"Request has expired\". The application must sign a new URL.",
+                           "410. saniyede 300 saniye dolmuştur. S3 AccessDenied, \"Request has expired\" ile reddeder. Uygulama yeni bir URL imzalamalıdır."),
+                  "marks": {"r": {0: "read", 1: "match", 2: "match", 3: "bad"}}, "out": deepcopy(out), "outmarks": {3: "bad"}, "count": {"allowed": 2, "refused": 1}})
+    return {"tables": [{"id": "r", "name": T(lang, "timeline", "zaman çizelgesi"), "cols": [T(lang, "time", "zaman"), T(lang, "action", "eylem")], "rows": reqs, "key": [0], "ref": []}],
+            "out": {"name": T(lang, "responses", "cevaplar"), "cols": [T(lang, "time", "zaman"), T(lang, "result", "sonuç")]}, "steps": steps}
+
+
+S3_CANDS = ["Amazon S3", "Aurora PostgreSQL", "DynamoDB", "DocumentDB", "ElastiCache"]
+
+
+def s3(lang):
+    w1 = verdicts(S3_CANDS, [
+        V((1, "objects up to 5 TB", "5 TB'a kadar object'ler"), (0, "large binaries make tables, backups and replicas heavy", "büyük binary'ler table'ları, yedekleri ve replica'ları ağırlaştırır"),
+          (0, "an item is at most 400 KB", "bir item en fazla 400 KB"), (0, "a document is at most 16 MB", "bir document en fazla 16 MB"), (0, "memory is expensive and not the durable store", "bellek pahalıdır ve kalıcı depo değildir")),
+        V((1, "presigned URL or CloudFront", "presigned URL ya da CloudFront"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi")),
+        V((1, "versioning", "versioning"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi")),
+    ])
+    w2 = verdicts(S3_CANDS, [
+        V((0, "an object is replaced as a whole", "bir object bütün olarak değiştirilir"), (1, "UPDATE one column", "tek kolonu UPDATE"), (1, "UpdateItem", "UpdateItem"), (1, "$inc on one field", "tek field'da $inc"), (1, "DECRBY on one key", "tek key'de DECRBY")),
+        V((0, "removed earlier", "daha önce elendi"), (1, "UPDATE ... WHERE stock >= n", "UPDATE ... WHERE stock >= n"), (1, "ConditionExpression", "ConditionExpression"), (1, "filter in updateOne", "updateOne'da filtre"), (1, "a Lua script or WATCH", "bir Lua script'i ya da WATCH")),
+        V((0, "removed earlier", "daha önce elendi"), (1, "ACID, durable", "ACID, kalıcı"), (1, "durable, transactions", "kalıcı, transaction'lar"), (1, "durable, transactions", "kalıcı, transaction'lar"), (0, "a cache, not the source of truth", "bir cache, source of truth değil")),
+    ])
+    spec = {
+        "decide_images": decide_generic(lang, ("Product images and files that sellers upload: 50 KB to 50 MB each, shown in the browser", "Ürün görselleri ve satıcıların yüklediği dosyalar: her biri 50 KB ile 50 MB arası, tarayıcıda gösterilir"),
+                                        [("Store files of any size durably", "Her boyuttaki dosyayı kalıcı olarak sakla"),
+                                         ("The browser downloads a file directly, not through the app", "Tarayıcı dosyayı uygulama üzerinden değil, doğrudan indirir"),
+                                         ("Keep the old file when a seller uploads a new one", "Satıcı yenisini yüklediğinde eski dosyayı tut")], S3_CANDS, w1),
+        "decide_stock": decide_generic(lang, ("The stock count of each product, reduced at each checkout", "Her ürünün stok sayısı, her checkout'ta azaltılır"),
+                                       [("Change one number inside a record", "Bir kaydın içindeki tek bir sayıyı değiştir"),
+                                        ("Reduce only if enough stock is left", "Sadece yeterli stok kaldıysa azalt"),
+                                        ("Durable source of truth", "Kalıcı source of truth")], S3_CANDS, w2),
+        "prefix": s3_prefix(lang), "versions": s3_versions(lang), "presign": s3_presign(lang),
+    }
+    return {k: _localize(v, lang) for k, v in spec.items()}
+
+
+COUNT_TR.update({"keys returned": "dönen key", "common prefixes": "common prefix", "versions": "version", "allowed": "izin verilen", "refused": "reddedilen"})
+SIMS["s3"] = s3

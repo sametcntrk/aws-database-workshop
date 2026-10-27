@@ -1,0 +1,238 @@
+{% extends "e2e/_base.html" %}
+{% import "e2e/_macros.html" as k with context %}
+{% block body %}
+
+<h2 id="goal" data-short="What you will learn"><span class="sec">00</span>What you will learn, and how to use this page</h2>
+<p>Section 01 gives the architect's decision: where Amazon S3 fits and where it does not. Then the tutorial has two parts.
+   Part 1 teaches object storage: buckets, keys and objects, prefixes, metadata, versions and signed URLs. Part 2 shows the AWS service and how Lale Market uses it.</p>
+<p>The examples come from the product images and the seller panel of Lale Market. Sometimes a different example makes an idea easier to see. Then the tutorial uses it: a cloakroom ticket, a parcel locker, a photo album with dated copies.</p>
+<p>After this tutorial, you can do these tasks:</p>
+<ol>
+  <li>Say for which data object storage is the right choice, and why a database is not.</li>
+  <li>Explain a bucket, a key, an object and its metadata.</li>
+  <li>Explain prefixes and why S3 has no real folders.</li>
+  <li>Explain what versioning does on an upload and on a delete.</li>
+  <li>Explain how a presigned URL gives a browser short access to a private object.</li>
+  <li>Select a storage class and a lifecycle rule for a kind of data.</li>
+</ol>
+<p>Four kinds of boxes help you. <b>Simulation</b>: press Play or Next step. <b>Predict first</b>: write your answer before you open it.
+   <b>Checkpoint</b>: a question with one right answer. <b>Analogy</b>: a picture from daily life.</p>
+
+<h2 id="architect" data-short="Architect's view: when to use"><span class="sec">01</span>The architect's view: where S3 fits</h2>
+<p><b>Read this section first.</b> It gives the decision. The sections after it teach how object storage works.</p>
+<p><b>In short:</b> Amazon S3 stores files of any kind and any size as objects. You write a complete object with one request and read it back with its key.
+   S3 keeps the data in several Availability Zones, scales with no limit on the number of objects, and lets a browser download an object directly. It is the place for images, documents, backups, logs and data lakes.
+   It is not a database: it does not change a part of an object, and it has no queries over the content.</p>
+<p>The key idea is the {{ k.term("object") }}: the bytes of a file plus metadata, stored under a key in a bucket. One request writes or reads the whole object.</p>
+
+<h3>Signals in a workload that point to S3</h3>
+<table class="data">
+  <thead><tr><th>Signal</th><th>What it looks like in a real project</th><th>The feature that answers it</th></tr></thead>
+  <tbody>
+    <tr><td>Files, not records</td><td>Images, PDFs, videos, exports, model files.</td><td>Objects up to 5 TB (section 03)</td></tr>
+    <tr><td>Write once, read many times</td><td>A product photo that thousands of visitors see.</td><td>Whole-object PUT and GET, a CDN in front</td></tr>
+    <tr><td>Users download directly</td><td>A browser shows an image or downloads an invoice.</td><td>Presigned URLs, CloudFront (section 06)</td></tr>
+    <tr><td>Data must survive mistakes</td><td>A seller uploads a wrong image over the right one.</td><td>Versioning (section 05)</td></tr>
+    <tr><td>Data gets cold with age</td><td>Logs that nobody reads after 90 days.</td><td>Storage classes and lifecycle rules (section 07)</td></tr>
+    <tr><td>Very large data sets for analytics</td><td>Years of events in Parquet files.</td><td>A data lake that Athena and Redshift can query</td></tr>
+  </tbody>
+</table>
+
+<h3>Use cases, with the reason and the feature</h3>
+<table class="data">
+  <thead><tr><th>Use case</th><th>Data</th><th>Why object storage</th><th>The feature that does the work</th></tr></thead>
+  <tbody>
+    <tr><td>Product images (Lale Market)</td><td>One JPEG per product with metadata.</td><td>Many readers, few writes.</td><td>Key products/&lt;id&gt;.jpg, Content-Type, x-amz-meta-*</td></tr>
+    <tr><td>Seller uploads (Lale Market)</td><td>Files from the seller panel.</td><td>Any file type, old versions kept.</td><td>Key prefix per visitor, versioning</td></tr>
+    <tr><td>Static websites and app assets</td><td>HTML, CSS, JavaScript, fonts.</td><td>Served to browsers, often through a CDN.</td><td>CloudFront with S3 as origin</td></tr>
+    <tr><td>Backups and archives</td><td>Database dumps, snapshots, legal records.</td><td>Durable and cheap for data that is seldom read.</td><td>Glacier storage classes, Object Lock</td></tr>
+    <tr><td>Data lake</td><td>Events, exports and logs as Parquet or CSV.</td><td>One store that many engines can read.</td><td>Athena, Redshift Spectrum, AWS Glue</td></tr>
+    <tr><td>Media processing</td><td>Uploaded videos and their converted copies.</td><td>An upload starts a job, the result is a new object.</td><td>Event notifications to Lambda or SQS</td></tr>
+    <tr><td>Log storage</td><td>Access logs of load balancers and CloudFront.</td><td>Grows every day, cold after weeks.</td><td>Lifecycle rules to cheaper classes</td></tr>
+    <tr><td>Machine-learning data</td><td>Training images, model files.</td><td>Large files, read in parallel by many workers.</td><td>High parallel throughput</td></tr>
+  </tbody>
+</table>
+{{ k.fig("s3-object-storage-model.png", "a generic object store. An application calls an API. Metadata nodes keep the object metadata, and storage nodes keep the data.") }}
+
+<h3>Signals that point away from S3</h3>
+<table class="data">
+  <thead><tr><th>Signal in the workload</th><th>Why S3 is a weak fit</th><th>Better choice</th></tr></thead>
+  <tbody>
+    <tr><td>Change one field of a record</td><td>A PUT replaces the whole object.</td><td><a href="/e2etutorial/dynamodb">DynamoDB</a>, <a href="/e2etutorial/aurora">Aurora</a></td></tr>
+    <tr><td>Queries on the content: "products under 500 TL"</td><td>S3 finds objects by key, not by content.</td><td><a href="/e2etutorial/docdb">DocumentDB</a>, <a href="/e2etutorial/opensearch">OpenSearch</a></td></tr>
+    <tr><td>Several changes as one unit</td><td>No transactions across objects.</td><td><a href="/e2etutorial/aurora">Aurora</a></td></tr>
+    <tr><td>Answers in under a millisecond</td><td>Each request goes over HTTPS to a regional service.</td><td><a href="/e2etutorial/elasticache">ElastiCache</a></td></tr>
+    <tr><td>A shared file system with file locks</td><td>No POSIX file system semantics.</td><td>Amazon EFS, Amazon FSx</td></tr>
+  </tbody>
+</table>
+
+<h3>The questions that an architect asks, in this order</h3>
+<ol>
+  <li><b>Is it a file or a record?</b> Files go to S3. The record that describes the file (owner, price, status) stays in a database and stores the key.</li>
+  <li><b>Who reads it, and how?</b> A private bucket and presigned URLs, or a CDN in front. Never a public bucket by accident.</li>
+  <li><b>Can a write be a mistake?</b> Then turn on versioning, and a lifecycle rule for old versions.</li>
+  <li><b>How often is it read after one month, after one year?</b> That selects the storage class and the lifecycle rules.</li>
+  <li><b>How do the keys look?</b> Put the parts that you list by at the start of the key: <code>uploads/&lt;visitor&gt;/</code>.</li>
+  <li><b>Must something happen after an upload?</b> Then use event notifications to start the next step.</li>
+</ol>
+
+<h3>S3 and its relatives on AWS</h3>
+<table class="data">
+  <thead><tr><th>Option</th><th>What it is</th><th>Choose it when</th></tr></thead>
+  <tbody>
+    <tr><td>Amazon S3 general purpose bucket</td><td>Object storage in one Region, data in several Availability Zones.</td><td>Most files. Lale Market uses one bucket.</td></tr>
+    <tr><td>S3 Glacier storage classes</td><td>Classes of S3 for archive data, with a lower price and a slower or paid restore.</td><td>Backups and records that you keep for years.</td></tr>
+    <tr><td>Amazon EFS</td><td>A shared NFS file system.</td><td>Many servers need the same files with file system semantics.</td></tr>
+    <tr><td>Amazon EBS</td><td>A block disk for one EC2 instance.</td><td>The disk of a server or a self-managed database.</td></tr>
+  </tbody>
+</table>
+
+<h3>Where S3 sits in Lale Market</h3>
+<p>One private bucket holds two prefixes. <code>products/</code> holds one image for each product. Its key is the product id, so the catalog needs no extra column to find it. <code>uploads/</code> holds the files that visitors upload in the seller panel.
+   Product pages load images through the S3 Engine App, and the seller panel can also give a presigned URL. Versioning is on, and a lifecycle rule deletes old versions after one day.</p>
+
+<h3>Simulation: let the requirements choose</h3>
+{{ k.sim("decide_images", "Workload 1: images and seller files") }}
+{{ k.sim("decide_stock", "Workload 2: the stock count") }}
+
+{{ k.quiz("s3-a1", "A hospital wants to keep X-ray images of 30 to 300 MB for ten years. Doctors open the images of the last month often, older ones seldom. What fits best?",
+   ["S3 with a lifecycle rule to an archive storage class", "DynamoDB with one item per image", "ElastiCache with one key per image", "Aurora with a bytea column"],
+   0, "Large files, many years and fewer reads with age match S3 with storage classes and lifecycle rules. The record of the patient stays in a database and stores the key.") }}
+{{ k.quiz("s3-a2", "A team keeps the shopping cart as a JSON object in S3 and changes one quantity at each click. What is the problem?",
+   ["S3 cannot store JSON", "Each change replaces the whole object, and there are no conditional field updates or transactions", "S3 deletes objects after one hour", "S3 objects cannot be read by the app"],
+   1, "A cart changes small parts often and must not lose a change. That is the work of a database such as DynamoDB.") }}
+
+<div class="part"><b>Part 1</b><h2 id="part1" data-short="PART 1: Object storage">Object storage: buckets, keys and objects</h2>
+<p>Keys and prefixes, metadata, versions and signed URLs.</p></div>
+
+<h2 id="why" data-short="Why object storage?"><span class="sec">02</span>Why object storage? The cloakroom</h2>
+<p>A file system has folders, and a program can open a file, change byte 1,000 and close it. A block disk is even lower: it stores numbered blocks for one server.
+   Object storage is simpler. It has one operation to put a complete object under a name, and one to get it back. This simple model is why it can grow to any number of objects and serve many readers at the same time.</p>
+{% call k.callout("analogy", "Analogy") %}
+<p>At a cloakroom, you give your coat and get a ticket with a number. You do not choose a shelf, and you cannot change a button on the coat while it hangs there. You show the ticket and get the whole coat back.
+   S3 is the cloakroom, the key is the ticket, and the object is the coat.</p>
+{% endcall %}
+
+<h2 id="objects" data-short="Buckets, keys, objects"><span class="sec">03</span>Buckets, keys, objects and metadata</h2>
+<ul>
+  <li>A {{ k.term("bucket") }} is a container for objects. Its name is unique, and it belongs to one AWS Region.</li>
+  <li>A {{ k.term("key") }} is the full name of an object in the bucket, for example <code>products/P0001.jpg</code>.</li>
+  <li>An object is the data plus metadata. System metadata includes the size and <code>Content-Type</code>. User metadata are your own headers that start with <code>x-amz-meta-</code>.</li>
+</ul>
+<p>These are six example keys of the Lale Market bucket. The visitor ids are examples. The real upload keys also contain the time of the upload.</p>
+{{ k.sample("s3_keys", "keys in the Lale Market bucket", key=["key"]) }}
+{% call k.sql("A1", "The Seed puts one product image") %}
+<pre><code>s3.put_object(Bucket=bucket, Key="products/P0001.jpg", Body=body, ContentType="image/jpeg",
+              Metadata={"name": "Alpen Kablosuz Kulaklik 1", "category": "Elektronik", ...})</code></pre>
+<table class="clause">
+  <tr><td>Bucket=bucket</td><td>The bucket of the workshop. Its name contains the account and the Region.</td></tr>
+  <tr><td>Key="products/P0001.jpg"</td><td>The key. It contains the product id, so the product page can build the key without a lookup.</td></tr>
+  <tr><td>Body=body</td><td>The bytes of the image. One request sends the complete object.</td></tr>
+  <tr><td>ContentType="image/jpeg"</td><td>S3 returns this value in the Content-Type header, so the browser shows the bytes as an image.</td></tr>
+  <tr><td>Metadata={...}</td><td>User metadata. S3 stores each pair as an <code>x-amz-meta-</code> header. The Seed writes plain ASCII here, because HTTP headers must carry plain text.</td></tr>
+</table>
+{% endcall %}
+<p>Identifiers: the catalog owns the product id. The S3 key borrows it, so the image and the product stay linked with no extra column. S3 owns the version id of each object version. The upload response returns it, and the seller panel shows it.</p>
+<p>S3 is strongly consistent. After a successful write, overwrite or delete of an object, the next read request immediately gets the latest version of the object
+   (<a href="https://aws.amazon.com/s3/consistency/">Amazon S3 consistency</a>).</p>
+{{ k.fig("s3-consistency.png", "client 1 writes color = red. Client 2 later writes color = ruby. Both reads after the second write return ruby.") }}
+
+<h2 id="prefixes" data-short="Prefixes, not folders"><span class="sec">04</span>Prefixes, not folders</h2>
+<p>A bucket is flat. The console shows folders, but they are only the common start of keys, the {{ k.term("prefix") }}. ListObjectsV2 can filter by a prefix and can group keys at a delimiter character
+   (<a href="https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html">ListObjectsV2</a>).</p>
+{% call k.sql("A2", "The seller panel lists the uploads of one visitor") %}
+<pre><code>s3.list_objects_v2(Bucket=bucket, Prefix="uploads/v-7f3a/", MaxKeys=12)</code></pre>
+<table class="clause">
+  <tr><td>Prefix="uploads/v-7f3a/"</td><td>Return only the keys that start with this text.</td></tr>
+  <tr><td>MaxKeys=12</td><td>At most 12 keys in this response. If there are more, the response says IsTruncated and gives a continuation token.</td></tr>
+</table>
+{% endcall %}
+{% call k.predict("Use the six keys. Which keys does A2 return?") %}
+<p>uploads/v-7f3a/invoice.pdf and uploads/v-7f3a/photo.jpg. The upload of v-3c8d has a different prefix.</p>
+{% endcall %}
+{{ k.sim("prefix", "Prefix and delimiter") }}
+
+<h2 id="versions" data-short="Versioning"><span class="sec">05</span>Versioning: an upload never destroys the old object</h2>
+<p>With {{ k.term("versioning") }} on, each PUT to a key adds a new version with its own version id. A DELETE without a version id does not delete data. It adds a delete marker, and a normal GET then returns 404.
+   The old versions stay until you delete them with their version id, or a lifecycle rule deletes them.</p>
+{{ k.fig("s3-versioning-put.png", "a PUT of photo.gif into a versioning-enabled bucket adds a new version ID. The old version stays.") }}
+{{ k.sim("versions", "Two uploads and a delete") }}
+{% call k.callout("analogy", "Analogy") %}
+<p>Think of a photo album where you never take out a photo. A new photo goes on top of the old one, and a "deleted" note goes on top of all of them. Lift the top sheets, and the old photos are still there.</p>
+{% endcall %}
+{{ k.quiz("s3-q1", "Versioning is on. A user deletes report.pdf without a version id. What happens to the data?",
+   ["S3 deletes all versions", "S3 adds a delete marker, and the old versions stay", "S3 refuses the delete", "S3 moves the object to Glacier"],
+   1, "The delete marker becomes the newest version. A GET with an old version id still returns the data.") }}
+
+<h2 id="presign" data-short="Presigned URLs"><span class="sec">06</span>Presigned URLs: short access to a private object</h2>
+<p>The Lale Market bucket blocks all public access. A browser has no AWS credentials. A {{ k.term("presigned URL") }} solves this: the application signs a URL for one operation on one object, with an expiry time.
+   "The credentials used by the presigned URL are those of the AWS user who generated the URL" (<a href="https://docs.aws.amazon.com/boto3/latest/guide/s3-presigned-urls.html">Boto3: presigned URLs</a>).</p>
+{% call k.sql("A3", "The seller panel signs a download link") %}
+<pre><code>s3.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": "products/P0001.jpg"}, ExpiresIn=300)</code></pre>
+<table class="clause">
+  <tr><td>"get_object"</td><td>The URL allows only a GET of the object.</td></tr>
+  <tr><td>Params={"Bucket": ..., "Key": ...}</td><td>The one object that the URL opens.</td></tr>
+  <tr><td>ExpiresIn=300</td><td>The URL is valid for 300 seconds. With SDKs, the maximum is 7 days. A URL that temporary credentials signed expires no later than those credentials.</td></tr>
+</table>
+{% endcall %}
+{{ k.sim("presign", "A presigned URL over time") }}
+{{ k.quiz("s3-q2", "Why must a presigned URL be short-lived?",
+   ["S3 deletes the object when the URL expires", "Anyone who has the URL can use it until it expires", "Presigned URLs work only once", "A long expiry makes the download slower"],
+   1, "The URL itself is the permission. If it leaks, for example in a log, the expiry limits the damage.") }}
+
+<div class="part"><b>Part 2</b><h2 id="part2" data-short="PART 2: Amazon S3">Amazon S3: the AWS service</h2>
+<p>Durability, storage classes, lifecycle and access.</p></div>
+
+<h2 id="service" data-short="Durability and classes"><span class="sec">07</span>Durability, storage classes and lifecycle</h2>
+<p>S3 is a regional service. AWS states 11 nines (99.999999999%) of durability for S3, with the data stored across Availability Zones in one Region
+   (<a href="https://aws.amazon.com/blogs/storage/aws-reinvent-recap-break-down-data-silos-with-a-data-lake-on-amazon-s3/">AWS Storage Blog</a>).
+   There is no limit to the amount of data or the number of objects in a bucket.</p>
+<p>Each object has a {{ k.term("storage class") }}. The classes differ in price per GB, in the cost of a read and in the time to get the data back. A {{ k.term("lifecycle rule") }} moves objects to another class, or deletes them, after a number of days.</p>
+<table class="data">
+  <thead><tr><th>Storage class</th><th>For data that is</th><th>Example</th></tr></thead>
+  <tbody>
+    <tr><td>S3 Standard</td><td>Read often.</td><td>Product images of Lale Market.</td></tr>
+    <tr><td>S3 Intelligent-Tiering</td><td>Read with an unknown pattern. S3 moves it between tiers by itself.</td><td>User uploads.</td></tr>
+    <tr><td>S3 Standard-IA</td><td>Read seldom, but needed fast when someone reads it.</td><td>Last year's invoices.</td></tr>
+    <tr><td>S3 Glacier classes</td><td>Archived. Restores take from milliseconds to hours, by class.</td><td>Backups and legal records.</td></tr>
+  </tbody>
+</table>
+<table class="data">
+  <thead><tr><th>Task</th><th>Your own file servers</th><th>Amazon S3</th></tr></thead>
+  <tbody>
+    <tr><td>Capacity</td><td>You buy disks before you need them.</td><td>No limit. You pay for what you store.</td></tr>
+    <tr><td>Copies of the data</td><td>You run RAID, backups and replacement of disks.</td><td>Data in several Availability Zones. AWS replaces lost copies.</td></tr>
+    <tr><td>Access control</td><td>File permissions per server.</td><td>IAM policies, bucket policies, Block Public Access.</td></tr>
+    <tr><td>Old data</td><td>Scripts that move or delete files.</td><td>Lifecycle rules.</td></tr>
+    <tr><td>Encryption</td><td>You configure it.</td><td>Server-side encryption by default for new objects.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="lalemarket" data-short="S3 in Lale Market"><span class="sec">08</span>S3 in Lale Market</h2>
+<ul>
+  <li>One bucket, <code>dbws-images-&lt;account&gt;-&lt;region&gt;</code>, with Block Public Access on, encryption SSE-S3 (AES256) and object ownership "bucket owner enforced".</li>
+  <li>The S3 Engine App reaches S3 through a gateway VPC endpoint and signs each request with its IAM role (SigV4).</li>
+  <li>The Seed deletes the objects under <code>products/</code> and puts one image for each product, with name, category, author and license as user metadata.</li>
+  <li>The seller panel uploads files up to 2 MB to <code>uploads/&lt;visitor&gt;/&lt;time&gt;-&lt;file name&gt;</code>, with the product id as metadata, and lists them with ListObjectsV2.</li>
+  <li>Versioning is on. The lifecycle rule <code>expire-old-versions</code> deletes a version 1 day after it stops being the current version. The reset deletes the objects under <code>uploads/</code>.</li>
+</ul>
+
+<h2 id="recall" data-short="Recall test"><span class="sec">09</span>Recall test</h2>
+{{ k.quiz("s3-r1", "What is a \"folder\" in an S3 bucket?",
+   ["A container object that holds other objects", "The common start of some keys, a prefix", "A second bucket inside the bucket", "A file system directory on the S3 servers"],
+   1, "A bucket is flat. The console groups keys at the slash and shows the groups as folders.") }}
+{{ k.quiz("s3-r2", "Where does the price of a product belong, in S3 metadata or in a database?",
+   ["In S3 metadata, next to the image", "In a database, because the shop queries and changes it", "In the key of the image", "In a presigned URL"],
+   1, "S3 cannot query or partially change metadata. Business data belongs in a database that stores the key of the image.") }}
+{{ k.quiz("s3-r3", "What does the Lale Market lifecycle rule do?",
+   ["It deletes the current images every day", "It deletes a version 1 day after it stops being current", "It moves images to Glacier", "It makes the bucket public"],
+   1, "The rule expire-old-versions keeps only the current versions for long. Old versions stay for one day.") }}
+
+<section class="lesson-foot">
+  <h2>Go deeper</h2>
+  <p><b>Primary source:</b> <a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html">What is Amazon S3?</a>, then
+     <a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html">Retaining multiple versions of objects with S3 Versioning</a>.</p>
+  <p><b>Use it in the shop:</b> the <a href="/free-e-commerce-app/seller">seller panel</a> uploads a file, lists your uploads and shows the version id.</p>
+  <p><b>Ask questions.</b> If a part is not clear, ask your instructor or your AI assistant. Bring the files of your project, and design their keys and lifecycle rules together.</p>
+</section>
+{% endblock %}

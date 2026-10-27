@@ -1,0 +1,239 @@
+{% extends "e2e/_base.html" %}
+{% import "e2e/_macros.html" as k with context %}
+{# Turkish version of s3.html. Terms stay in English; the explanations are Turkish. Keep both files in step. #}
+{% block body %}
+
+<h2 id="goal" data-short="Ne öğreneceksin"><span class="sec">00</span>Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
+<p>Bölüm 01 mimarın kararını verir: Amazon S3 nereye oturur, nereye oturmaz. Sonra tutorial iki bölümden oluşur.
+   Bölüm 1, object storage'ı öğretir: bucket'lar, key'ler ve object'ler, prefix'ler, metadata, version'lar ve imzalı URL'ler. Bölüm 2, AWS servisini ve Lale Market'in onu nasıl kullandığını gösterir.</p>
+<p>Örnekler Lale Market'in ürün görsellerinden ve satıcı panelinden gelir. Bazen başka bir örnek bir fikri daha kolay gösterir. O zaman tutorial onu kullanır: bir vestiyer fişi, bir kargo dolabı, tarihli kopyaları olan bir fotoğraf albümü.</p>
+<p>Bu tutorial'ın sonunda şunları yapabilirsin:</p>
+<ol>
+  <li>Hangi veri için object storage'ın doğru seçim olduğunu ve neden bir database'in olmadığını söylemek.</li>
+  <li>Bir bucket'ı, bir key'i, bir object'i ve onun metadata'sını açıklamak.</li>
+  <li>Prefix'leri ve S3'ün neden gerçek klasörleri olmadığını açıklamak.</li>
+  <li>Versioning'in bir yüklemede ve bir silmede ne yaptığını açıklamak.</li>
+  <li>Bir presigned URL'nin bir tarayıcıya private bir object'e nasıl kısa süreli erişim verdiğini açıklamak.</li>
+  <li>Bir veri türü için bir storage class ve bir lifecycle kuralı seçmek.</li>
+</ol>
+<p>Dört tür kutu sana yardım eder. <b>Simülasyon</b>: Oynat'a ya da Sonraki adım'a bas. <b>Önce tahmin et</b>: cevabı açmadan önce kendi cevabını yaz.
+   <b>Checkpoint</b>: tek doğru cevabı olan bir soru. <b>Analoji</b>: günlük hayattan bir resim.</p>
+
+<h2 id="architect" data-short="Mimar gözüyle: ne zaman"><span class="sec">01</span>Mimar gözüyle: S3 nereye oturur</h2>
+<p><b>Önce bu bölümü oku.</b> Kararı bu bölüm verir. Sonraki bölümler object storage'ın nasıl çalıştığını öğretir.</p>
+<p><b>Kısaca:</b> Amazon S3 her türden ve her boyuttan dosyayı object olarak saklar. Tam bir object'i tek bir istekle yazar ve onu key'i ile geri okursun.
+   S3 veriyi birkaç Availability Zone'da tutar, object sayısında sınır olmadan ölçeklenir ve bir tarayıcının bir object'i doğrudan indirmesine izin verir. Görsellerin, dokümanların, yedeklerin, log'ların ve data lake'lerin yeridir.
+   Bir database değildir: bir object'in bir kısmını değiştirmez ve içerik üzerinde query'si yoktur.</p>
+<p>Anahtar fikir {{ k.term("object") }}'tir: bir dosyanın byte'ları artı metadata, bir bucket'ta bir key altında saklanır. Tek bir istek bütün object'i yazar ya da okur.</p>
+
+<h3>Bir iş yükünde S3'ü işaret eden sinyaller</h3>
+<table class="data">
+  <thead><tr><th>Sinyal</th><th>Gerçek bir projede nasıl görünür</th><th>Onu cevaplayan özellik</th></tr></thead>
+  <tbody>
+    <tr><td>Kayıtlar değil, dosyalar</td><td>Görseller, PDF'ler, videolar, export'lar, model dosyaları.</td><td>5 TB'a kadar object'ler (bölüm 03)</td></tr>
+    <tr><td>Bir kez yaz, çok kez oku</td><td>Binlerce ziyaretçinin gördüğü bir ürün fotoğrafı.</td><td>Bütün object PUT ve GET, önünde bir CDN</td></tr>
+    <tr><td>Kullanıcılar doğrudan indirir</td><td>Bir tarayıcı bir görseli gösterir ya da bir faturayı indirir.</td><td>Presigned URL'ler, CloudFront (bölüm 06)</td></tr>
+    <tr><td>Veri hatalardan sağ çıkmalı</td><td>Bir satıcı doğru görselin üstüne yanlış bir görsel yükler.</td><td>Versioning (bölüm 05)</td></tr>
+    <tr><td>Veri yaşlandıkça soğur</td><td>90 günden sonra kimsenin okumadığı log'lar.</td><td>Storage class'lar ve lifecycle kuralları (bölüm 07)</td></tr>
+    <tr><td>Analitik için çok büyük veri setleri</td><td>Parquet dosyalarında yıllarca event.</td><td>Athena'nın ve Redshift'in sorgulayabildiği bir data lake</td></tr>
+  </tbody>
+</table>
+
+<h3>Use case'ler, nedeni ve özelliğiyle</h3>
+<table class="data">
+  <thead><tr><th>Use case</th><th>Veri</th><th>Neden object storage</th><th>İşi yapan özellik</th></tr></thead>
+  <tbody>
+    <tr><td>Ürün görselleri (Lale Market)</td><td>Ürün başına metadata'lı bir JPEG.</td><td>Çok okuyucu, az yazma.</td><td>products/&lt;id&gt;.jpg key'i, Content-Type, x-amz-meta-*</td></tr>
+    <tr><td>Satıcı yüklemeleri (Lale Market)</td><td>Satıcı panelinden gelen dosyalar.</td><td>Her dosya türü, eski version'lar korunur.</td><td>Ziyaretçi başına key prefix'i, versioning</td></tr>
+    <tr><td>Statik web siteleri ve uygulama varlıkları</td><td>HTML, CSS, JavaScript, font'lar.</td><td>Tarayıcılara, çoğunlukla bir CDN üzerinden sunulur.</td><td>Origin olarak S3 ile CloudFront</td></tr>
+    <tr><td>Yedekler ve arşivler</td><td>Database dump'ları, snapshot'lar, yasal kayıtlar.</td><td>Nadiren okunan veri için kalıcı ve ucuz.</td><td>Glacier storage class'ları, Object Lock</td></tr>
+    <tr><td>Data lake</td><td>Parquet ya da CSV olarak event'ler, export'lar ve log'lar.</td><td>Birçok engine'in okuyabildiği tek bir depo.</td><td>Athena, Redshift Spectrum, AWS Glue</td></tr>
+    <tr><td>Medya işleme</td><td>Yüklenen videolar ve dönüştürülmüş kopyaları.</td><td>Bir yükleme bir job başlatır, sonuç yeni bir object'tir.</td><td>Lambda'ya ya da SQS'e event notification'lar</td></tr>
+    <tr><td>Log saklama</td><td>Load balancer'ların ve CloudFront'un erişim log'ları.</td><td>Her gün büyür, haftalar sonra soğur.</td><td>Daha ucuz class'lara lifecycle kuralları</td></tr>
+    <tr><td>Machine learning verisi</td><td>Eğitim görselleri, model dosyaları.</td><td>Birçok worker'ın paralel okuduğu büyük dosyalar.</td><td>Yüksek paralel throughput</td></tr>
+  </tbody>
+</table>
+{{ k.fig("s3-object-storage-model.png", "genel bir object store. Bir uygulama bir API çağırır. Metadata node'ları object metadata'sını, storage node'ları veriyi tutar.") }}
+
+<h3>S3'ten uzaklaştıran sinyaller</h3>
+<table class="data">
+  <thead><tr><th>İş yükündeki sinyal</th><th>S3 neden zayıf bir seçim</th><th>Daha iyi seçim</th></tr></thead>
+  <tbody>
+    <tr><td>Bir kaydın tek bir field'ını değiştirmek</td><td>Bir PUT bütün object'i değiştirir.</td><td><a href="/e2etutorial/dynamodb">DynamoDB</a>, <a href="/e2etutorial/aurora">Aurora</a></td></tr>
+    <tr><td>İçerik üzerinde query'ler: "500 TL altındaki ürünler"</td><td>S3 object'leri içeriğe göre değil, key'e göre bulur.</td><td><a href="/e2etutorial/docdb">DocumentDB</a>, <a href="/e2etutorial/opensearch">OpenSearch</a></td></tr>
+    <tr><td>Tek bir birim olarak birkaç değişiklik</td><td>Object'ler arası transaction yok.</td><td><a href="/e2etutorial/aurora">Aurora</a></td></tr>
+    <tr><td>Bir milisaniyenin altında cevaplar</td><td>Her istek HTTPS üzerinden bölgesel bir servise gider.</td><td><a href="/e2etutorial/elasticache">ElastiCache</a></td></tr>
+    <tr><td>Dosya kilitli paylaşılan bir dosya sistemi</td><td>POSIX dosya sistemi semantiği yok.</td><td>Amazon EFS, Amazon FSx</td></tr>
+  </tbody>
+</table>
+
+<h3>Bir mimarın sorduğu sorular, bu sırayla</h3>
+<ol>
+  <li><b>Bir dosya mı, bir kayıt mı?</b> Dosyalar S3'e gider. Dosyayı tanımlayan kayıt (sahip, fiyat, durum) bir database'de kalır ve key'i saklar.</li>
+  <li><b>Onu kim, nasıl okuyor?</b> Private bir bucket ve presigned URL'ler ya da önünde bir CDN. Asla kazara public bir bucket değil.</li>
+  <li><b>Bir yazma bir hata olabilir mi?</b> O zaman versioning'i ve eski version'lar için bir lifecycle kuralını aç.</li>
+  <li><b>Bir ay sonra, bir yıl sonra ne sıklıkla okunuyor?</b> Bu storage class'ı ve lifecycle kurallarını seçer.</li>
+  <li><b>Key'ler nasıl görünüyor?</b> Listelemek istediğin parçaları key'in başına koy: <code>uploads/&lt;visitor&gt;/</code>.</li>
+  <li><b>Bir yüklemeden sonra bir şey olmalı mı?</b> O zaman sonraki adımı başlatmak için event notification'lar kullan.</li>
+</ol>
+
+<h3>AWS'te S3 ve akrabaları</h3>
+<table class="data">
+  <thead><tr><th>Seçenek</th><th>Nedir</th><th>Ne zaman seç</th></tr></thead>
+  <tbody>
+    <tr><td>Amazon S3 general purpose bucket</td><td>Bir Region'da object storage, veri birkaç Availability Zone'da.</td><td>Çoğu dosya. Lale Market bir bucket kullanır.</td></tr>
+    <tr><td>S3 Glacier storage class'ları</td><td>Arşiv verisi için S3 class'ları; daha düşük fiyat, daha yavaş ya da ücretli geri getirme.</td><td>Yıllarca tuttuğun yedekler ve kayıtlar.</td></tr>
+    <tr><td>Amazon EFS</td><td>Paylaşılan bir NFS dosya sistemi.</td><td>Birçok sunucunun dosya sistemi semantiğiyle aynı dosyalara ihtiyacı var.</td></tr>
+    <tr><td>Amazon EBS</td><td>Tek bir EC2 instance'ı için bir blok disk.</td><td>Bir sunucunun ya da kendi yönettiğin bir database'in diski.</td></tr>
+  </tbody>
+</table>
+
+<h3>Lale Market'te S3'ün yeri</h3>
+<p>Private bir bucket iki prefix tutar. <code>products/</code> her ürün için bir görsel tutar. Key'i ürün id'sidir, bu yüzden katalog onu bulmak için ek bir kolona ihtiyaç duymaz. <code>uploads/</code> ziyaretçilerin satıcı panelinde yüklediği dosyaları tutar.
+   Ürün sayfaları görselleri S3 Engine App üzerinden yükler ve satıcı paneli bir presigned URL de verebilir. Versioning açıktır ve bir lifecycle kuralı eski version'ları bir gün sonra siler.</p>
+
+<h3>Simülasyon: gereksinimler seçsin</h3>
+{{ k.sim("decide_images", "İş yükü 1: görseller ve satıcı dosyaları") }}
+{{ k.sim("decide_stock", "İş yükü 2: stok sayısı") }}
+
+{{ k.quiz("s3-a1", "Bir hastane 30 ile 300 MB arası röntgen görüntülerini on yıl tutmak istiyor. Doktorlar son ayın görüntülerini sık, eskileri nadiren açıyor. En iyi ne oturur?",
+   ["Bir arşiv storage class'ına lifecycle kuralı olan S3", "Görüntü başına bir item ile DynamoDB", "Görüntü başına bir key ile ElastiCache", "bytea kolonlu Aurora"],
+   0, "Büyük dosyalar, uzun yıllar ve yaşla azalan okumalar, storage class'ları ve lifecycle kurallarıyla S3'e uyar. Hastanın kaydı bir database'de kalır ve key'i saklar.") }}
+{{ k.quiz("s3-a2", "Bir ekip alışveriş sepetini S3'te bir JSON object'i olarak tutuyor ve her tıklamada bir miktarı değiştiriyor. Sorun nedir?",
+   ["S3 JSON saklayamaz", "Her değişiklik bütün object'i değiştirir ve koşullu field güncellemeleri ya da transaction'lar yoktur", "S3 object'leri bir saat sonra siler", "S3 object'leri uygulama tarafından okunamaz"],
+   1, "Bir sepet küçük parçaları sık değiştirir ve bir değişikliği kaybetmemelidir. Bu DynamoDB gibi bir database'in işidir.") }}
+
+<div class="part"><b>Bölüm 1</b><h2 id="part1" data-short="BÖLÜM 1: Object storage">Object storage: bucket'lar, key'ler ve object'ler</h2>
+<p>Key'ler ve prefix'ler, metadata, version'lar ve imzalı URL'ler.</p></div>
+
+<h2 id="why" data-short="Neden object storage?"><span class="sec">02</span>Neden object storage? Vestiyer</h2>
+<p>Bir dosya sisteminin klasörleri vardır ve bir program bir dosyayı açıp 1.000. byte'ı değiştirip kapatabilir. Bir blok disk daha da alt seviyededir: tek bir sunucu için numaralı bloklar saklar.
+   Object storage daha basittir. Tam bir object'i bir isim altına koyan bir işlemi ve onu geri alan bir işlemi vardır. Herhangi bir sayıda object'e büyüyebilmesinin ve aynı anda birçok okuyucuya hizmet edebilmesinin nedeni bu basit modeldir.</p>
+{% call k.callout("analogy", "Analoji") %}
+<p>Bir vestiyerde paltonu verirsin ve numaralı bir fiş alırsın. Rafı sen seçmezsin ve palto orada asılıyken bir düğmesini değiştiremezsin. Fişi gösterirsin ve bütün paltoyu geri alırsın.
+   S3 vestiyerdir, key fiştir, object de paltodur.</p>
+{% endcall %}
+
+<h2 id="objects" data-short="Bucket, key, object"><span class="sec">03</span>Bucket'lar, key'ler, object'ler ve metadata</h2>
+<ul>
+  <li>Bir {{ k.term("bucket") }}, object'ler için bir kaptır. Adı benzersizdir ve bir AWS Region'ına aittir.</li>
+  <li>Bir {{ k.term("key") }}, bucket'taki bir object'in tam adıdır, örneğin <code>products/P0001.jpg</code>.</li>
+  <li>Bir object veri artı metadata'dır. Sistem metadata'sı boyutu ve <code>Content-Type</code>'ı içerir. Kullanıcı metadata'sı <code>x-amz-meta-</code> ile başlayan kendi header'larındır.</li>
+</ul>
+<p>Bunlar Lale Market bucket'ının altı örnek key'idir. Ziyaretçi id'leri örnektir. Gerçek yükleme key'leri yüklemenin zamanını da içerir.</p>
+{{ k.sample("s3_keys", "Lale Market bucket'ındaki key'ler", key=["key"]) }}
+{% call k.sql("A1", "Seed bir ürün görselini koyar") %}
+<pre><code>s3.put_object(Bucket=bucket, Key="products/P0001.jpg", Body=body, ContentType="image/jpeg",
+              Metadata={"name": "Alpen Kablosuz Kulaklik 1", "category": "Elektronik", ...})</code></pre>
+<table class="clause">
+  <tr><td>Bucket=bucket</td><td>Workshop'un bucket'ı. Adı hesabı ve Region'ı içerir.</td></tr>
+  <tr><td>Key="products/P0001.jpg"</td><td>Key. Ürün id'sini içerir, böylece ürün sayfası key'i bir arama yapmadan oluşturabilir.</td></tr>
+  <tr><td>Body=body</td><td>Görselin byte'ları. Tek bir istek tam object'i gönderir.</td></tr>
+  <tr><td>ContentType="image/jpeg"</td><td>S3 bu değeri Content-Type header'ında döndürür, böylece tarayıcı byte'ları bir görsel olarak gösterir.</td></tr>
+  <tr><td>Metadata={...}</td><td>Kullanıcı metadata'sı. S3 her çifti bir <code>x-amz-meta-</code> header'ı olarak saklar. Seed buraya düz ASCII yazar, çünkü HTTP header'ları düz metin taşımalıdır.</td></tr>
+</table>
+{% endcall %}
+<p>Identifier'lar: ürün id'sinin sahibi katalogdur. S3 key'i onu ödünç alır, böylece görsel ve ürün ek bir kolon olmadan bağlı kalır. Her object version'ının version id'sinin sahibi S3'tür. Yükleme cevabı onu döndürür ve satıcı paneli onu gösterir.</p>
+<p>S3 strongly consistent'tir. Bir object'in başarılı bir yazmasından, üzerine yazılmasından ya da silinmesinden sonra bir sonraki okuma isteği hemen object'in en son version'ını alır
+   (<a href="https://aws.amazon.com/s3/consistency/">Amazon S3 consistency</a>).</p>
+{{ k.fig("s3-consistency.png", "client 1 color = red yazar. Client 2 daha sonra color = ruby yazar. İkinci yazmadan sonraki iki okuma da ruby döndürür.") }}
+
+<h2 id="prefixes" data-short="Klasör değil, prefix"><span class="sec">04</span>Klasörler değil, prefix'ler</h2>
+<p>Bir bucket düzdür. Konsol klasörler gösterir ama onlar sadece key'lerin ortak başlangıcıdır, yani {{ k.term("prefix") }}. ListObjectsV2 bir prefix'e göre filtreleyebilir ve key'leri bir delimiter karakterinde gruplayabilir
+   (<a href="https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html">ListObjectsV2</a>).</p>
+{% call k.sql("A2", "Satıcı paneli bir ziyaretçinin yüklemelerini listeler") %}
+<pre><code>s3.list_objects_v2(Bucket=bucket, Prefix="uploads/v-7f3a/", MaxKeys=12)</code></pre>
+<table class="clause">
+  <tr><td>Prefix="uploads/v-7f3a/"</td><td>Sadece bu metinle başlayan key'leri döndür.</td></tr>
+  <tr><td>MaxKeys=12</td><td>Bu cevapta en fazla 12 key. Daha fazlası varsa cevap IsTruncated der ve bir continuation token verir.</td></tr>
+</table>
+{% endcall %}
+{% call k.predict("Altı key'i kullan. A2 hangi key'leri döndürür?") %}
+<p>uploads/v-7f3a/invoice.pdf ve uploads/v-7f3a/photo.jpg. v-3c8d'nin yüklemesinin prefix'i farklıdır.</p>
+{% endcall %}
+{{ k.sim("prefix", "Prefix ve delimiter") }}
+
+<h2 id="versions" data-short="Versioning"><span class="sec">05</span>Versioning: bir yükleme eski object'i hiçbir zaman yok etmez</h2>
+<p>{{ k.term("versioning") }} açıkken bir key'e yapılan her PUT, kendi version id'si olan yeni bir version ekler. Version id'siz bir DELETE veri silmez. Bir delete marker ekler ve normal bir GET bundan sonra 404 döndürür.
+   Eski version'lar, sen onları version id'leriyle silene ya da bir lifecycle kuralı onları silene kadar kalır.</p>
+{{ k.fig("s3-versioning-put.png", "versioning açık bir bucket'a photo.gif PUT'u yeni bir version ID ekler. Eski version kalır.") }}
+{{ k.sim("versions", "İki yükleme ve bir silme") }}
+{% call k.callout("analogy", "Analoji") %}
+<p>Hiçbir fotoğrafı çıkarmadığın bir fotoğraf albümü düşün. Yeni bir fotoğraf eskisinin üstüne gider ve "silindi" notu hepsinin üstüne gider. Üstteki sayfaları kaldır, eski fotoğraflar hâlâ oradadır.</p>
+{% endcall %}
+{{ k.quiz("s3-q1", "Versioning açık. Bir kullanıcı report.pdf'i version id olmadan siliyor. Veriye ne olur?",
+   ["S3 bütün version'ları siler", "S3 bir delete marker ekler ve eski version'lar kalır", "S3 silmeyi reddeder", "S3 object'i Glacier'a taşır"],
+   1, "Delete marker en yeni version olur. Eski bir version id ile bir GET hâlâ veriyi döndürür.") }}
+
+<h2 id="presign" data-short="Presigned URL'ler"><span class="sec">06</span>Presigned URL'ler: private bir object'e kısa süreli erişim</h2>
+<p>Lale Market bucket'ı bütün public erişimi engeller. Bir tarayıcının AWS kimlik bilgisi yoktur. Bir {{ k.term("presigned URL") }} bunu çözer: uygulama bir object üzerinde tek bir işlem için, bir süre sonu ile bir URL imzalar.
+   "The credentials used by the presigned URL are those of the AWS user who generated the URL", yani URL'yi oluşturan kullanıcının kimlik bilgileri kullanılır (<a href="https://docs.aws.amazon.com/boto3/latest/guide/s3-presigned-urls.html">Boto3: presigned URLs</a>).</p>
+{% call k.sql("A3", "Satıcı paneli bir indirme linki imzalar") %}
+<pre><code>s3.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": "products/P0001.jpg"}, ExpiresIn=300)</code></pre>
+<table class="clause">
+  <tr><td>"get_object"</td><td>URL sadece object'in bir GET'ine izin verir.</td></tr>
+  <tr><td>Params={"Bucket": ..., "Key": ...}</td><td>URL'nin açtığı tek object.</td></tr>
+  <tr><td>ExpiresIn=300</td><td>URL 300 saniye geçerlidir. SDK'larla en fazla 7 gündür. Geçici kimlik bilgileriyle imzalanmış bir URL'nin süresi en geç o kimlik bilgileriyle biter.</td></tr>
+</table>
+{% endcall %}
+{{ k.sim("presign", "Zaman içinde bir presigned URL") }}
+{{ k.quiz("s3-q2", "Bir presigned URL neden kısa ömürlü olmalı?",
+   ["URL'nin süresi dolunca S3 object'i siler", "URL'ye sahip olan herkes onu süresi dolana kadar kullanabilir", "Presigned URL'ler sadece bir kez çalışır", "Uzun bir süre indirmeyi yavaşlatır"],
+   1, "URL'nin kendisi izindir. Örneğin bir log'da sızarsa süre zararı sınırlar.") }}
+
+<div class="part"><b>Bölüm 2</b><h2 id="part2" data-short="BÖLÜM 2: Amazon S3">Amazon S3: AWS servisi</h2>
+<p>Dayanıklılık, storage class'lar, lifecycle ve erişim.</p></div>
+
+<h2 id="service" data-short="Dayanıklılık, class'lar"><span class="sec">07</span>Dayanıklılık, storage class'lar ve lifecycle</h2>
+<p>S3 bölgesel bir servistir. AWS, verinin bir Region'daki Availability Zone'lara dağıtılarak saklandığı S3 için 11 dokuzluk (99.999999999%) dayanıklılık belirtir
+   (<a href="https://aws.amazon.com/blogs/storage/aws-reinvent-recap-break-down-data-silos-with-a-data-lake-on-amazon-s3/">AWS Storage Blog</a>).
+   Bir bucket'taki veri miktarında ya da object sayısında sınır yoktur.</p>
+<p>Her object'in bir {{ k.term("storage class") }}'ı vardır. Class'lar GB başına fiyatta, bir okumanın maliyetinde ve veriyi geri getirme süresinde farklılaşır. Bir {{ k.term("lifecycle rule") }}, object'leri belirli bir gün sayısından sonra başka bir class'a taşır ya da siler.</p>
+<table class="data">
+  <thead><tr><th>Storage class</th><th>Şu tür veri için</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>S3 Standard</td><td>Sık okunan.</td><td>Lale Market'in ürün görselleri.</td></tr>
+    <tr><td>S3 Intelligent-Tiering</td><td>Bilinmeyen bir pattern'le okunan. S3 onu tier'lar arasında kendisi taşır.</td><td>Kullanıcı yüklemeleri.</td></tr>
+    <tr><td>S3 Standard-IA</td><td>Nadiren okunan ama biri okuduğunda hızlı gereken.</td><td>Geçen yılın faturaları.</td></tr>
+    <tr><td>S3 Glacier class'ları</td><td>Arşivlenmiş. Geri getirme, class'a göre milisaniyelerden saatlere kadar sürer.</td><td>Yedekler ve yasal kayıtlar.</td></tr>
+  </tbody>
+</table>
+<table class="data">
+  <thead><tr><th>Görev</th><th>Kendi dosya sunucuların</th><th>Amazon S3</th></tr></thead>
+  <tbody>
+    <tr><td>Kapasite</td><td>Diskleri ihtiyaç duymadan önce satın alırsın.</td><td>Sınır yok. Sakladığın kadar ödersin.</td></tr>
+    <tr><td>Verinin kopyaları</td><td>RAID, yedekler ve disk değişimini sen yürütürsün.</td><td>Birkaç Availability Zone'da veri. AWS kaybolan kopyaları yerine koyar.</td></tr>
+    <tr><td>Erişim kontrolü</td><td>Sunucu başına dosya izinleri.</td><td>IAM policy'leri, bucket policy'leri, Block Public Access.</td></tr>
+    <tr><td>Eski veri</td><td>Dosyaları taşıyan ya da silen script'ler.</td><td>Lifecycle kuralları.</td></tr>
+    <tr><td>Şifreleme</td><td>Sen ayarlarsın.</td><td>Yeni object'ler için varsayılan server-side encryption.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="lalemarket" data-short="Lale Market'te S3"><span class="sec">08</span>Lale Market'te S3</h2>
+<ul>
+  <li>Tek bir bucket: <code>dbws-images-&lt;account&gt;-&lt;region&gt;</code>. Block Public Access açık, SSE-S3 (AES256) şifreleme ve "bucket owner enforced" object ownership.</li>
+  <li>S3 Engine App, S3'e bir gateway VPC endpoint üzerinden ulaşır ve her isteği kendi IAM role'ü ile imzalar (SigV4).</li>
+  <li>Seed <code>products/</code> altındaki object'leri siler ve her ürün için isim, kategori, yazar ve lisansı kullanıcı metadata'sı olarak taşıyan bir görsel koyar.</li>
+  <li>Satıcı paneli 2 MB'a kadar dosyaları ürün id'sini metadata olarak taşıyarak <code>uploads/&lt;visitor&gt;/&lt;time&gt;-&lt;file name&gt;</code>'a yükler ve onları ListObjectsV2 ile listeler.</li>
+  <li>Versioning açık. <code>expire-old-versions</code> lifecycle kuralı bir version'ı güncel olmaktan çıktıktan 1 gün sonra siler. Reset <code>uploads/</code> altındaki object'leri siler.</li>
+</ul>
+
+<h2 id="recall" data-short="Hatırlama testi"><span class="sec">09</span>Hatırlama testi</h2>
+{{ k.quiz("s3-r1", "Bir S3 bucket'ında \"klasör\" nedir?",
+   ["Başka object'leri tutan bir kap object'i", "Bazı key'lerin ortak başlangıcı, yani bir prefix", "Bucket'ın içinde ikinci bir bucket", "S3 sunucularında bir dosya sistemi dizini"],
+   1, "Bir bucket düzdür. Konsol key'leri slash'te gruplar ve grupları klasör olarak gösterir.") }}
+{{ k.quiz("s3-r2", "Bir ürünün fiyatı nereye aittir, S3 metadata'sına mı, bir database'e mi?",
+   ["Görselin yanında, S3 metadata'sına", "Bir database'e, çünkü mağaza onu sorgular ve değiştirir", "Görselin key'ine", "Bir presigned URL'ye"],
+   1, "S3 metadata'yı sorgulayamaz ya da kısmen değiştiremez. İş verisi, görselin key'ini saklayan bir database'e aittir.") }}
+{{ k.quiz("s3-r3", "Lale Market'in lifecycle kuralı ne yapar?",
+   ["Güncel görselleri her gün siler", "Bir version'ı güncel olmaktan çıktıktan 1 gün sonra siler", "Görselleri Glacier'a taşır", "Bucket'ı public yapar"],
+   1, "expire-old-versions kuralı sadece güncel version'ları uzun süre tutar. Eski version'lar bir gün kalır.") }}
+
+<section class="lesson-foot">
+  <h2>Daha derine in</h2>
+  <p><b>Ana kaynak:</b> <a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html">What is Amazon S3?</a>, sonra
+     <a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html">Retaining multiple versions of objects with S3 Versioning</a>.</p>
+  <p><b>Mağazada kullan:</b> <a href="/free-e-commerce-app/seller">satıcı paneli</a> bir dosya yükler, yüklemelerini listeler ve version id'sini gösterir.</p>
+  <p><b>Soru sor.</b> Bir kısım net değilse eğitmenine ya da AI asistanına sor. Projenin dosyalarını getir ve onların key'lerini ve lifecycle kurallarını birlikte tasarlayın.</p>
+</section>
+{% endblock %}
