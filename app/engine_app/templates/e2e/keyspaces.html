@@ -1,0 +1,166 @@
+{% extends "e2e/_base.html" %}
+{% import "e2e/_macros.html" as k with context %}
+{% block body %}
+
+<h2 id="goal" data-short="What you will learn"><span class="sec">00</span>What you will learn</h2>
+<p>Each Lale Market page writes an activity event: a view, a search, an "add to cart". The shop needs "the newest events of one user" in milliseconds,
+   for "Recently viewed" and "My activity". The number of events grows each day, and it never stops.
+   Amazon Keyspaces (for Apache Cassandra) stores these events. It is a {{ k.term("wide-column store") }} that speaks the Cassandra Query Language (CQL).</p>
+<p>After this tutorial, you can do these tasks:</p>
+<ol>
+  <li>Explain the two parts of a Cassandra primary key: the partition key and the clustering columns.</li>
+  <li>Design a table for one query, and say why "one table per query" is normal here.</li>
+  <li>Predict which CQL queries Keyspaces can answer, and which it cannot.</li>
+  <li>Select a read consistency level, and know its cost.</li>
+  <li>Use a table TTL for data that loses its value with time.</li>
+</ol>
+
+<h2 id="model" data-short="Partition and clustering"><span class="sec">01</span>The model: partitions of sorted rows</h2>
+<p>A CQL table looks like a SQL table: it has columns and rows. The difference is in the {{ k.term("primary key") }}. It has two parts with two different jobs:</p>
+<ul>
+  <li>The {{ k.term("partition key") }} selects the partition. Keyspaces keeps all rows with the same partition key value together.</li>
+  <li>The {{ k.term("clustering column") }}s sort the rows inside a partition. The sort happens at write time, so a read gets the rows already in order.</li>
+</ul>
+<p>This is the real table of Lale Market (from <code>META.model</code> of the Engine App):</p>
+<pre><code>CREATE TABLE dbws.activity_by_user (
+  user_id    text,                 <span class="c">-- partition key: one partition per user</span>
+  event_time timestamp,            <span class="c">-- clustering column 1: sort by time</span>
+  event_id   uuid,                 <span class="c">-- clustering column 2: two events in the same millisecond stay unique</span>
+  event_type text, product_id text, detail text,
+  PRIMARY KEY ((user_id), event_time, event_id)
+) WITH CLUSTERING ORDER BY (event_time DESC)     <span class="c">-- newest first</span>
+  AND default_time_to_live = 604800;            <span class="c">-- 7 days</span></code></pre>
+<p>Read <code>PRIMARY KEY ((user_id), event_time, event_id)</code> from left to right. The inner parentheses hold the partition key. The rest are clustering columns.
+   This is a real slice of the partition of Zeynep Şahin (C00005), who browses a lot:</p>
+<table class="data">
+  <caption>activity_by_user, partition user_id = 'C00005' (two of many rows, newest first)</caption>
+  <thead><tr><th class="key">user_id</th><th class="key">event_time ↓</th><th class="key">event_id</th><th>event_type</th><th>product_id</th><th>detail</th></tr></thead>
+  <tbody>
+    <tr><td class="key mono">C00005</td><td class="key mono">2026-10-26 16:37:43</td><td class="key mono">(uuid)</td><td>wishlist</td><td class="mono">P0130</td><td>Nordwind Yün Kazak 130 · Moda</td></tr>
+    <tr><td class="key mono">C00005</td><td class="key mono">2026-10-26 16:18:43</td><td class="key mono">(uuid)</td><td>wishlist</td><td class="mono">P0161</td><td>Kapadokya Oyuncu Mouse 161 · Elektronik</td></tr>
+  </tbody>
+</table>
+{% call k.callout("analogy", "Analogy") %}
+<p>Think of a filing cabinet with one drawer per customer. The drawer label is the partition key. Inside the drawer, the papers are always in date order, newest at the front.
+   "The last 10 papers of Zeynep" is: open one drawer, take 10 from the front. "All purchases of all customers" is: open every drawer.</p>
+{% endcall %}
+{% call k.query("keyspaces", "K6", "Read the schema from the system tables") %}
+<pre><code>SELECT column_name, kind, position, clustering_order, type
+FROM system_schema.columns WHERE keyspace_name = 'dbws' AND table_name = 'activity_by_user';</code></pre>
+<p>Purpose: see the role of each column. <code>kind</code> is <code>partition_key</code>, <code>clustering</code> or <code>regular</code>.</p>
+{% endcall %}
+
+<h2 id="reads" data-short="Reads that work"><span class="sec">02</span>Reads that Keyspaces answers well</h2>
+{% call k.predict("You ask for the 10 newest events of C00005. The table has events of 1,000 users. How many partitions does Keyspaces read, and does it sort anything?") %}
+<p>One partition, and no sort at read time. The partition key goes straight to the partition of C00005. The rows are already newest first,
+   so Keyspaces reads the first 10 rows and stops.</p>
+{% endcall %}
+{% call k.query("keyspaces", "K1", "The 10 newest events of one user") %}
+<pre><code>SELECT user_id, event_time, event_type, product_id, detail
+FROM dbws.activity_by_user WHERE user_id = 'C00005' LIMIT 10;</code></pre>
+<p>This is the query behind "Recently viewed" on the product page (with your browser id as user_id).</p>
+{% endcall %}
+{% call k.query("keyspaces", "K2", "A time range inside one partition") %}
+<pre><code>SELECT event_time, event_type, product_id
+FROM dbws.activity_by_user WHERE user_id = 'C00005' AND event_time &gt; &lt;now - 24 hours&gt;;</code></pre>
+<p>A condition on the first clustering column is a range read. The rows are in time order, so Keyspaces reads one continuous slice.</p>
+{% endcall %}
+{% call k.query("keyspaces", "K3", "How many rows does one partition hold?") %}
+<pre><code>SELECT event_time FROM dbws.activity_by_user WHERE user_id = 'C00005';   <span class="c">-- the Engine App counts the rows</span></code></pre>
+<p>Keyspaces does not support aggregate functions such as <code>count()</code>
+   (<a href="https://docs.aws.amazon.com/keyspaces/latest/devguide/cassandra-apis.html">Supported Cassandra APIs</a>). An app that needs counts keeps a counter, or it counts in a different Engine.</p>
+{% endcall %}
+
+<h2 id="limits" data-short="Reads that fail"><span class="sec">03</span>The question without a partition key</h2>
+<p>"Show the last 5 purchases of all users" gives no partition key. To answer it, the Engine must look in each partition.
+   Apache Cassandra refuses such a query unless you add <code>ALLOW FILTERING</code>, because its cost grows with the size of the table.</p>
+{% call k.query("keyspaces", "K4", "A filter on a regular column, with no partition key") %}
+<pre><code>SELECT user_id, event_type FROM dbws.activity_by_user WHERE event_type = 'purchase' LIMIT 5;</code></pre>
+<p>Run it and read the answer of Keyspaces. Then compare it with K1: the same table, but a different kind of question.</p>
+{% endcall %}
+<p>Keyspaces also does not support <code>CREATE INDEX</code>. So the rule is: design one table for each query.
+   If the shop needs "events by product", it writes each event a second time into a table with <code>PRIMARY KEY ((product_id), event_time, event_id)</code>.
+   Two writes for one event is normal in this model. Storage is cheaper than a full-table read on each request.</p>
+{{ k.quiz("ks-q1", "Which query can Keyspaces answer from one partition of activity_by_user?",
+   ["All events of type purchase from all users", "The events of user C00005 after 10:00 today", "The 10 users with the most events", "All events of product P0130"],
+   1, "Only this query gives the partition key (user_id). The time condition is on the first clustering column, so it is a slice of one partition.") }}
+
+<h2 id="cluster" data-short="How Cassandra distributes"><span class="sec">04</span>Where the partitions live</h2>
+<p>Apache Cassandra runs on a ring of nodes. A hash of the partition key (the token) decides which nodes hold the partition.
+   A client sends a request to any node. That node becomes the {{ k.term("coordinator") }}: it sends the request to the nodes that hold the partition and returns the answer.</p>
+{{ k.fig("keyspaces-cassandra-cluster.png", "a client sends CQL to one node of a ring of four nodes. In Apache Cassandra, you install, size and operate these nodes yourself.") }}
+{{ k.fig("keyspaces-coordinator.jpg", "the coordinator (orange) receives the request from the client and sends it to the other nodes of the ring (dashed arrows). The client talks to one node only.") }}
+<p>Amazon Keyspaces gives you the CQL interface without the nodes. It is serverless: there are "no clusters, hosts, or Java virtual machines (JVMs) to configure"
+   (<a href="https://docs.aws.amazon.com/keyspaces/latest/devguide/functional-differences.html">Functional differences</a>).
+   Lale Market connects with the open-source Python Cassandra driver, through a VPC interface endpoint, with IAM (SigV4) authentication instead of a password.</p>
+{{ k.fig("keyspaces-serverless.png", "Cassandra drivers, cqlsh and the console send CQL requests over TLS to Amazon Keyspaces. Keyspaces writes to encrypted storage. You see no nodes.") }}
+
+<h2 id="consistency" data-short="Consistency"><span class="sec">05</span>Consistency levels and their cost</h2>
+<p>Keyspaces "replicates all write operations three times across multiple Availability Zones". Writes always use <code>LOCAL_QUORUM</code>
+   (<a href="https://docs.aws.amazon.com/keyspaces/latest/devguide/consistency.html">Consistency levels</a>). For a read, you select the level:</p>
+<table class="data">
+  <thead><tr><th>Read level</th><th>What it does</th><th class="num">Cost per 4 KB (on-demand)</th></tr></thead>
+  <tbody>
+    <tr><td><code>LOCAL_QUORUM</code></td><td>Returns the result of all writes that succeeded before the read.</td><td class="num">1 RRU</td></tr>
+    <tr><td><code>LOCAL_ONE</code> / <code>ONE</code></td><td>Faster and more available, but it "might not reflect the results of a recently completed write".</td><td class="num">0.5 RRU</td></tr>
+  </tbody>
+</table>
+{% call k.query("keyspaces", "K5", "The same read as K1 with LOCAL_ONE") %}
+<pre><code>CONSISTENCY LOCAL_ONE;
+SELECT user_id, event_time, event_type, product_id FROM dbws.activity_by_user WHERE user_id = 'C00005' LIMIT 10;</code></pre>
+<p>The result is the same here, because nobody wrote to this partition in the last moment. The bill is half.</p>
+{% endcall %}
+{{ k.quiz("ks-q2", "\"Recently viewed\" can be one second old. Which read level is the better choice for it?",
+   ["LOCAL_ONE, because it costs half", "LOCAL_QUORUM, because it is newer", "EACH_QUORUM, for all the regions", "ALL, to read every copy of the data"],
+   0, "A short delay is acceptable for this strip, so the cheaper level is enough. EACH_QUORUM and ALL are not supported by Keyspaces.") }}
+
+<h2 id="ttl" data-short="TTL"><span class="sec">06</span>TTL: old events go away</h2>
+<p>The table has <code>default_time_to_live = 604800</code> (7 days). Each row expires 7 days after its write, and Keyspaces deletes it.
+   The Load Simulation writes with <code>USING TTL 600</code>, so its synthetic rows expire after 10 minutes.</p>
+{% call k.callout("warn", "Note for the workshop") %}
+<p>The TTL counts from the write time, not from <code>event_time</code>. The Seed writes 30 days of history in one go. All seeded rows expire 7 days after the Seed.
+   If K1 returns no rows, ask your instructor to run the Seed again.</p>
+{% endcall %}
+{% call k.query("keyspaces", "K7", "Read the table settings") %}
+<pre><code>SELECT default_time_to_live, custom_properties FROM system_schema_mcs.tables
+WHERE keyspace_name = 'dbws' AND table_name = 'activity_by_user';</code></pre>
+<p><code>system_schema_mcs</code> is a Keyspaces system keyspace. It shows settings that Apache Cassandra does not have, such as the capacity mode.</p>
+{% endcall %}
+
+<h2 id="usecases" data-short="Use cases"><span class="sec">07</span>When to use it, and when not</h2>
+<table class="data">
+  <thead><tr><th>Good fit</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td>Activity feeds, clickstreams, event history per user or device</td><td>Many writes, and reads of "the newest N for one key".</td></tr>
+    <tr><td>Apps that already use Apache Cassandra</td><td>The same CQL and drivers, with no nodes to operate.</td></tr>
+    <tr><td>Messages per conversation, orders per customer (as a read model)</td><td>One partition per owner, sorted by time.</td></tr>
+  </tbody>
+</table>
+<table class="data">
+  <thead><tr><th>Weak fit</th><th>Better choice</th></tr></thead>
+  <tbody>
+    <tr><td>Ad hoc questions across all partitions</td><td><a href="/e2etutorial/redshift">Redshift</a> or <a href="/e2etutorial/aurora">Aurora</a></td></tr>
+    <tr><td>Metrics that you aggregate by time windows</td><td><a href="/e2etutorial/influxdb">Timestream for InfluxDB</a></td></tr>
+    <tr><td>Joins and multi-row transactions with rules</td><td><a href="/e2etutorial/aurora">Aurora</a></td></tr>
+  </tbody>
+</table>
+
+<h2 id="recall" data-short="Recall test"><span class="sec">08</span>Recall test</h2>
+{{ k.quiz("ks-r1", "In PRIMARY KEY ((user_id), event_time, event_id), what does event_time do?",
+   ["It selects the partition of the row", "It sorts the rows inside a partition", "It makes the row expire after a time", "It is an index for queries by time"],
+   1, "event_time is the first clustering column. The partition key is user_id, in the inner parentheses.") }}
+{{ k.quiz("ks-r2", "The shop needs \"all events of one product\". What is the usual Keyspaces design?",
+   ["CREATE INDEX on product_id", "A second table keyed by product_id", "A query with no partition key", "A count() on the product column"],
+   1, "Keyspaces has no CREATE INDEX and no aggregates. One table per query, and the app writes the event to both tables.") }}
+{{ k.quiz("ks-r3", "Which consistency level do Keyspaces writes use?",
+   ["LOCAL_ONE", "LOCAL_QUORUM", "ALL", "ANY"],
+   1, "Keyspaces writes three replicas and acknowledges the write with LOCAL_QUORUM.") }}
+
+<section class="lesson-foot">
+  <h2>Go deeper</h2>
+  <p><b>Primary source:</b> <a href="https://docs.aws.amazon.com/keyspaces/latest/devguide/how-it-works.html">How Amazon Keyspaces works</a>, then
+     <a href="https://cassandra.apache.org/doc/latest/cassandra/developing/data-modeling/index.html">Apache Cassandra: data modeling</a>.</p>
+  <p><b>Use it in the shop:</b> <a href="/free-e-commerce-app/account/activity">My activity</a> has the consistency experiment and a clickstream burst.</p>
+  <p><b>Ask questions.</b> If a part is not clear, ask your instructor or your AI assistant. Bring one list from your app that grows each day, and design its table together.</p>
+</section>
+{% endblock %}

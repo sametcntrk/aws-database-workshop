@@ -2,7 +2,7 @@
 import ssl
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import boto3
 from cassandra import ConsistencyLevel
@@ -16,7 +16,7 @@ from flask import jsonify, request
 from .. import catalog, simlimit, trace
 from ..base import env, region
 from ..visitor import persona_id, visitor_id
-from . import PRICE_WRITE_RU, usd
+from . import PRICE_WRITE_RU, table as result_table, usd
 
 META = catalog.META["keyspaces"]
 PAGES = catalog.PAGES["keyspaces"]
@@ -171,3 +171,46 @@ def learn_item(lesson, item_id):
     order = ["user_id", "event_time", "event_id"] + [k for k in rec if k not in ("user_id", "event_time", "event_id")]
     return {"title": f"{rec.get('event_type')} olayı", "sub": "Bir satır. user_id partition key; event_time ve event_id clustering key (partition içindeki sıra).",
             "record": {k: rec[k] for k in order}, "marks": {"user_id": "kept", "event_time": "kept", "event_id": "kept"}}
+
+
+# ---------------------------------------------------------------- E2E tutorial queries (templates/e2e/keyspaces.html)
+def _cql(op, cql, params=(), level="LOCAL_QUORUM", note=None, limit_rows=50):
+    """Run one read-only CQL statement. A refused statement comes back as a one-row table with the message."""
+    shown = cql
+    for p in params:
+        shown = shown.replace("%s", f"'{p}'" if isinstance(p, str) else str(p), 1)
+    try:
+        with trace.call(op, shown, {"consistency": level}) as t:
+            rs = s().execute(SimpleStatement(cql, consistency_level=LEVELS.get(level, ConsistencyLevel.LOCAL_QUORUM), fetch_size=500), params)
+            rows = list(rs)
+            t.result(items=len(rows))
+    except Exception as e:                       # the lesson shows the refusal of Keyspaces
+        return result_table(["Keyspaces answered with an error"], [[f"{type(e).__name__}: {e}"[:600]]], note=note)
+    if not rows:
+        return result_table(["result"], [["No rows."]], note=note)
+    cols = list(rows[0]._fields)
+    return result_table(cols, [list(r) for r in rows[:limit_rows]], note=note, total=len(rows))
+
+
+def _e2e_size():
+    out = _cql("SELECT (full partition)", f"SELECT event_time FROM {table()} WHERE user_id = %s", ("C00005",))
+    n = out.get("total", 0)
+    return result_table(["partition (user_id)", "rows in the partition"], [["C00005", n]],
+                        note="Keyspaces has no aggregate functions such as count(). The Engine App counted the rows that the read returned.")
+
+
+E2E = {
+    "K1": lambda: _cql("SELECT (one partition)", f"SELECT user_id, event_time, event_type, product_id, detail FROM {table()} WHERE user_id = %s LIMIT 10",
+                       ("C00005",), note="Newest first: the table stores the rows of a partition in event_time DESC order."),
+    "K2": lambda: _cql("SELECT (clustering range)", f"SELECT event_time, event_type, product_id FROM {table()} WHERE user_id = %s AND event_time > %s",
+                       ("C00005", datetime.now(timezone.utc).replace(microsecond=0) - timedelta(days=1)),
+                       note="A range on the clustering column event_time inside one partition."),
+    "K3": _e2e_size,
+    "K4": lambda: _cql("SELECT (no partition key)", f"SELECT user_id, event_type FROM {table()} WHERE event_type = 'purchase' LIMIT 5"),
+    "K5": lambda: _cql("SELECT (LOCAL_ONE)", f"SELECT user_id, event_time, event_type, product_id FROM {table()} WHERE user_id = %s LIMIT 10",
+                       ("C00005",), level="LOCAL_ONE", note="LOCAL_ONE: one replica answers. The read costs half of a LOCAL_QUORUM read."),
+    "K6": lambda: _cql("SELECT (schema)", "SELECT column_name, kind, position, clustering_order, type FROM system_schema.columns "
+                       "WHERE keyspace_name = %s AND table_name = %s", (env("KEYSPACE"), env("TABLE_NAME"))),
+    "K7": lambda: _cql("SELECT (table settings)", "SELECT default_time_to_live, custom_properties FROM system_schema_mcs.tables "
+                       "WHERE keyspace_name = %s AND table_name = %s", (env("KEYSPACE"), env("TABLE_NAME"))),
+}
