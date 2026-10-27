@@ -55,7 +55,7 @@ def tutorials(engine):
 
 @lru_cache(maxsize=None)
 def lessons(engine):
-    """101 lessons of one Engine (lessons/<engine>.yaml, Turkish). Every Engine App has every file, so any app can list all."""
+    """101 lessons of one Engine (lessons/<engine>.yaml, English). Every Engine App has every file, so any app can list all."""
     path = HERE / "lessons" / f"{engine}.yaml"
     return yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else {}
 

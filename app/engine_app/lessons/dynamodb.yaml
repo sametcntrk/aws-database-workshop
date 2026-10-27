@@ -1,102 +1,102 @@
-# 101 lessons for Amazon DynamoDB (Turkish).
+# 101 lessons for Amazon DynamoDB (English, ASD-STE100).
 cart:
-  title: "DynamoDB 101: sepet, anahtar ve partition"
+  title: "DynamoDB 101: the cart, the key and the partition"
   apis: ["/api/cart"]
-  kicker: "DynamoDB 101: anahtar-değer veritabanı"
-  headline: "Sepetin, milyonlarca sepetin arasında nasıl tek adımda bulunuyor?"
-  lead: "Sepete ürün eklediğinde, sildiğinde ya da sepeti açtığında Lale Market DynamoDB'ye anahtarıyla gitti. Bu sayfa anahtarın ne olduğunu ve sepetinin tabloda nerede durduğunu gösteriyor."
+  kicker: "DynamoDB 101: a key-value database"
+  headline: "How does DynamoDB find your cart among millions of carts in one step?"
+  lead: "When you added a product to the cart, removed it or opened the cart, Lale Market went to DynamoDB with the key of the cart. This page shows what the key is and where your cart is in the table."
   sample: { url: "/dynamodb/api/cart", label: "Load the cart" }
   big:
-    title: "Büyük resim: tablo, partition'lar ve senin sepetin"
-    text: "Her raf bir <b>partition</b>: aynı <code>pk</code> değerini taşıyan item'lar. Her kare bir item. En üstteki raf senin sepetin; <code>SIM#</code> rafları Load Simulation'dan kalan geçici item'lar."
-    legend: '<span><i class="k"></i>Anahtar (pk + sk) ve TTL</span>'
+    title: "The big picture: the table, the partitions and your cart"
+    text: "Each shelf is one <b>partition</b>: the items with the same <code>pk</code> value. Each square is one item. The top shelf is your cart. The <code>SIM#</code> shelves are temporary items from the Load Simulation."
+    legend: '<span><i class="k"></i>Key (pk + sk) and TTL</span>'
   sections:
-    - title: "Kaynakta veri böyleydi, DynamoDB'de böyle duruyor"
+    - title: "The data at the source, and the data in DynamoDB"
       html: |
-        <p>Sepet aslında basit bir listedir: <q>bu ziyaretçinin sepetinde şu ürünler, şu adetlerle var</q>. DynamoDB bunu iki parçalı bir anahtarla saklar.</p>
+        <p>A cart is a simple list: <q>the cart of this visitor has these products, in these quantities</q>. DynamoDB stores it with a key that has two parts.</p>
         <div class="src-store">
-          <div><h3>Kaynak: ziyaretçinin sepeti</h3><pre>Ziyaretçi: 7f3c…
-          2 × Kablosuz Kulaklık (1.299 TL)
-          1 × Koşu Ayakkabısı (899 TL)</pre></div>
-          <div><h3>DynamoDB'de: aynı partition'da iki item</h3><pre>pk = CART#7f3c…   sk = ITEM#P0001   qty = 2
+          <div><h3>Source: the cart of the visitor</h3><pre>Visitor: 7f3c…
+          2 × Wireless Headphones (1,299 TL)
+          1 × Running Shoes (899 TL)</pre></div>
+          <div><h3>In DynamoDB: two items in the same partition</h3><pre>pk = CART#7f3c…   sk = ITEM#P0001   qty = 2
         pk = CART#7f3c…   sk = ITEM#P0042   qty = 1
           + name, unit_price, expires_at (TTL)</pre></div>
         </div>
         <ul>
-          <li><b>pk (partition key)</b> hangi sepet olduğunu söyler. DynamoDB bu değerden bir hash hesaplar ve item'ı o hash'in partition'ına koyar.</li>
-          <li><b>sk (sort key)</b> sepetin içindeki ürünü söyler. Aynı pk altındaki item'lar sk'ya göre sıralı durur.</li>
-          <li><b>expires_at (TTL)</b> 24 saat sonrasını gösterir. Süre dolunca DynamoDB item'ı yazma kapasitesi harcamadan, genelde birkaç gün içinde siler; terk edilen sepetler kendiliğinden temizlenir.</li>
+          <li><b>pk (partition key)</b> tells which cart it is. DynamoDB calculates a hash of this value and puts the item in the partition of that hash.</li>
+          <li><b>sk (sort key)</b> tells which product in the cart it is. The items with the same pk are stored in sk order.</li>
+          <li><b>expires_at (TTL)</b> is a time 24 hours later. After that time, DynamoDB deletes the item with no write capacity, usually within a few days. So abandoned carts are deleted automatically.</li>
         </ul>
   explain:
     Query:
-      title: "Sepeti okumak: Query"
-      text: "Tek bir <code>pk</code> ile Query, yalnız o partition'a gider ve içindeki item'ları sk sırasıyla döndürür. Tablo ne kadar büyürse büyüsün bu okuma aynı hızda kalır. <i>Strongly consistent</i> okuma son yazdığını kesin görür ve iki kat kapasite harcar."
+      title: "Read the cart: Query"
+      text: "A Query with one <code>pk</code> goes only to that partition and returns its items in sk order. The speed of this read stays the same when the table grows. A <i>strongly consistent</i> read always sees your last write and uses two times the capacity."
     UpdateItem:
-      title: "Ürün eklemek: UpdateItem ve koşul"
-      text: "<code>ADD qty :q</code> adedi atomik artırır: iki sekme aynı anda eklese bile bir artış kaybolmaz. <code>ConditionExpression</code> ise <q>en fazla 5 adet</q> kuralını DynamoDB'nin içinde, yazmayla aynı adımda kontrol eder."
+      title: "Add a product: UpdateItem with a condition"
+      text: "<code>ADD qty :q</code> increases the quantity atomically: if two browser tabs add at the same time, no increase is lost. <code>ConditionExpression</code> checks the rule <q>at most 5 pieces</q> inside DynamoDB, in the same step as the write."
     DeleteItem:
-      title: "Ürün silmek: DeleteItem"
-      text: "Tam anahtarla (pk + sk) tek bir item silinir. Öteki ürünlere dokunulmaz."
+      title: "Remove a product: DeleteItem"
+      text: "One item is deleted with its full key (pk + sk). The other products do not change."
     BatchWriteItem:
-      title: "Sepeti boşaltmak: BatchWriteItem"
-      text: "Checkout'tan sonra sepetin bütün item'ları tek istekte silinir (bir istekte en fazla 25 işlem)."
+      title: "Empty the cart: BatchWriteItem"
+      text: "After the checkout, one request deletes all items of the cart (at most 25 operations in one request)."
   analogy:
     icon: "🔑"
-    html: "<p>Bir otelin emanet dolapları düşün. Her misafirin dolap numarası var (pk). Dolabın içinde numaralı çekmeceler var (sk). Görevli bütün dolapları aramaz; numarayla doğrudan doğru dolaba gider.</p><p>Dolap sayısı on katına çıksa da görevlinin hızı değişmez. DynamoDB'nin gücü bu: anahtarı biliyorsan, tablo büyüklüğü fark etmez.</p>"
+    html: "<p>Think of the lockers of a hotel. Each guest has a locker number (pk). In the locker are numbered drawers (sk). The attendant does not search all lockers. The number takes the attendant directly to the right locker.</p><p>If the number of lockers becomes ten times larger, the attendant is not slower. This is the strength of DynamoDB: if you know the key, the size of the table does not matter.</p>"
   alternatives:
     engine: "DynamoDB"
-    criteria: ["Anahtarla okuma hızı", "Trafik patlamasında ölçek", "Terk edilen sepetleri silmek", "Esnek sorgu", "Kim işletir"]
+    criteria: ["Read speed by key", "Scale in a traffic peak", "Delete abandoned carts", "Flexible queries", "Who operates it"]
     rows:
-      - { name: "Amazon DynamoDB", chosen: true, cells: [[y, "Tek basamaklı ms, her boyutta"], [y, "On-demand, plan yok"], [y, "TTL, kapasite harcamaz"], [n, "Yalnız anahtar ve index"], [y, "AWS, sunucusuz"]] }
-      - { name: "Aurora PostgreSQL", sub: "bir sepet tablosu", cells: [[y, "Index'le hızlı"], [p, "Instance boyutuna bağlı"], [p, "Zamanlanmış DELETE işi"], [y, "Her türlü SQL"], [y, "AWS"]] }
-      - { name: "ElastiCache (Valkey)", sub: "bellekte hash", cells: [[y, "Mikrosaniyeler"], [y, "Serverless"], [y, "EXPIRE"], [n, "Yalnız anahtar"], [p, "Kalıcılık için ek ayar gerekir"]] }
-      - { name: "DocumentDB", sub: "sepet belgesi", cells: [[y, "_id ile hızlı"], [p, "Instance boyutuna bağlı"], [y, "TTL index"], [y, "Zengin sorgu"], [y, "AWS"]] }
-    verdict: "Sepet hep aynı şekilde okunur: <q>bu ziyaretçinin sepeti</q>. Kampanya günü trafik on katına çıkabilir. Anahtarla erişimde her ölçekte aynı hızı veren, kapasite planı istemeyen ve TTL ile kendini temizleyen DynamoDB bu iş için en sade seçim."
+      - { name: "Amazon DynamoDB", chosen: true, cells: [[y, "Single-digit ms at any size"], [y, "On-demand, no plan"], [y, "TTL, uses no capacity"], [n, "Only keys and indexes"], [y, "AWS, serverless"]] }
+      - { name: "Aurora PostgreSQL", sub: "a cart table", cells: [[y, "Fast with an index"], [p, "Depends on the instance size"], [p, "A scheduled DELETE job"], [y, "Any SQL"], [y, "AWS"]] }
+      - { name: "ElastiCache (Valkey)", sub: "a hash in memory", cells: [[y, "Microseconds"], [y, "Serverless"], [y, "EXPIRE"], [n, "Only by key"], [p, "Durability needs extra settings"]] }
+      - { name: "DocumentDB", sub: "a cart document", cells: [[y, "Fast by _id"], [p, "Depends on the instance size"], [y, "TTL index"], [y, "Rich queries"], [y, "AWS"]] }
+    verdict: "The shop always reads a cart in the same way: <q>the cart of this visitor</q>. On a campaign day, the traffic can become ten times larger. DynamoDB gives the same speed by key at every scale, needs no capacity plan and deletes old carts with TTL. It is the simplest choice for this work."
   try:
-    - { href: "/cart", label: "Sepette consistent okumayı kapat" }
-    - { href: "/p/P0001", label: "Bir ürünü 6 kez ekle (koşul)" }
+    - { href: "/cart", label: "Turn off the consistent read in the cart" }
+    - { href: "/p/P0001", label: "Add one product 6 times (condition)" }
   glossary:
-    - ["Partition key (pk)", "Item'ın hangi partition'da duracağını belirleyen anahtar."]
-    - ["Sort key (sk)", "Aynı partition içindeki item'ları sıralayan ikinci anahtar."]
-    - ["TTL", "Süresi dolan item'ı DynamoDB'nin kendiliğinden silmesi."]
-    - ["Conditional write", "Koşul doğruysa yazan, yanlışsa yazmayan atomik işlem."]
-    - ["RRU / WRU", "On-demand modda okuma ve yazma birimleri; fiyat bunlardan hesaplanır."]
+    - ["Partition key (pk)", "The key that decides in which partition an item is stored."]
+    - ["Sort key (sk)", "The second key that sorts the items inside one partition."]
+    - ["TTL", "DynamoDB deletes an item automatically after its time ends."]
+    - ["Conditional write", "An atomic operation that writes only if the condition is true."]
+    - ["RRU / WRU", "The read and write units of on-demand mode. The price comes from them."]
 
 simulate:
-  title: "DynamoDB 101: trafik patlaması"
+  title: "DynamoDB 101: a traffic peak"
   apis: ["/api/simulate"]
-  kicker: "DynamoDB 101: ölçek"
-  headline: "Saniyeler içinde yüzlerce yazma geldiğinde DynamoDB ne yaptı?"
-  lead: "Load Simulation, 200 sanal alışverişçiyle aynı anda sepetlere yazdı. Bu sayfa yükün partition'lara nasıl dağıldığını gösteriyor."
-  need: "Bu dersi kendi verinle görmek için sepet sayfasında <b>Load Simulation</b>'ı çalıştır, sonra paneldeki 101 bağlantısına tıkla."
+  kicker: "DynamoDB 101: scale"
+  headline: "What did DynamoDB do when hundreds of writes came in a few seconds?"
+  lead: "The Load Simulation wrote to carts with 200 virtual shoppers at the same time. This page shows how the load spread over the partitions."
+  need: "To see this lesson with your own data, run the <b>Load Simulation</b> on the cart page, then click the 101 link in the panel."
   big:
-    title: "Büyük resim: simülasyonun açtığı partition'lar"
-    text: "<code>SIM#</code> ile başlayan her raf bir sanal alışverişçinin sepeti. Yük 200 farklı pk'ya dağıldığı için tek bir partition'a yığılmadı."
-    legend: '<span><i class="k"></i>Anahtar (pk + sk) ve TTL</span>'
+    title: "The big picture: the partitions that the simulation used"
+    text: "Each shelf that starts with <code>SIM#</code> is the cart of one virtual shopper. The load spread over 200 different pk values, so it did not collect on one partition."
+    legend: '<span><i class="k"></i>Key (pk + sk) and TTL</span>'
   sections:
-    - title: "Yük neden dağıldı?"
+    - title: "Why did the load spread?"
       html: |
-        <p>DynamoDB her pk değerinden bir hash hesaplar ve item'ı o hash'in partition'ına koyar. Farklı pk'lar farklı partition'lara düşer, böylece yazmalar paralel çalışır.
-        Hepsi aynı pk'ya yazsaydı tek bir partition'ın sınırına (saniyede 1.000 WRU) takılırdı; buna <b>sıcak partition</b> denir.</p>
-        <p>On-demand modda kapasiteyi önceden ayarlamadın. DynamoDB gelen trafiği gördü ve karşıladı; ödediğin tutar yalnız yapılan yazma sayısı.</p>
+        <p>DynamoDB calculates a hash of each pk value and puts the item in the partition of that hash. Different pk values go to different partitions, so the writes run in parallel.
+        If all writes used the same pk, they would hit the limit of one partition (1,000 WRU per second). This is a <b>hot partition</b>.</p>
+        <p>In on-demand mode, you did not set the capacity before. DynamoDB saw the traffic and served it. You pay only for the number of writes.</p>
   explain:
     "PutItem × N":
-      title: "Yüzlerce eşzamanlı PutItem"
-      text: "32 iş parçacığı, 200 farklı pk'ya yazdı. Paneldeki p50, p95, p99 değerleri bekleme sürelerinin dağılımını gösterir. Bu item'lar 10 dakika sonra TTL ile silinir."
+      title: "Hundreds of parallel PutItem calls"
+      text: "32 threads wrote to 200 different pk values. The p50, p95 and p99 values in the panel show the distribution of the wait times. TTL deletes these items after 10 minutes."
   analogy:
     icon: "🛒"
-    html: "<p>Kampanya günü bir markette tek kasa açık olsa kuyruk kilometrelerce uzar. 200 kasa açıksa ve herkes farklı kasaya giderse kuyruk olmaz. Partition key, müşterileri kasalara dağıtan görevlidir.</p>"
+    html: "<p>On a campaign day in a supermarket, if only one cash desk is open, the queue becomes very long. If 200 desks are open and each customer goes to a different desk, there is no queue. The partition key is the person who sends the customers to the desks.</p>"
   alternatives:
     engine: "DynamoDB"
-    criteria: ["Ani yükte ölçek", "Kapasite planı", "Ödeme şekli"]
+    criteria: ["Scale in a sudden load", "Capacity plan", "How you pay"]
     rows:
-      - { name: "DynamoDB on-demand", chosen: true, cells: [[y, "Kendiliğinden"], [y, "Gerekmez"], [y, "İstek başına"]] }
-      - { name: "DynamoDB provisioned", sub: "sabit kapasite", cells: [[p, "Auto scaling ile, gecikmeli"], [n, "Önceden ayarlanır"], [p, "Saatlik, ucuz ama sabit"]] }
-      - { name: "Aurora PostgreSQL", sub: "tek yazar instance", cells: [[p, "Yazmalar tek instance'ta"], [n, "Instance boyutu seçilir"], [p, "Saatlik"]] }
-    verdict: "Sepet trafiği öngörülemez: sabah sakin, kampanyada patlama. On-demand DynamoDB bu dalgalanmayı plan yapmadan karşılar ve yalnız kullanılanı faturalar."
+      - { name: "DynamoDB on-demand", chosen: true, cells: [[y, "Automatic"], [y, "Not necessary"], [y, "Per request"]] }
+      - { name: "DynamoDB provisioned", sub: "fixed capacity", cells: [[p, "With auto scaling, with a delay"], [n, "Set in advance"], [p, "Per hour, cheap but fixed"]] }
+      - { name: "Aurora PostgreSQL", sub: "one writer instance", cells: [[p, "Writes on one instance"], [n, "You select the instance size"], [p, "Per hour"]] }
+    verdict: "Cart traffic is not predictable: quiet in the morning, a peak in a campaign. On-demand DynamoDB serves these changes with no plan and charges only for what you use."
   try:
-    - { href: "/cart", label: "Load Simulation'ı yeniden çalıştır" }
+    - { href: "/cart", label: "Run the Load Simulation again" }
   glossary:
-    - ["On-demand", "Kapasite ayarı olmadan istek başına ödenen DynamoDB modu."]
-    - ["Sıcak partition", "Trafiğin tek bir partition'a yığılması; o partition'ın sınırı darboğaz olur."]
-    - ["p99", "İsteklerin yüzde 99'unun bu süreden kısa sürdüğü değer."]
+    - ["On-demand", "The DynamoDB mode with no capacity setting, paid per request."]
+    - ["Hot partition", "Traffic that collects on one partition. The limit of that partition becomes the bottleneck."]
+    - ["p99", "The time under which 99 percent of the requests finished."]

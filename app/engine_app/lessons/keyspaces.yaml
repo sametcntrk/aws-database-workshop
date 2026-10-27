@@ -1,62 +1,60 @@
-# 101 lessons for Amazon Keyspaces (Turkish).
+# 101 lessons for Amazon Keyspaces (English, ASD-STE100).
 activity:
-  title: "Keyspaces 101: etkinlik geçmişi ve geniş sütun"
+  title: "Keyspaces 101: activity history and wide column"
   apis: ["/api/events", "/api/activity", "/api/recent", "/api/simulate"]
-  kicker: "Keyspaces 101: geniş sütun (wide column) veritabanı"
-  headline: "Gezdiğin her sayfa nereye yazılıyor ve neden en yenisi hep en üstte?"
-  lead: "Bir ürüne baktığında, sepete eklediğinde ya da aradığında Lale Market Keyspaces'e bir olay yazdı. Etkinlik sayfası bu olayları en yeniden eskiye okudu. Bu sayfa olayların nasıl dizildiğini gösteriyor."
+  kicker: "Keyspaces 101: a wide-column database"
+  headline: "Where does each page that you visit go, and why is the newest always at the top?"
+  lead: "When you looked at a product, added it to the cart or searched, Lale Market wrote an event to Keyspaces. The activity page read these events from the newest to the oldest. This page shows how the events are arranged."
   sample: { url: "/keyspaces/api/activity", label: "Load my activity" }
   big:
-    title: "Büyük resim: partition'lar ve senin geçmişin"
-    text: "Her raf bir <b>partition</b>: tek bir kullanıcının bütün olayları. Her kare bir olay; en yeni olay solda. En üstteki raf seninki. <code>SIM-</code> rafları Load Simulation'ın sanal alışverişçileri."
+    title: "The big picture: partitions and your history"
+    text: "Each shelf is a <b>partition</b>: all events of one user. Each square is one event, and the newest event is at the left. The top shelf is yours. The <code>SIM-</code> shelves are the virtual shoppers of the Load Simulation."
     legend: '<span><i class="k"></i>Primary key: partition key + clustering key</span>'
   sections:
-    - title: "Kaynakta veri böyleydi, Keyspaces'te böyle duruyor"
+    - title: "The data at the source, and the data in Keyspaces"
       html: |
-        <p>Kaynakta veri bir olay akışıdır: kim, ne zaman, ne yaptı. Milyonlarca kullanıcıdan sürekli gelir ve neredeyse hiç güncellenmez, hep eklenir.</p>
+        <p>At the source, the data is a stream of events: who did what, and when. It comes all the time from millions of users. It is almost never updated. New events are only added.</p>
         <div class="src-store">
-          <div><h3>Kaynak: olay akışı</h3><pre>14:02:11  7f3c…  view    P0001
+          <div><h3>Source: the event stream</h3><pre>14:02:11  7f3c…  view    P0001
         14:02:40  9a1b…  search  "kulaklik"
         14:03:05  7f3c…  cart    P0001
         …</pre></div>
-          <div><h3>Keyspaces'te: kullanıcı başına sıralı satırlar</h3><pre>PRIMARY KEY ((user_id), event_time, event_id)
+          <div><h3>In Keyspaces: sorted rows for each user</h3><pre>PRIMARY KEY ((user_id), event_time, event_id)
         CLUSTERING ORDER BY (event_time DESC)
 
         partition 7f3c…: 14:03:05 cart, 14:02:11 view, …</pre></div>
         </div>
         <ul>
-          <li><b>user_id (partition key)</b> olayların hangi partition'a gideceğini belirler. Bir kullanıcının bütün geçmişi aynı yerde durur.</li>
-          <li><b>event_time, event_id (clustering key)</b> partition içindeki sırayı belirler. Tablo bu sırayı yazarken korur; okurken sıralama yapılmaz.</li>
-          <li><b>TTL 7 gün:</b> eski olaylar kendiliğinden silinir.</li>
+          <li><b>user_id (partition key)</b> decides the partition of an event. All history of one user is in the same place.</li>
+          <li><b>event_time, event_id (clustering key)</b> decide the order inside the partition. The table keeps this order when it writes, so a read needs no sort.</li>
+          <li><b>TTL 7 days:</b> old events are deleted automatically.</li>
         </ul>
-        <p>Keyspaces, Apache Cassandra ile uyumlu bir hizmettir: aynı CQL dili ve aynı sürücüler çalışır, ama sunucu yoktur.</p>
+        <p>Keyspaces is a service that is compatible with Apache Cassandra. The same CQL language and the same drivers work, but there are no servers.</p>
   explain:
     INSERT:
-      title: "Olayı yazmak"
-      text: "Olay senin partition'ına eklendi. Yazma <code>LOCAL_QUORUM</code> ile yapıldı: 3 kopyanın en az 2'si onayladı."
+      title: "Write the event"
+      text: "The event went into your partition. The write used <code>LOCAL_QUORUM</code>: at least 2 of the 3 copies confirmed it."
     SELECT:
-      title: "Geçmişi okumak"
-      text: "Tek bir partition okundu; satırlar zaten en yeniden eskiye sıralı geldi. <code>LOCAL_ONE</code> tek kopyadan okur ve yarı fiyatına mal olur, ama son yazdığın olay henüz orada olmayabilir."
+      title: "Read the history"
+      text: "One partition was read, and the rows came back already sorted from the newest to the oldest. <code>LOCAL_ONE</code> reads from one copy and costs half, but your last event may not be there yet."
     "INSERT × N":
-      title: "Yüzlerce eşzamanlı yazma"
-      text: "500 sanal alışverişçi, 500 farklı partition'a yazdı. Yük partition'lara dağıldığı için yazmalar paralel ilerledi. Bu satırlar 10 dakika sonra silinir."
+      title: "Hundreds of parallel writes"
+      text: "500 virtual shoppers wrote to 500 different partitions. The load spread over the partitions, so the writes ran in parallel. These rows are deleted after 10 minutes."
   analogy:
     icon: "📓"
-    html: "<p>Her kullanıcı için ayrı bir günlük defteri düşün. Her olay deftere yeni bir satır olarak yazılır ve defter en yeni sayfadan açılır. <q>Son baktıklarım</q> sorusu için yalnız kendi defterinin ilk sayfasına bakarsın; başkalarının defterlerine dokunmazsın.</p>"
+    html: "<p>Think of a separate diary for each user. Each event is a new line in the diary, and the diary opens at the newest page. For the question <q>what did I look at last</q>, you look only at the first page of your own diary. You do not touch the diaries of other people.</p>"
   alternatives:
     engine: "Keyspaces"
-    criteria: ["Çok yüksek yazma hacmi", "Kullanıcı başına sıralı okuma", "Eski veriyi silme", "Cassandra uyumu", "Kim işletir"]
+    criteria: ["Very high write volume", "Sorted reads per user", "Delete old data", "Cassandra compatibility", "Who operates it"]
     rows:
-      - { name: "Amazon Keyspaces", chosen: true, cells: [[y, "Sunucusuz, yatay"], [y, "Clustering order"], [y, "TTL"], [y, "CQL, aynı sürücüler"], [y, "AWS"]] }
-      - { name: "DynamoDB", sub: "pk = kullanıcı, sk = zaman", cells: [[y, "Sunucusuz"], [y, "Sort key ile"], [y, "TTL"], [n, "Farklı API"], [y, "AWS"]] }
-      - { name: "Aurora PostgreSQL", sub: "events tablosu", cells: [[p, "Tek yazar instance"], [y, "Index ile"], [p, "Zamanlanmış DELETE"], [n, "SQL"], [y, "AWS"]] }
-      - { name: "EC2 üzerinde Cassandra", sub: "kendi kümen", cells: [[y, "Yatay"], [y, "Aynı"], [y, "Aynı"], [y, "Tam"], [n, "Sen: düğüm, onarım, yama"]] }
-    verdict: "Etkinlik akışı sürekli eklenen, kullanıcı başına zaman sırasıyla okunan ve eskiyince atılan bir veridir; geniş sütun modelinin tam alanı. DynamoDB de bu işi yapabilir. Keyspaces, Cassandra bilen ekiplere aynı dili ve araçları sunucusuz olarak verdiği için seçildi."
+      - { name: "Amazon Keyspaces", chosen: true, cells: [[y, "Serverless, horizontal"], [y, "Clustering order"], [y, "TTL"], [y, "CQL, the same drivers"], [y, "AWS"]] }
+      - { name: "DynamoDB", sub: "pk = user, sk = time", cells: [[y, "Serverless"], [y, "With the sort key"], [y, "TTL"], [n, "A different API"], [y, "AWS"]] }
+      - { name: "Aurora PostgreSQL", sub: "events table", cells: [[p, "One writer instance"], [y, "With an index"], [p, "Scheduled DELETE"], [n, "SQL"], [y, "AWS"]] }
+      - { name: "Cassandra on EC2", sub: "your own cluster", cells: [[y, "Horizontal"], [y, "The same"], [y, "The same"], [y, "Full"], [n, "You: nodes, repair, patches"]] }
+    verdict: "An activity stream is data that grows all the time, that is read in time order for each user, and that is deleted when it gets old. That is the core use of the wide-column model. DynamoDB can also do this work. Keyspaces was selected because it gives teams that know Cassandra the same language and tools, with no servers."
   try:
-    - { href: "/account/activity", label: "Etkinlik sayfasında LOCAL_ONE dene" }
-    - { href: "/search?q=kulaklik", label: "Bir arama yap, olayın düştüğünü gör" }
+    - { href: "/account/activity", label: "Try LOCAL_ONE on the activity page" }
+    - { href: "/search?q=kulaklik", label: "Do a search and see the new event" }
   glossary:
-    - ["Partition key", "Satırların hangi partition'da duracağını belirleyen sütun."]
-    - ["Clustering key", "Partition içindeki satırların sırasını belirleyen sütunlar."]
-    - ["CQL", "Cassandra Query Language; SQL'e benzeyen sorgu dili."]
-    - ["LOCAL_QUORUM", "Aynı bölgedeki kopyaların çoğunluğunun onayı."]
+    - ["Partition key", "The column that decides in which partition the rows are stored."]
+    - ["Clustering key", "The columns that decide the order of the rows inside a partition."]

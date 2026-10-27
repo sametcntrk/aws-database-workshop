@@ -1,165 +1,165 @@
-# 101 lessons for Amazon ElastiCache Serverless for Valkey (Turkish).
+# 101 lessons for Amazon ElastiCache Serverless for Valkey (English, ASD-STE100).
 deal:
-  title: "ElastiCache 101: flash deal ve atomik sayaç"
+  title: "ElastiCache 101: the flash deal and the atomic counter"
   apis: ["/api/deal"]
-  kicker: "ElastiCache 101: bellek içi anahtar-değer"
-  headline: "Yüzlerce kişi aynı anda son ürüne tıkladığında neden fazla satış olmadı?"
-  lead: "Flash deal sayfası stoğu bellekte tutulan bir sayaçtan okudu ve her satın almada sayacı bir azalttı. Bu sayfa bu azaltmanın neden güvenli olduğunu gösteriyor."
+  kicker: "ElastiCache 101: an in-memory key-value store"
+  headline: "When hundreds of people clicked the last product at the same time, why did the shop not sell too many?"
+  lead: "The flash deal page read the stock from a counter in memory and decreased the counter by one at each purchase. This page shows why this decrease is safe."
   focus: "keys"
   sample: { url: "/elasticache/api/deal", label: "Load the flash deal" }
   big:
-    title: "Büyük resim: bellekteki anahtarlar"
-    text: "Her kare bellekteki bir anahtar. Raflar anahtarın işi. Teal kareler senin çağrının dokunduğu anahtarlar; <code>lm:deal:stock</code> stok sayacıdır."
-    legend: '<span><i class="k"></i>Anahtar ve TTL</span>'
+    title: "The big picture: the keys in memory"
+    text: "Each square is one key in memory. The shelves are the jobs of the keys. The teal squares are the keys that your call touched. <code>lm:deal:stock</code> is the stock counter."
+    legend: '<span><i class="k"></i>Key and TTL</span>'
   sections:
-    - title: "Kaynakta veri böyleydi, ElastiCache'te böyle duruyor"
+    - title: "The data at the source, and the data in ElastiCache"
       html: |
-        <p>Kampanyanın bilgisi basit: hangi ürün, kaç TL, kaç adet kaldı. ElastiCache bunu tablo olarak değil, <b>anahtar → değer</b> olarak ve tamamen bellekte tutar.</p>
+        <p>The information of the campaign is simple: which product, at which price, and how many pieces are left. ElastiCache keeps it not as a table but as <b>key → value</b>, completely in memory.</p>
         <div class="src-store">
-          <div><h3>Kaynak: kampanya bilgisi</h3><pre>Ürün: Kablosuz Kulaklık
-        İndirimli fiyat: 999 TL
-        Kalan stok: 50</pre></div>
-          <div><h3>ElastiCache'te: iki anahtar</h3><pre>lm:deal        → hash { product_id, name, price, … }
-        lm:deal:stock  → "50"   (sayaç)</pre></div>
+          <div><h3>Source: the campaign information</h3><pre>Product: Wireless Headphones
+        Discount price: 999 TL
+        Stock left: 50</pre></div>
+          <div><h3>In ElastiCache: two keys</h3><pre>lm:deal        → hash { product_id, name, price, … }
+        lm:deal:stock  → "50"   (counter)</pre></div>
         </div>
-        <p>Bellekten okumak diskten okumaktan yüzlerce kat hızlıdır: bir okuma genelde 1 milisaniyenin altında biter. Bu yüzden saniyede binlerce tıklama gelen bir sayfa için uygundur.</p>
+        <p>A read from memory is hundreds of times faster than a read from disk: a read usually ends in less than 1 millisecond. So it fits a page that gets thousands of clicks per second.</p>
   explain:
     HGETALL:
-      title: "Kampanya bilgisini okumak"
-      text: "<code>HGETALL</code>, hash içindeki bütün alanları tek komutta getirir."
+      title: "Read the campaign information"
+      text: "<code>HGETALL</code> gets all fields of the hash with one command."
     GET:
-      title: "Kalan stoğu okumak"
-      text: "Sayaç bir string anahtardır; <code>GET</code> şu anki değeri döndürür."
+      title: "Read the stock that is left"
+      text: "The counter is a string key. <code>GET</code> returns its current value."
     DECR:
-      title: "Satın alma: atomik azaltma"
-      text: "<code>DECR</code> sayacı oku-azalt-yaz işini <b>tek adımda</b> yapar. Valkey komutları sırayla çalıştırır, iki DECR asla aynı değeri görmez. Sonuç 0 ya da üstüyse satış senindir."
+      title: "The purchase: an atomic decrease"
+      text: "<code>DECR</code> does the read-decrease-write work on the counter <b>in one step</b>. Valkey runs commands one after the other, so two DECR commands never see the same value. If the result is 0 or more, the sale is yours."
     INCR:
-      title: "Geri vermek"
-      text: "Sayaç 0'ın altına düştüyse ürün tükenmiştir; <code>INCR</code> fazladan alınan bir adedi geri koyar."
+      title: "Give it back"
+      text: "If the counter went below 0, the product is sold out. <code>INCR</code> puts back the piece that was taken too many."
     "Load Simulation":
-      title: "Yüzlerce eşzamanlı alıcı"
-      text: "Atomik modda her alıcı DECR kullanır: tam stok kadar satış olur. Naif modda her alıcı önce GET, sonra SET yapar: iki alıcı aynı değeri okuyup ikisi de satar ve stok eksiye düşer. Paneldeki <q>oversold</q> sayısı farkı gösterir."
+      title: "Hundreds of parallel buyers"
+      text: "In atomic mode, each buyer uses DECR, so the sales are exactly the stock. In naive mode, each buyer first does GET and then SET: two buyers read the same value, both sell, and the stock goes below zero. The number <q>oversold</q> in the panel shows the difference."
   analogy:
     icon: "🎫"
-    html: "<p>Bir konserin kapısında tek bir görevli bilet koçanından bilet koparıyor. Herkes sırayla bir bilet alır; koçan bitince biter. İki kişi aynı bileti alamaz. <code>DECR</code> bu görevlidir.</p><p>Naif yöntem ise herkesin duvardaki <q>kalan bilet</q> tahtasına bakıp sonra tahtayı kendisinin silmesidir: iki kişi aynı anda <q>1</q> görür, ikisi de son bileti aldığını sanar.</p>"
+    html: "<p>At the door of a concert, one attendant tears tickets from a ticket book. Each person gets one ticket in turn, and when the book is empty, it is empty. Two people cannot get the same ticket. <code>DECR</code> is this attendant.</p><p>The naive method is a board on the wall with <q>tickets left</q>: each person reads the board and then changes it. Two people see <q>1</q> at the same time, and both think that they got the last ticket.</p>"
   alternatives:
     engine: "ElastiCache (Valkey)"
-    criteria: ["Okuma gecikmesi", "Atomik sayaç", "Saniyede çok yazma", "Kalıcılık", "Kim işletir"]
+    criteria: ["Read latency", "Atomic counter", "Many writes per second", "Durability", "Who operates it"]
     rows:
-      - { name: "ElastiCache Serverless (Valkey)", chosen: true, cells: [[y, "Milisaniyenin altında"], [y, "DECR, INCR"], [y, "Bellekte"], [p, "Önbellek; asıl kayıt Aurora'da"], [y, "AWS, sunucusuz"]] }
-      - { name: "DynamoDB", sub: "UpdateItem ADD + koşul", cells: [[y, "Tek basamaklı ms"], [y, "Koşullu atomik yazma"], [p, "Tek item'da sınır var"], [y, "Kalıcı"], [y, "AWS"]] }
-      - { name: "Aurora PostgreSQL", sub: "UPDATE … WHERE stock > 0", cells: [[p, "Milisaniyeler"], [y, "Satır kilidiyle"], [n, "Tek satırda kilit kuyruğu"], [y, "Kalıcı"], [y, "AWS"]] }
-      - { name: "MemoryDB", sub: "kalıcı Valkey", cells: [[y, "Milisaniyenin altında okuma"], [y, "Aynı komutlar"], [y, "Bellekte"], [y, "Çok AZ'li kayıt"], [y, "AWS"]] }
-    verdict: "Flash deal birkaç dakika sürer, binlerce kişi aynı satıra yüklenir ve her milisaniye önemlidir. Bellek içi atomik sayaç bu iş için en hızlı ve en basit yol; kalıcı sipariş kaydı yine Aurora'ya yazılır."
+      - { name: "ElastiCache Serverless (Valkey)", chosen: true, cells: [[y, "Less than a millisecond"], [y, "DECR, INCR"], [y, "In memory"], [p, "A cache: the source of truth is in Aurora"], [y, "AWS, serverless"]] }
+      - { name: "DynamoDB", sub: "UpdateItem ADD + condition", cells: [[y, "Single-digit ms"], [y, "Conditional atomic write"], [p, "A limit on one item"], [y, "Durable"], [y, "AWS"]] }
+      - { name: "Aurora PostgreSQL", sub: "UPDATE … WHERE stock > 0", cells: [[p, "Milliseconds"], [y, "With a row lock"], [n, "A lock queue on one row"], [y, "Durable"], [y, "AWS"]] }
+      - { name: "MemoryDB", sub: "durable Valkey", cells: [[y, "Reads in less than a millisecond"], [y, "The same commands"], [y, "In memory"], [y, "Multi-AZ log"], [y, "AWS"]] }
+    verdict: "A flash deal lasts a few minutes, thousands of people hit the same value, and each millisecond is important. An in-memory atomic counter is the fastest and simplest way for this work. The durable order record still goes to Aurora."
   try:
-    - { href: "/deals", label: "Flash deal'de simülasyonu atomik ve naif modda çalıştır" }
+    - { href: "/deals", label: "Run the flash deal simulation in atomic and naive mode" }
   glossary:
-    - ["Bellek içi (in-memory)", "Veriyi diskte değil RAM'de tutmak."]
-    - ["Atomik işlem", "Ortasında başka bir işlemin araya giremediği tek adımlık işlem."]
-    - ["Hash", "Bir anahtarın altında alan → değer çiftleri tutan Valkey veri tipi."]
-    - ["Race condition", "İki işlemin aynı veriyi aynı anda okuyup birbirinin yazdığını ezmesi."]
+    - ["In-memory", "Keep data in RAM, not on disk."]
+    - ["Atomic operation", "An operation in one step that no other operation can interrupt."]
+    - ["Hash", "A Valkey data type that holds field → value pairs under one key."]
+    - ["Race condition", "Two operations read the same data at the same time, and one write deletes the other."]
 
 session:
-  title: "ElastiCache 101: oturum ve TTL"
+  title: "ElastiCache 101: the session and TTL"
   apis: ["/api/session"]
-  kicker: "ElastiCache 101: süreli anahtarlar"
-  headline: "Hangi sayfada olduğun nerede tutuluyor ve neden kendiliğinden siliniyor?"
-  lead: "Her sayfa açılışında Lale Market, oturumunu ElastiCache'e yazdı ve süresini yeniledi. Bu sayfa oturum anahtarını ve süresini gösteriyor."
+  kicker: "ElastiCache 101: keys with an expiry"
+  headline: "Where is the page that you are on stored, and why is it deleted automatically?"
+  lead: "At each page load, Lale Market wrote your session to ElastiCache and renewed its expiry. This page shows the session key and its expiry."
   focus: "keys"
   sample: { url: "/elasticache/api/session", label: "Read the session" }
   big:
-    title: "Büyük resim: oturumlar ve öteki anahtarlar"
-    text: "<b>Oturumlar</b> rafındaki her kare bir ziyaretçinin oturumu. Teal kare seninki. Tıkla: kaç saniye sonra silineceğini görürsün."
-    legend: '<span><i class="k"></i>Anahtar ve TTL</span>'
+    title: "The big picture: the sessions and the other keys"
+    text: "Each square on the <b>Sessions</b> shelf is the session of one visitor. The teal square is yours. Click it to see in how many seconds it will be deleted."
+    legend: '<span><i class="k"></i>Key and TTL</span>'
   sections:
-    - title: "Oturum neden önbellekte?"
+    - title: "Why is the session in a cache?"
       html: |
-        <p>Oturum geçici bir veridir: ziyaretçi gittiğinde değeri kalmaz. Her sayfada okunur ve yazılır, bu yüzden hızlı olmalıdır.
-        Her Engine App aynı oturumu okuyabildiği için ziyaretçi hangi sunucuya düşerse düşsün kaldığı yerden devam eder.</p>
-        <p><b>TTL</b> (time to live) anahtara bir ömür verir. Süre dolunca Valkey anahtarı siler; temizlik için ayrı bir iş gerekmez.</p>
+        <p>A session is temporary data: when the visitor leaves, it has no value. The shop reads and writes it on each page, so it must be fast.
+        Each Engine App can read the same session, so the visitor continues from the same place on any server.</p>
+        <p><b>TTL</b> (time to live) gives a key a life time. When the time ends, Valkey deletes the key. No separate cleanup job is necessary.</p>
   explain:
     HSET:
-      title: "Oturumu yazmak"
-      text: "Persona, son sayfa ve zaman tek bir hash'e yazıldı."
+      title: "Write the session"
+      text: "The persona, the last page and the time were written to one hash."
     EXPIRE:
-      title: "Süreyi yenilemek"
-      text: "Her sayfada TTL baştan başlar. 30 dakika hiçbir sayfa açmazsan oturum silinir."
+      title: "Renew the expiry"
+      text: "On each page, the TTL starts again. If you open no page for 30 minutes, the session is deleted."
     ZADD:
-      title: "Aktif ziyaretçiler listesi"
-      text: "Senin kimliğin, son görülme zamanını puan olarak kullanan sıralı bir kümeye yazıldı. <q>Son 5 dakikada kaç kişi aktif</q> sorusu buradan tek komutla cevaplanır."
+      title: "The list of active visitors"
+      text: "Your id was written to a sorted set that uses the last-seen time as the score. One command answers the question <q>how many people were active in the last 5 minutes</q> from it."
     HGETALL:
-      title: "Oturumu okumak"
-      text: "Hash'in bütün alanları tek komutta geldi."
+      title: "Read the session"
+      text: "All fields of the hash came with one command."
     TTL:
-      title: "Kalan süre"
-      text: "<code>TTL</code>, anahtarın silinmesine kaç saniye kaldığını söyler."
+      title: "The time that is left"
+      text: "<code>TTL</code> tells how many seconds are left before the key is deleted."
   analogy:
     icon: "⏳"
-    html: "<p>Bir otoparkın giriş fişi düşün: üzerinde saat yazar ve belli bir süre geçerlidir. Çıkış yapmasan bile süre dolunca fiş geçersiz olur. Oturum anahtarı da böyle bir fiştir.</p>"
+    html: "<p>Think of the entry ticket of a car park: it shows the time, and it is valid for a set period. Also if you do not leave, the ticket becomes invalid when the time ends. A session key is such a ticket.</p>"
   alternatives:
     engine: "ElastiCache"
-    criteria: ["Her sayfada hız", "Kendiliğinden silme", "Bütün sunuculardan erişim"]
+    criteria: ["Speed on each page", "Automatic delete", "Access from all servers"]
     rows:
-      - { name: "ElastiCache (Valkey)", chosen: true, cells: [[y, "Milisaniyenin altında"], [y, "EXPIRE"], [y, "Ortak"]] }
-      - { name: "DynamoDB", sub: "oturum tablosu", cells: [[y, "Tek basamaklı ms"], [p, "TTL, silme birkaç gün gecikebilir"], [y, "Ortak"]] }
-      - { name: "Sunucu belleği", sub: "her uygulamanın kendi RAM'i", cells: [[y, "En hızlı"], [y, "Uygulama siler"], [n, "Başka sunucuya düşünce kaybolur"]] }
-    verdict: "Oturum her istekte okunan, kısa ömürlü ve paylaşılan bir veridir. Bellek içi önbellek, süreli anahtarlarla bu işi en az kodla yapar."
+      - { name: "ElastiCache (Valkey)", chosen: true, cells: [[y, "Less than a millisecond"], [y, "EXPIRE"], [y, "Shared"]] }
+      - { name: "DynamoDB", sub: "session table", cells: [[y, "Single-digit ms"], [p, "TTL, the delete can be days late"], [y, "Shared"]] }
+      - { name: "Server memory", sub: "the RAM of each app", cells: [[y, "The fastest"], [y, "The app deletes it"], [n, "Lost when the visitor goes to another server"]] }
+    verdict: "A session is shared data with a short life, and the shop reads it on each request. An in-memory cache with keys that expire does this work with the least code."
   try:
-    - { href: "/", label: "Başka bir sayfa aç, TTL'in yenilendiğini gör" }
+    - { href: "/", label: "Open another page and see the TTL renew" }
   glossary:
-    - ["TTL", "Bir anahtarın ömrü; süre dolunca anahtar silinir."]
-    - ["Oturum (session)", "Bir ziyaretçinin siteyi kullanırken taşıdığı geçici bilgi."]
-    - ["Sorted set", "Üyeleri bir puana göre sıralı tutan Valkey veri tipi."]
+    - ["TTL", "The life time of a key. When the time ends, the key is deleted."]
+    - ["Session", "Temporary information that a visitor carries while they use the site."]
+    - ["Sorted set", "A Valkey data type that keeps its members sorted by a score."]
 
 leaderboard:
-  title: "ElastiCache 101: canlı sıralama"
+  title: "ElastiCache 101: the live ranking"
   apis: ["/api/leaderboard"]
   kicker: "ElastiCache 101: sorted set"
-  headline: "En çok harcayanlar listesi, her siparişten sonra nasıl anında güncelleniyor?"
-  lead: "Canlı sıralama ekranı ElastiCache'teki tek bir sorted set'ten ilk 10'u okudu. Bu sayfa sıralamanın neden her zaman hazır durduğunu gösteriyor."
+  headline: "How is the list of the top spenders updated immediately after each order?"
+  lead: "The live ranking screen read the top 10 from one sorted set in ElastiCache. This page shows why the ranking is always ready."
   focus: "keys"
   sample: { url: "/elasticache/api/leaderboard", label: "Load the leaderboard" }
   big:
-    title: "Büyük resim: sıralama ve sayaç anahtarları"
-    text: "Teal kareler bu ekranın okuduğu anahtarlar: sıralama (<code>lm:leaderboard</code>), bugünkü sipariş sayacı ve aktif ziyaretçiler."
-    legend: '<span><i class="k"></i>Anahtar ve TTL</span>'
+    title: "The big picture: the ranking and the counter keys"
+    text: "The teal squares are the keys that this screen reads: the ranking (<code>lm:leaderboard</code>), the order counter of today and the active visitors."
+    legend: '<span><i class="k"></i>Key and TTL</span>'
   sections:
-    - title: "Sorted set nasıl çalışır?"
+    - title: "How does a sorted set work?"
       html: |
-        <p>Sorted set her üyeyi bir puanla saklar ve üyeleri her yazmada puana göre sıralı tutar. <code>ZINCRBY</code> bir müşterinin puanını artırır;
-        <code>ZREVRANGE 0 9</code> en büyük 10 puanı sıralanmış olarak verir. Sıralama okuma anında hesaplanmaz, zaten hazırdır.</p>
-        <p>Aynı soruyu SQL ile sormak <code>SUM … GROUP BY … ORDER BY … LIMIT 10</code> demektir: her seferinde bütün siparişler taranır.</p>
+        <p>A sorted set stores each member with a score and keeps the members sorted by score at each write. <code>ZINCRBY</code> increases the score of a customer.
+        <code>ZREVRANGE 0 9</code> gives the 10 highest scores, already sorted. The ranking is not calculated at the time of the read. It is already ready.</p>
+        <p>The same question in SQL is <code>SUM … GROUP BY … ORDER BY … LIMIT 10</code>: each time, the database scans all orders.</p>
   explain:
     ZREVRANGE:
-      title: "İlk 10"
-      text: "Puanı en yüksek 10 üye, puanlarıyla birlikte geldi. Üye sayısı ne olursa olsun bu okuma çok hızlıdır."
+      title: "The top 10"
+      text: "The 10 members with the highest scores came back with their scores. This read is very fast for any number of members."
     GET:
-      title: "Bugünkü sipariş sayısı"
-      text: "Her siparişte <code>INCR</code> ile artan bir sayaç okundu."
+      title: "The number of orders today"
+      text: "The read got a counter that <code>INCR</code> increases at each order."
     ZCOUNT:
-      title: "Son 5 dakikada aktif olanlar"
-      text: "Son görülme zamanı 5 dakikadan yeni olan üyeler sayıldı."
+      title: "The visitors active in the last 5 minutes"
+      text: "The command counted the members whose last-seen time is less than 5 minutes ago."
     ZINCRBY:
-      title: "Puanı artırmak"
-      text: "Siparişin tutarı müşterinin puanına eklendi. Sıralama aynı anda güncellendi."
+      title: "Increase the score"
+      text: "The amount of the order was added to the score of the customer. The ranking changed at the same time."
     INCR:
-      title: "Sayacı artırmak"
-      text: "Bugünkü sipariş sayısı bir arttı."
+      title: "Increase the counter"
+      text: "The number of orders today went up by one."
   analogy:
     icon: "🏆"
-    html: "<p>Bir spor salonundaki skor tahtası düşün. Her sayıdan sonra hakem tahtayı hemen günceller; seyirci sıralamayı görmek için kimseye hesap yaptırmaz. Sorted set bu tahtadır.</p>"
+    html: "<p>Think of the scoreboard in a sports hall. After each point, the referee updates the board immediately. The audience does not ask anybody to calculate the ranking. A sorted set is this board.</p>"
   alternatives:
     engine: "ElastiCache"
-    criteria: ["Sıralama hazır mı", "Her yazmada güncel", "Okuma hızı"]
+    criteria: ["Is the ranking ready", "Current after each write", "Read speed"]
     rows:
-      - { name: "ElastiCache sorted set", chosen: true, cells: [[y, "Her zaman sıralı"], [y, "ZINCRBY"], [y, "Milisaniyenin altında"]] }
-      - { name: "Aurora", sub: "SUM + ORDER BY", cells: [[n, "Her okumada hesaplanır"], [y, "Siparişler zaten orada"], [p, "Veri büyüdükçe yavaşlar"]] }
-      - { name: "Redshift", sub: "analitik sorgu", cells: [[n, "Sorguda hesaplanır"], [p, "Saniyeler geride"], [p, "Saniyeler"]] }
-    verdict: "Canlı bir ekran saniyede birçok kez aynı <q>ilk 10</q>'u ister. Sıralamayı yazarken tutan bir veri yapısı, her okumada yeniden hesaplamaktan çok daha ucuzdur."
+      - { name: "ElastiCache sorted set", chosen: true, cells: [[y, "Always sorted"], [y, "ZINCRBY"], [y, "Less than a millisecond"]] }
+      - { name: "Aurora", sub: "SUM + ORDER BY", cells: [[n, "Calculated at each read"], [y, "The orders are already there"], [p, "Slower as the data grows"]] }
+      - { name: "Redshift", sub: "analytical query", cells: [[n, "Calculated in the query"], [p, "Seconds behind"], [p, "Seconds"]] }
+    verdict: "A live screen asks for the same <q>top 10</q> many times per second. A data structure that keeps the ranking at write time is much cheaper than a new calculation at each read."
   try:
-    - { href: "/admin/live", label: "Canlı sıralamayı aç" }
-    - { href: "/checkout", label: "Sipariş ver, sıralamada yüksel" }
+    - { href: "/admin/live", label: "Open the live ranking" }
+    - { href: "/checkout", label: "Place an order and go up in the ranking" }
   glossary:
-    - ["Sorted set", "Üyeleri puana göre sıralı tutan veri tipi."]
-    - ["ZINCRBY", "Bir üyenin puanını artıran komut."]
-    - ["ZREVRANGE", "Puanı en yüksekten başlayarak üyeleri döndüren komut."]
+    - ["Sorted set", "A data type that keeps its members sorted by score."]
+    - ["ZINCRBY", "The command that increases the score of a member."]
+    - ["ZREVRANGE", "The command that returns members from the highest score down."]

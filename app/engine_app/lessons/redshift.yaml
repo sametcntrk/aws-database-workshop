@@ -1,105 +1,105 @@
-# 101 lessons for Amazon Redshift Serverless (Turkish).
+# 101 lessons for Amazon Redshift Serverless (English, ASD-STE100).
 report:
-  title: "Redshift 101: satış raporu ve kolon deposu"
+  title: "Redshift 101: the sales report and the column store"
   apis: ["/api/report"]
-  kicker: "Redshift 101: analitik veri ambarı"
-  headline: "Redshift, yıllarca birikmiş satışları bir saniyenin altında nasıl topladı?"
-  lead: "Satış raporu, bütün satış satırlarını bir boyuta göre (ay, kategori ya da şehir) gruplayıp topladı. Bu sayfa Redshift'in bunu yaparken diskin yalnız küçük bir kısmını neden okuduğunu gösteriyor."
+  kicker: "Redshift 101: an analytical data warehouse"
+  headline: "How did Redshift add up years of sales in less than one second?"
+  lead: "The sales report grouped all sales rows by one dimension (month, category or city) and added them up. This page shows why Redshift read only a small part of the disk to do it."
   focus: "query:dim"
   sample: { url: "/redshift/api/report?dim=month", label: "Sales by month" }
   big:
-    title: "Büyük resim: sales tablosu, sütun sütun"
-    text: "Her raf bir sütun, her kare o sütundaki bir değer. Teal raflar senin raporunun okuduğu sütunlar; gri raflara Redshift hiç dokunmadı. Bir kareye tıkla, o sütunun diskte nasıl saklandığını gör."
-    legend: '<span><i class="k"></i>Seçtiğin değer</span>'
+    title: "The big picture: the sales table, column by column"
+    text: "Each shelf is one column, and each square is one value of that column. The teal shelves are the columns that your report read. Redshift did not touch the gray shelves. Click a square to see how that column is stored on disk."
+    legend: '<span><i class="k"></i>The value that you selected</span>'
   sections:
-    - title: "Kaynakta veri böyleydi, Redshift'te böyle duruyor"
+    - title: "The data at the source, and the data in Redshift"
       html: |
-        <p>Kaynakta her satış bir satırdır: sipariş, tarih, müşteri, şehir, kategori, ürün, adet, tutar. Aurora gibi bir satır deposu bu sekiz değeri diskte yan yana yazar.</p>
+        <p>At the source, each sale is one row: order, date, customer, city, category, product, quantity, amount. A row store like Aurora writes these eight values next to each other on disk.</p>
         <div class="src-store">
-          <div><h3>Satır deposu (Aurora)</h3><pre>[W1, 2025-01-03, C12, İzmir, Spor, P8, 1, 899]
+          <div><h3>Row store (Aurora)</h3><pre>[W1, 2025-01-03, C12, İzmir, Spor, P8, 1, 899]
         [W2, 2025-01-03, C40, Bursa, Moda, P3, 2, 450]
         [W3, 2025-01-04, C12, İzmir, Kitap, P9, 1, 120]
         …</pre></div>
-          <div><h3>Kolon deposu (Redshift)</h3><pre>order_date: 2025-01-03, 2025-01-03, 2025-01-04, …
+          <div><h3>Column store (Redshift)</h3><pre>order_date: 2025-01-03, 2025-01-03, 2025-01-04, …
         city:       İzmir, Bursa, İzmir, …
         amount:     899, 450, 120, …
-        (her sütun ayrı bloklarda, sıkıştırılmış)</pre></div>
+        (each column in separate blocks, compressed)</pre></div>
         </div>
-        <p><q>Aylara göre ciro</q> sorusu yalnız <code>order_date</code> ve <code>amount</code> sütunlarını ister. Redshift yalnız bu iki sütunun bloklarını okur; öteki altı sütun diskte kalır.
-        Aynı sütundaki değerler birbirine benzediği için çok iyi sıkışır; okunacak bayt daha da azalır.</p>
+        <p>The question <q>revenue by month</q> needs only the columns <code>order_date</code> and <code>amount</code>. Redshift reads only the blocks of these two columns. The other six columns stay on disk.
+        The values in one column are similar, so they compress very well, and there are even fewer bytes to read.</p>
         <ul>
-          <li><b>SORTKEY order_date:</b> bloklar tarihe göre sıralı. <q>Son 3 ay</q> gibi bir filtrede Redshift eski blokları hiç açmaz.</li>
-          <li><b>DISTKEY customer_id:</b> aynı müşterinin satırları aynı işlem düğümünde durur; müşteri bazlı JOIN'lerde veri düğümler arasında taşınmaz.</li>
+          <li><b>SORTKEY order_date:</b> the blocks are sorted by date. For a filter like <q>the last 3 months</q>, Redshift does not open the old blocks.</li>
+          <li><b>DISTKEY customer_id:</b> the rows of one customer are on the same compute node. For JOINs by customer, no data moves between the nodes.</li>
         </ul>
   explain:
     "SELECT (report)":
-      title: "Gruplayıp toplamak"
-      text: "Redshift sorguyu paralel parçalara böldü: her parça kendi bloklarını okuyup ara toplamı hesapladı, sonra ara toplamlar birleştirildi. Serverless'ta bu iş için kapasiteyi (RPU) Redshift kendisi ayarlar."
+      title: "Group and add up"
+      text: "Redshift split the query into parallel parts. Each part read its own blocks and calculated a partial sum, and then Redshift combined the partial sums. In Serverless, Redshift sets the capacity (RPU) for this work itself."
   analogy:
     icon: "📊"
-    html: "<p>Bir sınıfın not çizelgesi düşün. Satırlar öğrenciler, sütunlar dersler. <q>Matematik ortalaması</q> için yalnız matematik sütununa bakarsın; öteki dersleri okumazsın. Kolon deposu, her dersin notlarını ayrı bir şeritte saklayan bir çizelgedir.</p>"
+    html: "<p>Think of the grade sheet of a class. The rows are the students, and the columns are the subjects. For <q>the mean of mathematics</q>, you look only at the mathematics column. You do not read the other subjects. A column store is a sheet that keeps the grades of each subject on a separate strip.</p>"
   alternatives:
     engine: "Redshift"
-    criteria: ["Milyarlarca satırda toplama", "Canlı siparişlere etkisi", "SQL ve BI araçları", "Kapasite yönetimi"]
+    criteria: ["Sums over billions of rows", "Effect on live orders", "SQL and BI tools", "Capacity management"]
     rows:
-      - { name: "Amazon Redshift Serverless", chosen: true, cells: [[y, "Kolon deposu, paralel"], [y, "Ayrı sistem"], [y, "PostgreSQL uyumlu SQL"], [y, "Kendiliğinden ölçeklenir"]] }
-      - { name: "Aurora PostgreSQL", sub: "satır deposu", cells: [[p, "Orta veride iyi"], [n, "Aynı veritabanını yorar"], [y, "Tam SQL"], [p, "Instance boyutu"]] }
-      - { name: "Amazon Athena", sub: "S3 üzerinde SQL", cells: [[y, "Parquet ile hızlı"], [y, "Ayrı sistem"], [y, "SQL"], [y, "Sunucusuz, taranan bayt kadar"]] }
-      - { name: "Redshift provisioned", sub: "sabit küme", cells: [[y, "Aynı"], [y, "Ayrı sistem"], [y, "Aynı"], [p, "Düğüm sayısını sen seçersin"]] }
-    verdict: "Satış raporları yıllarca birikmiş veriyi tarar ve aynı soruları her gün sorar. Kolon deposu bu taramayı ucuzlatır. Redshift Serverless kapasite planı istemez ve zero-ETL ile Aurora'nın canlı verisini de kopyalar."
+      - { name: "Amazon Redshift Serverless", chosen: true, cells: [[y, "Column store, parallel"], [y, "A separate system"], [y, "PostgreSQL-compatible SQL"], [y, "Scales automatically"]] }
+      - { name: "Aurora PostgreSQL", sub: "row store", cells: [[p, "Good for medium data"], [n, "Loads the same database"], [y, "Full SQL"], [p, "Instance size"]] }
+      - { name: "Amazon Athena", sub: "SQL on S3", cells: [[y, "Fast with Parquet"], [y, "A separate system"], [y, "SQL"], [y, "Serverless, pay per scanned byte"]] }
+      - { name: "Redshift provisioned", sub: "fixed cluster", cells: [[y, "The same"], [y, "A separate system"], [y, "The same"], [p, "You select the number of nodes"]] }
+    verdict: "Sales reports scan years of data and ask the same questions every day. A column store makes this scan cheap. Redshift Serverless needs no capacity plan, and zero-ETL also copies the live data of Aurora."
   try:
-    - { href: "/admin/reports", label: "Raporda boyutu değiştir" }
+    - { href: "/admin/reports", label: "Change the dimension in the report" }
   glossary:
-    - ["Kolon deposu (column store)", "Her sütunun değerlerini diskte ayrı ve birlikte saklamak."]
-    - ["SORTKEY", "Blokların diskte sıralandığı sütun; aralık filtrelerini hızlandırır."]
-    - ["DISTKEY", "Satırların işlem düğümlerine hangi sütuna göre dağıtıldığı."]
-    - ["RPU", "Redshift Serverless'ın işlem kapasitesi birimi."]
+    - ["Column store", "Store the values of each column together and apart from the other columns on disk."]
+    - ["SORTKEY", "The column by which the blocks are sorted on disk. It makes range filters faster."]
+    - ["DISTKEY", "The column that decides how the rows are distributed to the compute nodes."]
+    - ["RPU", "The unit of compute capacity of Redshift Serverless."]
 
 zeroetl:
-  title: "Redshift 101: zero-ETL ile canlı kopya"
+  title: "Redshift 101: a live copy with zero-ETL"
   apis: ["/api/replication", "/api/admin/zeroetl"]
-  kicker: "Redshift 101: zero-ETL entegrasyonu"
-  headline: "Aurora'da verdiğin sipariş, kimse bir şey kopyalamadan Redshift'e nasıl geldi?"
-  lead: "Checkout'ta Aurora'ya yazılan sipariş, birkaç saniye içinde Redshift'teki aurora_live veritabanında belirdi. Bu sayfa arada ne olduğunu gösteriyor."
+  kicker: "Redshift 101: the zero-ETL integration"
+  headline: "How did your order in Aurora come to Redshift, when no person copied anything?"
+  lead: "The order that checkout wrote to Aurora showed in the Redshift database aurora_live within a few seconds. This page shows what happened between them."
   sample: { url: "/redshift/api/replication", label: "Replication status" }
   big:
-    title: "Büyük resim: aurora_live veritabanındaki siparişler"
-    text: "Her kare Redshift'teki kopyada bir sipariş. Teal kareler senin checkout'ta verdiğin siparişler. Birine tıkla: Aurora'daki satırın aynısını burada görürsün."
-    legend: '<span><i class="k"></i>Anahtar ve tarih</span>'
+    title: "The big picture: the orders in the database aurora_live"
+    text: "Each square is one order in the Redshift copy. The teal squares are the orders that you placed in checkout. Click one to see the same row as in Aurora."
+    legend: '<span><i class="k"></i>Key and date</span>'
   sections:
-    - title: "Arada ne oldu?"
+    - title: "What happened between them?"
       html: |
         <ol>
-          <li>Aurora her değişikliği zaten kendi depolama katmanının kaydına (log) yazar.</li>
-          <li>Zero-ETL entegrasyonu bu kayıttaki değişiklikleri okur ve Redshift'e gönderir. Lale Market'te bunun için tek satır kod yok.</li>
-          <li>Redshift değişiklikleri <code>aurora_live</code> veritabanındaki tablolara uygular. Tablolar Aurora'dakiyle aynı adı ve sütunları taşır.</li>
+          <li>Aurora already writes each change to the log of its storage layer.</li>
+          <li>The zero-ETL integration reads the changes in this log and sends them to Redshift. Lale Market has no line of code for this.</li>
+          <li>Redshift applies the changes to the tables in the database <code>aurora_live</code>. The tables have the same names and columns as in Aurora.</li>
         </ol>
-        <p>Eski yöntem bir ETL hattıydı: her gece veriyi Aurora'dan çeken, dönüştüren ve Redshift'e yükleyen bir iş. Hem kod gerekirdi hem rapor bir gün geriden gelirdi.</p>
+        <p>The old method was an ETL pipeline: a job that every night extracted the data from Aurora, transformed it and loaded it into Redshift. It needed code, and the report was one day late.</p>
   explain:
     "SELECT (integration status)":
-      title: "Entegrasyonun durumu"
-      text: "<code>svv_integration</code> görünümü entegrasyonun çalışıp çalışmadığını, kaç tablonun kopyalandığını ve son kontrol noktasını gösterir."
+      title: "The status of the integration"
+      text: "The view <code>svv_integration</code> shows if the integration runs, how many tables it copied and the last checkpoint."
     "SELECT (newest live order)":
-      title: "En yeni canlı sipariş"
-      text: "Redshift'teki kopyada en yeni workshop siparişinin zamanı okundu. <q>Saniye önce</q> değeri, Aurora'daki yazma ile Redshift'te görünme arasındaki gecikmeyi gösterir."
+      title: "The newest live order"
+      text: "The query read the time of the newest workshop order in the Redshift copy. The value <q>seconds ago</q> shows the delay between the write in Aurora and the row in Redshift."
     "CREATE DATABASE":
-      title: "Entegrasyondan veritabanı oluşturmak"
-      text: "Tek bir <code>CREATE DATABASE … FROM INTEGRATION</code> komutu Redshift'i entegrasyona bağlar. Sonrasında kopyalama sürekli çalışır."
+      title: "Create a database from the integration"
+      text: "One command <code>CREATE DATABASE … FROM INTEGRATION</code> connects Redshift to the integration. After that, the copy runs all the time."
   analogy:
     icon: "🪞"
-    html: "<p>Bir dükkânın kasasında her satış bir rulo kâğıda yazılıyor. Muhasebe her akşam ruloyu alıp deftere elle geçiriyordu (ETL). Zero-ETL, kasa rulosunun bir kopyasının muhasebenin masasına anında akmasıdır: kimse elle bir şey taşımaz.</p>"
+    html: "<p>In a shop, the cash register prints each sale on a paper roll. Every evening, the accountant took the roll and copied it into the ledger by hand (ETL). Zero-ETL is a copy of the roll that goes to the desk of the accountant immediately. No person carries anything.</p>"
   alternatives:
     engine: "zero-ETL"
-    criteria: ["Gecikme", "Yazılacak kod", "Aurora'ya yük", "Bakım"]
+    criteria: ["Delay", "Code to write", "Load on Aurora", "Maintenance"]
     rows:
-      - { name: "Aurora → Redshift zero-ETL", chosen: true, cells: [[y, "Saniyeler"], [y, "Yok"], [y, "Depolama katmanından okur"], [y, "AWS yönetir"]] }
-      - { name: "Gecelik ETL işi", sub: "AWS Glue veya kendi betiğin", cells: [[n, "Saatler, bir gün"], [n, "Dönüştürme kodu"], [p, "Toplu okuma yükü"], [n, "Sen"]] }
-      - { name: "AWS DMS ile CDC", sub: "değişiklik yakalama", cells: [[p, "Saniyeler-dakikalar"], [p, "Görev ayarı"], [p, "Kayıt okuma"], [p, "Replikasyon instance'ı"]] }
-    verdict: "Rapor ekibi canlı veriyi ister, uygulama ekibi ek kod ve yük istemez. Zero-ETL ikisini birden verir: Aurora'ya dokunmadan, kod yazmadan saniyeler içinde kopya."
+      - { name: "Aurora to Redshift zero-ETL", chosen: true, cells: [[y, "Seconds"], [y, "None"], [y, "Reads from the storage layer"], [y, "AWS manages it"]] }
+      - { name: "Nightly ETL job", sub: "AWS Glue or your own script", cells: [[n, "Hours, one day"], [n, "Transformation code"], [p, "Bulk read load"], [n, "You"]] }
+      - { name: "CDC with AWS DMS", sub: "change data capture", cells: [[p, "Seconds to minutes"], [p, "Task settings"], [p, "Log read"], [p, "A replication instance"]] }
+    verdict: "The report team wants live data, and the application team wants no extra code and no extra load. Zero-ETL gives both: a copy within seconds, with no change to Aurora and no code."
   try:
-    - { href: "/checkout", label: "Bir sipariş ver" }
-    - { href: "/admin/reports", label: "Sonra canlı kaynağı seç" }
+    - { href: "/checkout", label: "Place an order" }
+    - { href: "/admin/reports", label: "Then select the live source" }
   glossary:
-    - ["ETL", "Extract, transform, load: veriyi bir sistemden çekip dönüştürüp ötekine yüklemek."]
-    - ["Zero-ETL", "AWS'nin iki hizmet arasında veriyi kodsuz ve sürekli kopyalaması."]
-    - ["CDC", "Change data capture: yalnız değişen satırları yakalayıp göndermek."]
+    - ["ETL", "Extract, transform, load: get data from one system, change it and load it into another system."]
+    - ["Zero-ETL", "AWS copies data between two services all the time, with no code."]
+    - ["CDC", "Change data capture: catch and send only the rows that changed."]

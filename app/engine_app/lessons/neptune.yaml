@@ -1,95 +1,95 @@
-# 101 lessons for Amazon Neptune (Turkish).
+# 101 lessons for Amazon Neptune (English, ASD-STE100).
 recs:
-  title: "Neptune 101: birlikte alınanlar önerisi"
+  title: "Neptune 101: the bought-together recommendation"
   apis: ["/api/recs", "/api/purchase"]
-  kicker: "Neptune 101: graf veritabanı"
-  headline: "Ürün sayfasındaki “bunu alanlar şunları da aldı” listesi nasıl bulundu?"
-  lead: "Ürün sayfası Neptune'a bir yol sordu: bu üründen, onu alan müşterilere, oradan da onların aldığı öteki ürünlere. Bu sayfa o yolu düğüm düğüm gösteriyor."
+  kicker: "Neptune 101: a graph database"
+  headline: "How did the shop find the list “customers who bought this also bought” on the product page?"
+  lead: "The product page asked Neptune for a path: from this product, to the customers who bought it, and from them to the other products that they bought. This page shows that path vertex by vertex."
   focus: ["data:product_id", "query:product"]
   sample: { url: "/neptune/api/recs?mode=product&product=P0001", label: "Recommendations for P0001" }
   big:
-    title: "Büyük resim: graftaki düğümler ve öneri yolu"
-    text: "Her kare bir düğüm: ürünler kategori raflarında, en altta müşteriler. Teal kareler başlangıç ürünü ve önerilen ürünler. Bir ürüne tıkla: ona gelen BOUGHT kenarlarını ve iki adım ötedeki ürünleri gör."
-    legend: '<span><i class="k"></i>Düğüm kimliği, etiketi ve öneri yolu</span>'
+    title: "The big picture: the vertices of the graph and the recommendation path"
+    text: "Each square is one vertex: the products are on category shelves, and the customers are at the bottom. The teal squares are the start product and the recommended products. Click a product to see its incoming BOUGHT edges and the products two hops away."
+    legend: '<span><i class="k"></i>Vertex id, label and recommendation path</span>'
   sections:
-    - title: "Kaynakta veri böyleydi, Neptune'da böyle duruyor"
+    - title: "The data at the source, and the data in Neptune"
       html: |
-        <p>Kaynakta veri sipariş geçmişidir: hangi müşteri hangi ürünü aldı. Bir tabloda bu, milyonlarca satırlık bir <q>müşteri - ürün</q> listesidir.
-        Graf veritabanında aynı bilgi <b>düğümler</b> (müşteri, ürün) ve onları bağlayan <b>kenarlar</b> (BOUGHT) olarak durur.</p>
+        <p>At the source, the data is the order history: which customer bought which product. In a table, this is a <q>customer - product</q> list with millions of rows.
+        In a graph database, the same information is stored as <b>vertices</b> (customer, product) and the <b>edges</b> (BOUGHT) that connect them.</p>
         <div class="src-store">
-          <div><h3>Kaynak: sipariş satırları</h3><pre>C00001 Ayşe   aldı  P0001 Kulaklık
-        C00001 Ayşe   aldı  P0042 Powerbank
-        C00017 Mehmet aldı  P0001 Kulaklık
-        C00017 Mehmet aldı  P0093 Telefon kılıfı</pre></div>
-          <div><h3>Neptune'da: düğümler ve kenarlar</h3><pre>(Ayşe)-[:BOUGHT]->(Kulaklık)
+          <div><h3>Source: order lines</h3><pre>C00001 Ayşe   bought  P0001 Headphones
+        C00001 Ayşe   bought  P0042 Powerbank
+        C00017 Mehmet bought  P0001 Headphones
+        C00017 Mehmet bought  P0093 Phone case</pre></div>
+          <div><h3>In Neptune: vertices and edges</h3><pre>(Ayşe)-[:BOUGHT]->(Headphones)
         (Ayşe)-[:BOUGHT]->(Powerbank)
-        (Mehmet)-[:BOUGHT]->(Kulaklık)
-        (Mehmet)-[:BOUGHT]->(Telefon kılıfı)</pre></div>
+        (Mehmet)-[:BOUGHT]->(Headphones)
+        (Mehmet)-[:BOUGHT]->(Phone case)</pre></div>
         </div>
-        <p>Her düğüm komşularını doğrudan bilir. <q>Kulaklığı alanlar</q> sorusu için bütün siparişler taranmaz; Kulaklık düğümünden gelen kenarlar izlenir.
-        Öneri bu yürüyüşün iki adımıdır: Kulaklık → onu alan müşteriler → onların aldığı öteki ürünler. En çok ortak müşterisi olan ürün en üste çıkar.</p>
+        <p>Each vertex knows its neighbors directly. For the question <q>who bought the headphones</q>, Neptune does not scan all orders. It follows the edges that come into the Headphones vertex.
+        The recommendation is two steps of this walk: the headphones, then the customers who bought them, then the other products that they bought. The product with the most shared customers comes first.</p>
   explain:
     openCypher:
-      title: "Graf üzerinde yürümek: openCypher"
-      text: "<code>MATCH (p)&lt;-[:BOUGHT]-(c)-[:BOUGHT]-&gt;(rec)</code> deseni, çizilen yolun aynısını arar. <code>count(DISTINCT c)</code> her öneriye kaç ortak müşterinin götürdüğünü sayar. SQL'de her adım büyük bir tabloda bir JOIN daha olurdu."
+      title: "Walk on the graph: openCypher"
+      text: "The pattern <code>MATCH (p)&lt;-[:BOUGHT]-(c)-[:BOUGHT]-&gt;(rec)</code> looks for the same path as the drawing. <code>count(DISTINCT c)</code> counts how many shared customers lead to each recommendation. In SQL, each step would be one more JOIN on a large table."
     "openCypher (write)":
-      title: "Yeni kenar yazmak"
-      text: "Checkout'tan sonra persona'ndan aldığın ürünlere yeni BOUGHT kenarları eklendi. Bir sonraki öneri bunları hemen hesaba katar; gece çalışan bir yeniden hesaplama yoktur."
+      title: "Write a new edge"
+      text: "After the checkout, new BOUGHT edges were added from your persona to the products that you bought. The next recommendation includes them immediately. There is no recalculation at night."
   analogy:
     icon: "🕸️"
-    html: "<p>Bir arkadaşına <q>bu kitabı sevenler başka neyi sevdi?</q> diye soruyorsun. Arkadaşın kitabı okuyan tanıdıklarını düşünür, sonra onların sevdiği öteki kitapları. Herkesin listesini baştan sona okumaz; tanıdıktan tanıdığa gider. Graf veritabanı bu <q>tanıdıktan tanıdığa</q> gitmeyi hızlı yapar.</p>"
+    html: "<p>You ask a friend: <q>what else do the people who like this book like?</q> Your friend thinks of the people they know who read the book, then of the other books that these people like. Your friend does not read the list of every person from start to end. They go from one person to the next. A graph database makes this <q>from person to person</q> walk fast.</p>"
   alternatives:
     engine: "Neptune"
-    criteria: ["Çok adımlı ilişki sorgusu", "Yeni ilişki anında etkili", "Sorgunun okunabilirliği", "Kim işletir"]
+    criteria: ["Multi-step relation query", "A new relation counts at once", "Easy to read query", "Who operates it"]
     rows:
-      - { name: "Amazon Neptune", chosen: true, cells: [[y, "Kenar izleyerek"], [y, "Yazınca hemen"], [y, "openCypher, Gremlin"], [y, "AWS, serverless seçeneği"]] }
-      - { name: "Aurora PostgreSQL", sub: "order_items üzerinde self-JOIN", cells: [[p, "Her adım bir JOIN, büyüdükçe pahalı"], [y, "Hemen"], [p, "Uzun SQL"], [y, "AWS"]] }
-      - { name: "Amazon Personalize", sub: "makine öğrenmesiyle öneri", cells: [[y, "Model öğrenir"], [p, "Yeniden eğitim veya olay akışı"], [p, "Kara kutu"], [y, "AWS"]] }
-      - { name: "EC2 üzerinde graf veritabanı", sub: "kendi kurulumun", cells: [[y, "Aynı"], [y, "Aynı"], [y, "Aynı"], [n, "Sen"]] }
-    verdict: "<q>Birlikte alınanlar</q> bir ilişki sorusudur ve cevabı ilişkileri izleyerek bulunur. Graf veritabanı bu yürüyüşü veri büyüdükçe de hızlı tutar ve yeni bir sipariş öneriyi anında değiştirir."
+      - { name: "Amazon Neptune", chosen: true, cells: [[y, "Follows the edges"], [y, "Immediately after the write"], [y, "openCypher, Gremlin"], [y, "AWS, serverless option"]] }
+      - { name: "Aurora PostgreSQL", sub: "self-JOIN on order_items", cells: [[p, "Each step is a JOIN, more expensive as the data grows"], [y, "Immediately"], [p, "Long SQL"], [y, "AWS"]] }
+      - { name: "Amazon Personalize", sub: "recommendations with machine learning", cells: [[y, "A model learns"], [p, "Retraining or an event stream"], [p, "A black box"], [y, "AWS"]] }
+      - { name: "Graph database on EC2", sub: "your own installation", cells: [[y, "The same"], [y, "The same"], [y, "The same"], [n, "You"]] }
+    verdict: "<q>Bought together</q> is a question about relations, and the answer comes from a walk along the relations. A graph database keeps this walk fast when the data grows, and a new order changes the recommendation immediately."
   try:
-    - { href: "/p/P0001", label: "Bir ürün sayfasında önerilere bak" }
-    - { href: "/admin/graph", label: "Müşteri grafını aç" }
+    - { href: "/p/P0001", label: "Look at the recommendations on a product page" }
+    - { href: "/admin/graph", label: "Open the customer graph" }
   glossary:
-    - ["Düğüm (node)", "Graftaki bir varlık: müşteri ya da ürün."]
-    - ["Kenar (edge)", "İki düğümü bağlayan ilişki, ör. BOUGHT."]
-    - ["Hop (adım)", "Bir kenar boyunca bir düğümden ötekine geçmek."]
-    - ["openCypher", "Grafta desen arayan açık sorgu dili."]
+    - ["Vertex (node)", "One thing in the graph: a customer or a product."]
+    - ["Edge", "The relation that connects two vertices, for example BOUGHT."]
+    - ["Hop", "One move along an edge, from one vertex to the next."]
+    - ["openCypher", "An open query language that looks for patterns in a graph."]
 
 graph:
-  title: "Neptune 101: bir müşterinin komşuluğu"
+  title: "Neptune 101: the neighborhood of a customer"
   apis: ["/api/graph"]
-  kicker: "Neptune 101: grafı görmek"
-  headline: "Müşteri grafı ekranındaki ağ, tek bir sorguyla nasıl çizildi?"
-  lead: "Müşteri grafı ekranı, bir müşterinin aldığı ürünleri ve o ürünleri alan öteki müşterileri istedi. Bu sayfa dönen ağın veritabanında nasıl durduğunu gösteriyor."
+  kicker: "Neptune 101: see the graph"
+  headline: "How did one query draw the network on the customer graph screen?"
+  lead: "The customer graph screen asked for the products that one customer bought and for the other customers who bought these products. This page shows how the returned network is stored in the database."
   focus: "data:id"
   sample: { url: "/neptune/api/graph", label: "Load the customer graph" }
   big:
-    title: "Büyük resim: graf ve ekrandaki komşuluk"
-    text: "Teal kareler ekrana çizilen düğümler: persona'n, aldığı ürünler ve aynı ürünleri alan öteki müşteriler. Bir müşteriye tıkla: ondan çıkan kenarları gör."
-    legend: '<span><i class="k"></i>Düğüm kimliği ve etiketi</span>'
+    title: "The big picture: the graph and the neighborhood on the screen"
+    text: "The teal squares are the vertices on the screen: your persona, the products that it bought, and the other customers who bought the same products. Click a customer to see its outgoing edges."
+    legend: '<span><i class="k"></i>Vertex id and label</span>'
   sections:
-    - title: "Komşuluk nedir?"
+    - title: "What is a neighborhood?"
       html: |
-        <p>Bir düğümün <b>komşuluğu</b>, ona bir ya da iki kenarla bağlı düğümlerdir. Ekrandaki ağ, persona'nın iki adımlık komşuluğudur:
-        persona → aldığı ürünler → o ürünleri alan öteki müşteriler.</p>
-        <p>Sorgu bu deseni bir kez tarif eder, Neptune deseni graf üzerinde arar. Dönen satırlar tarayıcıda düğüm ve kenar listesine çevrilip çizilir.</p>
+        <p>The <b>neighborhood</b> of a vertex is the vertices that connect to it through one or two edges. The network on the screen is the two-step neighborhood of your persona:
+        the persona, the products that it bought, and the other customers who bought these products.</p>
+        <p>The query describes this pattern once, and Neptune looks for the pattern in the graph. The browser turns the returned rows into a list of vertices and edges and draws them.</p>
   explain:
     openCypher:
-      title: "Komşuluğu bulmak"
-      text: "<code>OPTIONAL MATCH</code>, bir ürünü başka kimse almamış olsa bile ürünü sonuçta tutar. <code>collect(…)[0..3]</code> her ürün için en fazla üç öteki müşteri alır, ekran kalabalıklaşmasın diye."
+      title: "Find the neighborhood"
+      text: "<code>OPTIONAL MATCH</code> keeps a product in the result also when no other customer bought it. <code>collect(…)[0..3]</code> takes at most three other customers for each product, so that the screen does not become crowded."
   analogy:
     icon: "👥"
-    html: "<p>Bir düğün davetiyesi listesi düşün: gelin, gelinin arkadaşları, arkadaşlarının eşleri. Listeyi oturma planına çevirmek için kimin kimi tanıdığını bilmen yeter. Graf bu <q>kim kimi tanıyor</q> bilgisidir.</p>"
+    html: "<p>Think of the guest list of a wedding: the bride, the friends of the bride, the partners of these friends. To make a seating plan from the list, you only need to know who knows whom. The graph is this <q>who knows whom</q> information.</p>"
   alternatives:
     engine: "Neptune"
-    criteria: ["İki adımlık komşuluk", "Ağı çizmeye hazır sonuç", "Kim işletir"]
+    criteria: ["Two-step neighborhood", "A result that is ready to draw", "Who operates it"]
     rows:
-      - { name: "Amazon Neptune", chosen: true, cells: [[y, "Tek desen"], [y, "Düğüm ve kenar"], [y, "AWS"]] }
-      - { name: "Aurora PostgreSQL", sub: "recursive CTE veya JOIN'ler", cells: [[p, "Birkaç JOIN"], [p, "Satırları uygulama çevirir"], [y, "AWS"]] }
-    verdict: "Ağı çizmek, ilişkileri olduğu gibi döndüren bir veritabanıyla en kolaydır. Neptune'da sorgu, ekrandaki resmin tarifine benzer."
+      - { name: "Amazon Neptune", chosen: true, cells: [[y, "One pattern"], [y, "Vertices and edges"], [y, "AWS"]] }
+      - { name: "Aurora PostgreSQL", sub: "recursive CTE or JOINs", cells: [[p, "Several JOINs"], [p, "The app converts the rows"], [y, "AWS"]] }
+    verdict: "A network is easiest to draw with a database that returns the relations as they are. In Neptune, the query is similar to a description of the picture on the screen."
   try:
-    - { href: "/admin/graph", label: "Başka bir persona seç" }
+    - { href: "/admin/graph", label: "Select a different persona" }
   glossary:
-    - ["Komşuluk", "Bir düğüme bir ya da birkaç kenarla bağlı düğümler."]
-    - ["OPTIONAL MATCH", "Desen bulunmazsa da satırı tutan eşleşme."]
+    - ["Neighborhood", "The vertices that connect to a vertex through one or more edges."]
+    - ["OPTIONAL MATCH", "A match that keeps the row also when the pattern is not found."]

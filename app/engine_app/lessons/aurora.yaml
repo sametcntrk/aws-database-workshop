@@ -1,157 +1,157 @@
-# 101 lessons for Amazon Aurora PostgreSQL (Turkish).
+# 101 lessons for Amazon Aurora PostgreSQL (English, ASD-STE100).
 transaction:
-  title: "Aurora 101: checkout ve transaction"
+  title: "Aurora 101: checkout and the transaction"
   apis: ["POST /api/orders"]
-  kicker: "Aurora 101: ilişkisel veritabanı"
-  headline: "Sipariş verdiğinde stok, sipariş ve sipariş satırları neden ya hep birlikte yazılır ya hiç?"
-  lead: "Checkout'ta Aurora'ya tek bir iş verildi: stoğu düş, siparişi yaz, satırlarını yaz. Bu sayfa bu adımların neden tek bir transaction içinde olduğunu gösteriyor."
-  need: "Bu dersi kendi verinle görmek için sepete bir ürün ekle ve <b>checkout</b>'ı tamamla, sonra paneldeki 101 bağlantısına tıkla. Rollback deneyini de dene."
+  kicker: "Aurora 101: a relational database"
+  headline: "When you place an order, why are the stock, the order and the order lines written all together or not at all?"
+  lead: "In checkout, Aurora got one job: decrease the stock, write the order, write its lines. This page shows why these steps are in one transaction."
+  need: "To see this lesson with your own data, add a product to the cart and complete the <b>checkout</b>, then click the 101 link in the panel. Try the rollback experiment too."
   big:
-    title: "Büyük resim: dört tablo ve senin siparişin"
-    text: "Her raf bir tablo, her kare bir satır. Teal kareler senin siparişlerin, onların satırları, içindeki ürünler ve persona müşterin. Bir siparişe tıkla: öteki tablolardaki bağlı satırlar onun altında açılır."
-    legend: '<span><i class="k"></i>Anahtar sütunlar (primary key, foreign key)</span>'
+    title: "The big picture: four tables and your order"
+    text: "Each shelf is one table, and each square is one row. The teal squares are your orders, their lines, the products in them and your persona customer. Click an order to open the linked rows of the other tables below it."
+    legend: '<span><i class="k"></i>Key columns (primary key, foreign key)</span>'
   sections:
-    - title: "Kaynakta veri böyleydi, Aurora'da böyle duruyor"
+    - title: "The data at the source, and the data in Aurora"
       html: |
-        <p>Bir sipariş fişinde müşteri, tarih, toplam ve satırlar bir aradadır. İlişkisel veritabanı bu fişi tekrar etmeyen parçalara böler ve parçaları <b>anahtarlarla</b> bağlar.</p>
+        <p>An order slip has the customer, the date, the total and the lines together. A relational database divides this slip into parts that do not repeat, and links the parts with <b>keys</b>.</p>
         <div class="src-store">
-          <div><h3>Kaynak: bir sipariş fişi</h3><pre>Sipariş W1730…  Ayşe Yılmaz  27.10.2026
-          2 × Kablosuz Kulaklık   2.598 TL
-          1 × Koşu Ayakkabısı       899 TL
-        Toplam: 3.497 TL</pre></div>
-          <div><h3>Aurora'da: dört tabloya bölünmüş</h3><pre>orders       (order_id, customer_id, total, …)
+          <div><h3>Source: an order slip</h3><pre>Order W1730…  Ayşe Yılmaz  27.10.2026
+          2 × Wireless Headphones   2,598 TL
+          1 × Running Shoes           899 TL
+        Total: 3,497 TL</pre></div>
+          <div><h3>In Aurora: divided into four tables</h3><pre>orders       (order_id, customer_id, total, …)
         order_items  (order_id, product_id, qty, unit_price)
         products     (product_id, name, stock, …)
         customers    (customer_id, name, city, …)</pre></div>
         </div>
-        <p>Müşterinin adı yalnız <code>customers</code> tablosunda bir kez yazılır; sipariş ona <code>customer_id</code> ile işaret eder (foreign key).
-        Böylece bir bilgi değişince tek yerde değişir. <code>CHECK (stock &gt;= 0)</code> kuralı ise stoğun eksiye düşmesini veritabanı düzeyinde engeller.</p>
+        <p>The name of the customer is written only once, in the <code>customers</code> table. The order points to it with <code>customer_id</code> (a foreign key).
+        So when a value changes, it changes in one place. The rule <code>CHECK (stock &gt;= 0)</code> stops the stock from going below zero at the database level.</p>
   explain:
     BEGIN:
-      title: "Transaction başladı"
-      text: "Buradan COMMIT'e kadar bütün komutlar tek bir iş sayılır: ya hepsi kalıcı olur ya hiçbiri."
+      title: "The transaction started"
+      text: "From here to COMMIT, all commands are one job: either all of them become permanent, or none of them."
     "UPDATE (stock)":
-      title: "Stok düşüldü ve satır kilitlendi"
-      text: "<code>stock &gt;= qty</code> koşulu yeterli stok yoksa güncellemeyi yapmaz. Güncellenen satır transaction bitene kadar kilitli kalır: iki müşteri aynı son ürünü aynı anda alamaz."
+      title: "The stock went down, and the row was locked"
+      text: "The condition <code>stock &gt;= qty</code> stops the update if the stock is not enough. The updated row stays locked until the transaction ends, so two customers cannot buy the same last product at the same time."
     "INSERT (order)":
-      title: "Sipariş satırı yazıldı"
-      text: "<code>orders</code> tablosuna yeni bir satır eklendi. <code>customer_id</code>, customers tablosunda var olmayan bir müşteriyi gösteremez (foreign key)."
+      title: "The order row was written"
+      text: "A new row was added to the <code>orders</code> table. <code>customer_id</code> cannot point to a customer that is not in the customers table (foreign key)."
     "INSERT (order item)":
-      title: "Siparişin her ürünü yazıldı"
-      text: "Her ürün <code>order_items</code> tablosunda bir satır olur ve hem siparişe hem ürüne anahtarla bağlanır."
+      title: "Each product of the order was written"
+      text: "Each product becomes one row in the <code>order_items</code> table, with keys to both the order and the product."
     COMMIT:
-      title: "COMMIT: kalıcı oldu"
-      text: "Aurora değişikliği 3 Availability Zone'daki 6 kopyanın en az 4'üne yazdıktan sonra COMMIT'i onaylar. Elektrik kesilse bile sipariş kaybolmaz."
+      title: "COMMIT: the change is permanent"
+      text: "Aurora confirms COMMIT after it writes the change to at least 4 of the 6 copies in 3 Availability Zones. Also if the power fails, the order is not lost."
     ROLLBACK:
-      title: "ROLLBACK: hiçbir şey olmadı"
-      text: "Bir adım hata verdi. PostgreSQL BEGIN'den sonraki her değişikliği geri aldı: stok eski haline döndü, sipariş hiç yazılmadı. Yarım sipariş diye bir şey yok."
+      title: "ROLLBACK: nothing happened"
+      text: "One step failed. PostgreSQL undid each change after BEGIN: the stock went back to its old value, and the order was never written. A half order does not exist."
   analogy:
     icon: "🏦"
-    html: "<p>Bankada bir hesaptan ötekine para gönderiyorsun. Paranın bir hesaptan çıkıp ötekine girmemesi kabul edilemez. Banka iki hareketi tek bir işlem olarak yapar: ya ikisi birden olur ya hiçbiri.</p><p>Checkout da aynı: stoğun düşüp siparişin yazılmaması ya da tersi asla olmamalı. Transaction bunun garantisidir.</p>"
+    html: "<p>You send money from one bank account to another. Money that leaves one account and does not arrive in the other is not acceptable. The bank does the two movements as one operation: both happen, or neither happens.</p><p>Checkout is the same: the stock must never go down without the order, and the order must never exist without the stock change. A transaction gives this guarantee.</p>"
   alternatives:
     engine: "Aurora PostgreSQL"
-    criteria: ["Birden çok tabloda tek transaction", "Veri bütünlüğü kuralları", "Raporda SQL ve JOIN", "Dayanıklılık", "Kim işletir"]
+    criteria: ["One transaction over many tables", "Data integrity rules", "SQL and JOIN in reports", "Durability", "Who operates it"]
     rows:
-      - { name: "Amazon Aurora PostgreSQL", chosen: true, cells: [[y, "Tam ACID"], [y, "Foreign key, CHECK"], [y, "Tam SQL"], [y, "3 AZ'de 6 kopya"], [y, "AWS"]] }
-      - { name: "RDS for PostgreSQL", sub: "klasik yönetilen PostgreSQL", cells: [[y, "Tam ACID"], [y, "Aynı"], [y, "Aynı"], [p, "Multi-AZ'de 2 kopya"], [y, "AWS"]] }
-      - { name: "DynamoDB", sub: "TransactWriteItems", cells: [[p, "En fazla 100 item"], [n, "Foreign key yok"], [n, "JOIN yok"], [y, "3 AZ"], [y, "AWS, sunucusuz"]] }
-      - { name: "DocumentDB", sub: "çok belgeli transaction", cells: [[p, "Destekli, sınırlı"], [n, "Foreign key yok"], [p, "$lookup ile"], [y, "3 AZ'de 6 kopya"], [y, "AWS"]] }
-    verdict: "Siparişler paradır: stok, sipariş ve satırlar her zaman birbiriyle tutarlı olmalı. İlişkisel model ve ACID transaction bunun için yapıldı. Aurora aynı PostgreSQL'i daha dayanıklı bir depolama katmanıyla verir."
+      - { name: "Amazon Aurora PostgreSQL", chosen: true, cells: [[y, "Full ACID"], [y, "Foreign key, CHECK"], [y, "Full SQL"], [y, "6 copies in 3 AZs"], [y, "AWS"]] }
+      - { name: "RDS for PostgreSQL", sub: "classic managed PostgreSQL", cells: [[y, "Full ACID"], [y, "The same"], [y, "The same"], [p, "2 copies with Multi-AZ"], [y, "AWS"]] }
+      - { name: "DynamoDB", sub: "TransactWriteItems", cells: [[p, "At most 100 items"], [n, "No foreign keys"], [n, "No JOIN"], [y, "3 AZs"], [y, "AWS, serverless"]] }
+      - { name: "DocumentDB", sub: "multi-document transaction", cells: [[p, "Supported, with limits"], [n, "No foreign keys"], [p, "With $lookup"], [y, "6 copies in 3 AZs"], [y, "AWS"]] }
+    verdict: "Orders are money: the stock, the order and the lines must always agree. The relational model and ACID transactions were made for this. Aurora gives the same PostgreSQL with a more durable storage layer."
   try:
-    - { href: "/checkout", label: "Checkout'ta rollback deneyini aç" }
-    - { href: "/orders", label: "Siparişlerimi gör" }
+    - { href: "/checkout", label: "Turn on the rollback experiment in checkout" }
+    - { href: "/orders", label: "See my orders" }
   glossary:
-    - ["Transaction", "Birden çok komutun tek bir iş olarak ya hep ya hiç çalışması."]
-    - ["ACID", "Atomik, tutarlı, yalıtılmış ve kalıcı: transaction'ın dört garantisi."]
-    - ["Primary key", "Bir satırı tekil olarak tanımlayan sütun."]
-    - ["Foreign key", "Başka bir tablonun satırına işaret eden ve geçerli olması zorunlu sütun."]
-    - ["Satır kilidi", "Bir transaction bir satırı değiştirirken ötekilerin beklemesi."]
+    - ["Transaction", "Many commands that run as one job, all or nothing."]
+    - ["ACID", "Atomic, consistent, isolated and durable: the four guarantees of a transaction."]
+    - ["Primary key", "The column that identifies one row."]
+    - ["Foreign key", "A column that points to a row of another table and must be valid."]
+    - ["Row lock", "While one transaction changes a row, the others wait."]
 
 join:
-  title: "Aurora 101: siparişlerim ve JOIN"
+  title: "Aurora 101: my orders and JOIN"
   apis: ["GET /api/orders"]
-  kicker: "Aurora 101: tabloları birleştirmek"
-  headline: "Dört tabloya bölünmüş veri, tek bir sipariş listesine nasıl geri döndü?"
-  lead: "Siparişlerim sayfası Aurora'ya tek bir SQL gönderdi. Bu sayfa o sorgunun tabloları anahtarlarla nasıl birleştirdiğini gösteriyor."
+  kicker: "Aurora 101: combine tables"
+  headline: "How did data that is divided into four tables become one list of orders again?"
+  lead: "The My orders page sent one SQL query to Aurora. This page shows how that query combined the tables with keys."
   sample: { url: "/aurora/api/orders", label: "Load my orders" }
   big:
-    title: "Büyük resim: tablolar ve senin siparişlerine bağlı satırlar"
-    text: "Teal kareler sorgunun birleştirdiği satırlar. Bir siparişe tıkla: altında order_items ve products satırları JOIN ile açılmış halde görünür."
-    legend: '<span><i class="k"></i>Anahtar sütunlar</span>'
+    title: "The big picture: the tables and the rows linked to your orders"
+    text: "The teal squares are the rows that the query combined. Click an order to see its order_items and products rows, opened with JOIN, below it."
+    legend: '<span><i class="k"></i>Key columns</span>'
   sections:
-    - title: "JOIN adım adım"
+    - title: "JOIN step by step"
       html: |
         <ol>
-          <li><code>orders</code> tablosunda <code>visitor_id</code> senin olan satırlar seçilir (bu sütunun index'i var).</li>
-          <li>Her sipariş için <code>order_items</code> tablosunda aynı <code>order_id</code>'ye sahip satırlar bulunur.</li>
-          <li>Her satırın <code>product_id</code>'si ile <code>products</code> tablosundaki ürün adı alınır.</li>
-          <li><code>GROUP BY</code> her siparişi tek satıra indirir; <code>string_agg</code> ürün adlarını virgülle birleştirir.</li>
+          <li>The query selects the rows of <code>orders</code> whose <code>visitor_id</code> is yours (this column has an index).</li>
+          <li>For each order, it finds the rows of <code>order_items</code> with the same <code>order_id</code>.</li>
+          <li>With the <code>product_id</code> of each row, it gets the product name from the <code>products</code> table.</li>
+          <li><code>GROUP BY</code> reduces each order to one row, and <code>string_agg</code> joins the product names with commas.</li>
         </ol>
-        <p>Ürünün adı değişirse geçmiş siparişlerin listesinde de yeni ad görünür: ad yalnız bir yerde saklanır.</p>
+        <p>If the name of a product changes, the list of old orders also shows the new name, because the name is stored in only one place.</p>
   explain:
     "SELECT (JOIN)":
-      title: "Üç tablo tek sorguda"
-      text: "PostgreSQL'in sorgu planlayıcısı hangi tablodan başlayacağına ve hangi index'i kullanacağına kendisi karar verdi. Sen yalnız <q>ne istediğini</q> yazdın, <q>nasıl</q> bulunacağını değil."
+      title: "Three tables in one query"
+      text: "The query planner of PostgreSQL decided itself with which table to start and which index to use. You wrote only <q>what you want</q>, not <q>how to find it</q>."
   analogy:
     icon: "🧩"
-    html: "<p>Bir okulun öğrenci listesi, ders listesi ve not çizelgesi ayrı defterlerde. <q>Ayşe'nin karnesi</q> için üç defteri öğrenci numarası ve ders koduyla yan yana koyarsın. JOIN bu yan yana koymadır; anahtarlar defterleri birbirine bağlayan numaralardır.</p>"
+    html: "<p>A school keeps the student list, the course list and the grade sheet in separate books. For <q>the report card of Ayşe</q>, you put the three books side by side with the student number and the course code. JOIN is this side-by-side match. The keys are the numbers that link the books.</p>"
   alternatives:
     engine: "Aurora PostgreSQL"
-    criteria: ["Tablolar arası JOIN", "Yeni soru için yeni sorgu", "Kim işletir"]
+    criteria: ["JOIN between tables", "A new query for a new question", "Who operates it"]
     rows:
-      - { name: "Amazon Aurora PostgreSQL", chosen: true, cells: [[y, "Tam SQL"], [y, "Şema aynı kalır"], [y, "AWS"]] }
-      - { name: "DynamoDB", sub: "anahtar-değer", cells: [[n, "Uygulama birleştirir"], [n, "Yeni index veya veri kopyası"], [y, "AWS"]] }
-      - { name: "DocumentDB", sub: "$lookup", cells: [[p, "$lookup, sınırlı"], [p, "Pipeline ile"], [y, "AWS"]] }
-    verdict: "Sipariş verisi doğası gereği ilişkiseldir: müşteri, sipariş, satır, ürün. Bu ilişkileri sorgu anında birleştirmek SQL'in temel işidir."
+      - { name: "Amazon Aurora PostgreSQL", chosen: true, cells: [[y, "Full SQL"], [y, "The schema stays the same"], [y, "AWS"]] }
+      - { name: "DynamoDB", sub: "key-value", cells: [[n, "The app combines the data"], [n, "A new index or a copy of the data"], [y, "AWS"]] }
+      - { name: "DocumentDB", sub: "$lookup", cells: [[p, "$lookup, with limits"], [p, "With a pipeline"], [y, "AWS"]] }
+    verdict: "Order data is relational by nature: customer, order, line, product. To combine these relations at query time is the core work of SQL."
   try:
-    - { href: "/orders", label: "Siparişlerimi yeniden yükle" }
+    - { href: "/orders", label: "Load my orders again" }
   glossary:
-    - ["JOIN", "İki tablonun satırlarını ortak bir sütun değeriyle eşleştirmek."]
-    - ["GROUP BY", "Satırları bir sütuna göre gruplayıp her grubu tek satıra indirmek."]
-    - ["Sorgu planlayıcısı", "SQL'i çalıştırmanın en ucuz yolunu seçen veritabanı bileşeni."]
+    - ["JOIN", "Match the rows of two tables by a shared column value."]
+    - ["GROUP BY", "Group rows by a column and reduce each group to one row."]
+    - ["Query planner", "The part of the database that selects the cheapest way to run a SQL query."]
 
 report:
-  title: "Aurora 101: operasyonel rapor"
+  title: "Aurora 101: the operational report"
   apis: ["/api/report"]
-  kicker: "Aurora 101: canlı veride rapor"
-  headline: "Aurora canlı siparişlerden bir raporu nasıl hesapladı, sınırı nerede?"
-  lead: "Sipariş raporu, segment başına sipariş ve ciro hesapladı. Bu sayfa sorgu planını ve bu tür raporların Aurora'da nerede zorlanmaya başladığını gösteriyor."
+  kicker: "Aurora 101: a report on live data"
+  headline: "How did Aurora calculate a report from live orders, and where is its limit?"
+  lead: "The order report calculated the orders and the revenue for each segment. This page shows the query plan and where reports of this kind start to be difficult for Aurora."
   sample: { url: "/aurora/api/report", label: "Load the order report" }
   big:
-    title: "Büyük resim: raporun taradığı tablolar"
-    text: "Rapor, orders, customers ve order_items tablolarının neredeyse bütün satırlarını okur. Teal kareler senin siparişlerin; rapor onları da sayar."
-    legend: '<span><i class="k"></i>Anahtar sütunlar</span>'
+    title: "The big picture: the tables that the report scans"
+    text: "The report reads almost all rows of the orders, customers and order_items tables. The teal squares are your orders, and the report counts them too."
+    legend: '<span><i class="k"></i>Key columns</span>'
   sections:
-    - title: "Satır deposu ve rapor"
+    - title: "The row store and the report"
       html: |
-        <p>Aurora veriyi <b>satır satır</b> saklar: bir siparişin bütün sütunları diskte yan yana durur. Bu, <q>bir siparişi oku, bir siparişi yaz</q> işleri için idealdir.</p>
-        <p>Rapor ise tek bir sütunu (ör. tutar) milyonlarca satırda toplar. Satır deposu bu durumda gereksiz sütunları da okur. Küçük ve orta veride sorun değildir; yıllarca birikmiş veride analitik bir veritabanı (Redshift) daha uygundur.
-        Bu yüzden Lale Market'te geçmiş satış raporu Redshift'te çalışır.</p>
+        <p>Aurora stores data <b>row by row</b>: all columns of an order are next to each other on disk. This is ideal for work like <q>read one order, write one order</q>.</p>
+        <p>A report adds up one column (for example the amount) over millions of rows. A row store then also reads the columns that the report does not need. With small and medium data, this is no problem. With years of data, an analytical database (Redshift) is a better fit.
+        This is why the sales history report of Lale Market runs in Redshift.</p>
   explain:
     "SELECT (report)":
-      title: "Segment başına toplamlar"
-      text: "Üç tablo birleştirildi, segmente göre gruplandı ve toplandı. Bu sorgu canlı siparişlerle aynı veritabanında çalışır; çok büyük olursa checkout'u yavaşlatabilir."
+      title: "Totals per segment"
+      text: "The query joined three tables, grouped them by segment and added them up. This query runs in the same database as the live orders. If it becomes very large, it can make checkout slower."
     "EXPLAIN ANALYZE":
-      title: "Sorgu planı"
-      text: "<code>EXPLAIN ANALYZE</code> sorguyu çalıştırıp her adımın süresini ve satır sayısını gösterir: hangi tablo taranmış (Seq Scan), hangisinde index kullanılmış, JOIN hangi yöntemle yapılmış (Hash Join)."
+      title: "The query plan"
+      text: "<code>EXPLAIN ANALYZE</code> runs the query and shows the time and the number of rows of each step: which table was scanned (Seq Scan), where an index was used, and which method the JOIN used (Hash Join)."
     "SELECT (workshop orders)":
-      title: "Workshop siparişleri saat saat"
-      text: "Bugün workshop'ta verilen siparişler saate göre gruplandı. Bu satırlar az olduğu için sorgu hızlıdır."
+      title: "Workshop orders hour by hour"
+      text: "The orders that were placed in the workshop today were grouped by hour. There are few of these rows, so the query is fast."
   analogy:
     icon: "📒"
-    html: "<p>Satır deposu, her müşterinin kartını ayrı tutan bir kartotektir. <q>Ayşe'nin kartı</q> anında bulunur. <q>Bütün müşterilerin toplam harcaması</q> içinse her kartı tek tek çekmen gerekir. Bunu her gün yapacaksan, harcamaları tek bir sütunda tutan bir deftere (Redshift) geçersin.</p>"
+    html: "<p>A row store is a card index that keeps a separate card for each customer. You find <q>the card of Ayşe</q> immediately. For <q>the total spending of all customers</q>, you must take out each card. If you do this every day, you move the spending to a book that keeps it in one column (Redshift).</p>"
   alternatives:
-    engine: "Aurora (operasyonel rapor için)"
-    criteria: ["Canlı veri", "Büyük taramada hız", "Checkout'a etkisi"]
+    engine: "Aurora (for an operational report)"
+    criteria: ["Live data", "Speed in a large scan", "Effect on checkout"]
     rows:
-      - { name: "Aurora, birincil instance", chosen: true, cells: [[y, "Anlık"], [p, "Küçük ve orta veride iyi"], [p, "Aynı kaynağı kullanır"]] }
-      - { name: "Aurora okuma kopyası (reader)", sub: "aynı küme", cells: [[y, "Milisaniyeler geride"], [p, "Aynı satır deposu"], [y, "Yazara dokunmaz"]] }
-      - { name: "Redshift + zero-ETL", sub: "kolon deposu", cells: [[y, "Saniyeler geride"], [y, "Milyarlarca satır"], [y, "Aurora'ya dokunmaz"]] }
-    verdict: "Küçük, güncel bir operasyon raporu için Aurora yeterli ve en basit yol. Rapor büyüdükçe okuma kopyasına, analitik ihtiyaç büyüdüğünde zero-ETL ile Redshift'e taşınır. Lale Market ikisini de gösterir."
+      - { name: "Aurora, primary instance", chosen: true, cells: [[y, "Immediate"], [p, "Good with small and medium data"], [p, "Uses the same resources"]] }
+      - { name: "Aurora read replica (reader)", sub: "the same cluster", cells: [[y, "Milliseconds behind"], [p, "The same row store"], [y, "Does not touch the writer"]] }
+      - { name: "Redshift + zero-ETL", sub: "column store", cells: [[y, "Seconds behind"], [y, "Billions of rows"], [y, "Does not touch Aurora"]] }
+    verdict: "For a small, current operations report, Aurora is enough and the simplest way. When the report grows, it moves to a read replica, and when the analytical need grows, it moves to Redshift with zero-ETL. Lale Market shows both."
   try:
-    - { href: "/admin/orders", label: "Raporda EXPLAIN'i aç" }
-    - { href: "/admin/reports", label: "Aynı soruyu Redshift'te sor" }
+    - { href: "/admin/orders", label: "Turn on EXPLAIN in the report" }
+    - { href: "/admin/reports", label: "Ask the same question in Redshift" }
   glossary:
-    - ["Satır deposu (row store)", "Bir satırın bütün sütunlarını diskte yan yana saklamak."]
-    - ["Seq Scan", "Bir tablonun bütün satırlarını baştan sona okumak."]
-    - ["Hash Join", "Bir tablodan bellekte hash tablosu kurup ötekini onunla eşleştiren JOIN yöntemi."]
+    - ["Row store", "Store all columns of a row next to each other on disk."]
+    - ["Seq Scan", "Read all rows of a table from start to end."]
+    - ["Hash Join", "A JOIN method that builds a hash table from one table in memory and matches the other table with it."]
