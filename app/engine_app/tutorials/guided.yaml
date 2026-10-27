@@ -1,0 +1,539 @@
+# Mission of the Guided e-commerce app (static/js/mission.js). ASD-STE100 English.
+# Each step: page (page id), path (shop path, the app base goes in front), engines, use_case, title,
+#   why (what the Engine does here), do (one instruction), target (CSS selector: the only open part of the page),
+#   wait (the Engine call that completes the action: method, path ("*" at the end = prefix), query/body values ("*" = any),
+#   count, any = a refused call also counts), quiz (q, options with the same word count, answer = index, why), result.
+finish_url: /e2etutorial
+steps:
+  # ---------------------------------------------------------------- Home: DocumentDB, ElastiCache, Keyspaces
+  - page: home
+    path: /
+    engines: [docdb]
+    use_case: Product catalog
+    title: The home page is one DocumentDB aggregation
+    why: >-
+      Each product is one JSON document in DocumentDB. The category tiles come from one aggregation pipeline.
+      DocumentDB groups the documents by category and counts them on the server. Only the counts travel to the Engine App.
+    do: Look at the Categories tiles. Then find the call "Load the home page" in the Behind-the-scenes panel and open its 101 link.
+    target: "#cats"
+    wait: {method: GET, path: /docdb/api/home}
+    quiz:
+      q: Where does DocumentDB count the products of each category?
+      options:
+        - In the browser, after it reads every product
+        - On the database server, in the pipeline
+        - In the Engine App, with a Python loop
+      answer: 1
+      why: The $group stage runs inside DocumentDB. The Engine App receives five small result documents.
+    result: The panel shows the aggregate pipeline with $group and the time. The page needs no second query for the counts.
+
+  - page: home
+    path: /
+    engines: [elasticache]
+    use_case: Hot data in memory
+    title: The flash deal comes from memory
+    why: >-
+      The flash deal changes each second, and every Visitor reads it. ElastiCache (Valkey) keeps it in memory as a hash and a counter.
+      A read takes less than one millisecond inside the VPC.
+    do: Look at the flash deal box. In the panel, find the HGETALL and GET commands of the call "Flash deal".
+    target: "#hero-deal"
+    wait: {method: GET, path: /elasticache/api/deal}
+    quiz:
+      q: Why does the shop keep the deal stock in ElastiCache?
+      options:
+        - Memory reads are fast for many readers
+        - ElastiCache keeps data safe for years
+        - ElastiCache joins tables for the report
+      answer: 0
+      why: Many Visitors read and change the same small value. An in-memory store answers in microseconds.
+    result: The deal hash has the product, the price and the end time. The stock is a separate counter key.
+
+  # ---------------------------------------------------------------- Category: DocumentDB indexes
+  - page: category
+    path: /c/Elektronik
+    engines: [docdb]
+    use_case: Filter with an index
+    title: An index decides how many documents DocumentDB reads
+    why: >-
+      The page asks for the products of one category, sorted by rating. A compound index on {category, rating} lets DocumentDB
+      go straight to the matching documents. Without the index, it must examine every document in the collection.
+    do: In the Experiment box, select "Collection scan". Then compare "docs examined" of the two calls in the panel.
+    target: "#exp"
+    wait: {method: GET, path: /docdb/api/products, query: {index: "off"}}
+    quiz:
+      q: What does the collection scan change in the panel?
+      options:
+        - Docs examined becomes the full collection size
+        - The result list gets more products
+        - The products come back without a price
+      answer: 0
+      why: The result is the same. Only the work is larger, because DocumentDB reads each document to test the filter.
+    result: With the index, docs examined is equal to the number of results. With the scan, it is equal to the full catalog.
+
+  - page: category
+    path: /c/Elektronik
+    engines: [docdb]
+    use_case: Query a nested field
+    title: Filter on a field inside the document
+    why: >-
+      The colour is in a nested object, attributes.renk. DocumentDB can filter and index a nested field with dot notation.
+      In a relational model, these optional attributes often need a separate table.
+    do: Select a colour in the "Colour" list.
+    target: "#exp"
+    wait: {method: GET, path: /docdb/api/products, query: {color: "*"}}
+    result: The filter in the panel is {"category", "attributes.renk"}. The index on attributes.renk keeps this filter fast.
+
+  # ---------------------------------------------------------------- Search: OpenSearch
+  - page: search
+    path: /search?q=kablosuz%20kulaklik
+    engines: [opensearch]
+    use_case: Full-text search
+    title: Search finds words, not exact strings
+    why: >-
+      OpenSearch keeps an inverted index: for each word, a list of the products that contain it. The tr_folded analyzer
+      changes "ı" to "i" and "ş" to "s" at index time and at query time. So "kulaklik" finds "Kulaklık".
+    do: Select "standard" in the Analyzer experiment. Compare the result count with the first search.
+    target: "#exp"
+    wait: {method: GET, path: /opensearch/api/search, query: {analyzer: standard}}
+    quiz:
+      q: Why does "kulaklik" find fewer products with the standard analyzer?
+      options:
+        - The standard analyzer keeps the Turkish letters
+        - The standard analyzer removes all the products
+        - The standard analyzer sorts by the price
+      answer: 0
+      why: The index has the token "kulaklık". The query token "kulaklik" is a different word for the standard analyzer.
+    result: The same query gets different tokens from two analyzers. The analyzer decides which words match.
+
+  - page: search
+    path: /search?q=kulaklk
+    engines: [opensearch]
+    use_case: Typo tolerance
+    title: Fuzziness accepts a typo
+    why: >-
+      "kulaklk" has a missing letter. With fuzziness AUTO, OpenSearch also matches words that are one or two edits away.
+      An edit is one added, removed or changed letter.
+    do: Select "Exact words". The same typo now finds nothing.
+    target: "#exp"
+    wait: {method: GET, path: /opensearch/api/search, query: {fuzzy: "off", q: kulaklk}}
+    result: The match query in the panel has no "fuzziness" now. The typo finds no product.
+
+  - page: search
+    path: /search?q=kablosuz%20kulaklik
+    engines: [opensearch]
+    use_case: Facets
+    title: The facet counts come from the same request
+    why: >-
+      The category and price counts at the left are aggregations. OpenSearch calculates them in the same request as the hits.
+      A shop needs no second query for its filters.
+    do: Click a category name in the facets at the left.
+    target: "#facets"
+    wait: {method: GET, path: /opensearch/api/search, query: {category: "*"}}
+    result: The query now has a filter on the keyword field "category". A filter does not change the relevance score.
+
+  # ---------------------------------------------------------------- Stores: OpenSearch geo
+  - page: stores
+    path: /stores
+    engines: [opensearch]
+    use_case: Geospatial search
+    title: Find the stores near a point
+    why: >-
+      Each store document has a location field of type geo_point. A geo_distance filter keeps the stores in a circle,
+      and a sort puts the nearest store first.
+    do: Select "100 km" in the Experiment box.
+    target: "#exp, #map"
+    wait: {method: GET, path: /opensearch/api/stores, query: {km: "100"}}
+    quiz:
+      q: Which field type lets OpenSearch filter by distance?
+      options:
+        - A keyword field with the city
+        - A geo_point field with the location
+        - A text field with the address
+      answer: 1
+      why: Only a geo_point (or geo_shape) field stores coordinates that a distance query can use.
+    result: The geo_distance query in the panel has distance 100km. More stores come into the circle.
+
+  # ---------------------------------------------------------------- Product: DocumentDB, Keyspaces, Neptune, DynamoDB
+  - page: product
+    path: /p/P0001
+    engines: [docdb]
+    use_case: One read for one product
+    title: One document has the full product
+    why: >-
+      The product, its attributes and its tags are in one document. One read by _id returns all of it.
+      A projection returns only the fields that you ask for.
+    do: Select "Card fields only". Compare the document size of the two reads in the panel.
+    target: "#exp"
+    wait: {method: GET, path: /docdb/api/product/*, query: {projection: card}}
+    result: The card projection has no description and no attributes. Less data goes over the network.
+
+  - page: product
+    path: /p/P0001
+    engines: [keyspaces]
+    use_case: Event history per user
+    title: The page wrote a view event to Keyspaces
+    why: >-
+      Keyspaces is a wide-column store with the Cassandra Query Language (CQL). The table has one partition per user.
+      Inside the partition, the rows are sorted by event_time, newest first. So "recently viewed" is one partition read.
+    do: Look at the "Recently viewed" strip. In the panel, find the INSERT and the SELECT on activity_by_user.
+    target: "#recent-wrap"
+    wait: {method: GET, path: /keyspaces/api/recent}
+    quiz:
+      q: Why is "the last 10 events of one user" a fast read?
+      options:
+        - The rows of one user are in one sorted partition
+        - Keyspaces keeps a copy of every table in memory
+        - The browser sends the events with each request
+      answer: 0
+      why: The partition key (user_id) finds the partition. The clustering order (event_time DESC) gives the newest rows first.
+    result: The SELECT has WHERE user_id = ? and LIMIT. Keyspaces reads one partition and stops after the limit.
+
+  - page: product
+    path: /p/P0001
+    engines: [neptune]
+    use_case: Recommendations
+    title: Recommendations are a walk on a graph
+    why: >-
+      In Neptune, customers and products are vertices, and each purchase is a BOUGHT edge. "Customers who bought this also bought"
+      is a walk: product → buyers → their other products. The query counts the paths to each product.
+      "For my persona" starts at you: your products → other buyers → their products.
+    do: Select "For my persona" in the Recommendations experiment.
+    target: "#exp, #recs-wrap"
+    wait: {method: GET, path: /neptune/api/recs, query: {mode: persona}}
+    quiz:
+      q: What does a persona with no orders get?
+      options:
+        - No personal recommendation, because no edges exist
+        - The best recommendation, because the graph is empty
+        - An error, because Neptune needs a SQL table
+      answer: 0
+      why: A walk starts at the persona vertex. With no BOUGHT edges, the walk finds nothing. This is the cold-start problem.
+    result: The openCypher query in the panel starts at your persona vertex and follows three hops of BOUGHT edges.
+
+  - page: product
+    path: /p/P0001
+    engines: [dynamodb]
+    use_case: Shopping cart
+    title: Add the product to your cart
+    why: >-
+      The cart is in DynamoDB. Each Visitor has one partition (pk = CART#<visitor>). Each product is one item in it (sk = ITEM#<product>).
+      One UpdateItem adds the quantity atomically.
+    do: Keep quantity 1. Click "Add to cart".
+    target: "#pdp .qty, #add-msg"
+    wait: {method: POST, path: /dynamodb/api/cart/items}
+    result: The panel shows UpdateItem with ADD qty and the write request units (WRU). Your cart has one item now.
+
+  - page: product
+    path: /p/P0001
+    engines: [dynamodb]
+    use_case: Conditional write
+    title: A condition stops a bad write
+    why: >-
+      The UpdateItem has a ConditionExpression: the new quantity must be 5 or less. DynamoDB tests the condition and writes
+      in one step. No other request can change the item between the test and the write.
+    do: Set the quantity to 5. Click "Add to cart" again.
+    target: "#pdp .qty, #add-msg"
+    wait: {method: POST, path: /dynamodb/api/cart/items, body: {qty: "5"}}
+    quiz:
+      q: What happened to the cart item?
+      options:
+        - DynamoDB refused the write and kept quantity 1
+        - DynamoDB wrote quantity 6 and sent a warning
+        - DynamoDB deleted the item from the cart
+      answer: 0
+      why: 1 + 5 = 6 breaks the condition. DynamoDB returns ConditionalCheckFailedException, and the item does not change.
+    result: The refused write still costs write capacity. The condition protects the rule on the server, not in the browser.
+
+  # ---------------------------------------------------------------- Cart: DynamoDB
+  - page: cart
+    path: /cart
+    engines: [dynamodb]
+    use_case: Read consistency
+    title: Two kinds of read
+    why: >-
+      A strongly consistent read returns the last write. An eventually consistent read can be some time behind,
+      and it costs half the read capacity. The cart uses a Query on one partition key.
+    do: Select "Eventually consistent". Compare the read request units (RRU) of the two reads in the panel.
+    target: "#exp"
+    wait: {method: GET, path: /dynamodb/api/cart, query: {consistent: "false"}}
+    quiz:
+      q: When is an eventually consistent read a good choice?
+      options:
+        - When a short delay in the data is acceptable
+        - When the read must show the write before it
+        - When the table has no partition key at all
+      answer: 0
+      why: A product list or a cart preview can be one second old. Checkout reads the cart strongly consistent.
+    result: The eventually consistent Query used half the RRU. The items have an expires_at time (TTL, 24 hours).
+
+  - page: cart
+    path: /cart
+    engines: [dynamodb]
+    use_case: Burst traffic
+    title: A burst of shoppers
+    why: >-
+      On-demand mode needs no capacity plan. DynamoDB spreads the items over partitions by the partition key.
+      The simulation writes from 200 synthetic shoppers in parallel.
+    do: Click "Start the simulation". Look at the writes per second and the latency percentiles.
+    target: "#sim"
+    wait: {method: POST, path: /dynamodb/api/simulate, any: true}
+    result: The latency stays in single-digit milliseconds. If the simulation limit refused the run, the panel shows the limit.
+
+  # ---------------------------------------------------------------- Deals: ElastiCache
+  - page: deals
+    path: /deals
+    engines: [elasticache]
+    use_case: Atomic counter
+    title: Buy one piece with DECR
+    why: >-
+      The stock is one integer key. DECR lowers it by one and returns the new value in one atomic command.
+      If the value goes below zero, the app sends INCR to give the piece back.
+    do: Click "Buy one now".
+    target: "#deal, #buy"
+    wait: {method: POST, path: /elasticache/api/deal/buy}
+    result: The panel shows DECR and the new stock value. No second command can come between the read and the write.
+
+  - page: deals
+    path: /deals
+    engines: [elasticache]
+    use_case: Race condition
+    title: Read, then write, sells too much
+    why: >-
+      In "Read, then write" mode, each buyer reads the stock and then writes stock - 1. Two buyers can read the same value.
+      Then both write, and the shop sells one piece two times. DECR does not have this problem.
+    do: Select "Read, then write". Click "Start the rush".
+    target: "#sim"
+    wait: {method: POST, path: /elasticache/api/deal/simulate, body: {mode: naive}, any: true}
+    quiz:
+      q: Why does "Read, then write" sell more pieces than the stock?
+      options:
+        - Two buyers read the same value before a write
+        - Valkey loses some writes when memory is full
+        - The browser sends each purchase two times
+      answer: 0
+      why: GET and SET are two commands. Other commands can run between them. DECR is one command, so it is atomic.
+    result: Compare the sold count with the stock. The atomic mode sells exactly the stock.
+
+  - page: deals
+    path: /deals
+    engines: [elasticache]
+    use_case: Session with TTL
+    title: Sessions expire by themselves
+    why: >-
+      Your session is a hash with a time to live (TTL). Valkey deletes the key when the TTL gets to zero.
+      The app needs no cleanup job.
+    do: Set the TTL to 30 seconds. Click the button that refreshes the session. Then read the session.
+    target: "#session"
+    wait: {method: POST, path: /elasticache/api/session, body: {ttl: "*"}}
+    result: The panel shows HSET and EXPIRE. Each read shows a smaller TTL.
+
+  # ---------------------------------------------------------------- Checkout: Aurora and the fan-out
+  - page: checkout
+    path: /checkout
+    engines: [aurora]
+    use_case: Transaction rollback
+    title: A failed payment rolls back the order
+    why: >-
+      Aurora PostgreSQL writes the order in one transaction: BEGIN, UPDATE products (stock), INSERT orders, INSERT order_items, COMMIT.
+      If one step fails, ROLLBACK cancels all the steps. The stock comes back.
+    do: Select the experiment "Make the payment fail". Click "Place the order".
+    target: "#exp, #place"
+    wait: {method: POST, path: /aurora/api/orders, body: {fail_after_stock: "true"}}
+    quiz:
+      q: What is the stock after the rollback?
+      options:
+        - The same as before the order
+        - Lower by the ordered quantity
+        - Zero for each product in the order
+      answer: 0
+      why: Atomicity is the "A" in ACID. All the statements of a transaction commit together, or none of them stays.
+    result: The panel shows the UPDATE of the stock and then ROLLBACK. No order row exists. Your cart did not change.
+
+  - page: checkout
+    path: /checkout
+    engines: [aurora, dynamodb, elasticache, keyspaces, influxdb, neptune]
+    use_case: One order, six Engines
+    title: Place the order
+    why: >-
+      Aurora commits the order. Then the browser tells five more Engines: DynamoDB empties the cart, ElastiCache updates the leaderboard,
+      Keyspaces records a purchase event, InfluxDB counts the order, Neptune adds BOUGHT edges.
+    do: Clear the experiment check box. Click "Place the order". Wait until all six steps show a result.
+    target: "#exp, #place, #flow"
+    wait: {method: POST, path: /neptune/api/purchase}
+    quiz:
+      q: Which Engine is the system of record for the order?
+      options:
+        - Aurora PostgreSQL, with the committed transaction
+        - ElastiCache, with the leaderboard sorted set
+        - InfluxDB, with the orders per minute point
+      answer: 0
+      why: The other Engines keep copies or views for one purpose each. Only Aurora has the full order with its constraints.
+    result: The panel has six numbered calls in six Engine colours. Each Engine stores the part of the order that it is good at.
+
+  - page: orders
+    path: /orders
+    engines: [aurora]
+    use_case: JOIN on related tables
+    title: Your orders come from three tables
+    why: >-
+      orders, order_items and products are separate tables. Foreign keys connect them. One SELECT with JOINs
+      builds the list, and the database checks that each order item points to a real order and a real product.
+    do: Find your new order in the list. In the panel, read the SELECT with JOIN.
+    target: "#orders"
+    wait: {method: GET, path: /aurora/api/orders}
+    result: The query joins on order_id and product_id. The primary keys make each join a lookup by index.
+
+  # ---------------------------------------------------------------- Activity: Keyspaces
+  - page: activity
+    path: /account/activity
+    engines: [keyspaces]
+    use_case: Tunable consistency
+    title: LOCAL_ONE reads one replica
+    why: >-
+      Keyspaces stores three replicas of each row. LOCAL_QUORUM reads two of them, so it returns the last write.
+      LOCAL_ONE reads one replica, at half the read cost, and it can miss a very new write.
+    do: Select "My persona". Then select LOCAL_ONE.
+    target: "#exp"
+    wait: {method: GET, path: /keyspaces/api/activity, query: {consistency: LOCAL_ONE, who: persona}}
+    quiz:
+      q: Which consistency level costs less for a read?
+      options:
+        - LOCAL_ONE, because it reads one replica
+        - LOCAL_QUORUM, because it reads two replicas
+        - Both cost the same in Keyspaces
+      answer: 0
+      why: A LOCAL_ONE read uses half the read capacity units of a LOCAL_QUORUM read.
+    result: The persona partition has many events. The rows come newest first, because of the clustering order.
+
+  # ---------------------------------------------------------------- Reports: Redshift
+  - page: reports
+    path: /admin/reports
+    engines: [redshift]
+    use_case: Analytics on history
+    title: A columnar warehouse reads only the columns it needs
+    why: >-
+      Redshift stores each column in separate blocks. A report that groups revenue by city reads two columns,
+      not the full rows. Zone maps let it skip blocks that cannot match.
+    do: Select "City" in the "Group by" experiment.
+    target: "#exp, #chart-wrap"
+    wait: {method: GET, path: /redshift/api/report, query: {dim: city}}
+    quiz:
+      q: Why is a columnar store good for this report?
+      options:
+        - The query reads few columns of many rows
+        - The query reads all columns of one row
+        - The query changes many rows in one transaction
+      answer: 0
+      why: Analytic queries scan many rows but few columns. Row stores (OLTP) are better for one-row reads and writes.
+    result: The SQL in the panel has GROUP BY city. The answer comes from many rows in a short time.
+
+  - page: reports
+    path: /admin/reports
+    engines: [redshift, aurora]
+    use_case: Zero-ETL
+    title: Your order is already in the warehouse
+    why: >-
+      The zero-ETL integration copies changes from Aurora to Redshift in near real time. You write no pipeline code.
+      The "Live from Aurora" source reads the copied Aurora tables.
+    do: Select "Live from Aurora". Then refresh the zero-ETL status.
+    target: "#exp, #repl"
+    wait: {method: GET, path: /redshift/api/report, query: {source: live}}
+    result: The status shows how many seconds ago Redshift received the newest order. Your order from checkout is in the count.
+
+  - page: order_report
+    path: /admin/orders
+    engines: [aurora]
+    use_case: Query plan
+    title: Read the query plan
+    why: >-
+      Aurora can also report on current data. EXPLAIN ANALYZE shows how PostgreSQL runs the query: the join order,
+      the scans and the time of each step.
+    do: Select the experiment that shows the plan.
+    target: "#exp, #plan-wrap"
+    wait: {method: GET, path: /aurora/api/report, query: {explain: "on"}}
+    result: Each plan node shows rows and time. Large reports on the checkout database compete with checkout traffic.
+
+  # ---------------------------------------------------------------- Live: ElastiCache sorted set
+  - page: live
+    path: /admin/live
+    engines: [elasticache]
+    use_case: Leaderboard
+    title: A sorted set keeps the order at each write
+    why: >-
+      The leaderboard is a sorted set: each member (a persona) has a score (the revenue). ZINCRBY adds to a score.
+      ZREVRANGE returns the top members. The set stays sorted, so "top 10" needs no sort at read time.
+    do: Find your persona in the leaderboard. In the panel, find ZREVRANGE WITHSCORES.
+    target: "#board, #counters"
+    wait: {method: GET, path: /elasticache/api/leaderboard}
+    result: Your order from checkout added its total to your persona with ZINCRBY.
+
+  # ---------------------------------------------------------------- Ops: InfluxDB
+  - page: ops
+    path: /admin/ops
+    engines: [influxdb]
+    use_case: Time-series metrics
+    title: One value per time window
+    why: >-
+      Each sensor reading is one point: a time, tags (warehouse, sensor) and a field (value). aggregateWindow
+      calculates one mean per window. A larger window returns fewer points.
+    do: Select the window "1 h". Compare the point count with the 1 min window.
+    target: "#exp"
+    wait: {method: GET, path: /influxdb/api/series, query: {window: 1h}}
+    quiz:
+      q: What does a larger window do to the result?
+      options:
+        - It returns fewer points, each one a mean
+        - It returns more points, each one a raw value
+        - It deletes the raw points from the bucket
+      answer: 0
+      why: The query aggregates at read time. The raw points stay in the bucket until the retention period ends.
+    result: The Flux query in the panel has range, filter and aggregateWindow. Your order is in the orders chart.
+
+  # ---------------------------------------------------------------- Graph: Neptune
+  - page: graph
+    path: /admin/graph
+    engines: [neptune]
+    use_case: Relationship analysis
+    title: The neighbourhood of a customer
+    why: >-
+      Lukas Weber buys books only, so his graph is narrow. Other customers bought the same books.
+      A graph query follows edges. It does not join tables.
+    do: Select "Lukas Weber" in the Customer list.
+    target: "#exp, #graph"
+    wait: {method: GET, path: /neptune/api/graph, query: {persona: C00004}}
+    result: The graph shows Lukas, his books, and other buyers of the same books.
+
+  # ---------------------------------------------------------------- Seller: S3
+  - page: seller
+    path: /seller
+    engines: [s3]
+    use_case: Private files, direct download
+    title: A presigned URL
+    why: >-
+      The bucket is private. The Engine App signs a URL with its IAM role. The URL works for a short time.
+      The browser then downloads the object from S3 itself, and the bytes do not go through EC2.
+    do: Click "Presigned URL, straight from S3".
+    target: "#direct"
+    wait: {method: GET, path: /s3/api/presign/*}
+    quiz:
+      q: Who downloads the image bytes with a presigned URL?
+      options:
+        - The browser, straight from S3
+        - The Engine App, then the browser
+        - DocumentDB, from the product document
+      answer: 0
+      why: The Engine App only signs. The signature in the URL gives the browser time-limited access to one object.
+    result: The URL host is the S3 endpoint. The query string has X-Amz-Signature and X-Amz-Expires.
+
+  - page: seller
+    path: /seller
+    engines: [s3]
+    use_case: Object storage
+    title: Upload an image as an object
+    why: >-
+      S3 stores each file as an object with a key, the bytes and metadata. Versioning keeps old versions when you upload
+      to the same key again.
+    do: Select a small JPEG or PNG file from your computer. Click "Upload".
+    target: "#upload, #gallery-wrap"
+    wait: {method: POST, path: /s3/api/upload}
+    result: The panel shows PutObject with the metadata and the new version id. The uploads/ list shows your object.

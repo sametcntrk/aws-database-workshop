@@ -6,20 +6,12 @@ from concurrent.futures import ThreadPoolExecutor
 from flask import jsonify, request
 from redis.cluster import RedisCluster
 
-from .. import simlimit, trace
+from .. import catalog, simlimit, trace
 from ..base import env, secret
 from ..visitor import PERSONAS, persona_id, visitor_id
-from . import page
 
-META = {
-    "id": "elasticache", "name": "Amazon ElastiCache (Valkey)", "data_type": "Semi-structured", "category": "In-memory",
-    "auth": "Password (Secrets Manager, ACL user)", "via": "ElastiCache Serverless endpoint (data subnet, TLS 6379)",
-    "section": "Flash deal and live data",
-    "model": "lm:deal                 HASH   product, name, price, ends_at\nlm:deal:stock           STRING counter (DECR)\n"
-             "lm:session:<visitor>    HASH   persona, last_page   (TTL)\nlm:leaderboard          ZSET   persona → revenue\n"
-             "lm:orders:today         STRING counter (INCR)",
-}
-PAGES = [page("deals", "deals", "Flash deal", "/deals"), page("live", "live", "Live leaderboard", "/admin/live")]
+META = catalog.META["elasticache"]
+PAGES = catalog.PAGES["elasticache"]
 DEAL_STOCK = 50
 
 _client = None

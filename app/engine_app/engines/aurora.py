@@ -6,21 +6,12 @@ from datetime import datetime, timezone
 import psycopg
 from flask import jsonify, request
 
-from .. import trace
+from .. import catalog, trace
 from ..base import env, secret
 from ..visitor import persona_id, visitor_id
-from . import page
 
-META = {
-    "id": "aurora", "name": "Amazon Aurora PostgreSQL", "data_type": "Structured", "category": "Relational",
-    "auth": "Password (Secrets Manager)", "via": "Aurora writer endpoint (data subnet, TLS 5432)",
-    "section": "Checkout and orders",
-    "model": "customers(customer_id PK, name, city, segment)\nproducts(product_id PK, name, category, price, stock CHECK >= 0)\n"
-             "orders(order_id PK, customer_id FK, visitor_id, order_date, status, total)\n"
-             "order_items(order_id FK, product_id FK, qty, unit_price, PK(order_id, product_id))",
-}
-PAGES = [page("checkout", "checkout", "Checkout", "/checkout"), page("orders", "orders", "My orders", "/orders"),
-         page("order_report", "order_report", "Order report", "/admin/orders")]
+META = catalog.META["aurora"]
+PAGES = catalog.PAGES["aurora"]
 
 DDL = """DROP TABLE IF EXISTS order_items, orders, products, customers;
 CREATE TABLE customers (customer_id text PRIMARY KEY, name text NOT NULL, email text, city text, segment text, created_at timestamptz);

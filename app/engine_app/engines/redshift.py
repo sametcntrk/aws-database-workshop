@@ -3,19 +3,12 @@
 import redshift_connector
 from flask import jsonify, request
 
-from .. import trace
+from .. import catalog, trace
 from ..base import env, secret
 from ..visitor import visitor_id
-from . import page
 
-META = {
-    "id": "redshift", "name": "Amazon Redshift Serverless", "data_type": "Structured", "category": "Columnar",
-    "auth": "Password (Secrets Manager)", "via": "Redshift Serverless workgroup endpoint (data subnet, TLS 5439)",
-    "section": "Sales reports",
-    "model": "dev.public.sales            history: DISTKEY customer_id, SORTKEY order_date\n"
-             "aurora_live.public.*        live copy of the Aurora tables (zero-ETL integration)",
-}
-PAGES = [page("reports", "reports", "Sales reports", "/admin/reports")]
+META = catalog.META["redshift"]
+PAGES = catalog.PAGES["redshift"]
 LIVE_DB = "aurora_live"
 
 DIMENSIONS = {

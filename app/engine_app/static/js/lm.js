@@ -1,4 +1,5 @@
-/* Lale Market core: Visitor and Persona, API calls with the Behind-the-Scenes Panel, Tutorial and Guided journey. */
+/* Lale Market core: Visitor and Persona, API calls with the Behind-the-Scenes Panel, shop links of the current app,
+ * the per-page Tutorial (Free e-commerce app) and the locked Mission (Guided e-commerce app, mission.js). */
 (function () {
   "use strict";
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -6,6 +7,26 @@
   const tl = (n) => new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", maximumFractionDigits: 2 }).format(n);
   const ENGINE_LABEL = { docdb: "DocumentDB", opensearch: "OpenSearch", neptune: "Neptune", dynamodb: "DynamoDB", aurora: "Aurora",
     elasticache: "ElastiCache", keyspaces: "Keyspaces", s3: "S3", redshift: "Redshift", influxdb: "InfluxDB" };
+
+  /* ---------------- Shop links. The pages use plain shop paths ("/cart", "/p/P0001").
+   * The app base ("/free-e-commerce-app" or "/guided-e-commerce-app") goes in front of each one, also in HTML that a
+   * page renders later. Engine paths ("/dynamodb/...") and site paths stay as they are. */
+  const BASE = (LM.mode && LM.mode.base) || "";
+  const KEEP = new RegExp(`^/(?:${Object.keys(ENGINE_LABEL).join("|")})(?:/|$)|^/e2etutorial|^/guided-e-commerce-app|^/free-e-commerce-app`);
+  const u = (path) => (BASE && path.startsWith("/") && !path.startsWith("//") && !KEEP.test(path) ? BASE + path : path);
+  function fixLinks(root) {
+    if (!BASE || !root.querySelectorAll) return;
+    const els = [...root.querySelectorAll("a[href^='/'], form[action^='/']")];
+    if (root.matches && root.matches("a[href^='/'], form[action^='/']")) els.push(root);
+    els.forEach((el) => {
+      const attr = el.tagName === "FORM" ? "action" : "href";
+      const v = el.getAttribute(attr), fixed = u(v);
+      if (fixed !== v) el.setAttribute(attr, fixed);
+    });
+  }
+  fixLinks(document);
+  new MutationObserver((muts) => muts.forEach((m) => m.addedNodes.forEach((n) => { if (n.nodeType === 1) fixLinks(n); })))
+    .observe(document.body, { childList: true, subtree: true });
 
   /* ---------------- Visitor and Persona (cookies, read by every Engine App) */
   function cookie(name) { return (document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]*)")) || [])[1]; }
@@ -26,6 +47,8 @@
   });
   showPersona();
   if (!persona()) dialog.showModal();
+  else setTimeout(() => document.dispatchEvent(new CustomEvent("lm:ready")), 0);
+  dialog.addEventListener("close", () => document.dispatchEvent(new CustomEvent("lm:ready")), { once: true });
 
   /* ---------------- Behind-the-Scenes Panel */
   const list = $("#bts-list");
@@ -92,6 +115,7 @@
    * Call an Engine App API and show the call in the panel.
    * opts: {method, body, form, label, source (CSS selector of the shop element), background}
    */
+  const calls = [];   // every finished call of this page, for the Mission
   async function api(url, opts = {}) {
     const method = opts.method || (opts.body || opts.form ? "POST" : "GET");
     const init = { method, headers: {} };
@@ -108,6 +132,11 @@
     }
     const ms = Math.round(performance.now() - t0);
     addCall({ label: opts.label || url, url, method, entries: json.trace || [], ms, ok: json.ok !== false, source: opts.source, background: opts.background, data: json.data });
+    // The Mission (Guided e-commerce app) waits for these events.
+    const done = { method, url, path: new URL(url, location.origin).pathname, query: Object.fromEntries(new URL(url, location.origin).searchParams),
+      body: opts.body || {}, ok: json.ok !== false, data: json.data, background: !!opts.background };
+    calls.push(done);
+    document.dispatchEvent(new CustomEvent("lm:call", { detail: done }));
     if (json.ok === false) { const e = new Error(json.error || "The call failed."); e.payload = json; throw e; }
     return json.data;
   }
@@ -143,7 +172,9 @@
   /* ---------------- Tutorial
    * The header toggle turns the Tutorial on or off for all pages (lm_tutor_off).
    * Close and Finish close it for this page only (lm_tutor_done_<page>). */
-  const tutor = $("#tutor"), tut = LM.tutorial || {};
+  const tutor = $("#tutor");
+  if (tutor) {
+  const tut = LM.tutorial || {};
   const steps = tut.steps || [];
   const tKey = `lm_tutor_${LM.page.id}`, doneKey = `lm_tutor_done_${LM.page.id}`;
   let stepNo = Number(localStorage.getItem(tKey) || 0);
@@ -201,31 +232,8 @@
   const onScroll = () => { if (!navTick) navTick = requestAnimationFrame(() => { navTick = 0; checkNav(); }); };
   addEventListener("scroll", onScroll, { passive: true });
   addEventListener("resize", onScroll);
-
-  /* ---------------- Guided shopping journey */
-  const jbar = $("#journey"), stops = (LM.journey && LM.journey.stops) || [];
-  function renderJourney() {
-    const at = Number(localStorage.getItem("lm_journey") ?? -1);
-    if (at < 0 || !stops.length) { jbar.hidden = true; return; }
-    const here = stops.findIndex((s) => s.page === LM.page.id);
-    const now = here >= 0 ? here : at;
-    if (here >= 0 && here > at) localStorage.setItem("lm_journey", String(here));
-    const next = stops[now + 1];
-    jbar.hidden = false;
-    jbar.innerHTML = `<strong>Guided journey</strong>
-      <ol aria-label="Journey progress">${stops.map((s, i) => `<li class="${i < now ? "done" : i === now ? "now" : ""}" title="${esc(s.title)}"></li>`).join("")}</ol>
-      <span>${esc(stops[now].title)}: ${esc(stops[now].text)}</span>
-      ${next ? `<a href="${next.href}">Next stop: ${esc(next.title)}</a>` : "<span>You finished the journey.</span>"}
-      <button class="quiet" type="button" id="journey-stop">Stop the journey</button>`;
-    $("#journey-stop").addEventListener("click", () => { localStorage.setItem("lm_journey", "-1"); renderJourney(); });
-  }
-  function startJourney() {
-    localStorage.setItem("lm_journey", "0"); localStorage.setItem("lm_tutor_off", "0");
-    Object.keys(localStorage).filter((k) => k.startsWith("lm_tutor_done_")).forEach((k) => localStorage.removeItem(k));
-    window.location.href = stops[0].href;
-  }
-  renderJourney();
   renderTutor();
+  }
 
   /* ---------------- Session (ElastiCache, background call on each page) */
   api("/elasticache/api/session", { body: { page: location.pathname }, label: "Update the session", background: true }).catch(() => {});
@@ -255,5 +263,5 @@
     return data;
   }
 
-  window.lm = { api, esc, tl, stars, productCard, segmented, errorBox, setCartCount, addToCart, persona, visitor, startJourney, $ };
+  window.lm = { api, esc, tl, stars, productCard, segmented, errorBox, setCartCount, addToCart, persona, visitor, u, calls, $ };
 })();

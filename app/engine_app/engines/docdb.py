@@ -4,25 +4,12 @@ import json
 from flask import jsonify, request
 from pymongo import MongoClient
 
-from .. import trace
+from .. import catalog, trace
 from ..base import env, secret
-from . import page
 
 CA_FILE = "/opt/engine-app/certs/global-bundle.pem"
-META = {
-    "id": "docdb", "name": "Amazon DocumentDB", "data_type": "Semi-structured", "category": "Document",
-    "auth": "Password (Secrets Manager)", "via": "DocumentDB cluster endpoint (data subnet, TLS 27017)",
-    "section": "Catalog",
-    "model": '{ "_id": "P0001", "name": "...", "category": "Elektronik", "price": 1299.9,\n'
-             '  "attributes": { "renk": "siyah", "garanti_ay": 24 },  "tags": ["yeni"] }\n'
-             "Indexes: { category: 1, rating: -1 }, { \"attributes.renk\": 1 }",
-}
-PAGES = [
-    page("home", "home", "Lale Market", "/"),
-    page("category", "category", "Category", "/c/<category>"),
-    page("product", "product", "Product", "/p/<pid>"),
-    page("admin", "admin", "Admin Console", "/admin"),
-]
+META = catalog.META["docdb"]
+PAGES = catalog.PAGES["docdb"]
 CARD = {"name": 1, "price": 1, "rating": 1, "category": 1, "brand": 1, "tags": 1, "stock": 1}
 
 _client = None

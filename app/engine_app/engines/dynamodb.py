@@ -7,18 +7,13 @@ import boto3
 from boto3.dynamodb.conditions import Key
 from flask import jsonify, request
 
-from .. import simlimit, trace
+from .. import catalog, simlimit, trace
 from ..base import env, region
 from ..visitor import visitor_id
-from . import PRICE_READ_RU, PRICE_WRITE_RU, page, usd
+from . import PRICE_READ_RU, PRICE_WRITE_RU, usd
 
-META = {
-    "id": "dynamodb", "name": "Amazon DynamoDB", "data_type": "Semi-structured", "category": "Key-value",
-    "auth": "IAM role (SigV4)", "via": "S3/DynamoDB gateway endpoint → DynamoDB", "section": "Cart",
-    "model": "Table dbws-cart\n  pk  CART#<visitor>        (partition key)\n  sk  ITEM#<product_id>     (sort key)\n"
-             "  qty, name, unit_price, expires_at (TTL, 24 h)",
-}
-PAGES = [page("cart", "cart", "Your cart", "/cart")]
+META = catalog.META["dynamodb"]
+PAGES = catalog.PAGES["dynamodb"]
 CART_TTL = 24 * 3600
 MAX_QTY = 5
 

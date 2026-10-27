@@ -1,8 +1,14 @@
 """Flask app factory. ENGINE selects the Engine module (engine_app/engines/<ENGINE>.py).
 
-Each Engine App serves:
-  - its Storefront Section and Report Screen pages on friendly paths (/cart, /search, /admin/reports, ...)
-  - its API, static files and health check under /<engine>/...
+Each Engine App serves its API, static files, 101 lessons and health check under /<engine>/...
+
+The DocumentDB Engine App is the default target of the load balancer. Paths that match no Engine rule come to it, so it
+renders the site pages for all ten Engines (catalog.py has no database driver):
+  /                                  Home hub with the three sections
+  /e2etutorial, /e2etutorial/<e>     End-to-end tutorial of each Engine
+  /guided-e-commerce-app/...         Lale Market with a locked, step-by-step mission
+  /free-e-commerce-app/...           Lale Market with free navigation and per-page Tutorials
+The old friendly paths (/cart, /search, ...) redirect to the Free e-commerce app.
 The browser composes pages from several Engine Apps (docs/adr/0002-browser-composes-storefront.md).
 """
 import importlib
@@ -13,10 +19,10 @@ from functools import lru_cache
 from pathlib import Path
 
 import yaml
-from flask import Blueprint, Flask, jsonify, render_template, request
+from flask import Blueprint, Flask, abort, jsonify, redirect, render_template, request
 from jinja2 import TemplateNotFound
 
-from . import admin, simlimit, trace, visitor
+from . import admin, catalog, simlimit, trace, visitor
 
 log = logging.getLogger("engine_app")
 HERE = Path(__file__).parent
@@ -67,7 +73,14 @@ def find_lesson(engine, method, api, op):
     return next((lid for lid, lesson in lessons(engine).items() if op in lesson.get("ops", [])), None)
 
 
-ENGINE_IDS = ["docdb", "opensearch", "dynamodb", "aurora", "redshift", "elasticache", "keyspaces", "influxdb", "neptune", "s3"]
+ENGINE_IDS = catalog.ENGINE_IDS
+SITE_ENGINE = "docdb"   # default ALB target: serves the site pages
+
+# The two e-commerce apps share the pages. `base` is the path prefix of every shop link.
+MODES = {
+    "guided": {"id": "guided", "base": "/guided-e-commerce-app", "label": "Guided e-commerce app"},
+    "free": {"id": "free", "base": "/free-e-commerce-app", "label": "Free e-commerce app"},
+}
 
 
 def lesson_index():
@@ -75,8 +88,26 @@ def lesson_index():
 
 
 @lru_cache(maxsize=None)
-def journey():
-    return yaml.safe_load((HERE / "tutorials" / "journey.yaml").read_text(encoding="utf-8"))
+def mission():
+    """Steps of the Guided e-commerce app (tutorials/guided.yaml)."""
+    return yaml.safe_load((HERE / "tutorials" / "guided.yaml").read_text(encoding="utf-8"))
+
+
+@lru_cache(maxsize=None)
+def e2e_index():
+    """The E2E tutorials in reading order (e2e/index.yaml)."""
+    return yaml.safe_load((HERE / "e2e" / "index.yaml").read_text(encoding="utf-8"))
+
+
+@lru_cache(maxsize=None)
+def e2e_images():
+    """Source and licence of each E2E tutorial image (e2e/images.yaml)."""
+    return yaml.safe_load((HERE / "e2e" / "images.yaml").read_text(encoding="utf-8"))
+
+
+def page_owner():
+    """{page id: Engine id} for all pages."""
+    return {pg["id"]: e for e in ENGINE_IDS for pg in catalog.PAGES[e]}
 
 
 def create_app():
@@ -124,6 +155,15 @@ def create_app():
             """One record of the big picture, with its nested structure."""
             return jsonify(trace.payload(engine.learn_item(request.args.get("lesson", ""), request.args.get("id", ""))))
 
+    if hasattr(engine, "E2E"):
+        @bp.get("/api/e2e/<qid>")
+        def e2e_run(qid):
+            """One fixed, read-only query of the E2E tutorial. The tutorial page shows the rows and the trace."""
+            fn = engine.E2E.get(qid)
+            if not fn:
+                return jsonify(ok=False, error=f"No E2E query {qid!r} for this Engine.", trace=[]), 404
+            return jsonify(trace.payload(fn()))
+
     engine.register(bp)
     admin.register(bp, engine)
 
@@ -140,19 +180,58 @@ def create_app():
 
     app.register_blueprint(bp, url_prefix=prefix)
 
-    def page_view(page):
+    def render_page(e, page, mode, kwargs):
+        trace.configure(catalog.META[e])
+        return render_template(
+            f"pages/{page['template']}.html", meta=catalog.META[e], page=page, args=kwargs, prefix=f"/{e}", mode=mode,
+            tutorial=tutorials(e).get(page["id"], {}) if mode["id"] == "free" else {},
+            mission=mission() if mode["id"] == "guided" else None, owners=page_owner(),
+            nav=NAV, reports=REPORTS, modes=MODES, personas=visitor.PERSONAS)
+
+    def page_view(e, page, mode):
         def view(**kwargs):
-            trace.configure(meta)
-            return render_template(
-                f"pages/{page['template']}.html", meta=meta, page=page, args=kwargs, prefix=prefix,
-                tutorial=tutorials(engine_id).get(page["id"], {}), journey=journey(), nav=NAV, reports=REPORTS,
-                personas=visitor.PERSONAS)
-        view.__name__ = f"page_{page['id']}"
+            return render_page(e, page, mode, kwargs)
+        view.__name__ = f"page_{mode['id']}_{page['id']}"
         return view
 
+    def to_free(**_):
+        qs = request.query_string.decode()
+        return redirect(MODES["free"]["base"] + request.path + (f"?{qs}" if qs else ""), 302)
+
+    # Old friendly paths of this Engine: they go to the Free e-commerce app.
     for page in engine.PAGES:
         for path in page["paths"]:
-            app.add_url_rule(path, view_func=page_view(page), endpoint=f"{page['id']}:{path}")
+            if path != "/":
+                app.add_url_rule(path, view_func=to_free, endpoint=f"old:{path}")
+
+    if engine_id == SITE_ENGINE:
+        ctx = lambda **kw: dict(modes=MODES, engines=catalog.META, e2e=e2e_index(), images=e2e_images(), prefix=prefix, **kw)  # noqa: E731
+
+        @app.get("/")
+        def hub():
+            return render_template("site/hub.html", **ctx())
+
+        @app.get("/e2etutorial")
+        @app.get("/e2etutorial/")
+        def e2e_home():
+            return render_template("site/e2e_index.html", **ctx())
+
+        @app.get("/e2etutorial/<eid>")
+        def e2e_lesson(eid):
+            if eid not in catalog.META and eid != "glossary":
+                abort(404)
+            entry = next((x for x in e2e_index()["lessons"] if x["id"] == eid), None)
+            return render_template(f"e2e/{eid}.html", **ctx(eid=eid, entry=entry,
+                                                              meta=catalog.META.get(eid, {})))
+
+        for mode in MODES.values():
+            for e in ENGINE_IDS:
+                for page in catalog.PAGES[e]:
+                    for path in page["paths"]:
+                        url = mode["base"] + (path if path != "/" else "/")
+                        app.add_url_rule(url, view_func=page_view(e, page, mode), endpoint=f"{mode['id']}:{path}")
+            app.add_url_rule(mode["base"], view_func=lambda base=mode["base"]: redirect(base + "/", 301),
+                             endpoint=f"{mode['id']}:bare")
     return app
 
 

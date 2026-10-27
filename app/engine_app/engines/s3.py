@@ -8,18 +8,12 @@ import boto3
 from botocore.exceptions import ClientError
 from flask import Response, jsonify, request
 
-from .. import trace
+from .. import catalog, trace
 from ..base import env, region
 from ..visitor import visitor_id
-from . import page
 
-META = {
-    "id": "s3", "name": "Amazon S3", "data_type": "Unstructured", "category": "Blob", "auth": "IAM role (SigV4)",
-    "via": "S3/DynamoDB gateway endpoint → S3", "section": "Seller panel and images",
-    "model": "s3://<bucket>/products/<product_id>.jpg       Content-Type, x-amz-meta-name, -category, -author, -license\n"
-             "s3://<bucket>/uploads/<visitor>/<file>        x-amz-meta-product-id   (versioning on)",
-}
-PAGES = [page("seller", "seller", "Seller panel", "/seller")]
+META = catalog.META["s3"]
+PAGES = catalog.PAGES["s3"]
 PHOTOS = Path(__file__).resolve().parent.parent / "static" / "products"   # Wikimedia Commons photos, see CREDITS.md
 ASCII = str.maketrans("ıİşŞğĞüÜöÖçÇ", "iIsSgGuUoOcC")
 MAX_UPLOAD = 2 * 1024 * 1024

@@ -13,20 +13,13 @@ from cassandra.query import SimpleStatement
 from cassandra_sigv4.auth import SigV4AuthProvider
 from flask import jsonify, request
 
-from .. import simlimit, trace
+from .. import catalog, simlimit, trace
 from ..base import env, region
 from ..visitor import persona_id, visitor_id
-from . import PRICE_WRITE_RU, page, usd
+from . import PRICE_WRITE_RU, usd
 
-META = {
-    "id": "keyspaces", "name": "Amazon Keyspaces", "data_type": "Semi-structured", "category": "Wide column",
-    "auth": "IAM role (SigV4)", "via": "Keyspaces interface endpoint (data subnet ENI, TLS 9142)",
-    "section": "Activity",
-    "model": "CREATE TABLE dbws.activity_by_user (\n  user_id text, event_time timestamp, event_id uuid,\n"
-             "  event_type text, product_id text, detail text,\n  PRIMARY KEY ((user_id), event_time, event_id)\n"
-             ") WITH CLUSTERING ORDER BY (event_time DESC)   -- default TTL 7 days",
-}
-PAGES = [page("activity", "activity", "My activity", "/account/activity")]
+META = catalog.META["keyspaces"]
+PAGES = catalog.PAGES["keyspaces"]
 LEVELS = {"LOCAL_ONE": ConsistencyLevel.LOCAL_ONE, "LOCAL_QUORUM": ConsistencyLevel.LOCAL_QUORUM}
 
 _session = None

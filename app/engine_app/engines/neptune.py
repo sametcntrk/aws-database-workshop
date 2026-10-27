@@ -8,18 +8,12 @@ from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 from flask import jsonify, request
 
-from .. import trace
+from .. import catalog, trace
 from ..base import env, region
 from ..visitor import persona_id
-from . import page
 
-META = {
-    "id": "neptune", "name": "Amazon Neptune", "data_type": "Semi-structured", "category": "Graph",
-    "auth": "IAM role (SigV4, neptune-db)", "via": "Neptune cluster endpoint (data subnet, HTTPS 8182)",
-    "section": "Recommendations",
-    "model": "(:Customer {~id, name, city})-[:BOUGHT {order_id, qty}]->(:Product {~id, name, category})",
-}
-PAGES = [page("graph", "graph", "Customer graph", "/admin/graph")]
+META = catalog.META["neptune"]
+PAGES = catalog.PAGES["neptune"]
 
 BY_PRODUCT = """MATCH (p:Product {`~id`: $pid})<-[:BOUGHT]-(c:Customer)-[:BOUGHT]->(rec:Product)
 WHERE rec <> p

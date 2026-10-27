@@ -3,18 +3,11 @@ import boto3
 from flask import jsonify, request
 from opensearchpy import AWSV4SignerAuth, OpenSearch, RequestsHttpConnection, helpers
 
-from .. import trace
+from .. import catalog, trace
 from ..base import env, region
-from . import page
 
-META = {
-    "id": "opensearch", "name": "Amazon OpenSearch Service", "data_type": "Unstructured",
-    "category": "Text search + Geospatial", "auth": "IAM role (SigV4)",
-    "via": "OpenSearch VPC endpoint (data subnet, HTTPS 443)", "section": "Search and stores",
-    "model": "index products: name (tr_folded) + name.std (standard), description, category (keyword), price, rating\n"
-             "index stores:   name, city (keyword), location (geo_point)",
-}
-PAGES = [page("search", "search", "Search", "/search"), page("stores", "stores", "Find a store", "/stores")]
+META = catalog.META["opensearch"]
+PAGES = catalog.PAGES["opensearch"]
 
 _client = None
 

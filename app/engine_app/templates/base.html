@@ -10,12 +10,38 @@
   <link rel="stylesheet" href="{{ prefix }}/static/css/lm.css">
   {% block head %}{% endblock %}
 </head>
-<body data-engine="{{ meta.id }}" data-page="{{ page.id }}">
+<body data-engine="{{ meta.id }}" data-page="{{ page.id }}" data-mode="{{ mode.id }}">
 <a class="skip" href="#main">Skip to the shop</a>
 
-<div class="learnbar">
-<div class="journey" id="journey" hidden></div>
+{% include "site/sitebar.html" %}
 
+<div class="learnbar">
+{% if mode.id == "guided" %}
+<section class="mission" id="mission" aria-label="Guided mission" aria-live="polite">
+  <div class="mission-head">
+    <span class="tutor-badge">Mission</span>
+    <span class="mission-step" id="mission-step"></span>
+    <ol class="mission-dots" id="mission-dots" aria-hidden="true"></ol>
+    <button type="button" class="quiet" id="mission-restart">Start again</button>
+  </div>
+  <div class="mission-body">
+    <div>
+      <p class="mission-engine" id="mission-engine"></p>
+      <h2 id="mission-title"></h2>
+      <p id="mission-why"></p>
+      <p class="mission-do" id="mission-do"></p>
+      <div class="mission-quiz" id="mission-quiz" hidden></div>
+      <div class="mission-result" id="mission-result" hidden></div>
+    </div>
+    <div class="mission-nav">
+      <button type="button" id="mission-back">Back</button>
+      <button type="button" class="primary" id="mission-next" disabled>Next</button>
+    </div>
+  </div>
+</section>
+{% endif %}
+
+{% if mode.id == "free" %}
 <section class="tutor" id="tutor" aria-label="Tutorial" hidden>
   <div class="tutor-engine">
     <span class="tutor-badge">Tutorial</span>
@@ -33,21 +59,24 @@
     <button type="button" id="tutor-close" data-tutor="close" class="quiet" aria-label="Close the tutorial on this page">Close</button>
   </div>
 </section>
+{% endif %}
 </div>
 
+{% if mode.id == "free" %}
 <div class="tutor-mini" id="tutor-mini" role="region" aria-label="Tutorial controls" hidden>
   <span id="tutor-mini-text"></span>
   <button type="button" data-tutor="back">Back</button>
   <button type="button" data-tutor="next" class="primary">Next</button>
   <button type="button" data-tutor="close" class="quiet" aria-label="Close the tutorial on this page">Close</button>
 </div>
+{% endif %}
 
 <header class="topbar">
-  <a class="brand" href="/" aria-label="Lale Market home">
+  <a class="brand" href="{{ mode.base }}/" aria-label="Lale Market home">
     <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 29V15" stroke="currentColor" stroke-width="2"/><path d="M16 22c-4 0-7-2-8-5 3 0 6 1 8 4" fill="#1B8A8F"/><path d="M16 15c-5 0-8-4-8-9 3 2 5 2 8-2 3 4 5 4 8 2 0 5-3 9-8 9z" fill="#C8102E"/></svg>
     <span>Lale Market</span>
   </a>
-  <form class="search" action="/search" role="search">
+  <form class="search" action="{{ mode.base }}/search" role="search">
     <input name="q" type="search" placeholder="Search 200 products, try “kablosuz kulaklik”" value="{{ request.args.get('q', '') }}" autocomplete="off" aria-label="Search products" id="header-q">
     <div class="suggest" id="suggest" hidden></div>
   </form>
@@ -55,17 +84,17 @@
     <button class="persona-chip" id="persona-chip" type="button" aria-haspopup="dialog">
       <span class="avatar" id="persona-avatar">?</span><span id="persona-name">Choose a persona</span>
     </button>
-    <a class="cart-link" href="/cart" aria-label="Cart">Cart <span class="badge" id="cart-count">0</span></a>
-    <button class="tutor-toggle" id="tutor-toggle" type="button" aria-pressed="true">Tutorial</button>
+    <a class="cart-link" href="{{ mode.base }}/cart" aria-label="Cart">Cart <span class="badge" id="cart-count">0</span></a>
+    {% if mode.id == "free" %}<button class="tutor-toggle" id="tutor-toggle" type="button" aria-pressed="true">Tutorial</button>{% endif %}
   </div>
 </header>
 
 <nav class="catnav" aria-label="Shop">
-  {% for n in nav %}<a href="{{ n.href }}" data-engine-tag="{{ n.engine }}" {% if n.href == request.path %}aria-current="page"{% endif %}>{{ n.label }}</a>{% endfor %}
+  {% for n in nav %}<a href="{{ mode.base }}{{ n.href }}" data-engine-tag="{{ n.engine }}" {% if mode.base ~ n.href == request.path %}aria-current="page"{% endif %}>{{ n.label }}</a>{% endfor %}
   <span class="catnav-sep" aria-hidden="true"></span>
   <details class="reports-menu">
     <summary>Reports</summary>
-    <div>{% for n in reports %}<a href="{{ n.href }}" data-engine-tag="{{ n.engine }}">{{ n.label }}<small>{{ n.engine }}</small></a>{% endfor %}</div>
+    <div>{% for n in reports %}<a href="{{ mode.base }}{{ n.href }}" data-engine-tag="{{ n.engine }}">{{ n.label }}<small>{{ n.engine }}</small></a>{% endfor %}</div>
   </details>
 </nav>
 
@@ -90,13 +119,13 @@
   </aside>
 </div>
 
-<footer class="site-foot">Lale Market is a workshop demo. Product photos: Wikimedia Commons contributors,
+<footer class="site-foot">Lale Market is a workshop demo. <a href="/">All sections</a>. Product photos: Wikimedia Commons contributors,
   <a href="{{ prefix }}/static/products/CREDITS.md">photo credits and licences</a>.</footer>
 
 <dialog class="persona-dialog" id="persona-dialog" aria-labelledby="persona-title">
   <form method="dialog">
     <h2 id="persona-title">First, choose a persona</h2>
-    <p>The shop, the Tutorial and the Guided journey start after you choose. A persona is a customer in the shared catalog, so recommendations and history exist from the first page. Your cart and orders stay yours.</p>
+    <p>The shop and its learning steps start after you choose. A persona is a customer in the shared catalog, so recommendations and history exist from the first page. Your cart and orders stay yours.</p>
     <div class="persona-grid">
       {% for p in personas %}
       <button type="submit" value="{{ p.id }}" class="persona-card">
@@ -116,12 +145,15 @@
     page: {{ page | tojson }},
     args: {{ args | tojson }},
     tutorial: {{ tutorial | tojson }},
-    journey: {{ journey | tojson }},
+    mode: {{ mode | tojson }},
+    mission: {{ mission | tojson }},
+    owners: {{ owners | tojson }},
     personas: {{ personas | tojson }},
     prefix: {{ prefix | tojson }}
   };
 </script>
 <script src="{{ prefix }}/static/js/lm.js"></script>
+{% if mode.id == "guided" %}<script src="{{ prefix }}/static/js/mission.js"></script>{% endif %}
 {% block scripts %}{% endblock %}
 </body>
 </html>

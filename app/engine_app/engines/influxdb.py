@@ -6,17 +6,11 @@ from flask import jsonify, request
 from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 
-from .. import trace
+from .. import catalog, trace
 from ..base import env, secret
-from . import page
 
-META = {
-    "id": "influxdb", "name": "Amazon Timestream for InfluxDB", "data_type": "Semi-structured", "category": "Time-series",
-    "auth": "Password (Secrets Manager)", "via": "InfluxDB endpoint (data subnet, HTTPS 8086)", "section": "Operations",
-    "model": "bucket metrics\n  warehouse_env  tags: warehouse, sensor   field: value   every 5 minutes\n"
-             "  orders         tags: channel              field: count   every minute",
-}
-PAGES = [page("ops", "ops", "Operations", "/admin/ops")]
+META = catalog.META["influxdb"]
+PAGES = catalog.PAGES["influxdb"]
 WINDOWS = {"1m", "5m", "15m", "1h"}
 RANGES = {"-1h", "-6h", "-24h"}
 
