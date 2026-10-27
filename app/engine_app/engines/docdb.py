@@ -98,12 +98,12 @@ def learn_overview(lesson, focus):
         indexes = db().products.index_information()
         t.result(items=len(docs))
     cats = sorted({d["category"] for d in docs})
-    return {"title": "DocumentDB: products koleksiyonu", "text": "Kataloğun asıl kaydı. Her kare bir JSON belgesi; raflar kategoriler.",
+    return {"title": "DocumentDB: the products collection", "text": "The source of truth of the catalog. Each square is one JSON document, and the shelves are the categories.",
             "facts": [[stats.get("count", len(docs)), "belge"], [f"{int(stats.get('avgObjSize', 0))} bayt", "ortalama belge boyutu"],
-                      [len(indexes), "index (_id dahil)"], [len(f & {d["_id"] for d in docs}), "belge senin çağrında"]],
+                      [len(indexes), "indexes (with _id)"], [len(f & {d["_id"] for d in docs}), "documents in your call"]],
             "groups": [{"label": c, "items": [{"id": d["_id"], "title": f"{d['_id']}: {d['name']}", "hit": d["_id"] in f}
                                               for d in docs if d["category"] == c]} for c in cats],
-            "hit_label": "Senin çağrının okuduğu belgeler"}
+            "hit_label": "The documents that your call read"}
 
 
 def learn_item(lesson, pid):
@@ -114,7 +114,7 @@ def learn_item(lesson, pid):
         return {"title": pid, "sub": "Bu belge yok.", "record": {}}
     size = len(json.dumps(d, default=str, ensure_ascii=False).encode())
     marks = {"_id": "kept", "category": "kept", "rating": "kept", "attributes.renk": "kept"}
-    return {"title": d["name"], "sub": f"products koleksiyonunda bir belge: {len(d)} alan, {size} bayt. Sarı alanların index'i var.",
+    return {"title": d["name"], "sub": f"One document in the products collection: {len(d)} fields, {size} bytes. The yellow fields have an index.",
             "record": d, "marks": marks}
 
 

@@ -185,16 +185,16 @@ def learn_overview(lesson, focus):
     parts.setdefault(mine, [])   # your partition is always shown, empty or not
     order = sorted(parts, key=lambda k: (k != mine, not k.startswith("CART#"), k))[:24]
     short = lambda pk: pk if len(pk) <= 22 else pk[:20] + "…"
-    groups = [{"label": ("Senin sepetin" + ("" if parts[pk] else " (boş)") if pk == mine else short(pk)),
+    groups = [{"label": ("Your cart" + ("" if parts[pk] else " (empty)") if pk == mine else short(pk)),
                "items": [{"id": f"{pk}|{sk}", "title": f"pk={pk}  sk={sk}", "hit": pk == mine} for sk in sorted(parts[pk])]}
               for pk in order]
     mode = desc.get("BillingModeSummary", {}).get("BillingMode", "PROVISIONED")
     return {"title": f"DynamoDB: {table().name} tablosu",
-            "text": "Her satır bir partition (aynı pk), her kare o partition'daki bir item (sk). İlk 24 partition gösteriliyor."
-                    + ("" if parts[mine] else " Senin sepetin şu an boş: sepete bir ürün ekle, sonra bu sayfayı yeniden aç."),
-            "facts": [[desc.get("ItemCount", resp["Count"]), "item (yaklaşık, 6 saatte bir güncellenir)"], [len(parts), "partition örnekte"],
+            "text": "Each row is one partition (the same pk), and each square is one item (sk) in that partition. The first 24 partitions are shown."
+                    + ("" if parts[mine] else " Your cart is empty now. Add a product to the cart, then open this page again."),
+            "facts": [[desc.get("ItemCount", resp["Count"]), "items (approximate, updated every 6 hours)"], [len(parts), "partitions in the sample"],
                       [mode.replace("PAY_PER_REQUEST", "on-demand"), "kapasite modu"], [len(parts.get(mine, [])), "item senin sepetinde"]],
-            "groups": groups, "hit_label": "Senin sepetinin item'ları (pk = CART#<senin id>)"}
+            "groups": groups, "hit_label": "The items of your cart (pk = CART#<your id>)"}
 
 
 def learn_item(lesson, item_id):
@@ -203,13 +203,13 @@ def learn_item(lesson, item_id):
         it = table().get_item(Key={"pk": pk, "sk": sk}).get("Item")
         t.result(items=1 if it else 0)
     if not it:
-        return {"title": sk, "sub": "Bu item artık yok (TTL ile silinmiş olabilir).", "record": {}}
+        return {"title": sk, "sub": "This item does not exist any more (TTL may have deleted it).", "record": {}}
     rec = {k: (float(v) if isinstance(v, Decimal) else v) for k, v in it.items()}
     rec = {k: (int(v) if isinstance(v, float) and v.is_integer() else v) for k, v in rec.items()}
     order = ["pk", "sk"] + sorted(k for k in rec if k not in ("pk", "sk"))
     exp = rec.get("expires_at")
-    left = f" TTL: süresi {max(0, int(exp - time.time())) // 60} dakika sonra doluyor." if exp else ""
-    return {"title": f"{pk}  /  {sk}", "sub": f"Bir item: {len(rec)} attribute.{left} Sarı: anahtar (pk + sk) ve TTL.",
+    left = f" TTL: it expires in {max(0, int(exp - time.time())) // 60} minutes." if exp else ""
+    return {"title": f"{pk}  /  {sk}", "sub": f"One item: {len(rec)} attributes.{left} Yellow: the key (pk + sk) and the TTL.",
             "record": {k: rec[k] for k in order}, "marks": {"pk": "kept", "sk": "kept", "expires_at": "kept"}}
 
 

@@ -157,16 +157,16 @@ def learn_overview(lesson, focus):
             for o in resp.get("Contents", []):
                 total += 1
                 size += o["Size"]
-                label = "Senin yüklediklerin" if o["Key"].startswith(mine) else ("products/" if prefix == "products/" else "uploads/ (öteki ziyaretçiler)")
+                label = "Your uploads" if o["Key"].startswith(mine) else ("products/" if prefix == "products/" else "uploads/ (other visitors)")
                 groups.setdefault(label, []).append(o["Key"])
         t.result(items=total)
     hit = lambda k: k in f or k.startswith(mine) or any(k.endswith(f"/{x}.jpg") for x in f)
-    order = ["Senin yüklediklerin", "products/", "uploads/ (öteki ziyaretçiler)"]
-    return {"title": "S3: ürün görselleri bucket'ı", "text": "Her kare bir nesne (object). Raflar anahtarın öneki; klasör gibi görünür ama S3'te klasör yoktur.",
-            "facts": [[total, "nesne"], [f"{size / 1048576:.1f} MB", "toplam"], ["versioning", "açık"], [sum(1 for ks in groups.values() for k in ks if hit(k)), "nesne senin çağrında"]],
+    order = ["Your uploads", "products/", "uploads/ (other visitors)"]
+    return {"title": "S3: the product image bucket", "text": "Each square is one object. The shelves are key prefixes. They look like folders, but S3 has no folders.",
+            "facts": [[total, "objects"], [f"{size / 1048576:.1f} MB", "total"], ["versioning", "on"], [sum(1 for ks in groups.values() for k in ks if hit(k)), "objects in your call"]],
             "groups": [{"label": g, "items": [{"id": k, "title": k, "hit": hit(k)} for k in sorted(groups[g], key=lambda k: (not hit(k), k))[:120]]}
                        for g in order if g in groups],
-            "hit_label": "Senin çağrının okuduğu veya yazdığı nesneler"}
+            "hit_label": "The objects that your call read or wrote"}
 
 
 def learn_item(lesson, key):
@@ -176,5 +176,5 @@ def learn_item(lesson, key):
     rec = {"Key": key, "ContentLength (bayt)": h["ContentLength"], "ContentType": h.get("ContentType"), "ETag": h.get("ETag", "").strip('"'),
            "LastModified": h["LastModified"].isoformat(), "StorageClass": h.get("StorageClass", "STANDARD"), "VersionId": h.get("VersionId"),
            "ServerSideEncryption": h.get("ServerSideEncryption"), "Metadata (x-amz-meta-*)": h.get("Metadata", {})}
-    return {"title": key.rsplit("/", 1)[-1], "sub": "Bir nesne: baytlar (burada okunmadı) ve onları tarif eden metadata. Sarı: anahtar ve senin yazdığın metadata.",
+    return {"title": key.rsplit("/", 1)[-1], "sub": "One object: the bytes (not read here) and the metadata that describes them. Yellow: the key and the metadata that you wrote.",
             "record": rec, "marks": {"Key": "kept", "Metadata (x-amz-meta-*)": "kept"}}

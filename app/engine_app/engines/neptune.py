@@ -132,13 +132,13 @@ def learn_overview(lesson, focus):
         edges = _q(q3)[0]["edges"]
         t.result(items=1)
     cats = sorted({p["category"] for p in products})
-    return {"title": "Neptune: müşteri ve ürün grafı", "text": "Her kare bir düğüm (node). Ürünler kategori raflarında, en altta müşterilerden bir örnek.",
-            "facts": [[len(products), "Product düğümü"], [edges, "BOUGHT kenarı"], [len([x for x in products + customers if x["id"] in f]), "düğüm senin çağrında"]],
+    return {"title": "Neptune: the customer and product graph", "text": "Each square is one vertex (node). The products are on category shelves, and a sample of customers is at the bottom.",
+            "facts": [[len(products), "Product vertices"], [edges, "BOUGHT edges"], [len([x for x in products + customers if x["id"] in f]), "vertices in your call"]],
             "groups": [{"label": c, "items": [{"id": p["id"], "title": f"{p['id']}: {p['name']}", "hit": p["id"] in f}
                                               for p in products if p["category"] == c]} for c in cats]
-                      + [{"label": "Müşteriler", "items": [{"id": x["id"], "title": f"{x['id']}: {x['name']}", "hit": x["id"] in f}
+                      + [{"label": "Customers", "items": [{"id": x["id"], "title": f"{x['id']}: {x['name']}", "hit": x["id"] in f}
                                                           for x in sorted(customers, key=lambda x: x["id"] not in f)]}],
-            "hit_label": "Senin çağrının dokunduğu düğümler (ve persona'n)"}
+            "hit_label": "The vertices that your call touched (and your persona)"}
 
 
 def learn_item(lesson, node_id):
@@ -150,9 +150,9 @@ RETURN c.name AS name, c.city AS city, collect({product: p.`~id`, name: p.name, 
             t.result(items=len(rows))
         r0 = rows[0] if rows else {}
         rec = {"~id": node_id, "~label": "Customer", "name": r0.get("name"), "city": r0.get("city"),
-               f"BOUGHT kenarları (giden, {r0.get('n', 0)} tane, ilk 10)": [{"→ Product": b["product"], "name": b["name"], "order_id": b["order_id"]}
+               f"BOUGHT edges (outgoing, {r0.get('n', 0)}, first 10)": [{"→ Product": b["product"], "name": b["name"], "order_id": b["order_id"]}
                                                                           for b in r0.get("bought") or [] if b.get("product")]}
-        return {"title": r0.get("name") or node_id, "sub": "Bir Customer düğümü ve ondan çıkan BOUGHT kenarları. Kenar da bir kayıttır: order_id taşır.",
+        return {"title": r0.get("name") or node_id, "sub": "A Customer vertex and its outgoing BOUGHT edges. An edge is a record too: it holds an order_id.",
                 "record": rec, "marks": {"~id": "kept", "~label": "kept"}}
     q = """MATCH (p:Product {`~id`: $id}) OPTIONAL MATCH (p)<-[b:BOUGHT]-(c:Customer)
 WITH p, collect(DISTINCT {id: c.`~id`, name: c.name})[0..5] AS buyers, count(b) AS n
@@ -164,7 +164,7 @@ ORDER BY score DESC LIMIT 5"""
         t.result(items=len(rows))
     r0 = rows[0] if rows else {}
     rec = {"~id": node_id, "~label": "Product", "name": r0.get("name"), "category": r0.get("category"),
-           f"BOUGHT kenarları (gelen, {r0.get('n', 0)} tane), ilk 5 müşteri": [{"← Customer": b["id"], "name": b["name"]} for b in r0.get("buyers") or [] if b.get("id")],
-           "2 adım ötede: birlikte alınanlar": [{"Product": x["other"], "name": x["other_name"], "ortak müşteri": x["score"]} for x in rows if x.get("other")]}
-    return {"title": r0.get("name") or node_id, "sub": "Bir Product düğümü, ona gelen kenarlar ve iki adım ötedeki ürünler (öneri bu yoldan çıkar).",
-            "record": rec, "marks": {"~id": "kept", "~label": "kept", "2 adım ötede: birlikte alınanlar": "kept"}}
+           f"BOUGHT edges (incoming, {r0.get('n', 0)}), first 5 customers": [{"← Customer": b["id"], "name": b["name"]} for b in r0.get("buyers") or [] if b.get("id")],
+           "2 hops away: bought together": [{"Product": x["other"], "name": x["other_name"], "shared customers": x["score"]} for x in rows if x.get("other")]}
+    return {"title": r0.get("name") or node_id, "sub": "A Product vertex, its incoming edges and the products two hops away (the recommendation comes from this path).",
+            "record": rec, "marks": {"~id": "kept", "~label": "kept", "2 hops away: bought together": "kept"}}

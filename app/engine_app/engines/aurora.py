@@ -140,9 +140,9 @@ def learn_overview(lesson, focus):
     for tbl in ("customers", "orders", "order_items", "products"):
         ids = list(dict.fromkeys(first[tbl] + sample[tbl]))[:48]
         groups.append({"label": labels[tbl], "items": [{"id": f"{tbl}:{i}", "title": f"{tbl}: {i}", "hit": i in hits[tbl]} for i in ids]})
-    return {"title": "Aurora PostgreSQL: shop veritabanı", "text": "Dört tablo, her biri bir raf. Her kare bir satır (her tablodan en fazla 48 satır gösteriliyor).",
-            "facts": [[counts[0], "müşteri"], [counts[1], "ürün"], [counts[2], "sipariş"], [counts[3], "sipariş satırı"], [len(my_orders), "sipariş senin"]],
-            "groups": groups, "hit_label": "Senin siparişlerin ve onlara bağlı satırlar"}
+    return {"title": "Aurora PostgreSQL: the shop database", "text": "Four tables, each one a shelf. Each square is one row (at most 48 rows of each table are shown).",
+            "facts": [[counts[0], "customers"], [counts[1], "products"], [counts[2], "orders"], [counts[3], "order lines"], [len(my_orders), "orders are yours"]],
+            "groups": groups, "hit_label": "Your orders and the rows that they link to"}
 
 
 def learn_item(lesson, item_id):
@@ -159,14 +159,14 @@ def learn_item(lesson, item_id):
                                                                  "products (JOIN, product_id ile)": {"name": i["name"], "category": i["category"]}} for i in items],
                    "customers (JOIN, customer_id ile)": cust}
             marks = {"order_id": "kept", "customer_id": "kept"}
-            return {"title": f"Sipariş {key}", "sub": "orders tablosunda bir satır. Altında, anahtarlarla bağlı öteki tabloların satırları var (JOIN).",
+            return {"title": f"Order {key}", "sub": "One row of the orders table. Below it are the rows of the other tables that the keys link (JOIN).",
                     "record": rec, "marks": marks}
         if tbl == "order_items":
             oid, _, pid = key.partition("|")
             sql(cur, "SELECT (JOIN)", "SELECT oi.*, p.name FROM order_items oi JOIN products p USING (product_id) WHERE order_id = %(o)s AND product_id = %(p)s",
                 {"o": oid, "p": pid})
             row = (_rows(cur) or [{}])[0]
-            return {"title": f"Sipariş satırı {oid} / {pid}", "sub": "order_items: bir siparişin bir ürünü. order_id ve product_id öteki tablolara işaret eder.",
+            return {"title": f"Order line {oid} / {pid}", "sub": "order_items: one product of one order. order_id and product_id point to the other tables.",
                     "record": row, "marks": {"order_id": "kept", "product_id": "kept"}}
         keycol = {"customers": "customer_id", "products": "product_id"}.get(tbl)
         if not keycol:
@@ -178,8 +178,8 @@ def learn_item(lesson, item_id):
             row["orders (son 5, customer_id ile)"] = _rows(cur)
         else:
             sql(cur, "SELECT", "SELECT count(*) AS satir, coalesce(sum(qty), 0) AS adet FROM order_items WHERE product_id = %(k)s", {"k": key})
-            row["order_items içinde (sayım)"] = _rows(cur)[0]
-    return {"title": f"{tbl}: {key}", "sub": f"{tbl} tablosunda bir satır. Her sütunun tipi tabloyu kurarken bir kez belirlendi.",
+            row["in order_items (count)"] = _rows(cur)[0]
+    return {"title": f"{tbl}: {key}", "sub": f"One row of the {tbl} table. The type of each column was set once, when the table was created.",
             "record": row, "marks": {keycol: "kept"}}
 
 

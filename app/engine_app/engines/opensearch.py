@@ -163,11 +163,11 @@ def learn_overview(lesson, focus):
         t.result(items=len(r["hits"]["hits"]))
     docs = [(h["_id"], h["_source"]) for h in r["hits"]["hits"]]
     groups = sorted({d[group_field] for _, d in docs})
-    return {"title": f"OpenSearch: {index} index'i", "text": "Her kare bir belge. " + ("Raflar şehirler." if index == "stores" else "Raflar kategoriler."),
-            "facts": [[len(docs), "belge"], [len(groups), "şehir" if index == "stores" else "kategori"], [len(f & {i for i, _ in docs}), "belge senin sonucunda"]],
+    return {"title": f"OpenSearch: the {index} index", "text": "Each square is one document. " + ("The shelves are cities." if index == "stores" else "The shelves are categories."),
+            "facts": [[len(docs), "documents"], [len(groups), "cities" if index == "stores" else "categories"], [len(f & {i for i, _ in docs}), "documents in your result"]],
             "groups": [{"label": g, "items": [{"id": i, "title": f"{i}: {d['name']}", "hit": i in f} for i, d in sorted(docs) if d[group_field] == g]}
                        for g in groups],
-            "hit_label": "Senin çağrının döndürdüğü belgeler"}
+            "hit_label": "The documents that your call returned"}
 
 
 def learn_item(lesson, doc_id):
@@ -177,8 +177,8 @@ def learn_item(lesson, doc_id):
         t.result(items=1)
     rec = {"_index": d["_index"], "_id": d["_id"], "_source": d["_source"]}
     marks = {"_source.location": "kept"} if index == "stores" else {"_source.name": "kept"}
-    sub = ("Bir mağaza belgesi. location alanı geo_point: OpenSearch enlem ve boylamı bir harita ızgarasında index'ler." if index == "stores"
-           else "OpenSearch'teki belge. name alanı hem kelimelere bölünür hem de yazdıkça öneri için önek (prefix) aramasına açıktır.")
+    sub = ("A store document. The location field is a geo_point: OpenSearch indexes the latitude and longitude in a map grid." if index == "stores"
+           else "The document in OpenSearch. The name field is split into words, and it also supports prefix search for suggestions while you type.")
     return {"title": d["_source"].get("name", doc_id), "sub": sub, "record": rec, "marks": marks}
 
 

@@ -151,12 +151,12 @@ def learn_overview(lesson, focus):
     order = sorted(parts, key=lambda u: (u != mine, u))[:20]
     rid = lambda row: f"{row.user_id}|{row.event_time.isoformat()}|{row.event_id}"
     short = lambda u: u if len(u) <= 18 else u[:16] + "…"
-    groups = [{"label": "Senin geçmişin" if u == mine else short(u),
+    groups = [{"label": "Your history" if u == mine else short(u),
                "items": [{"id": rid(x), "title": f"{x.event_time:%Y-%m-%d %H:%M:%S}  {x.event_type}", "hit": u == mine}
                          for x in sorted(parts[u], key=lambda x: x.event_time, reverse=True)[:40]]} for u in order]
-    return {"title": f"Keyspaces: {table()} tablosu", "text": "Her raf bir partition (bir kullanıcı), her kare bir olay; en yeni olay solda. İlk 20 partition gösteriliyor.",
-            "facts": [[len(rows), "satır örnekte"], [len(parts), "partition örnekte"], [len(own), "olay senin partition'ında"], ["7 gün", "TTL"]],
-            "groups": groups, "hit_label": "Senin partition'ın (user_id = senin id)"}
+    return {"title": f"Keyspaces: the {table()} table", "text": "Each shelf is one partition (one user), and each square is one event, the newest at the left. The first 20 partitions are shown.",
+            "facts": [[len(rows), "rows in the sample"], [len(parts), "partitions in the sample"], [len(own), "events in your partition"], ["7 days", "TTL"]],
+            "groups": groups, "hit_label": "Your partition (user_id = your id)"}
 
 
 def learn_item(lesson, item_id):
@@ -166,10 +166,10 @@ def learn_item(lesson, item_id):
         row = s().execute(cql, (uid, datetime.fromisoformat(ts), uuid.UUID(eid))).one()
         t.result(items=1 if row else 0)
     if not row:
-        return {"title": eid, "sub": "Bu satır artık yok (TTL ile silinmiş olabilir).", "record": {}}
+        return {"title": eid, "sub": "This row does not exist any more (TTL may have deleted it).", "record": {}}
     rec = {k: (v.isoformat() if hasattr(v, "isoformat") else str(v) if isinstance(v, uuid.UUID) else v) for k, v in row._asdict().items()}
     order = ["user_id", "event_time", "event_id"] + [k for k in rec if k not in ("user_id", "event_time", "event_id")]
-    return {"title": f"{rec.get('event_type')} olayı", "sub": "Bir satır. user_id partition key; event_time ve event_id clustering key (partition içindeki sıra).",
+    return {"title": f"{rec.get('event_type')} event", "sub": "One row. user_id is the partition key. event_time and event_id are the clustering key (the order inside the partition).",
             "record": {k: rec[k] for k in order}, "marks": {"user_id": "kept", "event_time": "kept", "event_id": "kept"}}
 
 

@@ -16,7 +16,7 @@
     const init = body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {};
     const res = await fetch(url, init);
     const json = await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }));
-    if (json.ok === false) throw new Error(json.error || "Çağrı başarısız oldu.");
+    if (json.ok === false) throw new Error(json.error || "The call failed.");
     return { data: json.data, trace: json.trace || [] };
   }
 
@@ -31,12 +31,12 @@
   function showCall(r, e) {
     const box = $("#yourcall");
     box.hidden = false;
-    box.innerHTML = `${r.sample ? `<p class="yourcall-note">Bu sayfayı doğrudan açtın. Aşağıda örnek bir çağrı var: mağazada kendi çağrını yapıp panelden <b>101</b> bağlantısına tıklarsan kendi verini görürsün.</p>` : ""}
+    box.innerHTML = `${r.sample ? `<p class="yourcall-note">You opened this page directly, so below is an example call. Make your own call in the shop and click the <b>101</b> link in the panel to see your own data.</p>` : ""}
       <dl>
-        <div><dt>Mağazadaki işlem</dt><dd>${esc(r.label)}</dd></div>
-        <div><dt>Engine işlemi</dt><dd><code>${esc(e.op)}</code></dd></div>
-        <div><dt>Sonuç</dt><dd>${e.items !== undefined ? `${e.items} kayıt` : "–"}</dd></div>
-        <div><dt>Engine'de geçen süre</dt><dd>${e.ms} ms</dd></div>
+        <div><dt>Action in the shop</dt><dd>${esc(r.label)}</dd></div>
+        <div><dt>Engine operation</dt><dd><code>${esc(e.op)}</code></dd></div>
+        <div><dt>Result</dt><dd>${e.items !== undefined ? `${e.items} records` : "–"}</dd></div>
+        <div><dt>Time in the Engine</dt><dd>${e.ms} ms</dd></div>
       </dl>`;
   }
 
@@ -51,8 +51,8 @@
   }
 
   /* ---------------- Tree: the nested structure of one record, with a type label for each field */
-  const TYPE = (v) => (v === null ? "boş" : Array.isArray(v) ? `liste, ${v.length} öğe` : typeof v === "object" ? `nesne, ${Object.keys(v).length} alan`
-    : typeof v === "number" ? "sayı" : typeof v === "boolean" ? "doğru/yanlış" : "metin");
+  const TYPE = (v) => (v === null ? "null" : Array.isArray(v) ? `list, ${v.length} items` : typeof v === "object" ? `object, ${Object.keys(v).length} fields`
+    : typeof v === "number" ? "number" : typeof v === "boolean" ? "true/false" : "text");
   /** mark(path) returns a CSS class for a field ("kept", "dropped", "key", ...) or "" */
   function tree(obj, mark = () => "", path = "") {
     return `<ul class="tree">${Object.entries(obj).map(([k, v]) => {
@@ -75,14 +75,14 @@
         </div></div>`).join("")}</div>
         ${opts.legend ? `<div class="legend">${opts.legend}</div>` : ""}</div>
       <div class="zoom-link" aria-hidden="true"></div>
-      <div class="zoom-lens" aria-live="polite"><p class="wait">Bir kare seç.</p></div>`;
+      <div class="zoom-lens" aria-live="polite"><p class="wait">Select a square.</p></div>`;
     const lens = $(".zoom-lens", el);
     async function select(id) {
       el.querySelectorAll(".tile.sel").forEach((t) => t.classList.remove("sel"));
       const tile = el.querySelector(`.tile[data-id="${CSS.escape(id)}"]`);
       if (tile) tile.classList.add("sel");
       lens.classList.add("busy");
-      try { lens.innerHTML = await opts.onSelect(id); } catch (e) { lens.innerHTML = `<p>Kayıt okunamadı: ${esc(e.message)}</p>`; }
+      try { lens.innerHTML = await opts.onSelect(id); } catch (e) { lens.innerHTML = `<p>Could not read the record: ${esc(e.message)}</p>`; }
       lens.classList.remove("busy"); lens.classList.remove("in"); void lens.offsetWidth; lens.classList.add("in");
     }
     el.addEventListener("click", (e) => { const t = e.target.closest(".tile"); if (t) select(t.dataset.id); });
@@ -109,13 +109,13 @@
   }
 
   function stepHtml(op, x, en) {
-    const facts = en ? [en.items !== undefined ? `<span><b>${en.items}</b> kayıt</span>` : "", `<span><b>${en.ms}</b> ms</span>`,
-      en.capacity ? `<span>Kapasite: <b>${esc(en.capacity)}</b></span>` : "", en.cost ? `<span>Maliyet: <b>${esc(en.cost)}</b></span>` : ""].join("") : "";
+    const facts = en ? [en.items !== undefined ? `<span><b>${en.items}</b> records</span>` : "", `<span><b>${en.ms}</b> ms</span>`,
+      en.capacity ? `<span>Capacity: <b>${esc(en.capacity)}</b></span>` : "", en.cost ? `<span>Cost: <b>${esc(en.cost)}</b></span>` : ""].join("") : "";
     return `<li><h3>${esc(x.title || op)} <code>${esc(op)}</code></h3><div class="sp">${x.text || ""}
       ${en ? `<div class="facts">${facts}</div>
-        ${en.note ? `<p class="enote"><span>Paneldeki not:</span> ${esc(en.note)}</p>` : ""}
+        ${en.note ? `<p class="enote"><span>Note in the panel:</span> ${esc(en.note)}</p>` : ""}
         ${en.error ? `<p class="enote bad">${esc(en.error)}</p>` : ""}
-        <details class="req"><summary>Gerçek istek</summary><pre>${esc(en.request)}</pre>${en.plan ? `<pre>${esc(en.plan)}</pre>` : ""}</details>` : ""}</div></li>`;
+        <details class="req"><summary>Real request</summary><pre>${esc(en.request)}</pre>${en.plan ? `<pre>${esc(en.plan)}</pre>` : ""}</details>` : ""}</div></li>`;
   }
 
   async function renderLesson() {
@@ -134,7 +134,7 @@
           overview: `<h3>${esc(ov.title)}</h3><p>${esc(ov.text || "")}</p>
             <div class="facts">${(ov.facts || []).map(([v, l]) => `<span><b>${esc(v)}</b> ${esc(l)}</span>`).join("")}</div>`,
           groups: ov.groups.map((g) => ({ label: g.label, items: g.items.map((it) => ({ id: it.id, title: it.title, cls: it.hit ? "hit" : "" })) })),
-          legend: `<span><i class="h"></i>${esc(ov.hit_label || "Senin çağrının kullandığı")}</span><span><i class="s"></i>Seçili</span><span><i class="d"></i>Öteki kayıtlar</span>`,
+          legend: `<span><i class="h"></i>${esc(ov.hit_label || "Used by your call")}</span><span><i class="s"></i>Selected</span><span><i class="d"></i>Other records</span>`,
           selected: ov.selected || (first.find((it) => it.hit) || first[0] || {}).id,
           onSelect: async (id) => {
             const it = (await call(`${P}/api/learn/item?${new URLSearchParams({ lesson: C.id, id })}`)).data;
@@ -143,14 +143,14 @@
               ${C.big.legend ? `<div class="legend">${C.big.legend}</div>` : ""}`;
           },
         });
-      } catch (err) { $("#zoom").innerHTML = `<p>Büyük resim okunamadı: ${esc(err.message)}</p>`; }
+      } catch (err) { $("#zoom").innerHTML = `<p>Could not read the big picture: ${esc(err.message)}</p>`; }
     }
 
     const ex = C.explain || {};
     if (r) {
       $("#qsteps").innerHTML = r.entries.map((en) => stepHtml(en.op, ex[en.op] || {}, en)).join("");
     } else {
-      $("#steps-intro").textContent = "Henüz bir çağrın yok. Bu işlemler mağazada genelde şu sırayla çalışır:";
+      $("#steps-intro").textContent = "You have no call yet. In the shop, these operations usually run in this order:";
       $("#qsteps").innerHTML = Object.entries(ex).map(([op, x]) => stepHtml(op, x, null)).join("");
     }
   }

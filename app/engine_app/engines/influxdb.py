@@ -143,12 +143,12 @@ def learn_overview(lesson, focus):
         groups.append({"label": label, "items": [{"id": f"{key}|{x.get_time().isoformat()}|{window}",
                                                    "title": f"{x.get_time():%H:%M}: {x.get_value()} ham nokta", "hit": hit} for x in recs[-48:]]})
     groups.sort(key=lambda g: (not g["items"] or not g["items"][0]["hit"], g["label"]))
-    note = (f" Seçtiğin aralıkta nokta yok (örnek veri yüklendiği anda bitiyor), bu yüzden {widened.lstrip('-')} geriye bakıldı."
+    note = (f" Your range has no points (the sample data ends at the time of the load), so the page looked back {widened.lstrip('-')}."
             if widened else "")
-    return {"title": "Timestream for InfluxDB: metrics bucket'ı", "text": f"Her raf bir seri (measurement + tag'ler). Her kare {window}'lık bir zaman penceresi; en yeni sağda." + note,
-            "facts": [[len(groups), "seri"], [total, f"ham nokta ({rng.lstrip('-')} içinde)"], [window, "pencere"],
-                      [sum(1 for g in groups if g["items"] and g["items"][0]["hit"]), "seri senin grafiğinde"]],
-            "groups": groups, "hit_label": "Senin grafiğinin okuduğu seriler"}
+    return {"title": "Timestream for InfluxDB: the metrics bucket", "text": f"Each shelf is one series (measurement + tags). Each square is one time window of {window}, the newest at the right." + note,
+            "facts": [[len(groups), "series"], [total, f"raw points (in {rng.lstrip('-')})"], [window, "window"],
+                      [sum(1 for g in groups if g["items"] and g["items"][0]["hit"]), "series in your chart"]],
+            "groups": groups, "hit_label": "The series that your chart reads"}
 
 
 def learn_item(lesson, item_id):
@@ -164,12 +164,12 @@ def learn_item(lesson, item_id):
     vals = [v for _, v in pts if v is not None]
     tag_lp = "".join(f",{k}={v}" for k, v in tags.items())
     rec = {"measurement": m, "tags": tags, "field": field,
-           "pencere": {"başlangıç": (stop - timedelta(minutes=minutes)).isoformat(), "bitiş": stop.isoformat()},
-           "ham nokta sayısı": len(pts),
-           "grafikteki tek değer": {"ortalama": round(sum(vals) / len(vals), 2) if vals else None, "toplam": round(sum(vals), 2) if vals else None,
-                                    "en küçük": min(vals) if vals else None, "en büyük": max(vals) if vals else None},
-           "ham noktalar (ilk 8)": [{"zaman": t.isoformat(), "değer": v} for t, v in pts[:8]]}
+           "window": {"start": (stop - timedelta(minutes=minutes)).isoformat(), "stop": stop.isoformat()},
+           "raw points": len(pts),
+           "the one value in the chart": {"mean": round(sum(vals) / len(vals), 2) if vals else None, "sum": round(sum(vals), 2) if vals else None,
+                                    "min": min(vals) if vals else None, "max": max(vals) if vals else None},
+           "raw points (first 8)": [{"time": t.isoformat(), "value": v} for t, v in pts[:8]]}
     if pts:
-        rec["diskteki satır (line protocol)"] = f"{m}{tag_lp} {field}={pts[0][1]} {int(pts[0][0].timestamp())}"
-    return {"title": f"{m}, {window} pencere", "sub": f"Bu kare, {len(pts)} ham noktanın tek bir değere indirgenmiş hali (aggregateWindow).",
-            "record": rec, "marks": {"tags": "kept", "grafikteki tek değer": "kept"}}
+        rec["line on disk (line protocol)"] = f"{m}{tag_lp} {field}={pts[0][1]} {int(pts[0][0].timestamp())}"
+    return {"title": f"{m}, window {window}", "sub": f"This square is {len(pts)} raw points reduced to one value (aggregateWindow).",
+            "record": rec, "marks": {"tags": "kept", "the one value in the chart": "kept"}}

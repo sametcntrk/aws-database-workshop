@@ -172,9 +172,9 @@ def status():
     return {"deal stock": r().get("lm:deal:stock"), "leaderboard members": r().zcard("lm:leaderboard")}
 
 
-KEY_GROUPS = [("lm:deal", "Flash deal"), ("lm:session:", "Oturumlar (session)"), ("lm:leaderboard", "Sıralama ve sayaçlar"),
-              ("lm:active", "Sıralama ve sayaçlar"), ("lm:orders", "Sıralama ve sayaçlar"), ("lm:name:", "İsimler"), ("lm:sim", "Load Simulation")]
-TYPE_TR = {"string": "string (metin veya sayaç)", "hash": "hash (alan → değer)", "zset": "sorted set (puana göre sıralı)",
+KEY_GROUPS = [("lm:deal", "Flash deal"), ("lm:session:", "Sessions"), ("lm:leaderboard", "Rankings and counters"),
+              ("lm:active", "Rankings and counters"), ("lm:orders", "Rankings and counters"), ("lm:name:", "Names"), ("lm:sim", "Load Simulation")]
+TYPE_TR = {"string": "string (text or counter)", "hash": "hash (field to value)", "zset": "sorted set (sorted by score)",
            "set": "set", "list": "list"}
 
 
@@ -192,17 +192,17 @@ def learn_overview(lesson, focus):
     keys = sorted(set(keys) | {k for k in f if k.startswith("lm:")})
     groups = {}
     for k in keys:
-        label = next((g for prefix, g in KEY_GROUPS if k.startswith(prefix)), "Öteki")
+        label = next((g for prefix, g in KEY_GROUPS if k.startswith(prefix)), "Other")
         groups.setdefault(label, []).append(k)
     for label in groups:   # the keys of the call first, then the others
         groups[label].sort(key=lambda k: (k not in f, k))
         groups[label] = groups[label][:60]
     order = [g for _, g in KEY_GROUPS]
-    return {"title": "ElastiCache (Valkey): anahtar uzayı", "text": "Bellekteki her anahtar bir kare. Raflar anahtarın işi (adındaki önek).",
-            "facts": [[len(keys), "anahtar (en fazla 400 sayılır)"], [len(groups), "grup"], [len([k for k in keys if k in f]), "anahtar senin çağrında"]],
+    return {"title": "ElastiCache (Valkey): the key space", "text": "Each key in memory is one square. The shelves are the job of the key (the prefix of its name).",
+            "facts": [[len(keys), "keys (at most 400 are counted)"], [len(groups), "groups"], [len([k for k in keys if k in f]), "keys in your call"]],
             "groups": [{"label": g, "items": [{"id": k, "title": k, "hit": k in f} for k in groups[g]]}
                        for g in sorted(groups, key=lambda g: order.index(g) if g in order else 99)],
-            "hit_label": "Senin çağrının okuduğu veya yazdığı anahtarlar"}
+            "hit_label": "The keys that your call read or wrote"}
 
 
 def learn_item(lesson, key):
@@ -222,11 +222,11 @@ def learn_item(lesson, key):
             value = None
         ttl = r().ttl(key)
         t.result(items=1 if value is not None else 0)
-    rec = {"anahtar": key, "tip": TYPE_TR.get(kind, kind), "değer": value,
-           "TTL": "süresiz (-1)" if ttl == -1 else ("anahtar yok (-2)" if ttl == -2 else f"{ttl} saniye sonra silinecek")}
+    rec = {"key": key, "type": TYPE_TR.get(kind, kind), "value": value,
+           "TTL": "no expiry (-1)" if ttl == -1 else ("no key (-2)" if ttl == -2 else f"deleted in {ttl} seconds")}
     if kind == "zset":
-        rec["değer"] = {"ilk 10 üye (puana göre, büyükten küçüğe)": value}
-    return {"title": key, "sub": "Bellekte tek bir anahtar ve değeri. Diskte tablo, satır veya sorgu planı yok.",
+        rec["value"] = {"first 10 members (by score, highest first)": value}
+    return {"title": key, "sub": "One key and its value in memory. There is no table, row or query plan on disk.",
             "record": rec, "marks": {"anahtar": "kept", "TTL": "kept"}}
 
 

@@ -155,22 +155,22 @@ def learn_overview(lesson, focus):
         vid = visitor_id()
         mine = [r for r in rows if r[1] == vid]
         others = [r for r in rows if r[1] != vid]
-        return {"title": f"Redshift: {LIVE_DB} veritabanı (zero-ETL kopyası)",
-                "text": "Aurora'daki orders tablosunun Redshift'teki kopyası. Her kare bir sipariş; en yeni 96 sipariş gösteriliyor.",
-                "facts": [[cnt[0][0], "sipariş"], [cnt[0][1], "sipariş satırı"], [cnt[0][2], "müşteri"], [cnt[0][3], "ürün"], [len(mine), "sipariş senin"]],
-                "groups": [{"label": "Senin siparişlerin", "items": [{"id": f"o:{r[0]}", "title": r[0], "hit": True} for r in mine]},
-                           {"label": "Öteki siparişler", "items": [{"id": f"o:{r[0]}", "title": r[0], "hit": False} for r in others]}],
-                "hit_label": "Senin checkout'ta verdiğin siparişler"}
+        return {"title": f"Redshift: the database {LIVE_DB} (zero-ETL copy)",
+                "text": "The Redshift copy of the Aurora table orders. Each square is one order. The newest 96 orders are shown.",
+                "facts": [[cnt[0][0], "orders"], [cnt[0][1], "order lines"], [cnt[0][2], "customers"], [cnt[0][3], "products"], [len(mine), "orders are yours"]],
+                "groups": [{"label": "Your orders", "items": [{"id": f"o:{r[0]}", "title": r[0], "hit": True} for r in mine]},
+                           {"label": "Other orders", "items": [{"id": f"o:{r[0]}", "title": r[0], "hit": False} for r in others]}],
+                "hit_label": "The orders that you placed in checkout"}
     used = {DIM_COLS.get(f, f) for f in focus} | {"order_id", "qty", "amount"} if focus else {"order_date", "order_id", "qty", "amount"}
     _, cnt = run("SELECT", "SELECT count(*) FROM sales")
     _, rows = run("SELECT", f"SELECT {', '.join(SALES_COLS)} FROM sales ORDER BY order_date LIMIT 36")
-    return {"title": "Redshift: sales tablosu, sütun sütun",
-            "text": "Redshift tabloyu satır satır değil, sütun sütun saklar. Her raf bir sütun, her kare o sütunun bir değeri (ilk 36 satır).",
-            "facts": [[cnt[0][0], "satır"], [len(SALES_COLS), "sütun"], ["customer_id", "DISTKEY"], ["order_date", "SORTKEY"],
-                      [len(used), "sütun senin sorgunda"]],
+    return {"title": "Redshift: the sales table, column by column",
+            "text": "Redshift stores the table column by column, not row by row. Each shelf is one column, and each square is one value of that column (the first 36 rows).",
+            "facts": [[cnt[0][0], "rows"], [len(SALES_COLS), "columns"], ["customer_id", "DISTKEY"], ["order_date", "SORTKEY"],
+                      [len(used), "columns in your query"]],
             "groups": [{"label": col, "items": [{"id": f"c:{col}:{i}", "title": f"{col} = {_v(r[j])}", "hit": col in used}
                                                 for i, r in enumerate(rows)]} for j, col in enumerate(SALES_COLS)],
-            "hit_label": "Senin raporunun okuduğu sütunlar"}
+            "hit_label": "The columns that your report reads"}
 
 
 def learn_item(lesson, item_id):
@@ -180,20 +180,20 @@ def learn_item(lesson, item_id):
         cols, rows = run("SELECT", f"SELECT * FROM {LIVE_DB}.public.orders WHERE order_id = '{oid}'")
         order = {c: _v(v) for c, v in zip(cols, rows[0])} if rows else {}
         cols, rows = run("SELECT", f"SELECT product_id, qty, unit_price FROM {LIVE_DB}.public.order_items WHERE order_id = '{oid}'")
-        order["order_items (aynı veritabanında)"] = [{c: _v(v) for c, v in zip(cols, r)} for r in rows]
-        return {"title": f"Sipariş {oid}", "sub": "Aurora'da yazılan satırın Redshift'teki kopyası. Bunu kimse kopyalamadı: zero-ETL kopyaladı.",
+        order["order_items (same database)"] = [{c: _v(v) for c, v in zip(cols, r)} for r in rows]
+        return {"title": f"Order {oid}", "sub": "The Redshift copy of a row that Aurora wrote. No person copied it: zero-ETL copied it.",
                 "record": order, "marks": {"order_id": "kept", "order_date": "kept"}}
     col, _, idx = rest.partition(":")
     if col not in SALES_COLS:
-        return {"title": col, "sub": "Bilinmeyen sütun.", "record": {}}
+        return {"title": col, "sub": "Unknown column.", "record": {}}
     _, st = run("SELECT", f"SELECT count(DISTINCT {col}), min({col}), max({col}) FROM sales")
     _, sample = run("SELECT", f"SELECT {col} FROM sales ORDER BY order_date LIMIT 36")
     _, typ = run("SELECT", f"SELECT type, encoding, distkey, sortkey FROM pg_table_def WHERE tablename = 'sales' AND \"column\" = '{col}'")
     t = typ[0] if typ else ("?", "?", False, 0)
     i = int(idx or 0)
-    return {"title": f"Sütun: {col}", "sub": f"Bu sütunun bütün değerleri diskte yan yana durur ve birlikte sıkıştırılır ({t[1]}).",
-            "record": {"sütun": col, "tip": t[0], "sıkıştırma (encoding)": t[1], "DISTKEY": bool(t[2]), "SORTKEY sırası": t[3],
-                       "farklı değer sayısı": st[0][0], "en küçük": _v(st[0][1]), "en büyük": _v(st[0][2]),
-                       "seçtiğin kare": {"satır": i + 1, "değer": _v(sample[i][0]) if i < len(sample) else None},
-                       "ilk 8 değer (diskteki sırayla)": [_v(r[0]) for r in sample[:8]]},
-            "marks": {"seçtiğin kare": "kept"}}
+    return {"title": f"Column: {col}", "sub": f"All values of this column are next to each other on disk, and Redshift compresses them together ({t[1]}).",
+            "record": {"column": col, "type": t[0], "compression (encoding)": t[1], "DISTKEY": bool(t[2]), "SORTKEY position": t[3],
+                       "distinct values": st[0][0], "smallest": _v(st[0][1]), "largest": _v(st[0][2]),
+                       "your square": {"row": i + 1, "value": _v(sample[i][0]) if i < len(sample) else None},
+                       "first 8 values (in disk order)": [_v(r[0]) for r in sample[:8]]},
+            "marks": {"your square": "kept"}}
