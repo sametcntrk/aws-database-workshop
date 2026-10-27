@@ -6,6 +6,7 @@ from pymongo import MongoClient
 
 from .. import catalog, trace
 from ..base import env, secret
+from . import table as result_table
 
 CA_FILE = "/opt/engine-app/certs/global-bundle.pem"
 META = catalog.META["docdb"]
@@ -135,3 +136,98 @@ def reset_visitors():
 
 def status():
     return {"products": db().products.estimated_document_count()}
+
+
+# ---------------------------------------------------------------- E2E tutorial queries (templates/e2e/docdb.html)
+def _find(op, shown, flt, proj=None, sort=None, limit=20, note=None, cols=None):
+    with trace.call(op, shown, {}) as t:
+        cur = db().products.find(flt, proj)
+        if sort:
+            cur = cur.sort(sort)
+        docs = list(cur.limit(limit))
+        total = db().products.count_documents(flt)
+        t.result(items=len(docs), note=f"{total} documents match the filter.")
+    cols = cols or ["_id"] + [c for c in (proj or {}) if c != "_id"]
+    get = lambda d, c: d.get(c) if "." not in c else (d.get(c.split(".")[0]) or {}).get(c.split(".", 1)[1])
+    return result_table(cols, [[get(d, c) for c in cols] for d in docs], note=note, total=total)
+
+
+def _e2e_doc():
+    with trace.call("find_one", "db.products.find_one({ _id: 'P0001' })", {}) as t:
+        d = db().products.find_one({"_id": "P0001"})
+        size = len(json.dumps(d, default=str, ensure_ascii=False).encode())
+        t.result(items=1, note=f"Document size: {size} bytes.")
+    return {"json": d, "note": f"One document, {len(d)} top-level fields, {size} bytes."}
+
+
+def _explain(flt, sort, natural):
+    find = {"find": "products", "filter": flt, "sort": sort, "limit": 48}
+    if natural:
+        find["hint"] = {"$natural": 1}
+    shown = f"db.products.find({json.dumps(flt, ensure_ascii=False)}).sort({json.dumps(sort)}).limit(48)" + (".hint({ $natural: 1 })" if natural else "")
+    with trace.call("explain (executionStats)", shown + ".explain('executionStats')", {}) as t:
+        plan = db().command("explain", find, verbosity="executionStats")
+        t.result()
+    stats = plan.get("executionStats", {})
+
+    def stages(node):
+        out = []
+        while isinstance(node, dict) and node.get("stage"):
+            out.append(node["stage"] + (f" ({node['indexName']})" if node.get("indexName") else ""))
+            node = node.get("inputStage")
+        return " → ".join(out)
+    return ["COLLSCAN forced" if natural else "planner's choice", stages(plan.get("queryPlanner", {}).get("winningPlan", {})),
+            stats.get("totalDocsExamined"), stats.get("nReturned"), stats.get("executionTimeMillis")]
+
+
+def _e2e_explain():
+    flt, sort = {"category": "Kitap"}, {"rating": -1}
+    rows = [_explain(flt, sort, False), _explain(flt, sort, True)]
+    return result_table(["run", "plan stages (outer → inner)", "docs examined", "returned", "ms"], rows,
+                        note="Read the stages from right to left: the inner stage runs first.")
+
+
+def _e2e_aggregate():
+    pipeline = [{"$unwind": "$tags"}, {"$group": {"_id": "$tags", "products": {"$sum": 1}, "avg_price": {"$avg": "$price"}}},
+                {"$sort": {"products": -1}}]
+    shown = ("db.products.aggregate([\n  { $unwind: '$tags' },\n  { $group: { _id: '$tags', products: { $sum: 1 }, avg_price: { $avg: '$price' } } },\n"
+             "  { $sort: { products: -1 } }\n])")
+    with trace.call("aggregate", shown, {}) as t:
+        rows = list(db().products.aggregate(pipeline))
+        t.result(items=len(rows))
+    return result_table(["tag", "products", "avg_price"], [[r["_id"], r["products"], round(r["avg_price"], 2)] for r in rows])
+
+
+def _e2e_indexes():
+    with trace.call("listIndexes", "db.products.getIndexes()", {}) as t:
+        idx = db().products.index_information()
+        t.result(items=len(idx))
+    return result_table(["name", "key"], [[n, json.dumps(dict(v["key"]))] for n, v in idx.items()])
+
+
+def _e2e_stats():
+    with trace.call("collStats", "db.runCommand({ collStats: 'products' })", {}) as t:
+        s = db().command("collStats", "products")
+        t.result()
+    return result_table(["count", "avgObjSize (bytes)", "size (bytes)", "nindexes", "totalIndexSize (bytes)"],
+                        [[s.get("count"), s.get("avgObjSize"), s.get("size"), s.get("nindexes"), s.get("totalIndexSize")]])
+
+
+E2E = {
+    "M1": _e2e_doc,
+    "M2": lambda: _find("find (nested field)", "db.products.find({ category: 'Elektronik', 'attributes.renk': 'siyah' },\n"
+                        "  { name: 1, price: 1, 'attributes.renk': 1, 'attributes.garanti_ay': 1 }).sort({ price: 1 })",
+                        {"category": "Elektronik", "attributes.renk": "siyah"}, {"name": 1, "price": 1, "attributes.renk": 1, "attributes.garanti_ay": 1},
+                        [("price", 1)], cols=["_id", "name", "price", "attributes.renk", "attributes.garanti_ay"]),
+    "M3": lambda: _find("find (array)", "db.products.find({ tags: 'indirim' }, { name: 1, tags: 1 }).limit(10)",
+                        {"tags": "indirim"}, {"name": 1, "tags": 1}, limit=10,
+                        note="{ tags: 'indirim' } matches a document when one element of the tags array is 'indirim'."),
+    "M4": _e2e_explain,
+    "M5": _e2e_aggregate,
+    "M6": _e2e_indexes,
+    "M7": _e2e_stats,
+    "M8": lambda: _find("find (range on nested field)", "db.products.find({ 'attributes.garanti_ay': { $gte: 36 }, rating: { $gte: 4.5 } },\n"
+                        "  { name: 1, rating: 1, 'attributes.garanti_ay': 1 }).sort({ rating: -1 })",
+                        {"attributes.garanti_ay": {"$gte": 36}, "rating": {"$gte": 4.5}}, {"name": 1, "rating": 1, "attributes.garanti_ay": 1},
+                        [("rating", -1)], cols=["_id", "name", "rating", "attributes.garanti_ay"]),
+}
