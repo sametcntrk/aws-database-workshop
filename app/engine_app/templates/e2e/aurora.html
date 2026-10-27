@@ -2,115 +2,191 @@
 {% import "e2e/_macros.html" as k with context %}
 {% block body %}
 
-<h2 id="goal" data-short="What you will learn"><span class="sec">00</span>What you will learn</h2>
-<p>Lale Market keeps its orders in Amazon Aurora PostgreSQL. Each order changes the stock, writes an order header and writes order lines.
-   These writes must happen together, or not at all. Many shoppers do this at the same time.</p>
+<h2 id="goal" data-short="What you will learn"><span class="sec">00</span>What you will learn, and how to use this page</h2>
+<p>This tutorial has two parts. Part 1 teaches PostgreSQL itself. You learn how it stores data and how it answers a question.
+   You also learn how it keeps data correct when many people write at the same time. Everything in Part 1 is true for any PostgreSQL server, on your laptop or in a data center.
+   Part 2 shows what Amazon Aurora PostgreSQL changes. Aurora runs the same PostgreSQL, but it replaces the storage and the operations around it.</p>
+<p>The examples come from Lale Market, the shop of this workshop. Lale Market keeps its orders in Aurora PostgreSQL.
+   When a different example makes an idea easier to see, the tutorial uses that example instead: a library, a bank account, a café.</p>
 <p>After this tutorial, you can do these tasks:</p>
 <ol>
-  <li>Draw the four Lale Market tables and the keys that connect them.</li>
-  <li>Read a JOIN and say which rows each step of the Engine touches.</li>
-  <li>Read a query plan and tell an index scan from a full table scan.</li>
-  <li>Explain how a transaction and a row lock stop the shop from selling the last piece two times.</li>
-  <li>Say when Aurora is the correct Engine, and when a different Engine is better.</li>
+  <li>Read a <code>CREATE TABLE</code> statement and say what each line allows and refuses.</li>
+  <li>Say which table owns which identifier, and which tables borrow it.</li>
+  <li>Read a SELECT with JOIN and GROUP BY, clause by clause, and predict its result from the input tables.</li>
+  <li>Explain why an index makes one query fast and each write a little slower.</li>
+  <li>Explain how a transaction and a row lock stop a shop from selling the last piece two times.</li>
+  <li>Explain what Aurora adds to PostgreSQL, and when a different AWS database is a better choice.</li>
 </ol>
-
-<h2 id="model" data-short="Tables, rows, schema"><span class="sec">01</span>The model: tables with a set shape</h2>
-<p>A {{ k.term("relational database") }} keeps data in tables. A table has columns, and each column has one data type.
-   Each row of the table has a value for each column. The list of tables, columns, types and rules is the {{ k.term("schema") }}.
-   You define the schema before you write the first row.</p>
-<p>This is the real <code>customers</code> table of Lale Market, with three of its 1,000 rows:</p>
-<table class="data">
-  <caption>customers (customer_id text PRIMARY KEY, name text NOT NULL, email text, city text, segment text, created_at timestamptz)</caption>
-  <thead><tr><th class="key">customer_id</th><th>name</th><th>email</th><th>city</th><th>segment</th></tr></thead>
-  <tbody>
-    <tr><td class="key mono">C00001</td><td>Ayşe Yılmaz</td><td class="mono">ayse.yilmaz@example.com</td><td>İstanbul</td><td>premium</td></tr>
-    <tr><td class="key mono">C00002</td><td>Mert Doğan</td><td class="mono">mert.dogan@example.com</td><td>Ankara</td><td>kurumsal</td></tr>
-    <tr><td class="key mono">C00003</td><td>Elif Kaya</td><td class="mono">elif.kaya@example.com</td><td>İzmir</td><td>bireysel</td></tr>
-  </tbody>
-</table>
-{% call k.callout("analogy", "Analogy") %}
-<p>A table is like a printed form with set boxes. Each customer fills the same boxes. You cannot write a phone number in the box for the city,
-   because the database checks the type of each value. A new kind of information needs a new box for all forms: <code>ALTER TABLE ... ADD COLUMN</code>.</p>
-{% endcall %}
-<p>On disk, PostgreSQL stores each table and each index as a list of pages of one size, usually 8 kB
-   (<a href="https://www.postgresql.org/docs/current/storage-page-layout.html">PostgreSQL: Database Page Layout</a>).
-   A page holds many rows. To read one row, the Engine reads the full page that holds it. Keep this picture in mind: the cost of a query is mostly
-   the number of pages that it reads.</p>
-
-{% call k.query("aurora", "A1", "How many rows are in each table?") %}
-<pre><code>SELECT 'customers' AS table_name, count(*) AS rows FROM customers
-UNION ALL SELECT 'products', count(*) FROM products
-UNION ALL SELECT 'orders', count(*) FROM orders
-UNION ALL SELECT 'order_items', count(*) FROM order_items;</code></pre>
-<p>Purpose: see the size of the data before you query it. <code>count(*)</code> counts rows. <code>UNION ALL</code> puts the four results under each other.</p>
-{% endcall %}
-
-{% call k.query("aurora", "A2", "Read one customer by the primary key") %}
-<pre><code>SELECT * FROM customers WHERE customer_id = 'C00001';</code></pre>
-<p>Purpose: get exactly one row. The {{ k.term("primary key") }} <code>customer_id</code> is unique, so the result has zero or one row.</p>
-{% endcall %}
-
-<h2 id="keys" data-short="Keys and relations"><span class="sec">02</span>Keys: how four tables make one order</h2>
-<p>An order has a header (who, when, status, total) and one or more lines (which product, how many, at which price).
-   Lale Market puts these facts in four tables. Keys connect the tables:</p>
+<p>Four kinds of boxes help you:</p>
 <ul>
-  <li>A <b>primary key</b> (PK) is the column or columns that identify one row. No two rows can have the same primary key.</li>
-  <li>A {{ k.term("foreign key") }} (FK) is a column that holds the primary key of a row in a different table.
-      PostgreSQL rejects a foreign key value that points to no row.</li>
+  <li><b>Simulation</b>: press Play or Next step. The input tables change color while PostgreSQL works, and the result table fills row by row.</li>
+  <li><b>Predict first</b>: write your answer before you open the solution. A wrong guess that you correct teaches more than a right answer that you read.</li>
+  <li><b>Checkpoint</b>: a question with one correct answer. The score at the left counts your first answers.</li>
+  <li><b>Analogy</b>: a picture from daily life. An analogy helps you remember, but the text before it is the exact rule.</li>
 </ul>
-{{ k.fig("aurora-er-diagram.png", "each box is a table. PK marks the primary key and FK marks a foreign key. Each line connects a foreign key to the primary key that it points to. The Lale Market tables use the same idea with four tables.") }}
-<p>This is order <code>O000001</code> of Ayşe Yılmaz, as PostgreSQL stores it. One order uses four tables:</p>
-<table class="data">
-  <caption>orders</caption>
-  <thead><tr><th class="key">order_id (PK)</th><th>customer_id (FK → customers)</th><th>order_date</th><th>status</th><th class="num">total</th></tr></thead>
-  <tbody><tr><td class="key mono">O000001</td><td class="mono hl">C00001</td><td>2026-06-08 13:05</td><td>delivered</td><td class="num">14,988.97</td></tr></tbody>
-</table>
-<table class="data">
-  <caption>order_items (PRIMARY KEY (order_id, product_id))</caption>
-  <thead><tr><th class="key">order_id (FK)</th><th class="key">product_id (FK)</th><th class="num">qty</th><th class="num">unit_price</th></tr></thead>
-  <tbody>
-    <tr><td class="key mono">O000001</td><td class="key mono">P0044</td><td class="num">1</td><td class="num">2,651.39</td></tr>
-    <tr><td class="key mono">O000001</td><td class="key mono">P0095</td><td class="num">1</td><td class="num">2,721.65</td></tr>
-    <tr><td class="key mono">O000001</td><td class="key mono">P0142</td><td class="num">3</td><td class="num">2,693.65</td></tr>
-    <tr><td class="key mono">O000001</td><td class="key mono">P0179</td><td class="num">2</td><td class="num">767.49</td></tr>
-  </tbody>
-</table>
-<table class="data">
-  <caption>products (four of 200 rows)</caption>
-  <thead><tr><th class="key">product_id (PK)</th><th>name</th><th>category</th></tr></thead>
-  <tbody>
-    <tr><td class="key mono">P0044</td><td>Kapadokya Bulut Mimarisi 44</td><td>Kitap</td></tr>
-    <tr><td class="key mono">P0095</td><td>Anadolu Yün Kazak 95</td><td>Moda</td></tr>
-    <tr><td class="key mono">P0142</td><td>Ege Hava Temizleyici 142</td><td>Ev &amp; Yaşam</td></tr>
-    <tr><td class="key mono">P0179</td><td>Toros Python ile Veri 179</td><td>Kitap</td></tr>
-  </tbody>
-</table>
-<p>The total is the sum of the lines: 2,651.39 + 2,721.65 + 3 × 2,693.65 + 2 × 767.49 = 14,988.97.</p>
-<p>Why not one wide table with the customer name and the product name in each line? Because then one fact has many copies.
-   If Ayşe changes her e-mail address, you must change each line of each order that she ever placed. If one change fails, the copies disagree.
-   With separate tables, each fact has one place. This design rule is {{ k.term("normalization") }}.</p>
-<p>One copy is on purpose: <code>order_items.unit_price</code>. The price in <code>products</code> can change tomorrow.
-   The order must keep the price that the customer paid. So the order line stores the price at the time of the order.</p>
 
-{% call k.predict("The products table gets a new price for P0142 tomorrow. Does the total of order O000001 change?") %}
-<p>No. The order line has its own <code>unit_price</code> (2,693.65), and the order row keeps its own <code>orders.total</code>.
-   Only new orders use the new price. This copy is a business decision, not an accident.</p>
+<div class="part"><b>Part 1</b><h2 id="part1" data-short="PART 1: PostgreSQL">PostgreSQL: the database engine</h2>
+<p>What a relational database is, and how PostgreSQL answers questions and protects data.</p></div>
+
+<h2 id="why" data-short="Why a database?"><span class="sec">01</span>Why not a spreadsheet? The problem that a database solves</h2>
+<p>Think about a small bookshop with three cashiers. The owner keeps the stock in one spreadsheet file on a shared disk.
+   For one person, this works well. Then the shop gets busy, and four problems appear.</p>
+<ol>
+  <li><b>Two people change the same cell.</b> Cashier A opens the file and sees 1 copy of a book. Cashier B opens the same file and also sees 1 copy.
+      Both sell the book, and both save. The file now says 0, but the shop sold 2 copies of a book that it had 1 time.</li>
+  <li><b>The computer stops in the middle of a change.</b> A sale has two parts: lower the stock, and write the sale into the sales sheet.
+      The power goes off after the first part. Now the stock is lower, but no sale exists.</li>
+  <li><b>Wrong data gets in.</b> Somebody types "ten" into a price cell, or a negative stock. The spreadsheet accepts it, and every total after it is wrong.</li>
+  <li><b>Questions get slow.</b> "Which books did customer 4021 buy last year?" With 2 million rows, somebody must filter by hand, or the program must read the full file.</li>
+</ol>
+<p>A database server solves these four problems in one program. It accepts many connections at the same time, and it puts their changes in a safe order.
+   It writes each change to a log on disk before it reports success. So a power failure does not lose a change that it reported as done.
+   It tests the rules that you declare, and it refuses data that breaks them. It keeps extra structures (indexes) that answer frequent questions without a full read.</p>
+<p>PostgreSQL is one such server. It is open source, and it is one of the most used relational databases. Your application does not open a file.
+   It connects to the PostgreSQL server over the network (TCP port 5432 by default) and sends text commands in SQL, the Structured Query Language.
+   The server does the work and sends back rows. In Lale Market, the application is the Aurora Engine App on an EC2 instance, and it sends SQL with the Python driver <code>psycopg</code>.</p>
+
+<h2 id="model" data-short="Table, row, column, schema"><span class="sec">02</span>Table, row, column, data type, schema</h2>
+<p>A {{ k.term("relational database") }} keeps data in tables. Start with a library, because everybody knows one.
+   A library has a list of books. Each book has a title, an author, a year and a number of copies. In a database, this list is a table named <code>books</code>.</p>
+<ul>
+  <li>A <b>column</b> is one kind of information: title, author, year, copies. Each column has a name and a <b>data type</b>.
+      The data type says which values the column accepts. The column <code>year</code> has the type <code>integer</code>, so it accepts 1998 but refuses "nineteen ninety-eight".</li>
+  <li>A <b>row</b> is one book: one value for each column. A table with 40,000 books has 40,000 rows.</li>
+  <li>The {{ k.term("schema") }} is the description of all tables: their names, their columns, the data types and the rules.
+      You write the schema first, with <code>CREATE TABLE</code>. Only then can rows go into the table.</li>
+</ul>
+<p>Now the real table of Lale Market. This is the statement that creates the table of customers (from <code>engines/aurora.py</code>):</p>
+<pre><code>CREATE TABLE customers (
+  customer_id text PRIMARY KEY,
+  name        text NOT NULL,
+  email       text,
+  city        text,
+  segment     text,
+  created_at  timestamptz
+);</code></pre>
+<p>Read it line by line:</p>
+<table class="clause">
+  <tr><td>CREATE TABLE customers ( ... )</td><td>Make a new table with the name <code>customers</code>. The lines inside the parentheses are its columns, one column on each line.</td></tr>
+  <tr><td>customer_id text PRIMARY KEY</td><td>A column with the name <code>customer_id</code>. Its type is <code>text</code>, so it holds characters such as <code>C00001</code>.
+      <code>PRIMARY KEY</code> makes this column the identifier of the row. PostgreSQL refuses an empty value and a value that another row already has.</td></tr>
+  <tr><td>name text NOT NULL</td><td>The name of the customer. <code>NOT NULL</code> means that the value must be present. PostgreSQL refuses a row with no name.</td></tr>
+  <tr><td>email text, city text, segment text</td><td>Three text columns with no extra rule. They can be empty. In SQL, the name of an empty value is <code>NULL</code>: "unknown" or "not given".</td></tr>
+  <tr><td>created_at timestamptz</td><td>A date and a time with a time zone. PostgreSQL refuses a value that is not a valid point in time, such as "31 February".</td></tr>
+</table>
+<p>This tutorial uses a small copy of the shop, so that you can see every row. The names and prices come from the real Lale Market data.
+   The stock values and the orders after O000001 are examples. The real tables have 1,000 customers, 200 products, about 5,000 orders and about 12,500 order lines.</p>
+{{ k.sample("customers", "customers (6 rows of the teaching copy)", key=["customer_id"]) }}
+{% call k.callout("analogy", "Analogy") %}
+<p>A table is like a pad of printed forms. Every form has the same boxes in the same places. Every customer fills one form.
+   The data type is the shape of the box: a box for a date does not accept a word. The schema is the master copy of the form.
+   To add a box, for example "phone", you change the master copy with <code>ALTER TABLE customers ADD COLUMN phone text</code>. Every form then has the new box, empty at first.</p>
 {% endcall %}
 
-{{ k.quiz("aurora-q1", "Which column makes it impossible to save an order line for a product that does not exist?",
-   ["The foreign key order_items.product_id", "The primary key orders.order_id", "The column order_items.unit_price", "The column products.category"],
-   0, "order_items.product_id is a foreign key to products. PostgreSQL checks that the product row exists before it saves the line.") }}
+<h3>How PostgreSQL keeps a table on disk</h3>
+<p>PostgreSQL stores each table in a file. The file is a list of {{ k.term("page") }}s of the same size, usually 8 kB each
+   (<a href="https://www.postgresql.org/docs/current/storage-page-layout.html">PostgreSQL: Database Page Layout</a>).
+   A page holds as many rows as fit into it. A customer row of about 100 bytes means about 70 rows in one page, so 1,000 customers fit in about 13 to 15 pages.</p>
+<p>The disk and the memory always move full pages. To read one row, PostgreSQL reads the full page that holds it. So the cost of a query is mostly
+   <b>the number of pages that it must read</b>. Keep this rule in mind. Every later section (indexes, joins, aggregation) comes back to it.</p>
 
-<h2 id="join" data-short="JOIN step by step"><span class="sec">03</span>JOIN: put the pieces together again</h2>
-<p>Storage is split. The shop page needs one picture. A {{ k.term("JOIN") }} combines rows of two tables where a condition is true,
-   usually "the foreign key equals the primary key".</p>
+<h3>Your first query: SELECT, FROM, WHERE</h3>
+<p>A question to the database is a {{ k.term("query") }}. The most common query is <code>SELECT</code>. It has three main parts:</p>
+{% call k.sql("Q1", "The customers who live in İstanbul") %}
+<pre><code>SELECT customer_id, name, city
+FROM customers
+WHERE city = 'İstanbul';</code></pre>
+<table class="clause">
+  <tr><td>FROM customers</td><td>The source: read the table <code>customers</code>. PostgreSQL works on this clause first, although you write it second.</td></tr>
+  <tr><td>WHERE city = 'İstanbul'</td><td>The filter: keep only the rows where this condition is true. Text values go between single quotes.
+      PostgreSQL tests the condition on each row separately.</td></tr>
+  <tr><td>SELECT customer_id, name, city</td><td>The columns of the result. The table has six columns, but the result shows only these three. <code>SELECT *</code> means "all columns".</td></tr>
+</table>
+<p>The input is the six rows of <code>customers</code> above. Two customers live in İstanbul: Ayşe Yılmaz and Zeynep Şahin.</p>
+{% endcall %}
+{% call k.predict("The table has no index on city. To find the two İstanbul customers, how many rows must PostgreSQL read?") %}
+<p>All six. PostgreSQL cannot know where the İstanbul rows are, so it reads each row and tests the condition. A row that fails the test was still read.
+   This way of reading is a {{ k.term("Seq Scan") }} (sequential scan). Play the simulation and watch the counter "rows read".</p>
+{% endcall %}
+{{ k.sim("where", "WHERE city = 'İstanbul' on a table with no index") }}
+<p>On 6 rows, a Seq Scan costs nothing. On 10 million rows, it reads every page of the table for each such query. Section 06 shows how an index takes this cost away.</p>
 
-{% call k.predict("Order O000001 has 4 lines. How many rows does a JOIN of orders, customers, order_items and products return for this order?") %}
-<p>4 rows. Each order line matches one order, one customer and one product. The order and customer columns repeat in each of the 4 result rows.
-   The result repeats data, but the storage does not.</p>
+{{ k.quiz("aurora-q0", "The customers table above has 6 rows. A query asks WHERE segment = 'premium'. With no index, how many rows does PostgreSQL read, and how many does it return?",
+   ["It reads 2 rows and returns 2 rows", "It reads 6 rows and returns 2 rows", "It reads 6 rows and returns 6 rows", "It reads 1 row and returns 2 rows"],
+   1, "With no index, PostgreSQL reads all 6 rows. Two of them (C00001 Ayşe Yılmaz and C00004 Lukas Weber) have segment = 'premium', so the result has 2 rows.") }}
+
+<h2 id="keys" data-short="Identifiers and ownership"><span class="sec">03</span>Identifiers: each table owns one, and borrows others</h2>
+<p>A shop must store facts about different things: customers, products, orders, and the lines of each order. Each kind of thing gets its own table.
+   Each table owns an identifier. An {{ k.term("identifier") }} is a value that names exactly one row of that table, and never changes.</p>
+<p>A table uses the identifier of a different table to say "this row is about that thing". It does not copy the other thing. It only borrows its identifier.
+   The borrowed column is a {{ k.term("foreign key") }}. The owned column is the {{ k.term("primary key") }}.</p>
+<p>This is the ownership in Lale Market. Read each row as a sentence.</p>
+<table class="data">
+  <thead><tr><th>Table</th><th>The identifier that it owns</th><th>The identifiers that it borrows</th></tr></thead>
+  <tbody>
+    <tr><td><code>customers</code></td><td>The customers table owns <code>customer_id</code>. Each customer has one, for example C00001 for Ayşe Yılmaz.</td><td>It borrows no identifier.</td></tr>
+    <tr><td><code>products</code></td><td>The products table owns <code>product_id</code>. Each product has one, for example P0044 for the book "Kapadokya Bulut Mimarisi 44".</td><td>It borrows no identifier.</td></tr>
+    <tr><td><code>orders</code></td><td>The orders table owns <code>order_id</code>. Each order has one, for example O000001.</td>
+        <td>It borrows <code>customer_id</code> from the customers table. The value says which customer placed the order.</td></tr>
+    <tr><td><code>order_items</code></td><td>The order_items table owns the pair (<code>order_id</code>, <code>product_id</code>). One product can appear only one time in one order.</td>
+        <td>It borrows <code>order_id</code> from the orders table and <code>product_id</code> from the products table.
+            Together they say "this many pieces of this product, in this order".</td></tr>
+  </tbody>
+</table>
+<p>In the tables below, a yellow column is an identifier that the table owns. A blue-green column is an identifier that the table borrows.
+   These are the input tables for the rest of Part 1. Come back to them when a question asks about the data.</p>
+{{ k.sample("customers", "customers: owns customer_id", key=["customer_id"]) }}
+{{ k.sample("products", "products: owns product_id (stock values are examples)", key=["product_id"]) }}
+{{ k.sample("orders", "orders: owns order_id, borrows customer_id from customers", key=["order_id"], ref=["customer_id"]) }}
+{{ k.sample("order_items", "order_items: owns the pair (order_id, product_id), borrows order_id from orders and product_id from products", key=["order_id", "product_id"], ref=["order_id", "product_id"]) }}
+<p>Follow one order with your eyes. Order O000001 belongs to customer C00001, because the orders table says so.
+   The customers table tells us that C00001 is Ayşe Yılmaz from İstanbul. The order_items table has four lines with order_id O000001.
+   The third line says that Ayşe bought 3 pieces of product P0142. Each piece cost 2,693.65. The products table tells us that P0142 is "Ege Hava Temizleyici 142".
+   The order total is the sum of its lines. 1 × 2,651.39 + 1 × 2,721.65 + 3 × 2,693.65 + 2 × 767.49 = 14,988.97.</p>
+{{ k.fig("aurora-er-diagram.png", "each box is a table. The line marked PK is the identifier that the table owns. A line marked FK is an identifier that the table borrows. An arrow goes from the borrowing table to the owning table. The four Lale Market tables follow the same pattern.") }}
+
+<h3>Why the database checks borrowed identifiers</h3>
+<p>The schema of order_items says <code>product_id text REFERENCES products</code>. This clause tells PostgreSQL: "a value in this column must exist as an identifier in products".
+   If a program tries to save an order line for product P9999, and no product owns P9999, PostgreSQL refuses the line.
+   Without this rule, the shop could have order lines for products that nobody can find.</p>
+
+<h3>Why not one large table?</h3>
+<p>A beginner often asks: "Why four tables? One table with all the columns is simpler." Look at what one large table looks like:</p>
+<table class="data">
+  <caption>order_lines_wide: one table with everything (a bad design, for comparison)</caption>
+  <thead><tr><th>order_id</th><th>customer_name</th><th>customer_email</th><th>product_name</th><th class="num">qty</th></tr></thead>
+  <tbody>
+    <tr><td>O000001</td><td>Ayşe Yılmaz</td><td class="mono">ayse.yilmaz@example.com</td><td>Kapadokya Bulut Mimarisi 44</td><td class="num">1</td></tr>
+    <tr><td>O000001</td><td>Ayşe Yılmaz</td><td class="mono">ayse.yilmaz@example.com</td><td>Anadolu Yün Kazak 95</td><td class="num">1</td></tr>
+    <tr><td>O000001</td><td>Ayşe Yılmaz</td><td class="mono">ayse.yilmaz@example.com</td><td>Ege Hava Temizleyici 142</td><td class="num">3</td></tr>
+    <tr><td>O000001</td><td>Ayşe Yılmaz</td><td class="mono">ayse.yilmaz@example.com</td><td>Toros Python ile Veri 179</td><td class="num">2</td></tr>
+  </tbody>
+</table>
+<p>The e-mail address of Ayşe is now in four rows. In the real shop, Ayşe has 30 orders, so the address is in about 80 rows.
+   Ayşe changes her address. The program must change all 80 rows. If it changes 79 and fails on one, the table has two different addresses for one person.
+   Which one is correct? Nobody knows. This is an {{ k.term("update anomaly") }}.</p>
+<p>With four tables, the address of Ayşe is in one row of customers. A change touches one row, and every order sees the new address through the identifier C00001.
+   This design rule is {{ k.term("normalization") }}: store each fact one time, in the table that owns it, and point to it with identifiers.</p>
+<p>One copy in Lale Market is on purpose: <code>order_items.unit_price</code>. The price in products can change tomorrow.
+   An order must keep the price that the customer paid on that day. So the order line stores its own copy of the price. This copy is a business rule, not a mistake.</p>
+
+{% call k.predict("Tomorrow the price of P0142 in the products table changes from 2,693.65 to 2,999.00. Look at the tables above. Does the total of order O000001 change?") %}
+<p>No. The order line for P0142 has its own <code>unit_price</code> (2,693.65). The orders row has its own <code>total</code> (14,988.97).
+   Nothing in order O000001 reads products.price. Only new orders use the new price.</p>
 {% endcall %}
 
-{% call k.query("aurora", "A3", "Order O000001 as one result") %}
+{{ k.quiz("aurora-q1", "A program tries to save the order line (O000001, P9999, 1, 10.00). No product owns the identifier P9999. Which part of the schema stops it?",
+   ["The foreign key order_items.product_id, which points to products", "The primary key orders.order_id, which is unique", "The column order_items.unit_price, which is numeric", "The column products.category, which is text"],
+   0, "order_items borrows product_id from products. PostgreSQL checks that a product owns the value before it saves the line. P9999 has no owner, so PostgreSQL refuses the line.") }}
+
+<h2 id="join" data-short="JOIN"><span class="sec">04</span>JOIN: put the pieces of one order together again</h2>
+<p>Normalization splits the facts over four tables. A web page needs them together: "Order O000001, Ayşe Yılmaz, four products with names and prices".
+   A {{ k.term("JOIN") }} combines rows of two tables into one result row when a condition is true. The usual condition is
+   "the borrowed identifier in one table equals the owned identifier in the other table".</p>
+<p>A simple picture first. You have a list of phone calls (caller number, minutes) and a phone book (number, name). To print "name, minutes",
+   you take each call, find its number in the phone book, and write the name next to the minutes. This matching is a JOIN.
+   The call list borrows the number, and the phone book owns it.</p>
+{% call k.sql("Q2", "Order O000001 with the customer name and the product names") %}
 <pre><code>SELECT o.order_id, o.order_date::date AS order_date, c.name AS customer,
        p.name AS product, oi.qty, oi.unit_price, oi.qty * oi.unit_price AS line_total
 FROM orders o
@@ -118,201 +194,359 @@ JOIN customers   c  ON c.customer_id = o.customer_id
 JOIN order_items oi ON oi.order_id   = o.order_id
 JOIN products    p  ON p.product_id  = oi.product_id
 WHERE o.order_id = 'O000001';</code></pre>
-<p>Purpose: show one order with the customer name and the product names. How the Engine can run it:</p>
-<ol class="steps">
-  <li>Find the row <code>O000001</code> in <code>orders</code> with the primary key index. This reads a few pages, not the full table.</li>
-  <li>Use <code>o.customer_id</code> (C00001) to find one row in <code>customers</code>, again by its primary key index.</li>
-  <li>Find the lines of <code>O000001</code> in <code>order_items</code>. The primary key (order_id, product_id) starts with order_id, so its index finds them.</li>
-  <li>For each of the 4 lines, find the product by <code>product_id</code>. The result is 4 rows.</li>
-</ol>
-<p>The planner of PostgreSQL selects the order of these steps and the join method. The steps above show one correct plan, not the only plan.</p>
+<table class="clause">
+  <tr><td>FROM orders o</td><td>Start from the orders table. <code>o</code> is a short name (an alias) for it, so later lines can write <code>o.customer_id</code> instead of <code>orders.customer_id</code>.</td></tr>
+  <tr><td>JOIN customers c
+ON c.customer_id = o.customer_id</td><td>For each order row, find the customer row whose owned identifier equals the identifier that the order borrows.
+      The result row now has the columns of both rows.</td></tr>
+  <tr><td>JOIN order_items oi
+ON oi.order_id = o.order_id</td><td>Find every order line that borrows the order_id of this order. One order with four lines gives four result rows.
+      The order and customer columns repeat in each of them.</td></tr>
+  <tr><td>JOIN products p
+ON p.product_id = oi.product_id</td><td>For each line, find the product that owns the product_id of the line. Now each result row also has the product name.</td></tr>
+  <tr><td>WHERE o.order_id = 'O000001'</td><td>Keep only order O000001. PostgreSQL usually applies this filter first, so it joins one order and not all of them.</td></tr>
+  <tr><td>SELECT ... oi.qty * oi.unit_price AS line_total</td><td>The result columns. A column can be a calculation. <code>AS line_total</code> gives the calculated column a name.
+      <code>::date</code> changes the date-and-time value into a date only.</td></tr>
+</table>
 {% endcall %}
+{% call k.predict("Look at the order_items table above. How many rows does this query return? Which columns repeat in every row?") %}
+<p>4 rows, because order O000001 has 4 lines. order_id, order_date and customer repeat in each row, because each row is one line together with its order and its customer.
+   The result repeats data. The tables do not: each fact is still stored one time.</p>
+{% endcall %}
+{{ k.sim("join", "JOIN of orders, customers, order_items and products for O000001") }}
+<p>The order of the steps in the simulation is one correct plan. PostgreSQL has a component named the {{ k.term("planner") }}. It looks at the query, the table sizes and the indexes,
+   and it selects the order of the joins and the join method. On large tables it can select a different order. The result is always the same. Only the work is different.</p>
 
-{{ k.quiz("aurora-q2", "Why is a JOIN on primary keys fast, also when the tables are large?",
-   ["The Engine copies the tables to memory first", "Each lookup uses an index and reads few pages", "The Engine stores the joined result on disk", "PostgreSQL caches every possible join in advance"],
-   1, "The primary key has a B-tree index. Each lookup reads a few pages, and this number grows very slowly with the table size.") }}
+{{ k.quiz("aurora-q2", "Use the input tables above. A JOIN of orders and customers ON c.customer_id = o.customer_id, WHERE c.city = 'İstanbul'. How many rows come back?",
+   ["1 row, the order of Ayşe Yılmaz", "2 rows, the orders of Ayşe and Zeynep", "4 rows, all orders in the table", "2 rows, the two İstanbul customers only"],
+   1, "Ayşe (C00001) and Zeynep (C00005) live in İstanbul. Ayşe has order O000001 and Zeynep has order O000104 (cancelled, but still an order). So the result has 2 rows.") }}
 
-<h2 id="aggregate" data-short="GROUP BY"><span class="sec">04</span>Aggregation: many rows become one number</h2>
-<p>A shop manager asks: "Which category earns the most?" The answer needs all order lines, grouped by the category of the product.</p>
-{% call k.query("aurora", "A4", "Revenue per category") %}
-<pre><code>SELECT p.category, count(DISTINCT o.order_id) AS orders,
-       sum(oi.qty) AS pieces, round(sum(oi.qty * oi.unit_price), 2) AS revenue
+<h2 id="aggregate" data-short="Aggregation, GROUP BY"><span class="sec">05</span>Aggregation: many rows become one number</h2>
+<p>Until now, each result row came from input rows one to one. Some questions are different. "How much did the shop earn?" needs one number from many rows.
+   A function that takes many values and returns one value is an {{ k.term("aggregate function") }}. The five common ones:</p>
+<table class="data">
+  <thead><tr><th>Function</th><th>What it returns</th><th>Example on the qty column of order_items: 1, 1, 3, 2, 5, 10, 2, 1, 1</th></tr></thead>
+  <tbody>
+    <tr><td><code>count(*)</code></td><td>The number of rows</td><td>9</td></tr>
+    <tr><td><code>sum(qty)</code></td><td>The total of the values</td><td>26</td></tr>
+    <tr><td><code>avg(qty)</code></td><td>The average (sum divided by count)</td><td>26 / 9 = 2.89</td></tr>
+    <tr><td><code>min(qty)</code>, <code>max(qty)</code></td><td>The smallest and the largest value</td><td>1 and 10</td></tr>
+    <tr><td><code>count(DISTINCT order_id)</code></td><td>The number of different values</td><td>4 (O000001, O000102, O000103, O000104)</td></tr>
+  </tbody>
+</table>
+<p>Without GROUP BY, an aggregate returns one row for the whole table. <code>SELECT sum(qty) FROM order_items</code> returns one row with 26.</p>
+
+<h3>GROUP BY: one result row for each group</h3>
+<p>The manager asks a more useful question: "How much did each category earn?" Now we need one number for each category, not one for the shop.
+   {{ k.term("GROUP BY") }} first puts the rows into groups. Rows with the same value in the group column go into the same group.
+   Then the aggregate functions run inside each group, and each group becomes one result row.</p>
+{% call k.callout("analogy", "Analogy") %}
+<p>You have a box of receipts and five empty envelopes, one for each category. You take the receipts one by one and put each one into the envelope of its category.
+   Then you add up the amounts in each envelope and write the total on the envelope. The envelopes are the groups. The total on each envelope is the aggregate.
+   A receipt of a cancelled order goes into the bin, not into an envelope. That is the WHERE filter.</p>
+{% endcall %}
+<p>The category is not in order_items. It is in products. The status is in orders. So the query first joins the three tables, and then it groups.
+   This is what PostgreSQL sees after the JOINs, before the grouping. Each row is one order line with the category of its product and the status of its order:</p>
+<table class="data">
+  <caption>The rows after FROM and JOIN (input of WHERE and GROUP BY)</caption>
+  <thead><tr><th>order_id</th><th>status</th><th>product_id</th><th>category</th><th class="num">qty</th><th class="num">unit_price</th><th class="num">qty × unit_price</th></tr></thead>
+  <tbody>
+  {% for oid, pid, q, price in sample_data.order_items.rows %}
+    {% set st = (sample_data.orders.rows | selectattr(0, "equalto", oid) | first)[3] %}
+    {% set cat = (sample_data.products.rows | selectattr(0, "equalto", pid) | first)[2] %}
+    <tr{% if st == "cancelled" %} style="color:#A0A7B2;text-decoration:line-through"{% endif %}><td class="mono">{{ oid }}</td><td>{{ st }}</td><td class="mono">{{ pid }}</td><td>{{ cat }}</td><td class="num">{{ q }}</td><td class="num">{{ "{:,.2f}".format(price) }}</td><td class="num">{{ "{:,.2f}".format(q * price) }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% call k.sql("Q3", "Revenue of each category, the largest first") %}
+<pre><code>SELECT p.category,
+       count(DISTINCT o.order_id)           AS orders,
+       sum(oi.qty)                          AS pieces,
+       round(sum(oi.qty * oi.unit_price), 2) AS revenue
 FROM order_items oi
 JOIN orders o   ON o.order_id = oi.order_id
 JOIN products p ON p.product_id = oi.product_id
 WHERE o.status &lt;&gt; 'cancelled'
 GROUP BY p.category
 ORDER BY revenue DESC;</code></pre>
-<ol class="steps">
-  <li>Read all order lines (about 12,500 rows), because the question is about all of them.</li>
-  <li>Join each line to its order, and drop the lines of cancelled orders.</li>
-  <li>Join each line to its product to get the category.</li>
-  <li>Put the lines into five groups, one for each category. Sum and count inside each group.</li>
-  <li>Sort the five result rows by revenue.</li>
-</ol>
+<p>You write a query in the order SELECT, FROM, WHERE, GROUP BY, ORDER BY. PostgreSQL works in a different order. Read the clauses in the order of the work:</p>
+<table class="clause">
+  <tr><td>1. FROM order_items oi
+   JOIN orders o ...
+   JOIN products p ...</td><td>Build the rows of the table above: each order line with its order and its product. Nine rows.</td></tr>
+  <tr><td>2. WHERE o.status &lt;&gt; 'cancelled'</td><td><code>&lt;&gt;</code> means "is not equal to". Drop the rows of cancelled orders. The line of O000104 goes out. Eight rows stay.</td></tr>
+  <tr><td>3. GROUP BY p.category</td><td>Put the eight rows into envelopes by category: Kitap, Elektronik, Ev &amp; Yaşam, Moda.</td></tr>
+  <tr><td>4. SELECT p.category, count(...), sum(...), round(...)</td><td>For each envelope, calculate the numbers.
+      <code>count(DISTINCT o.order_id)</code> counts the different orders in the envelope, so an order with two books counts one time.
+      <code>sum(oi.qty * oi.unit_price)</code> adds the line totals. <code>round(..., 2)</code> keeps two decimals.</td></tr>
+  <tr><td>5. ORDER BY revenue DESC</td><td>Sort the result rows by revenue. <code>DESC</code> means descending: the largest first.</td></tr>
+</table>
 {% endcall %}
-<p>This query reads the full tables. On Lale Market data, this takes milliseconds. On years of orders, it can take minutes,
-   and it competes with the checkout for the same Engine. The <a href="/e2etutorial/redshift">Redshift tutorial</a> shows an Engine that AWS built for this kind of query.</p>
+{% call k.predict("Use the table of rows after the JOINs. What is the revenue of the category Kitap, and how many different orders are in its envelope?") %}
+<p>Five Kitap lines belong to orders that are not cancelled:</p>
+<ul><li>O000001, P0044: 1 × 2,651.39 = 2,651.39</li><li>O000001, P0179: 2 × 767.49 = 1,534.98</li><li>O000102, P0179: 10 × 767.49 = 7,674.90</li>
+<li>O000103, P0044: 2 × 2,651.39 = 5,302.78</li><li>O000103, P0179: 1 × 767.49 = 767.49</li></ul>
+<p>The sum is 17,931.54. The different orders are O000001, O000102 and O000103: 3 orders.</p>
+{% endcall %}
+{{ k.sim("group", "GROUP BY category: each line goes into the envelope of its category") }}
+<p>A filter on the groups uses {{ k.term("HAVING") }}, not WHERE. WHERE drops input rows before the grouping. HAVING drops result groups after the grouping.
+   Example: <code>... GROUP BY p.category HAVING sum(oi.qty * oi.unit_price) &gt; 10000</code> keeps only the categories with more than 10,000 in revenue.
+   In our data, that is Kitap and Elektronik.</p>
+<p>This query must read every order line, because the question is about all of them. On the real shop, that is about 12,500 rows and takes a few milliseconds.
+   On ten years of orders it can read hundreds of millions of rows, and it competes with the checkout for the same server.
+   The <a href="/e2etutorial/redshift">Redshift tutorial</a> shows a database that AWS built for this kind of question.</p>
 
-<h2 id="index" data-short="Indexes and plans"><span class="sec">05</span>Indexes and query plans</h2>
-<p>An {{ k.term("index") }} is a second structure next to the table. It keeps the values of one or more columns in sorted order,
-   and each entry points to the row. The default index type of PostgreSQL is the {{ k.term("B-tree") }}
-   (<a href="https://www.postgresql.org/docs/current/indexes-types.html">PostgreSQL: Index Types</a>).
-   A primary key automatically gets a unique B-tree index
-   (<a href="https://www.postgresql.org/docs/current/ddl-constraints.html">PostgreSQL: Constraints</a>).</p>
-{{ k.fig("aurora-btree.png", "the root node holds 7 and 16. To find 12, the Engine goes to the middle child, because 7 < 12 < 16. A search reads one node on each level. A tree of millions of keys has only a few levels.") }}
+{{ k.quiz("aurora-q3", "Remove the line WHERE o.status <> 'cancelled' from Q3. Which result row changes, and how?",
+   ["Kitap, because the shop cancelled a book order", "No row changes, the line was not needed", "Moda appears with 1 more order and 2,721.65 more revenue", "Elektronik, because P0001 belongs to a cancelled order"],
+   2, "The only cancelled order is O000104, with one line of P0095 (Moda) at 2,721.65. Without the filter, that line goes into the Moda envelope. Moda then has 2 orders and 5,443.30.") }}
+
+<h2 id="index" data-short="Indexes and plans"><span class="sec">06</span>Indexes: find a row without reading the table</h2>
+<p>Section 02 showed a Seq Scan: to find the İstanbul customers, PostgreSQL read every row. For a table of 15 pages, that is fine.
+   For a table of 10 million customers (about 150,000 pages), each such query reads 150,000 pages. An index solves this.</p>
+<p>An {{ k.term("index") }} is a second structure next to the table. It holds the values of one column (or several columns) in sorted order.
+   Each entry of the index says where the row with that value is in the table. Because the index keeps the values in sorted order, PostgreSQL does not read them all.
+   It jumps to the correct part of the list.</p>
 {% call k.callout("analogy", "Analogy") %}
-<p>An index is like the index at the back of a book. To find "transaction", you do not read all pages. You look in the sorted index, and it gives the page number.
-   The book is the table. The page number is the pointer to the row.</p>
+<p>A thick book has an index at the back. The words are in alphabetical order, and each word has a page number. To find "transaction", you do not read 600 pages.
+   You open the index near "t", find the word in a few looks, and go to page 412. The book is the table. The alphabetical list is the index.
+   The page number is the pointer to the row.</p>
 {% endcall %}
+<p>The default index type of PostgreSQL is the {{ k.term("B-tree") }} (<a href="https://www.postgresql.org/docs/current/indexes-types.html">PostgreSQL: Index Types</a>).
+   A B-tree is a sorted tree of pages. The top page (the root) says which page to read next for each range of values. Each page holds hundreds of keys,
+   so a tree for 10 million keys has only 3 or 4 levels. A search reads one page on each level.
+   Each primary key automatically gets a unique B-tree index (<a href="https://www.postgresql.org/docs/current/ddl-constraints.html">PostgreSQL: Constraints</a>).
+   For customers, its name is <code>customers_pkey</code>.</p>
+{{ k.fig("aurora-btree.png", "the root holds 7 and 16. To find 12, the search goes to the middle child, because 12 is between 7 and 16. In each node, the keys are in sorted order. One read on each level is enough.") }}
+<p>The simulation below shows the same idea with a sorted list of six identifiers. Each look at the middle of the remaining list takes half of it.
+   This is how the search narrows down fast. A real B-tree takes away much more than half at each level, because each page holds hundreds of keys.</p>
+{{ k.sim("index", "Find C00005 with the primary key index customers_pkey") }}
 
-{% call k.query("aurora", "A5", "Which indexes exist?") %}
-<pre><code>SELECT tablename, indexname, indexdef
-FROM pg_indexes WHERE schemaname = 'public' ORDER BY tablename, indexname;</code></pre>
-<p>Purpose: list each index. You see the primary key indexes (<code>..._pkey</code>) and the two extra indexes on <code>orders.customer_id</code> and <code>orders.visitor_id</code>.
-   The <code>email</code> column of <code>customers</code> has no index.</p>
+<h3>Read a query plan</h3>
+<p>PostgreSQL shows its plan when you put <code>EXPLAIN</code> before a query. <code>EXPLAIN ANALYZE</code> also runs the query and adds the real times
+   (<a href="https://www.postgresql.org/docs/current/using-explain.html">PostgreSQL: Using EXPLAIN</a>). <code>BUFFERS</code> adds the number of pages.
+   These are two plans of the same kind as on the Lale Market table of 1,000 customers. Your numbers on your own server are different, but the shape is the same.</p>
+{% call k.sql("Q4", "A lookup by the primary key") %}
+<pre><code>EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM customers WHERE customer_id = 'C00450';
+
+Index Scan using customers_pkey on customers  (cost=0.28..8.29 rows=1 width=72) (actual time=0.020..0.021 rows=1 loops=1)
+  Index Cond: (customer_id = 'C00450'::text)
+  Buffers: shared hit=3</code></pre>
+<table class="clause">
+  <tr><td>Index Scan using customers_pkey</td><td>PostgreSQL used the primary key index. It did not read the table from the start.</td></tr>
+  <tr><td>cost=0.28..8.29 rows=1</td><td>The estimate of the planner before the run: a cost in its own units, and 1 expected row.</td></tr>
+  <tr><td>actual time=0.020..0.021 rows=1</td><td>The real run: about 0.02 milliseconds, 1 row.</td></tr>
+  <tr><td>Index Cond</td><td>The condition that the index answered.</td></tr>
+  <tr><td>Buffers: shared hit=3</td><td>3 pages read: two pages of the index (root and leaf) and one page of the table. "hit" means that the pages were already in memory.</td></tr>
+</table>
 {% endcall %}
+{% call k.sql("Q5", "A filter on a column with no index") %}
+<pre><code>EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM customers WHERE email = 'ayse.yilmaz@example.com';
 
-{% call k.predict("You look up a customer by customer_id, then by email. Which of the two queries reads more pages?") %}
-<p>The query by email. <code>customer_id</code> has an index, so PostgreSQL goes straight to one row (Index Scan).
-   <code>email</code> has no index, so PostgreSQL reads each row of the table and tests the filter (Seq Scan). Run A6 and A7 and compare the "Buffers" lines.</p>
+Seq Scan on customers  (cost=0.00..25.50 rows=1 width=72) (actual time=0.009..0.150 rows=1 loops=1)
+  Filter: (email = 'ayse.yilmaz@example.com'::text)
+  Rows Removed by Filter: 999
+  Buffers: shared hit=13</code></pre>
+<table class="clause">
+  <tr><td>Seq Scan on customers</td><td>No index helps, so PostgreSQL reads the table from the first page to the last page.</td></tr>
+  <tr><td>Filter</td><td>The condition that PostgreSQL tested on each row.</td></tr>
+  <tr><td>Rows Removed by Filter: 999</td><td>PostgreSQL read and dropped 999 rows to find 1 row. This line is the clearest sign that an index is missing.</td></tr>
+  <tr><td>Buffers: shared hit=8</td><td>PostgreSQL read all pages of the table. On a large table, this number grows with the table.</td></tr>
+</table>
 {% endcall %}
+<p>An index is not free. Each INSERT must also add an entry to each index of the table. Each UPDATE of an indexed column must move the entry.
+   Each index also uses disk and memory. So you add an index for the questions that the application asks often, not for every column.
+   The planner can select a Seq Scan even when an index exists. This happens on a very small table, or when a filter matches most of the rows. Then a read of all pages in order is cheaper.</p>
 
-{% call k.query("aurora", "A6", "Plan of a lookup by primary key") %}
-<pre><code>EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM customers WHERE customer_id = 'C00450';</code></pre>
-<p><code>EXPLAIN ANALYZE</code> runs the query and shows the plan with the real time of each step
-   (<a href="https://www.postgresql.org/docs/current/using-explain.html">PostgreSQL: Using EXPLAIN</a>). <code>BUFFERS</code> adds the number of pages that the step read.</p>
+{{ k.quiz("aurora-q4", "A plan shows Seq Scan on orders, Filter: (customer_id = 'C00002'), Rows Removed by Filter: 4,990. What change helps most?",
+   ["Add more read replicas to the database", "Add an index on orders.customer_id", "Change the type of customer_id to integer", "Run the same query two times in a row"],
+   1, "PostgreSQL read about 5,000 rows to keep 10. An index on customer_id lets it go straight to those 10 rows. (Lale Market has this index: CREATE INDEX ON orders (customer_id).)") }}
+
+<h2 id="constraints" data-short="Constraints"><span class="sec">07</span>Constraints: rules that the database enforces</h2>
+<p>An application can have bugs. A second application can write to the same database. A person can run a manual SQL command.
+   A {{ k.term("constraint") }} is a rule in the schema. PostgreSQL checks it on every write, from every source, and refuses a write that breaks it.
+   So the rule holds even when a program is wrong.</p>
+<table class="data">
+  <thead><tr><th>Constraint</th><th>The rule</th><th>Example in Lale Market</th></tr></thead>
+  <tbody>
+    <tr><td><code>NOT NULL</code></td><td>The value must be present.</td><td>Each customer must have a name.</td></tr>
+    <tr><td><code>PRIMARY KEY</code></td><td>The value must be present and unique in the table.</td><td>Two customers cannot both own C00003.</td></tr>
+    <tr><td><code>REFERENCES</code> (foreign key)</td><td>A borrowed value must exist as an owned value in the other table.</td><td>An order line cannot point to product P9999 if no product owns it.</td></tr>
+    <tr><td><code>CHECK (...)</code></td><td>A condition must be true for the row.</td><td><code>CHECK (stock &gt;= 0)</code>: the stock cannot go below zero.</td></tr>
+  </tbody>
+</table>
+{% call k.predict("Use the products table above. P0095 has stock 76. A program sends UPDATE products SET stock = stock - 500 WHERE product_id = 'P0095'. What happens to the row?") %}
+<p>Nothing. 76 - 500 = -424, which breaks <code>CHECK (stock &gt;= 0)</code>. PostgreSQL refuses the statement with an error, and the stock stays 76.</p>
 {% endcall %}
-{% call k.query("aurora", "A7", "Plan of a filter on a column with no index") %}
-<pre><code>EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM customers WHERE email = 'ayse.yilmaz@example.com';</code></pre>
-<p>Look for <code>Seq Scan</code> and <code>Rows Removed by Filter</code>. The Engine read 1,000 rows to return 1 row.</p>
-{% endcall %}
-<p>An index is not free. Each INSERT and each UPDATE of an indexed column also changes the index. So add an index for the queries that the shop runs often, not for each column.</p>
+{{ k.sim("constraints", "Three bad writes, three refusals") }}
+<p>The foreign key of order_items also has <code>ON DELETE CASCADE</code> toward orders: <code>order_id text REFERENCES orders ON DELETE CASCADE</code>.
+   It means: when a program deletes an order, PostgreSQL also deletes the lines of that order. Without this clause, PostgreSQL would refuse to delete an order that still has lines,
+   because the lines would then borrow an identifier that nobody owns.</p>
 
-{{ k.quiz("aurora-q3", "The plan of a query shows Seq Scan on orders and Rows Removed by Filter: 4,999. Which change helps most?",
-   ["Add more Aurora Replicas to the cluster", "Add an index on the filtered column", "Change the column type to text", "Run the query two times in a row"],
-   1, "A Seq Scan with many removed rows means that no index helps the filter. An index on the filtered column lets the Engine go straight to the matching rows.") }}
-
-<h2 id="constraints" data-short="Constraints"><span class="sec">06</span>Constraints: the database refuses bad data</h2>
-<p>The application can have bugs. A {{ k.term("constraint") }} is a rule in the schema, so PostgreSQL checks it for each write from each application.
-   Lale Market uses three kinds: PRIMARY KEY, FOREIGN KEY (<code>REFERENCES</code>) and CHECK (<code>stock &gt;= 0</code>).
-   The next two queries try to break a rule. They run inside a transaction that ends with ROLLBACK, so no change stays.</p>
-{% call k.query("aurora", "A8", "Write an order line for a product that does not exist") %}
+<h2 id="tx" data-short="Transactions, ACID"><span class="sec">08</span>Transactions: all or nothing</h2>
+<p>Many business actions need more than one statement. The classic example is a bank transfer of 200 from Ayşe to Mert:</p>
+<pre><code>UPDATE accounts SET balance = balance - 200 WHERE owner = 'Ayşe';   <span class="c">-- Ayşe: 1,000 becomes 800</span>
+UPDATE accounts SET balance = balance + 200 WHERE owner = 'Mert';   <span class="c">-- Mert:   500 becomes 700</span></code></pre>
+<p>If the server stops between the two statements, 200 left Ayşe's account but did not arrive in Mert's account. The bank lost money.
+   The two statements must happen together, or not at all.</p>
+<p>A {{ k.term("transaction") }} groups statements into one unit. <code>BEGIN</code> starts it. <code>COMMIT</code> makes all its changes permanent and visible to others at the same moment.
+   <code>ROLLBACK</code> undoes all its changes. If the server stops before COMMIT, PostgreSQL undoes the open transaction when it starts again
+   (<a href="https://www.postgresql.org/docs/current/tutorial-transactions.html">PostgreSQL: Transactions</a>).</p>
+<p>Database people describe the promises of a transaction with the four letters {{ k.term("ACID") }}:</p>
+<table class="data">
+  <thead><tr><th>Letter</th><th>Promise</th><th>In the bank example</th></tr></thead>
+  <tbody>
+    <tr><td><b>A</b>tomicity</td><td>All statements of the transaction happen, or none happens.</td><td>Both balances change, or neither changes.</td></tr>
+    <tr><td><b>C</b>onsistency</td><td>After the transaction, every constraint is still true.</td><td>A CHECK (balance &gt;= 0) refuses a transfer that makes Ayşe's balance negative.</td></tr>
+    <tr><td><b>I</b>solation</td><td>Transactions that run at the same time do not see each other's unfinished changes.</td><td>A report that runs during the transfer never sees 800 + 500.</td></tr>
+    <tr><td><b>D</b>urability</td><td>After COMMIT, the change survives a crash.</td><td>A power failure one second after COMMIT does not undo the transfer.</td></tr>
+  </tbody>
+</table>
+<p>The Lale Market checkout is the same kind of action. These are its real statements (from <code>engines/aurora.py</code>), one UPDATE for each cart line:</p>
 <pre><code>BEGIN;
-INSERT INTO order_items VALUES ('O000001', 'P9999', 1, 10.00);   -- P9999 is not in products
-ROLLBACK;</code></pre>
-<p>Expected: PostgreSQL refuses with a foreign key violation.</p>
-{% endcall %}
-{% call k.query("aurora", "A9", "Make the stock negative") %}
-<pre><code>BEGIN;
-UPDATE products SET stock = stock - 100000 WHERE product_id = 'P0001';
-ROLLBACK;</code></pre>
-<p>Expected: PostgreSQL refuses with a check constraint violation.</p>
-{% endcall %}
-
-<h2 id="tx" data-short="Transactions and locks"><span class="sec">07</span>Transactions: all or nothing, one at a time</h2>
-<p>A {{ k.term("transaction") }} groups statements into one unit. PostgreSQL makes all of its changes visible at COMMIT, or none of them at ROLLBACK
-   (<a href="https://www.postgresql.org/docs/current/tutorial-transactions.html">PostgreSQL: Transactions</a>).
-   These are the real statements of the Lale Market checkout (from <code>engines/aurora.py</code>):</p>
-<pre><code>BEGIN;
-UPDATE products SET stock = stock - 2 WHERE product_id = 'P0001' AND stock &gt;= 2;  <span class="c">-- one per cart line</span>
-INSERT INTO orders VALUES ('W1793...', 'C00001', '&lt;visitor&gt;', now(), 'processing', 6747.68);
+UPDATE products SET stock = stock - 2 WHERE product_id = 'P0001' AND stock &gt;= 2;
+UPDATE products SET stock = stock - 1 WHERE product_id = 'P0142' AND stock &gt;= 1;
+INSERT INTO orders VALUES ('W1793...', 'C00006', '&lt;visitor&gt;', now(), 'processing', 9441.33);
 INSERT INTO order_items VALUES ('W1793...', 'P0001', 2, 3373.84);
+INSERT INTO order_items VALUES ('W1793...', 'P0142', 1, 2693.65);
 COMMIT;</code></pre>
-<p>If the payment fails after the stock UPDATE, the app sends ROLLBACK. The stock comes back, and no order row exists.
-   This is atomicity, the "A" of {{ k.term("ACID") }}.</p>
+<p>In the simulation below, the payment service declines the card after the two stock UPDATEs. Watch the stock values of P0001 and P0142.</p>
+{{ k.sim("tx", "Checkout with a failed payment: ROLLBACK") }}
 
-<h3>The last piece: two checkouts at the same time</h3>
-<p>Product P0001 has stock 1. Ayşe and Mert click "Place the order" in the same second. Look at what a naive program does, step by step:</p>
-<table class="data">
-  <thead><tr><th>Time</th><th>Ayşe (naive program)</th><th>Mert (naive program)</th><th class="num">stock in the table</th></tr></thead>
-  <tbody>
-    <tr><td>t1</td><td><code>SELECT stock</code> → 1</td><td></td><td class="num">1</td></tr>
-    <tr><td>t2</td><td></td><td><code>SELECT stock</code> → 1</td><td class="num">1</td></tr>
-    <tr><td>t3</td><td>1 ≥ 1, so <code>UPDATE ... SET stock = 0</code></td><td></td><td class="num">0</td></tr>
-    <tr><td>t4</td><td></td><td>1 ≥ 1, so <code>UPDATE ... SET stock = 0</code></td><td class="num hl">0 (two pieces sold)</td></tr>
-  </tbody>
-</table>
-<p>Both programs read 1 before a write. The shop sold one piece two times. This is a {{ k.term("lost update") }}.</p>
-<p>Lale Market puts the test inside the UPDATE: <code>SET stock = stock - 1 WHERE ... AND stock &gt;= 1</code>.
-   An UPDATE takes a row lock. Mert's UPDATE waits until Ayşe's transaction ends. Then it reads the new value (0), the condition is false,
-   and it changes 0 rows. The app sees "0 rows" and tells Mert that the stock is not enough.</p>
-{% call k.query("aurora", "A10", "The conditional UPDATE of the checkout") %}
-<pre><code>BEGIN;
-UPDATE products SET stock = stock - 1
-WHERE product_id = 'P0001' AND stock &gt;= 1
-RETURNING product_id, stock AS stock_after;
-ROLLBACK;</code></pre>
-<p>Purpose: see the test and the change in one statement. <code>RETURNING</code> shows the new value. The ROLLBACK gives the piece back.</p>
-{% endcall %}
+<h3>The last piece: two customers at the same time</h3>
+<p>Atomicity protects one transaction from a crash. A second danger comes from two transactions that run at the same time.
+   Product P0095 has 1 piece left. Ayşe and Mert press "Place the order" in the same second. A naive program reads the stock first, decides in the application,
+   and then writes the new value. Play the simulation and watch the "pieces sold" counter.</p>
+{{ k.sim("lost", "The naive way: read, decide, then write") }}
+<p>Both programs read 1 before either of them wrote. Each program calculated 1 - 1 = 0 and wrote 0. Two pieces left the shop, but the stock went down by one.
+   The change of the first program is lost under the change of the second. This is a {{ k.term("lost update") }}.</p>
+<p>The Lale Market checkout avoids it. It puts the test inside the UPDATE: <code>SET stock = stock - 1 WHERE product_id = 'P0095' AND stock &gt;= 1</code>.
+   An UPDATE takes a {{ k.term("row lock") }} on each row that it changes. The lock stays until the transaction ends.
+   A second UPDATE of the same row waits for the lock. When the lock goes away, the second UPDATE tests the condition again on the new value.</p>
+{{ k.sim("locked", "The safe way: test and change in one UPDATE, under a row lock") }}
 {% call k.callout("analogy", "Analogy") %}
-<p>A row lock is like the key of a single toilet in a café. The person with the key goes in. The next person waits at the door.
-   When the key comes back, the next person goes in and sees the room as it is now, not as it was before the wait.</p>
+<p>A café has one toilet with one key. The person who takes the key goes in. The next person waits at the door. When the key comes back, the next person goes in.
+   That person sees the room as it is now, not as it was at the start of the wait. The row is the room, and the row lock is the key.</p>
 {% endcall %}
-<p>Readers do not wait for writers. PostgreSQL uses {{ k.term("MVCC") }}: each statement sees a snapshot of committed data.
-   So a SELECT does not block an UPDATE, and an UPDATE does not block a SELECT
-   (<a href="https://www.postgresql.org/docs/current/mvcc-intro.html">PostgreSQL: MVCC Introduction</a>).</p>
+<p>Readers do not wait for this key. PostgreSQL uses {{ k.term("MVCC") }} (multi-version concurrency control). An UPDATE does not overwrite the old row.
+   It writes a new version of the row. Until COMMIT, other sessions still see the old version. Take a report that reads products during a checkout.
+   It sees the stock from before the checkout, not a half-done state, and it does not wait
+   (<a href="https://www.postgresql.org/docs/current/mvcc-intro.html">PostgreSQL: MVCC Introduction</a>).
+   PostgreSQL deletes old versions later, when no transaction can need them. This background work is VACUUM.</p>
 
-{{ k.quiz("aurora-q4", "Why does the checkout put AND stock >= 1 inside the UPDATE instead of a SELECT before it?",
-   ["It makes the SQL text shorter to read", "The test and the change happen under one row lock", "SELECT statements are not allowed in a transaction", "It lets the UPDATE skip the primary key index"],
-   1, "Between a SELECT and a later UPDATE, another transaction can change the row. A single UPDATE tests and changes the row while it holds the row lock.") }}
+{{ k.quiz("aurora-q5", "Why does the checkout write AND stock >= 1 inside the UPDATE, and not run a SELECT first?",
+   ["The SQL text is shorter and easier to read", "The test and the change happen under one row lock", "PostgreSQL does not allow SELECT inside a transaction", "The UPDATE can then skip the primary key index"],
+   1, "Between a SELECT and a later UPDATE, another transaction can change the row. A single UPDATE tests the condition and changes the row while it holds the row lock.") }}
 
-<h2 id="aurora" data-short="What Aurora adds"><span class="sec">08</span>What Aurora adds to PostgreSQL</h2>
-<p>The SQL in this tutorial is PostgreSQL. Aurora PostgreSQL runs the PostgreSQL engine, but it changes the storage layer.
-   An Aurora {{ k.term("DB cluster") }} has DB instances and one cluster volume.
-   The primary (writer) instance does all the writes. Up to 15 Aurora Replicas connect to the same volume and serve reads.
-   The cluster volume has copies of the data in three Availability Zones
-   (<a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Overview.html">Aurora DB clusters</a>,
-   <a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Overview.StorageReliability.html">Aurora storage</a>).</p>
-{{ k.fig("aurora-cluster.png", "the writer and the two readers sit in three Availability Zones, but all three use one shared storage volume. A new reader needs no copy of the data. The volume also sends continuous backups to Amazon S3.") }}
-<p>In Lale Market, the Engine App connects to the writer endpoint, because the checkout writes. A report that only reads could use the reader endpoint.</p>
+<div class="part"><b>Part 2</b><h2 id="part2" data-short="PART 2: Amazon Aurora">Amazon Aurora PostgreSQL: the AWS service</h2>
+<p>The same PostgreSQL, with a different storage layer and with the operations done by AWS.</p></div>
+
+<h2 id="selfrun" data-short="Running PostgreSQL yourself"><span class="sec">09</span>What you must do when you run PostgreSQL yourself</h2>
+<p>Everything in Part 1 works on one server: one machine with PostgreSQL and a disk. For a real shop, one server is not enough. You must solve these tasks yourself:</p>
+<ol>
+  <li><b>The disk can fail.</b> You need a copy of the data on a second machine, ideally in a second data center. PostgreSQL can stream its changes to a replica server,
+      but you install it, watch it and keep it working yourself.</li>
+  <li><b>The server can fail.</b> Somebody, or some tool, must detect the failure, promote the replica to the new primary, and move the application to it.</li>
+  <li><b>Reads grow.</b> Each extra read replica is a full copy of the database. A 2 TB database needs 2 TB more disk for each replica, and hours to build it.</li>
+  <li><b>The disk gets full.</b> You must watch the space and make the disk larger before it is full.</li>
+  <li><b>Backups.</b> You must take backups, keep them in a different place, and test that a restore works.</li>
+  <li><b>Upgrades and patches.</b> You must update the operating system and PostgreSQL without long downtime.</li>
+</ol>
+<p>None of these tasks is about your shop. Amazon Aurora takes most of them over.</p>
+
+<h2 id="aurora" data-short="Aurora architecture"><span class="sec">10</span>The design of Aurora: compute and storage are separate</h2>
+<p>On one server, PostgreSQL and its data are on the same machine. Aurora separates them into two layers:</p>
+<ul>
+  <li>The <b>compute layer</b> is one or more {{ k.term("DB instance") }}s. Each DB instance runs the PostgreSQL engine: it accepts connections, plans queries and runs transactions.
+      Everything in Part 1 happens here.</li>
+  <li>The <b>storage layer</b> is the {{ k.term("cluster volume") }}. It is a single, virtual volume that spans several Availability Zones (AZs).
+      An AZ is one or more separate data centers in an AWS Region, with its own power and network.</li>
+</ul>
+<p>Together they form an Aurora {{ k.term("DB cluster") }}. The AWS documentation describes it like this
+   (<a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Overview.html">Amazon Aurora DB clusters</a>):</p>
+<ul>
+  <li>Each cluster has one <b>primary (writer) DB instance</b>. It "supports read and write operations, and performs all of the data modifications to the cluster volume".</li>
+  <li>A cluster can have up to 15 <b>Aurora Replicas</b> (reader instances). They connect to the same storage volume and support only reads.
+      If the writer becomes unavailable, Aurora fails over to one of them automatically.</li>
+  <li>The storage of each cluster "consists of six copies of all your data, spread across three AZs". This is true also when the cluster has only a writer
+      (<a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless-v2.how-it-works.html">How Aurora serverless works</a>).</li>
+</ul>
+{{ k.fig("aurora-cluster.png", "the writer instance and the two reader instances sit in three Availability Zones. All three connect to one shared storage volume, which keeps copies of the data in each zone. A reader does not keep its own copy. The volume also sends continuous backups to Amazon S3.") }}
+<p>Play the simulation to see one write. Look at where the new row appears.</p>
+{{ k.sim("storage", "One INSERT, three Availability Zones") }}
+<p>Compare this with the six tasks of section 09:</p>
 <table class="data">
-  <thead><tr><th>Question</th><th>PostgreSQL on one server</th><th>Aurora PostgreSQL</th></tr></thead>
+  <thead><tr><th>Task</th><th>PostgreSQL on your own server</th><th>Amazon Aurora PostgreSQL</th></tr></thead>
   <tbody>
-    <tr><td>Where is the data?</td><td>On the disk of the server</td><td>In a cluster volume with copies in three Availability Zones</td></tr>
-    <tr><td>New read replica</td><td>Copies the full database</td><td>Connects to the shared volume</td></tr>
-    <tr><td>Storage size</td><td>You select and grow the disk</td><td>The volume grows with the data</td></tr>
-    <tr><td>SQL, indexes, constraints</td><td colspan="2">The same PostgreSQL features</td></tr>
+    <tr><td>A copy of the data in other data centers</td><td>You set up and watch replication to a second server.</td><td>The cluster volume keeps six copies in three AZs. You do nothing.</td></tr>
+    <tr><td>Failover when the writer fails</td><td>You detect the failure and promote a replica.</td><td>Aurora promotes an Aurora Replica automatically. The cluster endpoint then points to the new writer.</td></tr>
+    <tr><td>A new read replica</td><td>Copy the full database to a new server. Hours for large data.</td><td>A new reader connects to the existing volume. No data copy.</td></tr>
+    <tr><td>Disk space</td><td>You watch it and make the disk larger.</td><td>The volume grows automatically as data grows. In current Aurora versions, it also shrinks when you drop data.</td></tr>
+    <tr><td>Backups</td><td>You plan, store and test them.</td><td>Continuous, automatic backups to Amazon S3, with restore to a point in time.</td></tr>
+    <tr><td>SQL, tables, indexes, constraints, transactions</td><td colspan="2">The same PostgreSQL. Everything in Part 1 stays the same. The same drivers and tools work.</td></tr>
   </tbody>
 </table>
 
-<h2 id="usecases" data-short="Use cases"><span class="sec">09</span>When to use it, and when not</h2>
+<h3>Endpoints: where the application connects</h3>
+<p>An application does not connect to a machine name. It connects to an {{ k.term("endpoint") }}, a DNS name that Aurora keeps up to date:</p>
+<ul>
+  <li>The <b>cluster endpoint</b> (writer endpoint) always points to the current writer. Use it for all writes. After a failover, it points to the new writer.</li>
+  <li>The <b>reader endpoint</b> spreads connections over the Aurora Replicas. Use it for reports and other read-only work, so they do not slow down the writer.</li>
+  <li>Each instance also has its own <b>instance endpoint</b>, for special cases.</li>
+</ul>
+
+<h2 id="lalemarket" data-short="Aurora in Lale Market"><span class="sec">11</span>Aurora in Lale Market</h2>
+<p>This is the real setup of the workshop (from <code>cloudformation/workshop.yaml</code>):</p>
+<ul>
+  <li>The cluster <code>dbws-aurora</code> runs Aurora PostgreSQL version 17.9 with encrypted storage.</li>
+  <li>It has two DB instances: <code>dbws-aurora-writer</code> in AZ a and <code>dbws-aurora-reader</code> in AZ b.</li>
+  <li>Both instances use <b>Aurora Serverless v2</b> (instance class <code>db.serverless</code>). You do not select a server size.
+      You give a capacity range in Aurora capacity units (ACUs). Each ACU is "approximately 2 gibibytes (GiB) of memory, corresponding CPU, and networking".
+      Lale Market uses 0.5 to 4 ACUs. Aurora changes the capacity with the load, in steps as small as 0.5 ACU
+      (<a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless-v2.how-it-works.html">How Aurora serverless works</a>).</li>
+  <li>The Aurora Engine App connects to the writer endpoint on port 5432 with TLS. The password comes from AWS Secrets Manager. Only the security group of the Engine App can reach the database.</li>
+  <li>A zero-ETL integration copies the four tables to Amazon Redshift in near real time. The sales report of the shop uses that copy, so the large scans do not run on the checkout database.</li>
+</ul>
+
+<h2 id="usecases" data-short="Use cases"><span class="sec">12</span>When to use it, and when not</h2>
 <table class="data">
   <thead><tr><th>Good fit</th><th>Why</th></tr></thead>
   <tbody>
-    <tr><td>Orders, payments, stock (Lale Market checkout)</td><td>Many related writes must commit together. Constraints protect the rules.</td></tr>
-    <tr><td>Customer accounts, bookings, invoices</td><td>Data with a clear structure and relations. Questions change over time, and SQL can answer new ones.</td></tr>
-    <tr><td>Operational reports on current data</td><td>JOIN and GROUP BY on medium data sizes.</td></tr>
+    <tr><td>Orders, payments, stock, bookings, invoices</td><td>Several related writes must commit together. Constraints protect the rules. Row locks stop lost updates.</td></tr>
+    <tr><td>Customer accounts and other core business data</td><td>The data has a clear structure and clear relations. Questions change over time, and SQL can answer a new question without a redesign.</td></tr>
+    <tr><td>Operational reports on current data</td><td>JOIN and GROUP BY on medium amounts of data, on a reader instance.</td></tr>
   </tbody>
 </table>
 <table class="data">
-  <thead><tr><th>Weak fit</th><th>Better Engine in Lale Market</th></tr></thead>
+  <thead><tr><th>Weak fit</th><th>Better AWS choice</th></tr></thead>
   <tbody>
-    <tr><td>Scans over years of history for dashboards</td><td><a href="/e2etutorial/redshift">Redshift</a> (columnar)</td></tr>
-    <tr><td>Millions of simple key lookups per second with a known access pattern</td><td><a href="/e2etutorial/dynamodb">DynamoDB</a></td></tr>
-    <tr><td>Full-text search with typos and relevance</td><td><a href="/e2etutorial/opensearch">OpenSearch</a></td></tr>
-    <tr><td>Questions about paths between records ("friends of friends")</td><td><a href="/e2etutorial/neptune">Neptune</a></td></tr>
+    <tr><td>Scans over years of history for dashboards</td><td><a href="/e2etutorial/redshift">Amazon Redshift</a>, a columnar data warehouse</td></tr>
+    <tr><td>Millions of simple reads per second, always by one key that you know in advance</td><td><a href="/e2etutorial/dynamodb">Amazon DynamoDB</a></td></tr>
+    <tr><td>Full-text search with typos and relevance ranking</td><td><a href="/e2etutorial/opensearch">Amazon OpenSearch Service</a></td></tr>
+    <tr><td>Questions about paths between records ("customers who bought what my friends bought")</td><td><a href="/e2etutorial/neptune">Amazon Neptune</a></td></tr>
   </tbody>
 </table>
 
-<h2 id="recall" data-short="Recall test"><span class="sec">10</span>Recall test</h2>
-<p>Answer without a look back at the sections. Retrieval from memory makes the knowledge stay.</p>
-{{ k.quiz("aurora-r1", "A shop stores the product name in each order line, and not only the product_id. What problem can this cause?",
-   ["The JOIN to products becomes impossible", "Copies of one fact can disagree later", "The primary key of order_items breaks", "PostgreSQL rejects text in that table"],
-   1, "Each copy must change when the fact changes. If one change fails, the copies disagree. Normalization keeps one fact in one place.") }}
-{{ k.quiz("aurora-r2", "What does an Aurora Replica share with the writer instance?",
-   ["The same cluster volume with the data", "The same CPU and memory of one server", "A separate full copy that it built", "Nothing, it reads from an S3 backup"],
+<h2 id="recall" data-short="Recall test"><span class="sec">13</span>Recall test</h2>
+<p>Answer without a look back at the sections. To remember something, you must take it out of your memory, not read it again.</p>
+{{ k.quiz("aurora-r1", "A shop stores the customer e-mail in every order line. The customer changes the address, and one update fails. What is the name of this problem?",
+   ["A lost update between two sessions", "An update anomaly from repeated data", "A foreign key violation on the table", "A Seq Scan on the order lines"],
+   1, "The same fact is in many rows, and the copies now disagree. Normalization stores the e-mail one time, in customers.") }}
+{{ k.quiz("aurora-r2", "In which order does PostgreSQL work on these clauses: SELECT, FROM, WHERE, GROUP BY?",
+   ["SELECT, FROM, WHERE, GROUP BY", "FROM, WHERE, GROUP BY, SELECT", "FROM, GROUP BY, WHERE, SELECT", "WHERE, FROM, SELECT, GROUP BY"],
+   1, "First the source rows (FROM and JOIN), then the row filter (WHERE), then the groups (GROUP BY), then the result columns and aggregates (SELECT).") }}
+{{ k.quiz("aurora-r3", "What does an Aurora Replica share with the writer instance?",
+   ["The same cluster volume with the data", "The same CPU and memory of one server", "A full copy of the data that it built", "Nothing, it reads from an S3 backup"],
    0, "All instances of an Aurora DB cluster use one cluster volume. This is why a new reader needs no data copy.") }}
-{{ k.quiz("aurora-r3", "Two transactions run UPDATE ... WHERE product_id = 'P0001' at the same time. What does the second one do?",
-   ["It fails at once with an error", "It overwrites the first change", "It waits for the row lock", "It reads an old snapshot and writes"],
-   2, "The first UPDATE holds the row lock until COMMIT or ROLLBACK. The second waits, then works on the new row value.") }}
+{{ k.quiz("aurora-r4", "Two transactions run UPDATE products SET stock = stock - 1 WHERE product_id = 'P0095' AND stock >= 1 at the same time. The stock is 1. What happens?",
+   ["Both change the row, and the stock becomes -1", "Both change the row, and the stock becomes 0", "The second waits, then changes 0 rows", "The second fails at once with an error"],
+   2, "The first UPDATE holds the row lock. The second waits, then tests stock >= 1 on the new value 0. The test is false, so it changes 0 rows.") }}
 
 <section class="lesson-foot">
   <h2>Go deeper</h2>
-  <p><b>Primary source:</b> <a href="https://www.postgresql.org/docs/current/tutorial-sql.html">PostgreSQL Tutorial: The SQL Language</a>, then
-     <a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Overview.html">Amazon Aurora DB clusters</a>.</p>
-  <p><b>Use it in the shop:</b> the <a href="/guided-e-commerce-app/">Guided mission</a> steps "A failed payment rolls back the order" and "Place the order" use these exact statements.
-     In the <a href="/free-e-commerce-app/admin/orders">Free app Order report</a>, turn on EXPLAIN ANALYZE.</p>
-  <p><b>Ask questions.</b> If a part is not clear, ask your instructor or your AI assistant. Give it the query and the plan that you saw. A question about your own result teaches more than a new page.</p>
+  <p><b>Primary source:</b> <a href="https://www.postgresql.org/docs/current/tutorial-sql.html">PostgreSQL Tutorial: The SQL Language</a> for Part 1, then
+     <a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Overview.html">Amazon Aurora DB clusters</a> for Part 2.</p>
+  <p><b>Use it in the shop:</b> the <a href="/guided-e-commerce-app/">Guided mission</a> has a checkout with a failed payment (ROLLBACK) and a real order (COMMIT).
+     The <a href="/free-e-commerce-app/admin/orders">Order report</a> of the Free app can show EXPLAIN ANALYZE.</p>
+  <p><b>Ask questions.</b> If a part is not clear, ask your instructor or your AI assistant. Give it the query, the input tables and the result that you expected. A question about your own example teaches more than a new page.</p>
 </section>
 {% endblock %}

@@ -97,3 +97,46 @@
     btn.addEventListener("click", () => { ans.hidden = !ans.hidden; btn.textContent = ans.hidden ? T.show : T.hide; });
   });
 })();
+
+/* ---------- Simulations (e2e_sims.py): input tables, a result table, one step at a time */
+(function () {
+  "use strict";
+  const T = window.E2E_UI || {};
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const fmt = (v) => (typeof v === "number" && !Number.isInteger(v) ? v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : v);
+  function table(t, rows, marks) {
+    const head = t.cols.map((c, i) => `<th class="${t.key.includes(i) ? "k" : t.ref.includes(i) ? "r" : ""}">${esc(c)}</th>`).join("");
+    const body = rows.length ? rows.map((r, i) => `<tr class="${marks && marks[i] ? `m-${marks[i]}` : ""}">${r.map((v) => `<td>${esc(fmt(v))}</td>`).join("")}</tr>`).join("")
+      : `<tr><td colspan="${t.cols.length}" class="empty">${esc(T.no_rows)}</td></tr>`;
+    return `<figure class="simt"><figcaption>${esc(t.name)}</figcaption><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></figure>`;
+  }
+  document.querySelectorAll(".sim").forEach((box) => {
+    const spec = JSON.parse(box.querySelector("script[type='application/json']").textContent);
+    const stage = box.querySelector(".sim-stage"), say = box.querySelector(".sim-say"), pos = box.querySelector(".sim-pos");
+    const [bPlay, bBack, bNext, bReset] = ["play", "back", "next", "reset"].map((k) => box.querySelector(`[data-sim=${k}]`));
+    let i = -1, timer = null;
+    function draw() {
+      const st = i >= 0 ? spec.steps[i] : { marks: {}, rows: {}, out: [], count: {} };
+      const ins = spec.tables.map((t) => table(t, (st.rows && st.rows[t.id]) || t.rows, (st.marks || {})[t.id])).join("");
+      const out = spec.out ? table({ name: spec.out.name, cols: spec.out.cols, key: [], ref: [] }, st.out || [], st.outmarks) : "";
+      const cnt = Object.entries(st.count || {}).map(([k, v]) => `<span>${esc(k)}: <b>${esc(v)}</b></span>`).join("");
+      stage.innerHTML = `<div class="sim-in">${ins}</div>${out ? `<div class="sim-out">${out}</div>` : ""}${cnt ? `<div class="sim-count">${cnt}</div>` : ""}`;
+      say.textContent = i >= 0 ? st.say : T.sim_start;
+      pos.textContent = i >= 0 ? T.sim_step.replace("{n}", i + 1).replace("{total}", spec.steps.length) : "";
+      bBack.disabled = i <= 0; bNext.disabled = i >= spec.steps.length - 1;
+      bPlay.textContent = timer ? T.sim_pause : (i >= spec.steps.length - 1 ? T.sim_replay : T.sim_play);
+    }
+    function stop() { clearInterval(timer); timer = null; }
+    bNext.addEventListener("click", () => { stop(); i = Math.min(i + 1, spec.steps.length - 1); draw(); });
+    bBack.addEventListener("click", () => { stop(); i = Math.max(i - 1, 0); draw(); });
+    bReset.addEventListener("click", () => { stop(); i = -1; draw(); });
+    bPlay.addEventListener("click", () => {
+      if (timer) { stop(); draw(); return; }
+      if (i >= spec.steps.length - 1) i = -1;
+      i += 1; draw();
+      timer = setInterval(() => { if (i >= spec.steps.length - 1) { stop(); draw(); return; } i += 1; draw(); }, 3200);
+      draw();
+    });
+    draw();
+  });
+})();

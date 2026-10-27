@@ -22,7 +22,7 @@ import yaml
 from flask import Blueprint, Flask, abort, jsonify, redirect, render_template, request
 from jinja2 import TemplateNotFound
 
-from . import admin, catalog, simlimit, trace, visitor
+from . import admin, catalog, e2e_sims, simlimit, trace, visitor
 
 log = logging.getLogger("engine_app")
 HERE = Path(__file__).parent
@@ -231,7 +231,9 @@ def create_app():
             lang = "tr" if has_tr and request.args.get("lang") == "tr" else "en"
             name = f"e2e/{eid}.tr.html" if lang == "tr" else f"e2e/{eid}.html"
             return render_template(name, **ctx(eid=eid, entry=entry, meta=catalog.META.get(eid, {}),
-                                               lang=lang, has_tr=has_tr, ui=e2e_ui()[lang]))
+                                               lang=lang, has_tr=has_tr, ui=e2e_ui()[lang],
+                                               sims=e2e_sims.SIMS[eid](lang) if eid in e2e_sims.SIMS else {},
+                                               sample_data=e2e_sims.tables()))
 
         for mode in MODES.values():
             for e in ENGINE_IDS:
