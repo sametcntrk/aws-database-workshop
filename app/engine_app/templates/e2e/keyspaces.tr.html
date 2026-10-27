@@ -1,0 +1,266 @@
+{% extends "e2e/_base.html" %}
+{% import "e2e/_macros.html" as k with context %}
+{# Turkish version of keyspaces.html. Terms stay in English; the explanations are Turkish. Keep both files in step. #}
+{% block body %}
+
+<h2 id="goal" data-short="Ne öğreneceksin"><span class="sec">00</span>Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
+<p>Bölüm 01 mimarın kararını verir: Amazon Keyspaces nereye oturur, nereye oturmaz. Sonra tutorial iki bölümden oluşur.
+   Bölüm 1, Apache Cassandra'yı ve query dili CQL'i öğretir: partition'lar, clustering column'lar ve "her query için bir table". Bölüm 2, CQL konuşan serverless servis Amazon Keyspaces'i gösterir.</p>
+<p>Örnekler Lale Market'in aktivite geçmişinden gelir. Başka bir örnek bir fikri daha kolay gösteriyorsa tutorial onu kullanır: bir dosya dolabı, bir banka ekstresi, bir gemi seyir defteri.</p>
+<p>Bu tutorial'ın sonunda şunları yapabilirsin:</p>
+<ol>
+  <li>Bir wide-column database'in hangi iş yükleri için doğru seçim olduğunu ve hangileri için olmadığını söylemek.</li>
+  <li>Bir CQL primary key'ini okuyup partition key'i ve clustering column'ları adlandırmak.</li>
+  <li>Hangi CQL query'lerinin ucuz olduğunu ve hangilerinin bütün partition'lara ihtiyaç duyduğunu tahmin etmek.</li>
+  <li>Bir query için bir table tasarlamak ve bunun burada neden normal olduğunu açıklamak.</li>
+  <li>Bir okuma consistency level'ı seçmek ve maliyetini bilmek.</li>
+  <li>Keyspaces'in senin için neyi çalıştırdığını açıklamak.</li>
+</ol>
+<p>Dört tür kutu sana yardım eder. <b>Simülasyon</b>: Oynat'a ya da Sonraki adım'a bas. <b>Önce tahmin et</b>: cevabı açmadan önce kendi cevabını yaz.
+   <b>Checkpoint</b>: tek doğru cevabı olan bir soru. <b>Analoji</b>: günlük hayattan bir resim.</p>
+
+<h2 id="architect" data-short="Mimar gözüyle: ne zaman"><span class="sec">01</span>Mimar gözüyle: Keyspaces nereye oturur</h2>
+<p><b>Önce bu bölümü oku.</b> Kararı bu bölüm verir. Sonraki bölümler Cassandra modelinin nasıl çalıştığını öğretir.</p>
+<p><b>Kısaca:</b> Amazon Keyspaces, Apache Cassandra ile uyumlu, serverless ve yönetilen bir database'dir. Çok büyük miktarda row'u bir partition key'e göre gruplanmış ve her partition'ın içinde sıralı olarak saklar.
+   "Bu tek key'in row'ları, bu sırayla" sorusunu her boyutta hızlı cevaplar.
+   Çok yazdığında, bilinen bir key ile okuduğunda ve Cassandra sunucuları olmadan Cassandra dilini ve driver'larını istediğinde onu seç.</p>
+<p>Veri modeli bir {{ k.term("wide-column store", "wide-column-store") }}'dur. Her partition, birbirine ait row'lardan oluşan uzun ve sıralı tek bir liste gibidir. Bir örnek, bir kullanıcının bütün event'leridir.</p>
+
+<h3>Bir iş yükünde Keyspaces'i işaret eden sinyaller</h3>
+<table class="data">
+  <thead><tr><th>Sinyal</th><th>Gerçek bir projede neye benzer</th><th>Ona cevap veren özellik</th></tr></thead>
+  <tbody>
+    <tr><td>Hiç durmayan çok sayıda yazma</td><td>Her tıklama, her sensör okuması, her mesaj.</td><td>Partition'lara dağılan yazmalar, serverless kapasite (bölüm 08)</td></tr>
+    <tr><td>"Bir key için en yeni N" okumaları</td><td>Bir kullanıcının son 20 event'i, bir sohbetin son 100 mesajı.</td><td>Partition key artı clustering sırası (bölüm 03 ve 04)</td></tr>
+    <tr><td>Zamanla değerini kaybeden veri</td><td>7 günlük clickstream, 30 günlük log'lar.</td><td>Table ya da row başına TTL (bölüm 07)</td></tr>
+    <tr><td>Mevcut bir Cassandra uygulaması</td><td>CQL kodu, Cassandra driver'ları, ekipte Cassandra becerileri.</td><td>CQL uyumluluğu (bölüm 08)</td></tr>
+    <tr><td>İşletilecek sunucu yok</td><td>Ekip bir Cassandra ring'i çalıştırmak istemiyor.</td><td>Serverless, on-demand kapasite (bölüm 08)</td></tr>
+    <tr><td>Okumalar bazen bir an eski olabilir</td><td>Bir "son görüntülenenler" şeridi, bir feed ön izlemesi.</td><td>Yarı maliyetle LOCAL_ONE okumaları (bölüm 06)</td></tr>
+  </tbody>
+</table>
+
+<h3>Kullanım alanları: sebebi ve özelliğiyle</h3>
+<table class="data">
+  <thead><tr><th>Kullanım alanı</th><th>Veri</th><th>Neden Keyspaces</th><th>İşi yapan özellik</th></tr></thead>
+  <tbody>
+    <tr><td>Aktivite geçmişi (Lale Market)</td><td>Her görüntüleme, arama, sepet değişikliği için bir row.</td><td>Kullanıcı başına bir partition, en yeni önce, 7 günlük geçmiş.</td><td>user_id partition key'i, zamana göre clustering, table TTL'i</td></tr>
+    <tr><td>Bir sohbetin ya da destek talebinin mesajları</td><td>Mesaj başına bir row.</td><td>"Bu konuşmanın en yeni 50 mesajı".</td><td>Konuşma başına partition, zamana göre clustering</td></tr>
+    <tr><td>Cihaz başına IoT event geçmişi</td><td>Okuma ya da alarm başına bir row.</td><td>Milyonlarca cihaz sürekli yazar.</td><td>Cihaz ve gün başına partition, TTL</td></tr>
+    <tr><td>Bir read model olarak sipariş ve kargo geçmişi</td><td>Sipariş başına durum değişiklikleri.</td><td>"Bu siparişin bütün durum değişiklikleri", zaman sırasıyla.</td><td>Sipariş başına partition, zamana göre clustering</td></tr>
+    <tr><td>Hesap başına dolandırıcılık ve güvenlik sinyalleri</td><td>Girişler, cihazlar, konumlar.</td><td>Bir ödeme sırasında okunan, bir hesabın son sinyalleri.</td><td>Hesap başına partition, en yeni row'larda LIMIT</td></tr>
+    <tr><td>Öneri girdileri</td><td>Bir modelin okuduğu, kullanıcı başına event'ler.</td><td>Yüksek yazma hızı, kullanıcı başına okuma.</td><td>Kullanıcı başına partition</td></tr>
+    <tr><td>Bir Cassandra cluster'ını AWS'ye taşımak</td><td>Mevcut table'lar ve CQL.</td><td>Kodu ve driver'ları koru, sunuculardan kurtul.</td><td>CQL 3.11 uyumluluğu</td></tr>
+    <tr><td>Oyun event'leri ve maç geçmişi</td><td>Bir oyuncunun ya da maçın event'i başına bir row.</td><td>Yoğun saatlerde patlamalar, oyuncu başına okumalar.</td><td>On-demand kapasite, oyuncu başına partition</td></tr>
+  </tbody>
+</table>
+
+<h3>Keyspaces'ten uzağı işaret eden sinyaller</h3>
+<table class="data">
+  <thead><tr><th>İş yükündeki sinyal</th><th>Keyspaces neden zayıf kalır</th><th>Daha iyi seçim</th></tr></thead>
+  <tbody>
+    <tr><td>Bütün kullanıcılar üzerinde gruplayan raporlar</td><td>Keyspaces'te aggregate fonksiyonlar ve JOIN yoktur.</td><td><a href="/e2etutorial/redshift">Redshift</a></td></tr>
+    <tr><td>Her column'da filtreli yeni sorular</td><td>Bir query partition key'e ihtiyaç duyar. Keyspaces CREATE INDEX'i desteklemez.</td><td><a href="/e2etutorial/aurora">Aurora</a>, <a href="/e2etutorial/opensearch">OpenSearch</a></td></tr>
+    <tr><td>Birkaç table üzerinde kurallar ve transaction'lar</td><td>Lightweight transaction'lar tek bir row'da çalışır.</td><td><a href="/e2etutorial/aurora">Aurora</a></td></tr>
+    <tr><td>Zaman pencerelerine göre toplanan metrikler</td><td>Keyspaces row saklar. Pencere başına ortalama hesaplamaz.</td><td><a href="/e2etutorial/influxdb">Timestream for InfluxDB</a></td></tr>
+    <tr><td>Cassandra kodu olmayan, key-value erişimli yeni bir proje</td><td>İkisi de uyar. DynamoDB'nin daha fazla AWS entegrasyonu var (Streams, global tables, zero-ETL).</td><td><a href="/e2etutorial/dynamodb">DynamoDB</a></td></tr>
+    <tr><td>Bir milisaniyenin altında cevaplar</td><td>Keyspaces milisaniyelerde cevap verir.</td><td><a href="/e2etutorial/elasticache">ElastiCache</a></td></tr>
+  </tbody>
+</table>
+
+<h3>Bir mimarın sorduğu sorular, bu sırayla</h3>
+<ol>
+  <li><b>Her okuma hangi değeri biliyor?</b> O değer partition key'dir.</li>
+  <li><b>Okumalar row'ları hangi sırada istiyor?</b> O sıra clustering sırasıdır.</li>
+  <li><b>Tek bir partition ne kadar büyür?</b> Sonu olmayan partition'lar bir problemdir. Onları böl, örneğin kullanıcı ve ay başına.</li>
+  <li><b>Kaç farklı query var?</b> Her query için bir table. Her event iki ya da üç table'a yazılabilir.</li>
+  <li><b>Veri ne kadar süre kalmalı?</b> Bu TTL'dir.</li>
+  <li><b>Ekip şu an Cassandra kullanıyor mu?</b> Evetse Keyspaces kodu korur. Hayırsa onu DynamoDB ile karşılaştır.</li>
+  <li><b>Raporlara kimin ihtiyacı var?</b> Bir analitik engine'e bir dışa aktarma planla. Raporları Keyspaces'te çalıştırma.</li>
+</ol>
+
+<h3>AWS'de Keyspaces ve akrabaları</h3>
+<table class="data">
+  <thead><tr><th>Seçenek</th><th>Nedir</th><th>Ne zaman seçilir</th></tr></thead>
+  <tbody>
+    <tr><td>Amazon Keyspaces, on-demand</td><td>Okuma ve yazma isteği başına ödersin. Kapasite planı yok.</td><td>Yeni ya da dalgalı trafik. Lale Market bunu kullanır.</td></tr>
+    <tr><td>Amazon Keyspaces, provisioned</td><td>Saniye başına okuma ve yazma kapasitesini sen belirlersin.</td><td>Sabit, öngörülebilir trafik.</td></tr>
+    <tr><td>Amazon EC2 üzerinde Apache Cassandra</td><td>Node ring'ini kendin çalıştırırsın.</td><td>Keyspaces'in desteklemediği bir Cassandra özelliğine ihtiyacın varsa ve operasyonları kabul ediyorsan.</td></tr>
+    <tr><td><a href="/e2etutorial/dynamodb">DynamoDB</a></td><td>Kendi API'si olan serverless bir key-value ve document database'i.</td><td>Cassandra kodu olmayan yeni bir proje.</td></tr>
+  </tbody>
+</table>
+
+<h3>Lale Market'te Keyspaces'in yeri</h3>
+<p>Her ürün sayfası görüntülemesi <code>activity_by_user</code>'a bir row yazar ve checkout bir satın alma row'u yazar. Ürün sayfası ve ana sayfa "son görüntülenenler"i
+   ziyaretçinin partition'ından okur. "My activity" sayfası ziyaretçinin ya da persona'nın partition'ını okur.
+   Row'ların süresi 7 gün sonra dolar. Mağazada hiçbir şey bu table'dan bütün kullanıcılar üzerinde bir rapor istemez.</p>
+
+<h3>Simülasyon: bırak gereksinimler seçsin</h3>
+{{ k.sim("decide_feed", "İş yükü 1: bir activity feed") }}
+{{ k.sim("decide_report", "İş yükü 2: bütün kullanıcılar üzerinde bir rapor") }}
+<p>İş yükü 1 için bir not: DynamoDB ilk iki gereksinime aynı derecede iyi uyar. Kararı ekibin Cassandra kodu verdi. Yeni bir ekip için ikisi de geçerlidir. O zaman ihtiyaç duyduğun entegrasyonları karşılaştır.</p>
+
+{{ k.quiz("ks-a1", "Bir mesajlaşma uygulaması bir konuşmanın en yeni 50 mesajını gösteriyor ve saniyede 20.000 mesaj yazıyor. Hangi primary key uyar?",
+   ["sent_at DESC ile PRIMARY KEY ((conversation_id), sent_at, message_id)", "PRIMARY KEY ((sent_at), conversation_id, message_id)", "PRIMARY KEY ((message_id)) ve konuşma üzerinde bir filtre", "PRIMARY KEY ((sender_id), conversation_id)"],
+   0, "Okuma konuşmayı bilir, bu yüzden o partition key'dir. Row'lar en yeni önce gelmeli, bu yüzden sent_at azalan sırada ilk clustering column'dur.") }}
+{{ k.quiz("ks-a2", "Ürün yöneticileri aktivite table'ından geçen ayın şehir başına satın almalarını istiyor. En iyi cevap nedir?",
+   ["Event'leri bir analitik engine'e kopyala ve orada grupla", "Bütün partition'larda ALLOW FILTERING ile SELECT çalıştır", "City column'una CREATE INDEX ekle", "Her gece uygulamada her partition'ı oku"],
+   0, "Keyspaces'te aggregate ve secondary index yok. Raporlar event'lerin bir kopyasını alan bir analitik engine'e aittir.") }}
+
+<div class="part"><b>Bölüm 1</b><h2 id="part1" data-short="BÖLÜM 1: Cassandra ve CQL">Apache Cassandra ve CQL: model</h2>
+<p>Partition'lar, clustering column'lar ve her query için bir table.</p></div>
+
+<h2 id="why" data-short="Neden wide-column?"><span class="sec">02</span>Neden bir wide-column store? Dosya dolabı</h2>
+<p>Bir ofis her müşteri için bir çekmece tutar. Her çekmecede kâğıtlar her zaman tarih sırasındadır, en yenisi önde. Yeni bir kâğıt hemen yerine girer.</p>
+{% call k.callout("analogy", "Analoji") %}
+<p>"5 numaralı müşterinin son 10 kâğıdı" kolaydır: bir çekmece aç, öndeki 10'u al. "Bütün müşterilerin fatura türündeki bütün kâğıtları" zordur: her çekmeceyi açmak zorundasın.
+   Çekmece etiketi partition key'dir. Çekmecenin içindeki tarih sırası clustering sırasıdır.</p>
+{% endcall %}
+<p>Apache Cassandra, birçok makineye dağılmış çok yüksek yazma hızları için yapıldı. JOIN'den, GROUP BY'dan ve her column'daki index'lerden vazgeçer. Karşılığında partition key'li bir okuma tek bir partition'a gider
+   ve iş table'ın boyutuyla büyümez.</p>
+
+<h2 id="model" data-short="Partition ve clustering"><span class="sec">03</span>Model: sıralı row'lardan oluşan partition'lar</h2>
+<p>Bir CQL table'ı bir SQL table'ına benzer. Column'ları ve row'ları vardır. Fark, iki parçası ve iki farklı görevi olan {{ k.term("primary key") }}'dedir:</p>
+<ul>
+  <li>{{ k.term("partition key") }} partition'ı seçer. Keyspaces aynı partition key değerine sahip bütün row'ları birlikte tutar.</li>
+  <li>{{ k.term("clustering column") }}'lar bir partition'ın içindeki row'ları sıralar. Sıralama yazma anında olur, bu yüzden bir okuma row'ları zaten sıralı alır.</li>
+</ul>
+<p>Bu, Lale Market'in gerçek table'ıdır:</p>
+{% call k.sql("T1", "Aktivite table'ı") %}
+<pre><code>CREATE TABLE dbws.activity_by_user (
+  user_id    text,
+  event_time timestamp,
+  event_id   uuid,
+  event_type text,
+  product_id text,
+  detail     text,
+  PRIMARY KEY ((user_id), event_time, event_id)
+) WITH CLUSTERING ORDER BY (event_time DESC)
+  AND default_time_to_live = 604800;</code></pre>
+<table class="clause">
+  <tr><td>dbws.activity_by_user</td><td><code>dbws</code> keyspace'indeki <code>activity_by_user</code> table'ı. Keyspace, bir database gibi bir table grubudur.</td></tr>
+  <tr><td>user_id text</td><td>Kullanıcının id'si (ziyaretçi id'si ya da bir müşteri id'si).</td></tr>
+  <tr><td>event_time timestamp, event_id uuid</td><td>Event'in ne zaman olduğu ve onun için benzersiz bir id.</td></tr>
+  <tr><td>PRIMARY KEY ((user_id), event_time, event_id)</td><td>İç parantezler partition key'i tutar: <code>user_id</code>. Diğer ikisi clustering column'dur. Birlikte tek bir row'u tanımlarlar.
+      <code>event_id</code> aynı milisaniyedeki iki event'i ayrı tutar.</td></tr>
+  <tr><td>CLUSTERING ORDER BY (event_time DESC)</td><td>Her partition'ın içinde row'ları en yeni önce tut.</td></tr>
+  <tr><td>default_time_to_live = 604800</td><td>Her row, yazılmasından 604.800 saniye (7 gün) sonra süresi dolar.</td></tr>
+</table>
+{% endcall %}
+<p>Bu sayfanın öğretim row'ları (üç kullanıcı, sekiz event):</p>
+{{ k.sample("activity", "activity_by_user (8 örnek row)", key=["user_id", "event_time"]) }}
+<table class="data">
+  <thead><tr><th>Identifier</th><th>Sahibi kim</th><th>Kim ödünç alıyor</th></tr></thead>
+  <tbody>
+    <tr><td><code>user_id</code></td><td>Mağaza onun sahibidir: ziyaretçi id'si cookie'den, müşteri id'si Aurora'daki customers table'ından gelir.</td><td>Aktivite table'ı onu partition key'i olarak ödünç alır. Keyspaces kullanıcının var olduğunu kontrol etmez.</td></tr>
+    <tr><td>Primary key (user_id, event_time, event_id)</td><td>Aktivite table'ı onun sahibidir. Var olan bir primary key'le yapılan bir yazma row'un yerine geçer.</td><td>Kimse onu ödünç almaz.</td></tr>
+    <tr><td><code>product_id</code></td><td>Katalog onun sahibidir (DocumentDB).</td><td>Her event row'u onu normal bir column olarak ödünç alır.</td></tr>
+  </tbody>
+</table>
+{{ k.quiz("ks-q0", "PRIMARY KEY ((user_id), event_time, event_id) içinde event_time ne yapar?",
+   ["Row'un partition'ını seçer", "Bir partition'ın içindeki row'ları sıralar", "Row'un bir süre sonra süresinin dolmasını sağlar", "Zamana göre query'ler için bir index'tir"],
+   1, "event_time ilk clustering column'dur. Partition key, iç parantezlerin içindeki user_id'dir.") }}
+
+<h2 id="reads" data-short="Key ile okumalar"><span class="sec">04</span>Partition key ile okumalar</h2>
+{% call k.sql("Q1", "Bir kullanıcının en yeni üç event'i") %}
+<pre><code>SELECT user_id, event_time, event_type
+FROM dbws.activity_by_user
+WHERE user_id = 'C00005'
+LIMIT 3;</code></pre>
+<table class="clause">
+  <tr><td>WHERE user_id = 'C00005'</td><td>Partition key. Keyspaces sadece tek bir partition'a gider.</td></tr>
+  <tr><td>LIMIT 3</td><td>Üç row'dan sonra dur. Row'lar zaten en yeni önce sıralı, bu yüzden bunlar en yeni üç row'dur.</td></tr>
+</table>
+{% endcall %}
+{% call k.predict("Öğretim row'larına bak. Hangi üç row geri gelir? Keyspaces kaç partition okur?") %}
+<p>C00005'in en yeni üç row'u: 16:37 wishlist, 16:18 wishlist, 15:02 view. Keyspaces tek bir partition okur.</p>
+{% endcall %}
+{{ k.sim("partition", "Tek bir partition, zaten sıralı") }}
+<p>İlk clustering column üzerindeki bir koşul, tek bir partition'ın içinde bir aralıktır: <code>WHERE user_id = 'C00005' AND event_time &gt; '2026-10-26'</code>.
+   Row'lar zaman sırasında olduğu için Keyspaces tek bir kesintisiz dilim okur.</p>
+<p>Simülasyon küçük bir öğretim token'ı kullanır (müşteri numarasının 3'e göre modu). Keyspaces kendi partitioner'ını kullanır. Varsayılan, Cassandra uyumlu Murmur3Partitioner'dır
+   (<a href="https://docs.aws.amazon.com/keyspaces/latest/devguide/functional-differences.html">Functional differences</a>).</p>
+
+<h2 id="limits" data-short="Key'siz query'ler"><span class="sec">05</span>Partition key'i olmayan soru</h2>
+<p>"Bütün kullanıcıların son satın almaları" hiçbir partition key vermez. Cevaplamak için database'in her partition'a bakması gerekir.</p>
+{{ k.sim("nokey", "Partition key'siz, event_type üzerinde bir filtre") }}
+<p>Apache Cassandra, <code>ALLOW FILTERING</code> eklemezsen böyle bir query'yi reddeder, çünkü maliyeti table ile büyür. Keyspaces <code>CREATE INDEX</code>'i desteklemez ve <code>count()</code> gibi aggregate fonksiyonları yoktur
+   (<a href="https://docs.aws.amazon.com/keyspaces/latest/devguide/cassandra-apis.html">Supported Cassandra APIs</a>).
+   Bu yüzden kural şudur: her query için bir table tasarla. Mağazanın "ürüne göre satın almalar"a ihtiyacı varsa, her satın almayı ikinci kez <code>PRIMARY KEY ((product_id), event_time, event_id)</code> olan bir table'a yazar.
+   Burada bir event için iki yazma normaldir. Storage, her istekte bütün partition'ları okumaktan daha ucuzdur.</p>
+{{ k.quiz("ks-q1", "Keyspaces hangi query'yi activity_by_user'ın tek bir partition'ından cevaplayabilir?",
+   ["Bütün kullanıcılardan purchase türündeki bütün event'ler", "En çok event'i olan 10 kullanıcı", "Bugün 10:00'dan sonra C00005'in event'leri", "P0130 ürününün bütün event'leri"],
+   2, "Sadece bu query partition key'i (user_id) verir. Zaman koşulu ilk clustering column'da, bu yüzden tek bir partition'ın bir dilimidir.") }}
+
+<h2 id="consistency" data-short="Consistency level'lar"><span class="sec">06</span>Consistency level'lar ve maliyetleri</h2>
+<p>Keyspaces "bütün yazma işlemlerini birden fazla Availability Zone'a üç kez replike eder". Yazmalar LOCAL_QUORUM kullanır: Keyspaces başarıyı bildirmeden önce yazma üç replica'dan ikisinde olmalıdır
+   (<a href="https://docs.aws.amazon.com/keyspaces/latest/devguide/consistency.html">Consistency levels</a>). Okumalar için level'ı sen seçersin:</p>
+<table class="data">
+  <thead><tr><th>Okuma level'ı</th><th>Ne yapar</th><th class="num">4 KB başına maliyet (on-demand)</th></tr></thead>
+  <tbody>
+    <tr><td><code>LOCAL_QUORUM</code></td><td>Okumadan önce başarılı olan bütün yazmaların sonucunu döndürür.</td><td class="num">1 RRU</td></tr>
+    <tr><td><code>LOCAL_ONE</code> / <code>ONE</code></td><td>Daha hızlı ve daha erişilebilir, ama "yakın zamanda tamamlanan bir yazmanın sonuçlarını yansıtmayabilir".</td><td class="num">0.5 RRU</td></tr>
+  </tbody>
+</table>
+{{ k.sim("consistency", "Bir yazma, sonra bir LOCAL_QUORUM okuma ve bir LOCAL_ONE okuma") }}
+<p>Simülasyon, üç replica ile quorum fikrini gösterir. Keyspaces iç replica'larını göstermez. Belgelenmiş davranış yukarıdaki table'dakidir.</p>
+{{ k.quiz("ks-q2", "\"Son görüntülenenler\" bir saniye eski olabilir. Onun için hangi okuma level'ı daha iyi bir seçimdir?",
+   ["LOCAL_QUORUM, çünkü daha yenidir", "LOCAL_ONE, çünkü yarı maliyetlidir", "Bütün Region'lar için EACH_QUORUM", "Verinin her kopyasını okumak için ALL"],
+   1, "Bu şerit için kısa bir gecikme kabul edilebilir, bu yüzden daha ucuz level yeterlidir. Keyspaces EACH_QUORUM'u ve ALL'u desteklemez.") }}
+
+<h2 id="ttl" data-short="TTL"><span class="sec">07</span>TTL: eski event'ler gider</h2>
+<p>Table'da <code>default_time_to_live = 604800</code> (7 gün) var. Her row'un süresi yazılmasından 7 gün sonra dolar. Load Simulation <code>USING TTL 600</code> ile yazar, bu yüzden sentetik row'larının süresi 10 dakika sonra dolar.</p>
+{% call k.callout("warn", "Workshop için not") %}
+<p>TTL, <code>event_time</code>'dan değil, yazma zamanından sayılır. Seed 30 günlük geçmişi bir kerede yazar ve seed edilen bütün row'ların süresi Seed'den 7 gün sonra dolar.
+   Aktivite sayfası bir persona için hiç row göstermiyorsa eğitmeninden Seed'i tekrar çalıştırmasını iste.</p>
+{% endcall %}
+
+<div class="part"><b>Bölüm 2</b><h2 id="part2" data-short="BÖLÜM 2: Amazon Keyspaces">Amazon Keyspaces: AWS servisi</h2>
+<p>Node ring'i olmayan CQL.</p></div>
+
+<h2 id="service" data-short="Cassandra ve Keyspaces"><span class="sec">08</span>Cassandra'yı kendin çalıştırmak ve Keyspaces'in değiştirdikleri</h2>
+<p>Apache Cassandra bir node ring'i üzerinde çalışır. Partition key'in bir hash'i (token) partition'ı hangi node'ların tutacağına karar verir. Bir istemci herhangi bir node'a istek gönderir ve o node {{ k.term("coordinator") }} olur.
+   Coordinator isteği partition'ı tutan node'lara gönderir ve cevabı döndürür.</p>
+{{ k.fig("keyspaces-cassandra-cluster.png", "bir istemci dört node'luk bir ring'in bir node'una CQL gönderir. Apache Cassandra'da bu node'ları kendin kurar, boyutlandırır ve işletirsin.") }}
+{{ k.fig("keyspaces-coordinator.jpg", "coordinator (turuncu) istemciden isteği alır ve onu ring'in diğer node'larına gönderir (kesikli oklar). İstemci sadece tek bir node ile konuşur.") }}
+<p>Cassandra'yı kendin çalıştırdığında node'ları boyutlandırırsın; veri büyüdüğünde node ekler ve veriyi taşırsın. Kopyaları yeniden eşitleyen süreci (<code>nodetool repair</code>) çalıştırır ve compaction'ı ayarlarsın.
+   Ayrıca backup alır ve her node'u güncellersin. Keyspaces serverless'tır: "yapılandırılacak cluster, host ya da Java sanal makinesi (JVM) yoktur"
+   (<a href="https://docs.aws.amazon.com/keyspaces/latest/devguide/functional-differences.html">Functional differences</a>).</p>
+{{ k.fig("keyspaces-serverless.png", "Cassandra driver'ları, cqlsh ve konsol TLS üzerinden Amazon Keyspaces'e CQL istekleri gönderir. Keyspaces şifreli storage'a yazar. Hiç node görmezsin.") }}
+<table class="data">
+  <thead><tr><th>İş</th><th>Kendi Cassandra ring'in</th><th>Amazon Keyspaces</th></tr></thead>
+  <tbody>
+    <tr><td>Node'lar</td><td>Sen seçer, kurar ve değiştirirsin.</td><td>Görülecek node yok.</td></tr>
+    <tr><td>Kopyalar</td><td>Replication factor'ü sen ayarlar ve <code>nodetool repair</code> çalıştırırsın.</td><td>AWS'nin yönettiği, birkaç Availability Zone'da üç kopya.</td></tr>
+    <tr><td>Compaction, caching, bloom filter'lar</td><td>Sen ayarlarsın.</td><td>"Amazon Keyspaces için geçerli değildir ve belirtilirse yok sayılır."</td></tr>
+    <tr><td>Kapasite</td><td>Zirveden önce node eklersin.</td><td>On-demand mod istek başına ücretlendirir.</td></tr>
+    <tr><td>Kimlik doğrulama</td><td>Cassandra kullanıcıları ve parolaları.</td><td>AWS IAM (SigV4) ya da servise özel kimlik bilgileri.</td></tr>
+    <tr><td>Dil ve driver'lar</td><td colspan="2">CQL 3.11 ve açık kaynak Cassandra driver'ları, bazı işlevsel farklarla (CREATE INDEX yok, aggregate yok, materialized view yok).</td></tr>
+  </tbody>
+</table>
+
+<h2 id="lalemarket" data-short="Lale Market'te Keyspaces"><span class="sec">09</span>Lale Market'te Keyspaces</h2>
+<ul>
+  <li>On-demand modda, point-in-time recovery ve 7 günlük varsayılan TTL ile <code>activity_by_user</code> table'ını içeren <code>dbws</code> keyspace'i.</li>
+  <li>Keyspaces Engine App, Python Cassandra driver'ıyla port 9142 üzerinden TLS ile, bir VPC interface endpoint aracılığıyla bağlanır. Kimliğini IAM rolüyle (SigV4 eklentisi) doğrular.</li>
+  <li>"My activity" sayfasında LOCAL_ONE deneyi ve bir clickstream Load Simulation'ı var.</li>
+</ul>
+
+<h2 id="recall" data-short="Recall test"><span class="sec">10</span>Recall test</h2>
+{{ k.quiz("ks-r1", "Mağazanın \"bir ürünün bütün event'leri\"ne ihtiyacı var. Genel Keyspaces tasarımı nedir?",
+   ["product_id üzerinde CREATE INDEX", "Partition key'i olmayan bir query", "product_id ile key'lenmiş ikinci bir table", "Ürün column'u üzerinde bir count()"],
+   2, "Keyspaces'te CREATE INDEX ve aggregate yok. Her query için bir table; uygulama event'i iki table'a da yazar.") }}
+{{ k.quiz("ks-r2", "Keyspaces yazmaları hangi consistency level'ı kullanır?",
+   ["LOCAL_ONE", "LOCAL_QUORUM", "ALL", "ANY"],
+   1, "Keyspaces üç replica'ya yazar ve başarıyı LOCAL_QUORUM ile bildirir.") }}
+{{ k.quiz("ks-r3", "Partition key ile bir okuma neden her table boyutunda hızlı kalır?",
+   ["Tek bir partition'a gider ve row'lar zaten sıralıdır", "Keyspaces table'ın tamamını bellekte tutar", "İstemci okumayı paralel olarak her node'a gönderir", "LOCAL_ONE her okumanın diski atlamasını sağlar"],
+   0, "Partition key tek bir partition seçer ve clustering sırası row'ları doğru sırada hazır tutar. Diğer partition'lar iş yapmaz.") }}
+
+<section class="lesson-foot">
+  <h2>Daha derine in</h2>
+  <p><b>Ana kaynak:</b> <a href="https://docs.aws.amazon.com/keyspaces/latest/devguide/how-it-works.html">How Amazon Keyspaces works</a>, sonra
+     <a href="https://cassandra.apache.org/doc/latest/cassandra/developing/data-modeling/index.html">Apache Cassandra: data modeling</a>.</p>
+  <p><b>Mağazada kullan:</b> <a href="/free-e-commerce-app/account/activity">My activity</a> sayfasında consistency deneyi ve bir clickstream patlaması var.</p>
+  <p><b>Soru sor.</b> Bir kısım net değilse eğitmenine ya da AI asistanına sor. Kendi uygulamandan her gün büyüyen bir liste getir ve onun table'ını birlikte tasarlayın.</p>
+</section>
+{% endblock %}

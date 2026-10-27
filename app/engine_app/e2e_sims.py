@@ -1000,3 +1000,129 @@ def elasticache(lang):
 
 COUNT_TR.update({"pieces sold": "satılan adet", "cache hits": "cache hit", "database reads": "database okuması"})
 SIMS["elasticache"] = elasticache
+
+
+# ================================================================ Keyspaces (Apache Cassandra)
+ACT = {"cols": ["user_id", "event_time", "event_type", "product_id"],
+       "rows": [["C00005", "2026-10-26 16:37", "wishlist", "P0130"], ["C00005", "2026-10-26 16:18", "wishlist", "P0161"],
+                ["C00005", "2026-10-26 15:02", "view", "P0095"], ["C00005", "2026-10-25 21:40", "purchase", "P0005"],
+                ["C00001", "2026-10-26 12:10", "view", "P0001"], ["C00001", "2026-10-25 09:55", "add_to_cart", "P0044"],
+                ["C00006", "2026-10-26 08:30", "view", "P0179"], ["C00006", "2026-10-24 19:05", "purchase", "P0044"]]}
+EXTRA_TABLES["activity"] = ACT
+
+
+def _token(uid, n=3):
+    """A small teaching token: the customer number modulo 3. Keyspaces uses its own partitioner (Murmur3 by default)."""
+    return int(uid[1:]) % n
+
+
+def ks_partition(lang):
+    nodes = {k: [] for k in range(3)}
+    for r in ACT["rows"]:
+        nodes[_token(r[0])].append(r[:3])
+    for k in nodes:
+        nodes[k].sort(key=lambda r: (r[0], r[1]), reverse=False)
+        # inside one partition the clustering order is event_time DESC
+        by = {}
+        for r in nodes[k]:
+            by.setdefault(r[0], []).append(r)
+        nodes[k] = [r for u in sorted(by) for r in sorted(by[u], key=lambda x: x[1], reverse=True)]
+    rows = lambda: {f"n{k}": deepcopy(nodes[k]) for k in range(3)}
+    steps = [{"say": T(lang, "The rows are stored by partition. The partition key user_id decides the place: a hash of it (the token) selects the storage. Inside each partition, the rows are already sorted by event_time, newest first.",
+                       "Row'lar partition'a göre saklanır. Partition key user_id yeri belirler: onun bir hash'i (token) storage'ı seçer. Her partition'ın içinde row'lar zaten event_time'a göre, en yeni önce sıralıdır."),
+              "marks": {}, "rows": rows(), "out": [], "count": {"partitions read": 0, "rows read": 0}}]
+    uid = "C00005"
+    k = _token(uid)
+    part = [i for i, r in enumerate(nodes[k]) if r[0] == uid]
+    steps.append({"say": T(lang, f"SELECT ... WHERE user_id = '{uid}' LIMIT 3. The token of {uid} points to storage unit {k}. Keyspaces reads only this partition.",
+                           f"SELECT ... WHERE user_id = '{uid}' LIMIT 3. {uid}'in token'ı {k} numaralı storage birimini gösterir. Keyspaces sadece bu partition'ı okur."),
+                  "marks": {f"n{k}": {i: "read" for i in part}}, "rows": rows(), "out": [], "count": {"partitions read": 1, "rows read": 0}})
+    out = []
+    for n, i in enumerate(part[:3], start=1):
+        out.append(nodes[k][i])
+        steps.append({"say": T(lang, f"Row {n}: {nodes[k][i][1]} {nodes[k][i][2]}. The rows are already newest first, so Keyspaces needs no sort.",
+                               f"Row {n}: {nodes[k][i][1]} {nodes[k][i][2]}. Row'lar zaten en yeni önce sıralı, bu yüzden Keyspaces sıralama yapmaz."),
+                      "marks": {f"n{k}": {**{j: "match" for j in part[:n]}}}, "rows": rows(), "out": deepcopy(out), "outmarks": {n - 1: "new"},
+                      "count": {"partitions read": 1, "rows read": n}})
+    steps.append({"say": T(lang, "LIMIT 3 is reached, so the read stops. Two storage units did no work at all. This is the same cost with 1,000 users or 100 million users.",
+                           "LIMIT 3'e ulaşıldı, bu yüzden okuma durur. İki storage birimi hiç iş yapmadı. Maliyet 1.000 kullanıcıda da 100 milyon kullanıcıda da aynıdır."),
+                  "marks": {f"n{k}": {j: "match" for j in part[:3]}}, "rows": rows(), "out": out, "count": {"partitions read": 1, "rows read": 3}})
+    return {"tables": [{"id": f"n{k}", "name": T(lang, f"storage unit {k}", f"storage birimi {k}"), "cols": ["user_id", "event_time ↓", "event_type"], "rows": [], "key": [0, 1], "ref": []} for k in range(3)],
+            "out": {"name": T(lang, "result", "sonuç"), "cols": ["user_id", "event_time", "event_type"]}, "steps": steps}
+
+
+def ks_nokey(lang):
+    rows = [r[:3] for r in ACT["rows"]]
+    steps = [{"say": T(lang, "SELECT ... WHERE event_type = 'purchase'. This filter does not name a partition key. To answer, the database must look at every partition.",
+                       "SELECT ... WHERE event_type = 'purchase'. Bu filtre bir partition key adlandırmaz. Cevaplamak için database'in her partition'a bakması gerekir."),
+              "marks": {}, "out": [], "count": {"rows read": 0, "rows returned": 0}}]
+    out, m = [], {}
+    for i, r in enumerate(rows):
+        hit = r[2] == "purchase"
+        m = {**{k: ("match" if rows[k][2] == "purchase" else "skip") for k in m}, i: "match" if hit else "read"}
+        if hit:
+            out.append(r)
+        steps.append({"say": T(lang, f"Row {i + 1} of partition {r[0]}: event_type = {r[2]}. " + ("It matches." if hit else "Read and dropped."),
+                               f"{r[0]} partition'ının {i + 1}. row'u: event_type = {r[2]}. " + ("Eşleşir." if hit else "Okundu ve atıldı.")),
+                      "marks": {"a": dict(m)}, "out": deepcopy(out), "outmarks": {len(out) - 1: "new"} if hit else {}, "count": {"rows read": i + 1, "rows returned": len(out)}})
+    steps.append({"say": T(lang, f"{len(rows)} rows read for {len(out)} results. With billions of rows, this read never ends in time. Apache Cassandra refuses such a query unless you add ALLOW FILTERING. The Cassandra way is a second table keyed by event_type.",
+                           f"{len(out)} sonuç için {len(rows)} row okundu. Milyarlarca row'da bu okuma zamanında hiç bitmez. Apache Cassandra, ALLOW FILTERING eklemezsen böyle bir query'yi reddeder. Cassandra yolu, event_type ile key'lenmiş ikinci bir table'dır."),
+                  "marks": {"a": {k: ("match" if r[2] == "purchase" else "skip") for k, r in enumerate(rows)}}, "out": out, "count": {"rows read": len(rows), "rows returned": len(out)}})
+    return {"tables": [{"id": "a", "name": "activity_by_user", "cols": ["user_id", "event_time", "event_type"], "rows": rows, "key": [0, 1], "ref": []}],
+            "out": {"name": T(lang, "result", "sonuç"), "cols": ["user_id", "event_time", "event_type"]}, "steps": steps}
+
+
+def ks_consistency(lang):
+    rep = lambda v: [["replica 1 (AZ a)", v[0]], ["replica 2 (AZ b)", v[1]], ["replica 3 (AZ c)", v[2]]]
+    vals = ["view P0095", "view P0095", "view P0095"]
+    steps = [{"say": T(lang, "The newest event of C00005 is \"view P0095\" in all three replicas. Now a write adds \"purchase P0005\".",
+                       "C00005'in en yeni event'i üç replica'nın hepsinde \"view P0095\". Şimdi bir yazma \"purchase P0005\" ekliyor."),
+              "marks": {}, "rows": {"r": rep(vals)}, "out": [], "count": {}}]
+    vals = ["purchase P0005", "purchase P0005", "view P0095"]
+    steps.append({"say": T(lang, "The write uses LOCAL_QUORUM: Keyspaces confirms it when two of the three replicas have it. For a short moment, replica 3 still has the old newest event.",
+                           "Yazma LOCAL_QUORUM kullanır: Keyspaces onu üç replica'dan ikisinde olduğunda onaylar. Kısa bir an için replica 3'te hâlâ eski en yeni event vardır."),
+                  "marks": {"r": {0: "new", 1: "new", 2: "lock"}}, "rows": {"r": rep(vals)}, "out": [], "count": {}})
+    steps.append({"say": T(lang, "A LOCAL_QUORUM read asks two replicas. At least one of any two has the new write, so the read returns \"purchase P0005\". Cost: 1 read unit per 4 KB.",
+                           "LOCAL_QUORUM bir okuma iki replica'ya sorar. Herhangi iki replica'dan en az birinde yeni yazma vardır, bu yüzden okuma \"purchase P0005\" döndürür. Maliyet: 4 KB başına 1 read unit."),
+                  "marks": {"r": {1: "match", 2: "read"}}, "rows": {"r": rep(vals)}, "out": [["LOCAL_QUORUM", "purchase P0005", "1 RRU"]], "count": {}})
+    steps.append({"say": T(lang, "A LOCAL_ONE read asks one replica. If it asks replica 3 in this moment, it returns the old event. The read costs half. The answer can be one moment old.",
+                           "LOCAL_ONE bir okuma tek bir replica'ya sorar. Bu anda replica 3'e sorarsa eski event'i döndürür. Okuma yarı maliyetlidir. Cevap bir an eski olabilir."),
+                  "marks": {"r": {2: "bad"}}, "rows": {"r": rep(vals)}, "out": [["LOCAL_QUORUM", "purchase P0005", "1 RRU"], ["LOCAL_ONE", "view P0095", "0.5 RRU"]], "outmarks": {1: "bad"}, "count": {}})
+    vals = ["purchase P0005"] * 3
+    steps.append({"say": T(lang, "A moment later, replica 3 also has the write. All reads return the same answer again.", "Bir an sonra replica 3'te de yazma var. Bütün okumalar yine aynı cevabı döndürür."),
+                  "marks": {"r": {2: "match"}}, "rows": {"r": rep(vals)}, "out": [["LOCAL_QUORUM", "purchase P0005", "1 RRU"], ["LOCAL_ONE", "view P0095", "0.5 RRU"]], "count": {}})
+    return {"tables": [{"id": "r", "name": T(lang, "the newest event of C00005 in each replica", "her replica'da C00005'in en yeni event'i"), "cols": ["replica", T(lang, "newest event", "en yeni event")], "rows": rep(["view P0095"] * 3), "key": [0], "ref": []}],
+            "out": {"name": T(lang, "reads", "okumalar"), "cols": ["consistency", T(lang, "answer", "cevap"), T(lang, "cost per 4 KB", "4 KB başına maliyet")]}, "steps": steps}
+
+
+KS_CANDS = ["Keyspaces", "DynamoDB", "Aurora PostgreSQL", "Timestream for InfluxDB", "ElastiCache (Valkey)"]
+
+
+def keyspaces(lang):
+    w1 = verdicts(KS_CANDS, [
+        V((1, "one partition per user, rows sorted by time", "kullanıcı başına bir partition, zamana göre sıralı row'lar"), (1, "partition key + sort key", "partition key + sort key"),
+          (1, "index on (user, time)", "(user, time) üzerinde index"), (0, "series of numbers, not event records", "sayı serileri, event kaydı değil"), (1, "sorted set per user", "kullanıcı başına sorted set")),
+        V((1, "serverless, writes spread over partitions", "serverless, yazmalar partition'lara dağılır"), (1, "partitions spread the writes", "partition'lar yazmaları dağıtır"),
+          (0, "one writer instance", "tek writer instance"), (0, "removed earlier", "daha önce elendi"), (0, "memory is expensive for months of events", "aylarca event için bellek pahalı")),
+        V((1, "CQL and Cassandra drivers", "CQL ve Cassandra driver'ları"), (0, "a different API", "farklı bir API"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi")),
+    ])
+    w2 = verdicts(KS_CANDS, [
+        V((0, "no aggregate functions, no JOIN", "aggregate fonksiyon yok, JOIN yok"), (0, "no GROUP BY", "GROUP BY yok"), (1, "SQL with GROUP BY", "GROUP BY'lı SQL"),
+          (1, "aggregation by time", "zamana göre aggregation"), (0, "no general queries", "genel query yok")),
+        V((0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (1, "JOIN with customers", "customers ile JOIN"), (0, "no JOIN", "JOIN yok"), (0, "removed earlier", "daha önce elendi")),
+    ])
+    spec = {
+        "decide_feed": decide_generic(lang, ("The activity feed of each user: billions of events, \"newest 20 of this user\" on each page", "Her kullanıcının activity feed'i: milyarlarca event, her sayfada \"bu kullanıcının en yeni 20'si\""),
+                                      [("Read the newest N events of one user, in time order", "Bir kullanıcının en yeni N event'ini zaman sırasıyla oku"),
+                                       ("Millions of writes per hour, growing with the users", "Saatte milyonlarca yazma, kullanıcılarla birlikte büyür"),
+                                       ("The team moves an existing Apache Cassandra application", "Ekip mevcut bir Apache Cassandra uygulamasını taşıyor")], KS_CANDS, w1),
+        "decide_report": decide_generic(lang, ("A monthly report: purchases per segment and city, from all users", "Aylık bir rapor: bütün kullanıcılardan segment ve şehre göre satın almalar"),
+                                        [("GROUP BY over all partitions", "Bütün partition'lar üzerinde GROUP BY"),
+                                         ("JOIN with the customer data", "Müşteri verisiyle JOIN")], KS_CANDS, w2),
+        "partition": ks_partition(lang), "nokey": ks_nokey(lang), "consistency": ks_consistency(lang),
+    }
+    return {k: _localize(v, lang) for k, v in spec.items()}
+
+
+COUNT_TR.update({"partitions read": "okunan partition"})
+SIMS["keyspaces"] = keyspaces
