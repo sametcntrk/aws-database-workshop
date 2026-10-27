@@ -30,7 +30,7 @@
   /* ---------------- Behind-the-Scenes Panel */
   const list = $("#bts-list");
   let callNo = 0;
-  function renderEntry(e, maxMs) {
+  function renderEntry(e, maxMs, learn) {
     const rows = [];
     const add = (k, v) => { if (v !== undefined && v !== null && v !== "") rows.push(`<dt>${k}</dt><dd>${esc(v)}</dd>`); };
     const params = e.params && Object.keys(e.params).length ? Object.entries(e.params).map(([k, v]) => `${k} = ${typeof v === "object" ? JSON.stringify(v) : v}`).join(", ") : "";
@@ -50,18 +50,35 @@
       ${e.plan ? `<pre>${esc(e.plan)}</pre>` : ""}
       ${e.note ? `<p class="note">${esc(e.note)}</p>` : ""}
       ${e.error ? `<p class="err">${esc(e.error)}</p>` : ""}
+      ${learn ? `<a class="learn-link" href="${learn}" target="_blank" rel="noopener">101: What happened to the data? <span aria-hidden="true">↗</span></a>` : ""}
     </div>`;
   }
-  function addCall({ label, url, method, entries, ms, ok, source, background }) {
+  /* ---------------- 101 lessons: the call goes to the lesson tab through localStorage */
+  const LEARN_KEY = "lm_learn";
+  function keepForLesson(rec) {
+    let all = {};
+    try { all = JSON.parse(localStorage.getItem(LEARN_KEY) || "{}"); } catch (e) { all = {}; }
+    const id = `${Date.now().toString(36)}-${callNo}`;
+    let data = rec.data;
+    if (JSON.stringify(data ?? null).length > 60000) data = undefined;   // keep localStorage small
+    all[id] = { ...rec, data, at: Date.now(), page: location.pathname };
+    const ids = Object.keys(all).sort((a, b) => all[a].at - all[b].at);
+    while (ids.length > 25) delete all[ids.shift()];
+    try { localStorage.setItem(LEARN_KEY, JSON.stringify(all)); return id; } catch (e) { return null; }
+  }
+
+  function addCall({ label, url, method, entries, ms, ok, source, background, data }) {
     $("#bts-empty").hidden = true;
     callNo += 1;
     const engine = (url.match(/^\/(\w+)\//) || [])[1];
+    const k = entries.length ? keepForLesson({ label, url, method, entries, ms, ok, engine, data }) : null;
+    const learn = (e, i) => engine ? `/${engine}/learn?${new URLSearchParams({ op: e.op, ...(k ? { k, i } : {}) })}` : "";
     const li = document.createElement("li");
     li.className = "call" + (ok ? "" : " failed") + (background ? " background" : "");
     const maxMs = Math.max(...entries.map((e) => e.ms || 0), 1);
     li.innerHTML = `<div class="call-head"><strong>${callNo}. ${esc(label)}</strong><span class="ms">${ms} ms</span>
       <span class="src">${esc(method)} ${esc(url)} → ${esc(ENGINE_LABEL[engine] || engine)} Engine App</span></div>
-      ${entries.map((e) => renderEntry(e, maxMs)).join("") || '<div class="entry"><p class="note">The Engine App answered without an Engine call.</p></div>'}`;
+      ${entries.map((e, i) => renderEntry(e, maxMs, learn(e, i))).join("") || '<div class="entry"><p class="note">The Engine App answered without an Engine call.</p></div>'}`;
     if (source) {
       li.addEventListener("mouseenter", () => document.querySelectorAll(source).forEach((el) => el.classList.add("source-hl")));
       li.addEventListener("mouseleave", () => document.querySelectorAll(".source-hl").forEach((el) => el.classList.remove("source-hl")));
@@ -89,7 +106,7 @@
       json = { ok: false, error: `The request did not reach the Engine App: ${err.message}` };
     }
     const ms = Math.round(performance.now() - t0);
-    addCall({ label: opts.label || url, url, method, entries: json.trace || [], ms, ok: json.ok !== false, source: opts.source, background: opts.background });
+    addCall({ label: opts.label || url, url, method, entries: json.trace || [], ms, ok: json.ok !== false, source: opts.source, background: opts.background, data: json.data });
     if (json.ok === false) { const e = new Error(json.error || "The call failed."); e.payload = json; throw e; }
     return json.data;
   }
@@ -114,38 +131,54 @@
   });
   document.addEventListener("click", (e) => { if (!sug.contains(e.target)) sug.hidden = true; });
 
-  /* ---------------- Tutorial */
+  /* ---------------- Tutorial
+   * The header toggle turns the Tutorial on or off for all pages (lm_tutor_off).
+   * Close and Finish close it for this page only (lm_tutor_done_<page>). */
   const tutor = $("#tutor"), tut = LM.tutorial || {};
   const steps = tut.steps || [];
-  const tKey = `lm_tutor_${LM.page.id}`;
+  const tKey = `lm_tutor_${LM.page.id}`, doneKey = `lm_tutor_done_${LM.page.id}`;
   let stepNo = Number(localStorage.getItem(tKey) || 0);
   const tutorOn = () => localStorage.getItem("lm_tutor_off") !== "1";
-  function renderTutor() {
+  const pageDone = () => localStorage.getItem(doneKey) === "1";
+  const smooth = () => (matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth");
+  const mini = $("#tutor-mini");
+  function renderTutor(move = false) {
     document.querySelectorAll(".spotlight").forEach((el) => el.classList.remove("spotlight"));
-    if (!steps.length || !tutorOn()) { tutor.hidden = true; return; }
+    if (!steps.length || !tutorOn() || pageDone()) { tutor.hidden = true; mini.hidden = true; syncToggle(); return; }
     stepNo = Math.max(0, Math.min(stepNo, steps.length - 1));
-    const s = steps[stepNo];
+    const s = steps[stepNo], last = stepNo === steps.length - 1;
     tutor.hidden = false;
     $("#tutor-step").textContent = `Step ${stepNo + 1} of ${steps.length}`;
+    $("#tutor-dots").innerHTML = steps.map((_, i) => `<i class="${i < stepNo ? "done" : i === stepNo ? "now" : ""}"></i>`).join("");
     $("#tutor-title").textContent = s.title;
     $("#tutor-text").textContent = s.text;
-    $("#tutor-back").disabled = stepNo === 0;
-    $("#tutor-next").textContent = stepNo === steps.length - 1 ? "Finish" : "Next";
-    if (s.target) document.querySelectorAll(s.target).forEach((el) => el.classList.add("spotlight"));
+    $("#tutor-mini-text").textContent = `Step ${stepNo + 1} of ${steps.length}: ${s.title}`;
+    document.querySelectorAll("[data-tutor=back]").forEach((b) => { b.disabled = stepNo === 0; });
+    document.querySelectorAll("[data-tutor=next]").forEach((b) => { b.textContent = last ? "Finish" : "Next"; });
+    tutor.classList.remove("tick"); void tutor.offsetWidth; tutor.classList.add("tick");
+    const targets = s.target ? [...document.querySelectorAll(s.target)] : [];
+    targets.forEach((el) => el.classList.add("spotlight"));
+    if (move && targets[0]) targets[0].scrollIntoView({ behavior: smooth(), block: "center" });
     localStorage.setItem(tKey, String(stepNo));
+    syncToggle();
   }
-  $("#tutor-next").addEventListener("click", () => {
-    if (stepNo === steps.length - 1) { localStorage.setItem("lm_tutor_off", "1"); syncToggle(); renderTutor(); return; }
-    stepNo += 1; renderTutor();
-  });
-  $("#tutor-back").addEventListener("click", () => { stepNo -= 1; renderTutor(); });
-  $("#tutor-close").addEventListener("click", () => { localStorage.setItem("lm_tutor_off", "1"); syncToggle(); renderTutor(); });
+  function closeForPage() { localStorage.setItem(doneKey, "1"); localStorage.removeItem(tKey); renderTutor(); }
+  document.querySelectorAll("[data-tutor=next]").forEach((b) => b.addEventListener("click", () => {
+    if (stepNo === steps.length - 1) { closeForPage(); return; }
+    stepNo += 1; renderTutor(true);
+  }));
+  document.querySelectorAll("[data-tutor=back]").forEach((b) => b.addEventListener("click", () => { stepNo -= 1; renderTutor(true); }));
+  document.querySelectorAll("[data-tutor=close]").forEach((b) => b.addEventListener("click", closeForPage));
   const toggle = $("#tutor-toggle");
-  function syncToggle() { toggle.setAttribute("aria-pressed", tutorOn() ? "true" : "false"); }
+  function syncToggle() { toggle.setAttribute("aria-pressed", tutor.hidden ? "false" : "true"); }
   toggle.addEventListener("click", () => {
-    localStorage.setItem("lm_tutor_off", tutorOn() ? "1" : "0"); stepNo = 0; syncToggle(); renderTutor();
+    if (!tutor.hidden) localStorage.setItem("lm_tutor_off", "1");
+    else { localStorage.setItem("lm_tutor_off", "0"); localStorage.removeItem(doneKey); stepNo = 0; }
+    renderTutor();
+    if (!tutor.hidden) window.scrollTo({ top: 0, behavior: smooth() });
   });
-  syncToggle();
+  // When the Tutorial box is out of view (the step target is lower on the page), a small bar keeps Back and Next near.
+  new IntersectionObserver(([en]) => { mini.hidden = tutor.hidden || en.isIntersecting; }).observe(tutor);
 
   /* ---------------- Guided shopping journey */
   const jbar = $("#journey"), stops = (LM.journey && LM.journey.stops) || [];
@@ -164,7 +197,11 @@
       <button class="quiet" type="button" id="journey-stop">Stop the journey</button>`;
     $("#journey-stop").addEventListener("click", () => { localStorage.setItem("lm_journey", "-1"); renderJourney(); });
   }
-  function startJourney() { localStorage.setItem("lm_journey", "0"); localStorage.setItem("lm_tutor_off", "0"); window.location.href = stops[0].href; }
+  function startJourney() {
+    localStorage.setItem("lm_journey", "0"); localStorage.setItem("lm_tutor_off", "0");
+    Object.keys(localStorage).filter((k) => k.startsWith("lm_tutor_done_")).forEach((k) => localStorage.removeItem(k));
+    window.location.href = stops[0].href;
+  }
   renderJourney();
   renderTutor();
 

@@ -13,7 +13,8 @@ from functools import lru_cache
 from pathlib import Path
 
 import yaml
-from flask import Blueprint, Flask, jsonify, render_template
+from flask import Blueprint, Flask, jsonify, render_template, request
+from jinja2 import TemplateNotFound
 
 from . import admin, simlimit, trace, visitor
 
@@ -71,6 +72,20 @@ def create_app():
     @bp.get("/api/meta")
     def api_meta():
         return jsonify(trace.payload({**meta, "simulation": simlimit.status()}))
+
+    @bp.get("/learn")
+    def learn():
+        """101 lesson for one Engine operation. The browser gives the clicked call (localStorage key) to the page."""
+        op = request.args.get("op", "")
+        lessons = getattr(engine, "LESSONS", {})
+        lesson = lessons.get(op) or next((v for k, v in lessons.items() if op.startswith(k)), None)
+        ctx = dict(meta=meta, prefix=prefix, op=op, lesson=lesson, lessons=sorted(set(lessons.values())))
+        if lesson:
+            try:
+                return render_template(f"learn/{engine_id}/{lesson}.html", **ctx)
+            except TemplateNotFound:
+                pass
+        return render_template("learn/missing.html", **ctx)
 
     engine.register(bp)
     admin.register(bp, engine)

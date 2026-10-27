@@ -15,6 +15,8 @@ META = {
              "index stores:   name, city (keyword), location (geo_point)",
 }
 PAGES = [page("search", "search", "Search", "/search"), page("stores", "stores", "Find a store", "/stores")]
+# Trace op -> 101 lesson template (templates/learn/opensearch/<lesson>.html)
+LESSONS = {"_search": "search", "_search (prefix)": "suggest", "_search (geo_distance)": "geo"}
 
 _client = None
 
@@ -79,6 +81,50 @@ def register(bp):
             t.result(items=len(r["hits"]["hits"]), note="geo_point fields support distance filters and distance sorting.")
         stores = [{"store_id": h["_id"], "distance_km": round(h["sort"][0], 1), **h["_source"]} for h in r["hits"]["hits"]]
         return jsonify(trace.payload(stores))
+
+
+    @bp.post("/api/learn/analyze")
+    def api_learn_analyze():
+        """101 lesson: the tokens that each analyzer makes from a text (the same analyzers as the products index)."""
+        texts = [str(t)[:200] for t in (request.get_json(silent=True) or {}).get("texts", [])][:6]
+        out = []
+        with trace.call("_analyze", "POST products/_analyze { analyzer: tr_folded | standard, text }", {"texts": len(texts)}) as t:
+            for text in texts:
+                row = {"text": text}
+                for key, analyzer in (("folded", "tr_folded"), ("standard", "standard")):
+                    r = client().indices.analyze(index="products", body={"analyzer": analyzer, "text": text})
+                    row[key] = [tok["token"] for tok in r["tokens"]]
+                out.append(row)
+            t.result(items=len(out))
+        return jsonify(trace.payload(out))
+
+    @bp.get("/api/learn/overview")
+    def api_learn_overview():
+        """101 lesson: the big picture of the products index (every document id, name and category, and index facts)."""
+        with trace.call("_search (match_all) + _stats", "GET products/_search { match_all, _source: [name, category] }; GET products/_stats", {}) as t:
+            r = client().search(index="products", body={"query": {"match_all": {}}, "size": 1000, "_source": ["name", "category"],
+                                                        "sort": [{"_doc": "asc"}]})
+            stats = client().indices.stats(index="products")["indices"]["products"]["primaries"]
+            settings = client().indices.get_settings(index="products")["products"]["settings"]["index"]
+            t.result(items=len(r["hits"]["hits"]))
+        return jsonify(trace.payload({
+            "index": "products", "count": stats["docs"]["count"], "size_bytes": stats["store"]["size_in_bytes"],
+            "shards": int(settings.get("number_of_shards", 1)), "replicas": int(settings.get("number_of_replicas", 0)),
+            "items": [{"id": h["_id"], "name": h["_source"]["name"], "category": h["_source"]["category"]} for h in r["hits"]["hits"]]}))
+
+    @bp.post("/api/learn/postings")
+    def api_learn_postings():
+        """101 lesson: one row of the inverted index per token: how many products have the token in `name`, and some of them."""
+        tokens = [str(t)[:60] for t in (request.get_json(silent=True) or {}).get("tokens", [])][:6]
+        out = []
+        with trace.call("_search (term)", "GET products/_search { query: { term: { name: <token> } } }", {"tokens": len(tokens)}) as t:
+            for tok in tokens:
+                r = client().search(index="products", body={"query": {"term": {"name": tok}}, "size": 4, "_source": ["name"],
+                                                            "track_total_hits": True})
+                out.append({"token": tok, "count": r["hits"]["total"]["value"],
+                            "sample": [{"product_id": h["_id"], "name": h["_source"]["name"]} for h in r["hits"]["hits"]]})
+            t.result(items=len(out))
+        return jsonify(trace.payload(out))
 
 
 def seed(ds):
