@@ -2,187 +2,320 @@
 {% import "e2e/_macros.html" as k with context %}
 {% block body %}
 
-<h2 id="goal" data-short="What you will learn"><span class="sec">00</span>What you will learn</h2>
-<p>Lale Market keeps its product catalog in Amazon DocumentDB. A product page needs the product with all its details in one read.
-   Products of different types have different attributes. A document database stores each product as one JSON document, with nested fields and arrays.</p>
+<h2 id="goal" data-short="What you will learn"><span class="sec">00</span>What you will learn, and how to use this page</h2>
+<p>Section 01 gives the architect's decision: where Amazon DocumentDB fits and where it does not. Then the tutorial has two parts.
+   Part 1 teaches the document model of the MongoDB API: documents, collections, queries, indexes and aggregation. Part 2 shows Amazon DocumentDB: what AWS runs for you, and how Lale Market uses it.</p>
+<p>The examples come from the product catalog of Lale Market. When a different example makes an idea easier to see, the tutorial uses it: a paper folder, a recipe card, a real estate listing.</p>
 <p>After this tutorial, you can do these tasks:</p>
 <ol>
-  <li>Read a real product document and name its nested objects and arrays.</li>
-  <li>Write a filter on a nested field and on an array, with a projection.</li>
-  <li>Read an explain plan and tell an index scan (IXSCAN) from a collection scan (COLLSCAN).</li>
+  <li>Say for which workloads a document database is the right choice, and for which it is not.</li>
+  <li>Read a real document and name its fields, nested objects and arrays.</li>
+  <li>Write a find with a filter on a nested field and a projection, and explain each part.</li>
+  <li>Read an explain plan and tell an index scan from a collection scan.</li>
   <li>Build an aggregation pipeline that unwinds an array and groups the result.</li>
-  <li>Decide between "embed in one document" and "reference another collection" for a piece of data.</li>
+  <li>Decide between "embed in the document" and "refer to another collection".</li>
+</ol>
+<p>Four kinds of boxes help you. <b>Simulation</b>: press Play or Next step. <b>Predict first</b>: write your answer before you open it.
+   <b>Checkpoint</b>: a question with one right answer. <b>Analogy</b>: a picture from daily life.</p>
+
+<h2 id="architect" data-short="Architect's view: when to use"><span class="sec">01</span>The architect's view: where DocumentDB fits</h2>
+<p><b>Read this section first.</b> It gives the decision. The sections after it teach how the document model works.</p>
+<p><b>In short:</b> Amazon DocumentDB is a managed document database that is compatible with the MongoDB API. It stores each business object as one JSON-like document.
+   Two documents in one collection can have different fields. You can filter, sort and index on any field, also on fields inside nested objects and arrays.</p>
+<p>The key idea is the {{ k.term("aggregate", "aggregate-ddd") }} in the sense of domain design: a group of data that the application reads and writes together.
+   A product with its attributes and tags is one such group. If the shape of the data on disk equals the shape that the screen needs, one read is enough.</p>
+
+<h3>Signals in a workload that point to DocumentDB</h3>
+<table class="data">
+  <thead><tr><th>Signal</th><th>What it looks like in a real project</th><th>The feature that answers it</th></tr></thead>
+  <tbody>
+    <tr><td>Items of one kind have different fields</td><td>A laptop has RAM and CPU. A sweater has size and fabric. A book has an author and pages.</td><td>Documents with no set schema (section 03)</td></tr>
+    <tr><td>The screen shows one object with all its parts</td><td>A product page, a user profile, an insurance policy with its options.</td><td>Nested objects and arrays, one read by <code>_id</code> (section 03)</td></tr>
+    <tr><td>Users filter on many fields, also nested ones</td><td>"Black electronics with at least 24 months of warranty, cheapest first".</td><td>find with dot notation, indexes on any field (sections 04 and 05)</td></tr>
+    <tr><td>The data shape changes often</td><td>Marketing adds a new attribute every week.</td><td>A new field needs no schema change. Old documents simply do not have it.</td></tr>
+    <tr><td>Summaries on the server</td><td>"How many products per category", "average price per tag".</td><td>The aggregation pipeline (section 06)</td></tr>
+    <tr><td>The team knows MongoDB</td><td>Existing code, drivers and skills for the MongoDB API.</td><td>MongoDB compatibility: the same drivers and tools (section 09)</td></tr>
+    <tr><td>Many more reads than writes</td><td>A catalog is read thousands of times for each change.</td><td>Up to 15 replica instances on the same storage (section 09)</td></tr>
+  </tbody>
+</table>
+
+<h3>Use cases, with the reason and the feature</h3>
+<table class="data">
+  <thead><tr><th>Use case</th><th>Data</th><th>Why a document database</th><th>The feature that does the work</th></tr></thead>
+  <tbody>
+    <tr><td>Product catalog (Lale Market)</td><td>One document per product with attributes and tags.</td><td>Each product type has other attributes. The product page needs everything in one read.</td><td>Free fields, nested <code>attributes</code>, compound indexes</td></tr>
+    <tr><td>Content management (articles, pages)</td><td>A title, sections, authors, images, comments.</td><td>An article is one unit with a deep structure.</td><td>Nested arrays, indexes on tags and dates</td></tr>
+    <tr><td>User profiles and preferences</td><td>Settings, addresses, devices, consents.</td><td>Each user has other settings, and the app reads the full profile.</td><td>Read by <code>_id</code>, partial updates with <code>$set</code></td></tr>
+    <tr><td>Mobile and web back ends</td><td>The JSON that the app sends and receives.</td><td>The API format and the storage format are the same.</td><td>JSON-like documents, MongoDB drivers</td></tr>
+    <tr><td>Device registry and configuration (IoT)</td><td>Model, firmware, settings, location of each device.</td><td>Device models differ, and support staff search on any field.</td><td>Queries on any field, indexes</td></tr>
+    <tr><td>Insurance policies and claims</td><td>A policy with options, people, vehicles and documents.</td><td>Each product line has its own structure, and a claim is read as a whole.</td><td>Documents, multi-document transactions where needed</td></tr>
+    <tr><td>Real estate or job listings</td><td>Each listing type has other fields.</td><td>Search pages filter on many optional fields.</td><td>Compound and sparse indexes</td></tr>
+    <tr><td>Game metadata and player profiles</td><td>Items, levels, achievements per player.</td><td>The structure changes with each release of the game.</td><td>No schema migration, nested arrays</td></tr>
+    <tr><td>Recipes, menus and products in restaurant apps</td><td>Ingredients, steps, allergens, variants.</td><td>Lists inside lists, read together.</td><td>Arrays of embedded documents, <code>$unwind</code> for reports</td></tr>
+  </tbody>
+</table>
+
+<h3>Signals that point away from DocumentDB</h3>
+<table class="data">
+  <thead><tr><th>Signal in the workload</th><th>Why DocumentDB is a weak fit</th><th>Better choice</th></tr></thead>
+  <tbody>
+    <tr><td>Rules between many related records (stock, orders, lines)</td><td>DocumentDB has transactions, but no foreign keys and no CHECK constraints between collections.</td><td><a href="/e2etutorial/aurora">Aurora PostgreSQL</a></td></tr>
+    <tr><td>Millions of simple writes per second by one key</td><td>A standard cluster has one writer instance.</td><td><a href="/e2etutorial/dynamodb">DynamoDB</a> (or DocumentDB elastic clusters, which shard)</td></tr>
+    <tr><td>Search with words, stems, typos and relevance</td><td>Filters compare values. They do not rank text.</td><td><a href="/e2etutorial/opensearch">OpenSearch</a></td></tr>
+    <tr><td>Reports over years of history</td><td>Large aggregations compete with the application for the same instances.</td><td><a href="/e2etutorial/redshift">Redshift</a></td></tr>
+    <tr><td>Deep relations ("customers who bought what my friends bought")</td><td>Each hop is one more lookup by the application.</td><td><a href="/e2etutorial/neptune">Neptune</a></td></tr>
+    <tr><td>A list that grows without an end (all page views)</td><td>A document can be up to 16 MiB. A growing array makes each read and write larger.</td><td><a href="/e2etutorial/keyspaces">Keyspaces</a> or <a href="/e2etutorial/dynamodb">DynamoDB</a>, one row per event</td></tr>
+    <tr><td>Files (images, PDFs)</td><td>Large binary values make the database large.</td><td><a href="/e2etutorial/s3">S3</a>, with the key in the document</td></tr>
+  </tbody>
+</table>
+
+<h3>The questions that an architect asks, in this order</h3>
+<ol>
+  <li><b>What does the application read together?</b> Each such group is a candidate for one document.</li>
+  <li><b>Do items of one kind have different fields?</b> If yes, a document model saves many optional columns or tables.</li>
+  <li><b>Which fields do users filter and sort on?</b> Each frequent filter needs an index. The order of fields in a compound index matters.</li>
+  <li><b>Which rules must hold between records?</b> Rules inside one document are easy. Rules between collections belong to the application, or to a relational database.</li>
+  <li><b>Does any array grow without an end?</b> Such a list belongs in its own collection or in a different database.</li>
+  <li><b>How many writes per second?</b> One writer instance carries the writes of a standard cluster. Beyond that, use elastic clusters or DynamoDB.</li>
+  <li><b>Does the team use the MongoDB API now?</b> Then DocumentDB keeps the code and the skills.</li>
 </ol>
 
-<h2 id="model" data-short="Documents"><span class="sec">01</span>The model: one document for one thing</h2>
-<p>A {{ k.term("document") }} is a set of field and value pairs, like a JSON object. A value can be a number, a text, an array or a second document (a nested object).
-   Documents of one kind go into a {{ k.term("collection") }}. A collection has no schema: two documents in one collection can have different fields.</p>
-{% call k.predict("A relational shop needs a products table, an attributes table and a tags table for this data. How many reads does DocumentDB need to return one product with its attributes and tags?") %}
-<p>One read. The attributes are a nested object and the tags are an array inside the same document. Run M1 and look at the result.</p>
+<h3>DocumentDB and its relatives on AWS</h3>
+<table class="data">
+  <thead><tr><th>Option</th><th>What it is</th><th>Choose it when</th></tr></thead>
+  <tbody>
+    <tr><td>DocumentDB instance-based cluster</td><td>One primary instance, up to 15 replicas, one shared cluster volume (Part 2).</td><td>The normal case: a catalog, profiles, content.</td></tr>
+    <tr><td>DocumentDB elastic cluster</td><td>A sharded cluster. AWS says that elastic clusters "support workloads with millions of reads/writes per second and petabytes of storage capacity"
+        (<a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/what-is.html">What is Amazon DocumentDB</a>).</td><td>The writes or the size are beyond one primary instance.</td></tr>
+    <tr><td><a href="/e2etutorial/dynamodb">DynamoDB</a></td><td>A serverless key-value and document database.</td><td>All access is by a known key, at very high scale, with no servers.</td></tr>
+    <tr><td><a href="/e2etutorial/aurora">Aurora PostgreSQL</a> with JSONB</td><td>A relational database with a JSON column type.</td><td>Most data is relational, and only some fields are free.</td></tr>
+  </tbody>
+</table>
+
+<h3>Where DocumentDB sits in Lale Market</h3>
+<p>DocumentDB is the source of truth for the catalog. The home page, the category pages and the product page read from it.
+   The search engine (OpenSearch) holds a copy of the names and descriptions, made by the Seed. Aurora holds a copy of the product id, name, price and stock, because the checkout needs them inside its transactions.
+   In a production shop, a change of a product in DocumentDB would reach the copies as an event, for example from a change stream.</p>
+
+<h3>Simulation: let the requirements choose</h3>
+<p>Five candidates start in each workload. Each requirement eliminates the candidates that cannot meet it. Before you press Play, guess the winner.</p>
+{{ k.sim("decide_catalog", "Workload 1: a product catalog") }}
+{{ k.sim("decide_checkout", "Workload 2: checkout") }}
+{{ k.sim("decide_devices", "Workload 3: the state of 5 million devices") }}
+<p>A note on workload 1: Aurora with JSONB can also store free fields. The simulation eliminates it only at the last requirement (the MongoDB API).
+   For a new team with no MongoDB code, both are valid choices. Then compare the effort of the queries that the screens need.</p>
+
+{{ k.quiz("doc-a1", "A real estate site has houses, offices and land. Each type has 10 to 40 other fields. Users filter on many of them. What fits best?",
+   ["A document database with indexes on the frequent filters", "A key-value table with one item for each field", "A data warehouse that loads the listings each night", "An in-memory cache with one hash per listing"],
+   0, "Different fields per type, filters on many fields, and one read per listing are the signals of a document model.") }}
+{{ k.quiz("doc-a2", "A team wants to store all page views of each user inside the user document, in an array. What is the problem?",
+   ["The array grows without an end, so each read and write becomes larger", "Documents cannot hold arrays of objects at all", "DocumentDB deletes arrays with more than ten elements", "The user document can then have no _id field"],
+   0, "A document can be up to 16 MiB, and a growing array makes every read of the profile larger. Page views belong in their own collection or in a time-ordered store.") }}
+{{ k.quiz("doc-a3", "A product change must also change the search index. Which design keeps the catalog as the source of truth?",
+   ["Write the change to DocumentDB, then send it to OpenSearch as an event", "Write the change to OpenSearch, and copy it back each night", "Write the change only to OpenSearch, and stop the catalog", "Write the change to both in the browser, in any order"],
+   0, "One system owns the fact (DocumentDB). The copies follow it through events. Then a failed copy can be repeated, and the source stays correct.") }}
+
+<div class="part"><b>Part 1</b><h2 id="part1" data-short="PART 1: The document model">The document model of the MongoDB API</h2>
+<p>Documents, collections, queries, indexes and aggregation.</p></div>
+
+<h2 id="why" data-short="Why documents?"><span class="sec">02</span>Why documents? The folder</h2>
+<p>An insurance office keeps one paper folder for each customer. The folder holds the policy, the list of insured cars, the addresses, the signed forms.
+   When a customer calls, the clerk takes one folder from the shelf and sees everything. Nobody needs to open five ledgers and match numbers.</p>
+{% call k.callout("analogy", "Analogy") %}
+<p>A relational database is a set of ledgers: one for customers, one for cars, one for addresses. To see one customer, you open each ledger and match the customer number.
+   A document database is a shelf of folders: everything about one thing is in its folder. The folder is the document. The shelf is the collection.</p>
 {% endcall %}
-{% call k.query("docdb", "M1", "Read one product document by _id") %}
-<pre><code>db.products.find_one({ _id: 'P0001' })</code></pre>
-<p>Purpose: see the full document as DocumentDB stores it. <code>_id</code> is the primary key of each document. DocumentDB always indexes it.</p>
-{% endcall %}
-<p>This is the result (the live result above is the same document):</p>
+<p>The folder has a price. Sometimes the same fact must appear in many folders, for example the address of an insurance agent. Then each folder has a copy, and a change must update all copies.
+   So a document model works best when each fact belongs to one folder, or when a copy is acceptable.</p>
+
+<h2 id="model" data-short="Documents and identifiers"><span class="sec">03</span>The model: documents, collections and identifiers</h2>
+<p>A {{ k.term("document") }} is a set of field and value pairs, like a JSON object. A value can be a number, a text, a date, an array, or another document (a nested object).
+   Documents of one kind go into a {{ k.term("collection") }}. A collection has no set schema.
+   This is a real product document of Lale Market, as the Engine App reads it with <code>db.products.find_one({ _id: 'P0001' })</code>:</p>
 <pre><code>{
   "_id": "P0001",
   "name": "Alpen Kablosuz Kulaklık 1",
-  "category": "Elektronik",  "brand": "Alpen",  "type": "Kablosuz Kulaklık",
-  "price": 3373.84,  "stock": 128,  "color": "siyah",  "rating": 4.8,
-  "attributes": { "renk": "siyah", "garanti_ay": 12, "agirlik_kg": 2.45 },   <span class="c">// nested document</span>
-  "tags": [ "hızlı kargo", "çevreci" ],                                      <span class="c">// array</span>
+  "category": "Elektronik",
+  "brand": "Alpen",
+  "price": 3373.84,
+  "stock": 128,
+  "rating": 4.8,
+  "attributes": { "renk": "siyah", "garanti_ay": 12, "agirlik_kg": 2.45 },
+  "tags": [ "hızlı kargo", "çevreci" ],
   "description": "Alpen markalı siyah kablosuz kulaklık. Elektronik kategorisinde, şık bir ürün."
 }</code></pre>
-<p>Compare this with the relational model of the <a href="/e2etutorial/aurora">Aurora tutorial</a>. There, the product has a set shape, and a list of tags needs its own table.
-   Here, the shape of the data in storage is the shape that the product page shows.</p>
-{% call k.callout("analogy", "Analogy") %}
-<p>A relational database is like a set of ledgers. One ledger for products, one for attributes, one for tags. To see a product, you open three ledgers and match the numbers.
-   A document database is like a folder for each product. Everything about the product is in its folder. You open one folder.</p>
-{% endcall %}
-<p>A document can be up to 16 MiB and nest up to 200 levels
-   (<a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/limits.html">DocumentDB quotas</a>).
-   A product document of Lale Market is about 500 bytes. The limit is far away, but it is real: a list that grows without an end does not belong in one document.</p>
+<table class="clause">
+  <tr><td>"_id": "P0001"</td><td>The identifier of the document. The collection owns it: each document has exactly one, and no two documents in the collection can have the same value. DocumentDB always indexes it.</td></tr>
+  <tr><td>"name", "category", "brand"</td><td>Text fields at the top level.</td></tr>
+  <tr><td>"price", "stock", "rating"</td><td>Number fields. A filter such as <code>{ price: { $lt: 1000 } }</code> compares them as numbers.</td></tr>
+  <tr><td>"attributes": { ... }</td><td>A nested document. Its fields have no identifier of their own. They belong to this product only. A query reaches them with dot notation: <code>'attributes.renk'</code>.</td></tr>
+  <tr><td>"tags": [ ... ]</td><td>An array of texts. A filter on an array matches when one element matches.</td></tr>
+</table>
+<p>The teaching collection of this page holds seven real products of Lale Market (a subset of their fields):</p>
+{{ k.sample("products_docs", "products (7 documents of 200, flattened for reading)", key=["_id"]) }}
 
-{% call k.query("docdb", "M7", "How big is the collection?") %}
-<pre><code>db.runCommand({ collStats: 'products' })</code></pre>
-<p>Purpose: see the number of documents, the average document size and the number of indexes.</p>
-{% endcall %}
-
-<h2 id="queries" data-short="Filters and projections"><span class="sec">02</span>Find: filters, nested fields, arrays, projections</h2>
-<p>A find has two parts. The filter selects documents. The {{ k.term("projection") }} selects the fields that come back.
-   Dot notation reaches into a nested document: <code>'attributes.renk'</code> is the field <code>renk</code> inside <code>attributes</code>.</p>
-{% call k.query("docdb", "M2", "Black electronics, cheapest first, only four fields") %}
-<pre><code>db.products.find(
-  { category: 'Elektronik', 'attributes.renk': 'siyah' },                   <span class="c">// filter</span>
-  { name: 1, price: 1, 'attributes.renk': 1, 'attributes.garanti_ay': 1 }   <span class="c">// projection</span>
-).sort({ price: 1 })</code></pre>
-<p>Both conditions must be true (an implicit AND). The projection makes the result smaller, so less data goes over the network. The Engine still reads the full document from storage.</p>
-{% endcall %}
-<p>A filter on an array field has a special meaning. <code>{ tags: 'indirim' }</code> does not mean "tags equals the text 'indirim'".
-   It means "one element of the array tags is 'indirim'".</p>
-{% call k.query("docdb", "M3", "Products with the tag indirim") %}
-<pre><code>db.products.find({ tags: 'indirim' }, { name: 1, tags: 1 }).limit(10)</code></pre>
-{% endcall %}
-{% call k.query("docdb", "M8", "A range on a nested field and a range on a top-level field") %}
-<pre><code>db.products.find(
-  { 'attributes.garanti_ay': { $gte: 36 }, rating: { $gte: 4.5 } },
-  { name: 1, rating: 1, 'attributes.garanti_ay': 1 }
-).sort({ rating: -1 })</code></pre>
-<p><code>$gte</code> means "greater than or equal". Operators start with <code>$</code>, so the Engine can tell them from field names.</p>
-{% endcall %}
-
-{{ k.quiz("docdb-q1", "A document has tags: ['yeni', 'indirim']. Which filter matches it?",
+<h3>Who owns which identifier</h3>
+<table class="data">
+  <thead><tr><th>Identifier</th><th>Who owns it</th><th>Who borrows it</th></tr></thead>
+  <tbody>
+    <tr><td><code>_id</code> of a product (for example <code>P0001</code>)</td><td>The products collection owns it. DocumentDB refuses a second document with the same <code>_id</code>.</td>
+        <td>The cart in DynamoDB, the order lines in Aurora, the search index in OpenSearch and the graph in Neptune borrow it. DocumentDB does not know these borrowers, and it does not check them.</td></tr>
+    <tr><td>A nested document (<code>attributes</code>)</td><td>It has no identifier. It belongs to the document that contains it.</td><td>Nobody can borrow it. To refer to it, you refer to its parent document.</td></tr>
+    <tr><td>An element of an array (<code>"çevreci"</code> in <code>tags</code>)</td><td>It has no identifier. Its position can change.</td><td>Nobody can borrow it.</td></tr>
+    <tr><td>A reference to another collection (not in Lale Market)</td><td>Example: a review document with <code>product_id: "P0001"</code>. The products collection owns the value.</td><td>The review collection borrows it. Unlike a foreign key in PostgreSQL, DocumentDB does not check that the product exists.</td></tr>
+  </tbody>
+</table>
+{{ k.quiz("doc-q0", "Look at the products table above. A document has tags: ['yeni', 'indirim']. Which filter matches it?",
    ["{ tags: 'indirim' }", "{ tags: 'indirim, yeni' }", "{ 'tags.indirim': true }", "{ tags: { $size: 1 } }"],
-   0, "A filter on an array field with one value matches when one element equals the value. The array has two elements, so $size: 1 does not match.") }}
+   0, "A filter on an array field with one value matches when one element equals the value. The array has two elements, so $size: 1 does not match. P0026 is this document.") }}
 
-<h2 id="index" data-short="Indexes and explain"><span class="sec">03</span>Indexes: what DocumentDB reads to answer</h2>
-<p>Without an index, DocumentDB must test each document of the collection. This is a {{ k.term("collection scan") }} (COLLSCAN).
-   An index keeps the values of one or more fields in a sorted tree, and each entry points to a document. DocumentDB can then go straight to the matching documents (IXSCAN).</p>
+<h2 id="find" data-short="find, filters, projection"><span class="sec">04</span>find: filters, nested fields and projections</h2>
+<p>A find has two parts. The filter selects documents. The {{ k.term("projection") }} selects the fields that come back.</p>
+{% call k.sql("Q1", "Black electronics, cheapest first, four fields") %}
+<pre><code>db.products.find(
+  { category: 'Elektronik', 'attributes.renk': 'siyah' },
+  { name: 1, price: 1, 'attributes.renk': 1 }
+).sort({ price: 1 })</code></pre>
+<table class="clause">
+  <tr><td>db.products</td><td>The collection <code>products</code> in the current database (<code>shop</code> in Lale Market).</td></tr>
+  <tr><td>{ category: 'Elektronik', ... }</td><td>The filter. Each field: value pair is a condition. Two pairs in one object mean AND: both must be true.</td></tr>
+  <tr><td>'attributes.renk': 'siyah'</td><td>Dot notation reaches the field <code>renk</code> inside the nested document <code>attributes</code>. The quotes are necessary because of the dot.</td></tr>
+  <tr><td>{ name: 1, price: 1, 'attributes.renk': 1 }</td><td>The projection. <code>1</code> means "return this field". <code>_id</code> comes back by default. The projection makes the answer smaller, but DocumentDB still reads the full document.</td></tr>
+  <tr><td>.sort({ price: 1 })</td><td>Sort the results. <code>1</code> is ascending (cheapest first), <code>-1</code> is descending.</td></tr>
+</table>
+{% endcall %}
+{% call k.predict("Use the products table. Which documents match { category: 'Elektronik', 'attributes.renk': 'siyah' }? How many documents must DocumentDB examine if no index helps?") %}
+<p>One document matches: P0001. P0026 is Elektronik but green (yeşil), and P0044 is black but a book. With no usable index, DocumentDB examines all seven documents. Play the simulation to see each test.</p>
+{% endcall %}
+{{ k.sim("scan", "A filter with no usable index: COLLSCAN") }}
+<p>Operators start with a dollar sign, so DocumentDB can tell them from field names. Examples: <code>$gt</code> and <code>$gte</code> (greater than, greater or equal),
+   <code>$in</code> (one of a list), <code>$exists</code> (the field is in the document or not). A filter can combine them: <code>{ 'attributes.garanti_ay': { $gte: 24 }, rating: { $gte: 3.5 } }</code>.</p>
+
+<h2 id="index" data-short="Indexes and explain"><span class="sec">05</span>Indexes: what DocumentDB reads to answer</h2>
+<p>Without an index, DocumentDB must test each document. This is a {{ k.term("collection scan") }} (COLLSCAN). An index keeps the values of one or more fields in a sorted tree,
+   and each entry points to a document. With an index, DocumentDB goes straight to the matching documents. The plan shows the stages IXSCAN and FETCH.</p>
 {{ k.fig("docdb-btree.png", "each node keeps its keys in sorted order. A search goes from the root to one leaf and reads one node on each level. An index on { category, rating } sorts first by category, then by rating inside each category.") }}
-{% call k.query("docdb", "M6", "The indexes of the products collection") %}
-<pre><code>db.products.getIndexes()</code></pre>
-<p>Expected: <code>_id_</code>, <code>category_1_rating_-1</code> (a compound index), <code>attributes.renk_1</code> (an index on a nested field) and <code>rating_-1</code>.
-   <code>1</code> means ascending order and <code>-1</code> means descending order.</p>
+<p>Lale Market has four indexes on <code>products</code> (from the Seed in <code>engines/docdb.py</code>):</p>
+<pre><code>db.products.create_index([("category", 1), ("rating", -1)])   # compound: category, then rating high to low
+db.products.create_index([("attributes.renk", 1)])           # a nested field
+db.products.create_index([("rating", -1)])                   # top rated products on the home page
+# and the automatic index on _id</code></pre>
+{% call k.predict("The index { category: 1, rating: -1 } exists. A query asks for the books (Kitap), best rating first. How many index entries does DocumentDB read, and does it need to sort?") %}
+<p>It reads the two Kitap entries and one more entry, which shows that the Kitap range is over. It does not sort, because the index already has the Kitap entries in rating order. It examines two documents.</p>
 {% endcall %}
-{% call k.predict("The catalog has 200 products, 40 in each category. You ask for the books (category Kitap), sorted by rating. How many documents does DocumentDB examine with the index, and how many without it?") %}
-<p>With the index on { category, rating }: 40. The index goes to the start of "Kitap" and reads its 40 entries, already sorted by rating.
-   Without the index: 200. DocumentDB reads each document, keeps 40, and then it must sort them in memory (a SORT stage). Run M4 to check.</p>
-{% endcall %}
-{% call k.query("docdb", "M4", "Explain the same query with and without the index") %}
-<pre><code>db.products.find({ category: 'Kitap' }).sort({ rating: -1 }).limit(48).explain('executionStats')
-db.products.find({ category: 'Kitap' }).sort({ rating: -1 }).limit(48).hint({ $natural: 1 }).explain('executionStats')</code></pre>
-<p><code>hint({ $natural: 1 })</code> tells DocumentDB to read the documents in storage order, so it forces a collection scan.
-   Compare "docs examined" and the stages: <code>IXSCAN</code> in the first plan, <code>COLLSCAN</code> and <code>SORT</code> in the second.</p>
-{% endcall %}
+{{ k.sim("index", "The compound index finds the books in rating order") }}
 <p>The order of fields in a compound index matters. <code>{ category: 1, rating: -1 }</code> helps "books, best first". It does not help "all products with rating above 4.5",
-   because the tree sorts by category first. For that question, Lale Market has the separate index <code>{ rating: -1 }</code>.</p>
-{{ k.quiz("docdb-q2", "A query filters on brand only. The collection has the index { category: 1, rating: -1 } and no other index on brand. What does DocumentDB do?",
-   ["It uses the compound index for the brand", "It examines each document of the collection", "It creates an index on brand by itself", "It returns an error for a missing index"],
-   1, "No index starts with brand, so no index can find the matching documents. The result is a COLLSCAN.") }}
+   because the tree sorts by category first. For that question, Lale Market has the separate index <code>{ rating: -1 }</code>.
+   Each index also costs work: every insert and every change of an indexed field must update the index.</p>
+<p>To see the plan of a query, add <code>.explain('executionStats')</code>. The Lale Market category page shows two numbers from it: "docs examined" and "returned".
+   With the index, the two numbers are equal. With the "Collection scan" experiment, "docs examined" is the full collection (200).</p>
+{{ k.quiz("doc-q1", "A query filters on brand only. The collection has { category: 1, rating: -1 } and no index on brand. What does DocumentDB do?",
+   ["It uses the compound index for the brand", "It examines each document of the collection", "It creates an index on brand by itself", "It returns an error because of a missing index"],
+   1, "No index starts with brand, so no index can find the matching documents. The plan is a COLLSCAN.") }}
 
-<h2 id="aggregate" data-short="Aggregation pipeline"><span class="sec">04</span>Aggregation: a pipeline of stages</h2>
-<p>An {{ k.term("aggregation pipeline") }} is a list of stages. Each stage takes documents, changes them, and gives them to the next stage.
-   The Lale Market home page uses <code>$group</code> to count the products of each category on the server.</p>
-{% call k.query("docdb", "M5", "How many products have each tag, and their average price") %}
+<h2 id="aggregate" data-short="Aggregation pipeline"><span class="sec">06</span>Aggregation: a pipeline of stages</h2>
+<p>An {{ k.term("aggregation pipeline") }} is a list of stages. Each stage takes documents, changes them, and gives them to the next stage, like stations on a production line.
+   The home page of Lale Market uses <code>$group</code> to count the products of each category on the server.</p>
+{% call k.sql("Q2", "How many products have each tag, and their average price") %}
 <pre><code>db.products.aggregate([
-  { $unwind: '$tags' },                                                    <span class="c">// 1 document with 2 tags → 2 documents</span>
+  { $unwind: '$tags' },
   { $group: { _id: '$tags', products: { $sum: 1 }, avg_price: { $avg: '$price' } } },
   { $sort: { products: -1 } }
 ])</code></pre>
-<ol class="walk">
-  <li><code>$unwind</code> makes one document for each element of <code>tags</code>. P0001 with ["hızlı kargo", "çevreci"] becomes two documents, one with each tag.</li>
-  <li><code>$group</code> puts the documents with the same tag together. It counts them and averages the price.</li>
-  <li><code>$sort</code> puts the most common tag first.</li>
-</ol>
+<table class="clause">
+  <tr><td>{ $unwind: '$tags' }</td><td>For each element of the array <code>tags</code>, make one copy of the document with that one tag. A product with two tags becomes two documents. <code>'$tags'</code> with a dollar sign means "the value of the field tags".</td></tr>
+  <tr><td>{ $group: { _id: '$tags', ... } }</td><td>Put the documents with the same tag into one group. <code>_id</code> of the output is the tag.</td></tr>
+  <tr><td>products: { $sum: 1 }</td><td>For each document in the group, add 1: this counts the documents.</td></tr>
+  <tr><td>avg_price: { $avg: '$price' }</td><td>The average of the field <code>price</code> inside the group.</td></tr>
+  <tr><td>{ $sort: { products: -1 } }</td><td>Put the group with the most products first.</td></tr>
+</table>
 {% endcall %}
-{{ k.quiz("docdb-q3", "Each of the 200 products has exactly 2 tags. How many documents leave the $unwind stage?",
-   ["200 documents", "400 documents", "2 documents", "6 documents"],
-   1, "$unwind makes one output document for each array element: 200 × 2 = 400.") }}
+{% call k.predict("Each of the seven products in the table has exactly two tags. How many documents leave the $unwind stage? Which tag has the most products?") %}
+<p>14 documents (7 × 2). Count the tags in the table: "çevreci" appears in P0001, P0044, P0095 and P0179, so 4 times. "yeni" also appears 4 times (P0005, P0026, P0095, P0142). Then "çok satan" 3 times.</p>
+{% endcall %}
+{{ k.sim("pipeline", "$unwind, then $group, then $sort") }}
+{{ k.quiz("doc-q2", "Each of 200 products has exactly 2 tags. How many documents leave the $unwind stage?",
+   ["200 documents", "2 documents", "400 documents", "6 documents"],
+   2, "$unwind makes one output document for each array element: 200 × 2 = 400.") }}
 
-<h2 id="design" data-short="Embed or reference"><span class="sec">05</span>Design: embed or reference?</h2>
-<p>The main design question in a document database is where each piece of data lives. Two options:</p>
+<h2 id="design" data-short="Embed or reference"><span class="sec">07</span>Design: embed or reference?</h2>
+<p>The main design question of a document database is where each piece of data lives:</p>
 <ul>
-  <li><b>Embed</b>: put the data inside the parent document (the attributes and tags of a product). One read returns all of it.</li>
-  <li><b>Reference</b>: keep the data in its own collection, and store its <code>_id</code> in the parent (like a foreign key, but DocumentDB does not check it).</li>
+  <li><b>Embed</b>: put the data inside the parent document. One read returns all of it. Use it when the data belongs to one parent, is small, and is read with the parent.</li>
+  <li><b>Reference</b>: keep the data in its own collection, and store its <code>_id</code> in the parent or in the child. Use it when the data is shared, large, or grows without an end.</li>
 </ul>
 <table class="data">
-  <thead><tr><th>Data</th><th>Lale Market choice</th><th>Why</th></tr></thead>
+  <thead><tr><th>Data</th><th>Choice</th><th>Why</th></tr></thead>
   <tbody>
     <tr><td>Attributes and tags of a product</td><td>Embed</td><td>Small, always read with the product, belongs to one product only.</td></tr>
-    <tr><td>Orders of a customer</td><td>Not in DocumentDB (Aurora)</td><td>The list grows without an end, and an order needs a transaction with the stock.</td></tr>
-    <tr><td>Reviews of a product (if the shop adds them)</td><td>Reference, or embed the newest 5</td><td>Thousands of reviews make one document too large. The page shows only a few.</td></tr>
+    <tr><td>The brand profile (logo, country, contact)</td><td>Reference</td><td>Shared by many products. A copy in each product would need many updates.</td></tr>
+    <tr><td>Reviews of a product</td><td>Reference, and embed the newest five</td><td>Thousands of reviews would make the document large. The page shows only a few.</td></tr>
+    <tr><td>Orders of a customer</td><td>Not in DocumentDB (Lale Market uses Aurora)</td><td>The list grows without an end, and an order needs rules with the stock.</td></tr>
   </tbody>
 </table>
+<p>When a change must touch several documents together, DocumentDB 4.0 and later supports transactions "across multiple documents, statements, collections, and databases"
+   (<a href="https://docs.aws.amazon.com/documentdb/latest/devguide/transactions.html">Transactions in Amazon DocumentDB</a>).
+   A good document design needs them rarely, because most changes touch one document.</p>
 {% call k.callout("warn", "Common mistake") %}
-<p>Do not embed a list that grows with time, such as all orders or all page views. The document gets larger with each write, and a read returns data that the page does not need.
+<p>Do not embed a list that grows with time, such as all orders or all page views. The document becomes larger with each write, and each read returns data that the page does not need.
    Lale Market keeps page views in <a href="/e2etutorial/keyspaces">Keyspaces</a>, one row per event.</p>
 {% endcall %}
 
-<h2 id="cluster" data-short="The DocumentDB cluster"><span class="sec">06</span>The DocumentDB cluster</h2>
-<p>Amazon DocumentDB (with MongoDB compatibility) speaks the MongoDB API. The Lale Market Engine App uses the standard Python MongoDB driver, <code>pymongo</code>.
-   A cluster has one primary instance for writes, up to 15 replica instances for reads, and one cluster volume.
-   The cluster volume keeps six copies of the data in three Availability Zones
+<div class="part"><b>Part 2</b><h2 id="part2" data-short="PART 2: Amazon DocumentDB">Amazon DocumentDB: the AWS service</h2>
+<p>The MongoDB API on a managed cluster with shared, distributed storage.</p></div>
+
+<h2 id="service" data-short="Running it, and DocumentDB"><span class="sec">08</span>Running a document database yourself, and what DocumentDB changes</h2>
+<p>A self-managed MongoDB deployment is usually a replica set: one primary server and two or more secondary servers. Each server keeps a full copy of the data on its own disk,
+   and the secondaries copy each change from the primary. You install the servers, watch the copies, replace a failed disk, make the disks larger, take backups and apply updates.</p>
+<p>Amazon DocumentDB keeps the MongoDB API but separates compute and storage, like Aurora. A cluster "consists of 0 to 16 instances and a cluster storage volume".
+   "All writes are done through the primary instance. All instances (primary and replicas) support reads." The storage layer "replicates six copies of your data across three AWS Availability Zones"
    (<a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/what-is.html">What is Amazon DocumentDB</a>).</p>
 {{ k.fig("docdb-cluster.png", "the primary instance writes to the cluster volume, which has data copies in all three Availability Zones. The replicas read from the same volume. They do not copy data from the primary.") }}
 {{ k.fig("docdb-endpoints.png", "the cluster endpoint always goes to the primary. The reader endpoint spreads connections over the replicas. Each instance also has its own endpoint.") }}
-<p>Lale Market has two instances. The driver connects with <code>readPreference=secondaryPreferred</code>, so the catalog reads go to the replica when it is available,
-   and the primary keeps its capacity for writes. A replica can be a short time behind the primary. For a catalog, this is acceptable.</p>
-
-<h2 id="usecases" data-short="Use cases"><span class="sec">07</span>When to use it, and when not</h2>
 <table class="data">
-  <thead><tr><th>Good fit</th><th>Why</th></tr></thead>
+  <thead><tr><th>Task</th><th>Self-managed MongoDB replica set</th><th>Amazon DocumentDB</th></tr></thead>
   <tbody>
-    <tr><td>Product catalogs, content management, user profiles</td><td>Each item has a different set of fields. The app reads one item with all its parts.</td></tr>
-    <tr><td>Apps that already use MongoDB</td><td>Same drivers and query language, with a managed cluster in your VPC.</td></tr>
-    <tr><td>Fast change of the data shape</td><td>A new field needs no schema change. Old documents simply do not have it.</td></tr>
+    <tr><td>Copies of the data</td><td>Each server keeps a full copy on its own disk.</td><td>One cluster volume with six copies in three AZs. Replicas share it.</td></tr>
+    <tr><td>A new read replica</td><td>Copies the full data set. Hours for large data.</td><td>Connects to the existing volume. "You can add replicas in minutes regardless of the storage volume size."</td></tr>
+    <tr><td>Failover</td><td>The replica set elects a new primary.</td><td>DocumentDB fails over to one of up to 15 replicas, and the cluster endpoint follows.</td></tr>
+    <tr><td>Disk space</td><td>You watch and grow the disks.</td><td>The volume grows in steps of 10 GB, up to 128 TiB, or 256 TiB from engine version 8.0.</td></tr>
+    <tr><td>Backups</td><td>You plan, store and test them.</td><td>Continuous backups in S3, restore to any second of the retention period (up to 35 days).</td></tr>
+    <tr><td>API and drivers</td><td colspan="2">The MongoDB API. Most MongoDB drivers and tools work. Check the list of supported features, because DocumentDB does not support every MongoDB feature.</td></tr>
   </tbody>
 </table>
-<table class="data">
-  <thead><tr><th>Weak fit</th><th>Better choice</th></tr></thead>
-  <tbody>
-    <tr><td>Many-to-many relations with joins in each query</td><td><a href="/e2etutorial/aurora">Aurora</a>, or <a href="/e2etutorial/neptune">Neptune</a> for deep paths</td></tr>
-    <tr><td>Full-text search with relevance and typos</td><td><a href="/e2etutorial/opensearch">OpenSearch</a> (Lale Market copies the catalog there)</td></tr>
-    <tr><td>Single-key access at very high scale with no queries on other fields</td><td><a href="/e2etutorial/dynamodb">DynamoDB</a></td></tr>
-  </tbody>
-</table>
+<p>Some limits change a design (<a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/limits.html">DocumentDB quotas</a>):</p>
+<ul><li>A document can be up to 16 MiB.</li><li>A document can nest up to 200 levels.</li><li>A collection can have up to 64 indexes.</li></ul>
 
-<h2 id="recall" data-short="Recall test"><span class="sec">08</span>Recall test</h2>
-{{ k.quiz("docdb-r1", "What does a projection change?",
-   ["Which documents match the filter", "Which fields come back to the client", "Which index the Engine uses", "Which instance answers the read"],
+<h2 id="lalemarket" data-short="DocumentDB in Lale Market"><span class="sec">09</span>DocumentDB in Lale Market</h2>
+<ul>
+  <li>One instance-based cluster with two instances: a primary and one replica.</li>
+  <li>The database <code>shop</code> has one collection, <code>products</code>, with 200 documents and four indexes.</li>
+  <li>The DocumentDB Engine App connects with the Python driver <code>pymongo</code>, with TLS on port 27017 and a password from AWS Secrets Manager.</li>
+  <li>The driver uses <code>readPreference=secondaryPreferred</code>: catalog reads go to the replica when it is available, and the primary keeps its capacity for writes.
+      A replica can be a short time behind the primary. For a catalog, this is acceptable.</li>
+  <li>The category page has the "Collection scan" experiment, and the product page has the projection experiment.</li>
+</ul>
+
+<h2 id="recall" data-short="Recall test"><span class="sec">10</span>Recall test</h2>
+<p>Answer without a look back at the sections.</p>
+{{ k.quiz("doc-r1", "What does a projection change?",
+   ["Which documents match the filter", "Which fields come back to the client", "Which index the planner selects", "Which instance answers the read"],
    1, "The filter selects documents. The projection selects fields of those documents.") }}
-{{ k.quiz("docdb-r2", "The explain plan shows COLLSCAN and then SORT. What is the most useful change?",
-   ["An index that starts with the filter field", "A larger instance class for the cluster", "A projection with fewer returned fields", "A second replica in a new zone"],
-   0, "An index on the filter field (and then the sort field) lets DocumentDB skip the scan and the sort.") }}
-{{ k.quiz("docdb-r3", "Which data should you NOT embed in the product document?",
-   ["The colour and the warranty of the product", "The list of tags of the product", "Every page view of the product forever", "The brand and the type of the product"],
-   2, "Page views grow without an end. They make the document larger with each write.") }}
+{{ k.quiz("doc-r2", "The explain plan shows COLLSCAN and then SORT. What is the most useful change?",
+   ["A larger instance class for the cluster", "A projection with fewer returned fields", "An index on the filter field and the sort field", "A second replica in a new zone"],
+   2, "An index on the filter field, then the sort field, lets DocumentDB skip the scan and the sort.") }}
+{{ k.quiz("doc-r3", "Which data should NOT be embedded in the product document?",
+   ["The colour and the warranty of the product", "The list of tags of the product", "The brand and the type of the product", "Every page view of the product forever"],
+   3, "Page views grow without an end. They make the document larger with each write.") }}
+{{ k.quiz("doc-r4", "What does a DocumentDB replica share with the primary instance?",
+   ["The cluster volume with the data", "The CPU and the memory of one server", "A full copy that it built at the start", "Nothing, it reads from an S3 backup"],
+   0, "All instances of a DocumentDB cluster use one cluster volume, so a new replica needs no data copy.") }}
 
 <section class="lesson-foot">
   <h2>Go deeper</h2>
   <p><b>Primary source:</b> <a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/what-is-document-db.html">What is a document database?</a>, then
      <a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/how-it-works.html">How Amazon DocumentDB works</a>.</p>
   <p><b>Use it in the shop:</b> the <a href="/free-e-commerce-app/c/Kitap">Kitap category page</a> has the "Collection scan" experiment. The product page has the projection experiment.</p>
-  <p><b>Ask questions.</b> If a part is not clear, ask your instructor or your AI assistant. Bring a JSON object from your own app, and decide together what to embed.</p>
+  <p><b>Ask questions.</b> If a part is not clear, ask your instructor or your AI assistant. Bring a JSON object from your own application, and decide together what to embed.</p>
 </section>
 {% endblock %}

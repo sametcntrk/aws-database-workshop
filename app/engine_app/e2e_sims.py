@@ -711,3 +711,155 @@ COUNT_TR.update({"partitions touched": "dokunulan partition", "items read": "oku
 SIMS["dynamodb"] = dynamodb
 
 EXTRA_TABLES["cart"] = CART
+
+
+# ================================================================ DocumentDB
+DOCS = [  # real product documents of Lale Market (subset of fields)
+    {"_id": "P0001", "name": "Alpen Kablosuz Kulaklık 1", "category": "Elektronik", "price": 3373.84, "rating": 4.8, "attributes": {"renk": "siyah", "garanti_ay": 12}, "tags": ["hızlı kargo", "çevreci"]},
+    {"_id": "P0005", "name": "Toros Güneş Gözlüğü 5", "category": "Moda", "price": 3884.10, "rating": 3.9, "attributes": {"renk": "lacivert", "garanti_ay": 12}, "tags": ["yeni", "çok satan"]},
+    {"_id": "P0026", "name": "Bosphorus Mekanik Klavye 26", "category": "Elektronik", "price": 84.61, "rating": 3.0, "attributes": {"renk": "yeşil", "garanti_ay": 24}, "tags": ["yeni", "indirim"]},
+    {"_id": "P0044", "name": "Kapadokya Bulut Mimarisi 44", "category": "Kitap", "price": 2651.39, "rating": 3.7, "attributes": {"renk": "siyah", "garanti_ay": 36}, "tags": ["çok satan", "çevreci"]},
+    {"_id": "P0095", "name": "Anadolu Yün Kazak 95", "category": "Moda", "price": 2721.65, "rating": 3.3, "attributes": {"renk": "lacivert", "garanti_ay": 36}, "tags": ["yeni", "çevreci"]},
+    {"_id": "P0142", "name": "Ege Hava Temizleyici 142", "category": "Ev & Yaşam", "price": 2693.65, "rating": 3.9, "attributes": {"renk": "gri", "garanti_ay": 24}, "tags": ["yeni", "çok satan"]},
+    {"_id": "P0179", "name": "Toros Python ile Veri 179", "category": "Kitap", "price": 767.49, "rating": 3.6, "attributes": {"renk": "lacivert", "garanti_ay": 24}, "tags": ["çevreci", "sınırlı"]},
+]
+DOC_COLS = ["_id", "name", "category", "price", "rating", "attributes.renk", "tags"]
+
+
+def _flat(d):
+    return [d["_id"], d["name"], d["category"], d["price"], d["rating"], d["attributes"]["renk"], ", ".join(d["tags"])]
+
+
+EXTRA_TABLES["products_docs"] = {"cols": DOC_COLS, "rows": [_flat(d) for d in DOCS]}
+
+
+def doc_scan(lang):
+    rows = [_flat(d) for d in DOCS]
+    flt = lambda d: d["category"] == "Elektronik" and d["attributes"]["renk"] == "siyah"
+    steps = [{"say": T(lang, "Filter: { category: 'Elektronik', 'attributes.renk': 'siyah' }. With no usable index, DocumentDB examines each document of the collection and tests both conditions.",
+                       "Filtre: { category: 'Elektronik', 'attributes.renk': 'siyah' }. Kullanılabilir bir index yoksa DocumentDB koleksiyondaki her dokümanı inceler ve iki koşulu da test eder."),
+              "marks": {}, "out": [], "count": {"docs examined": 0, "docs returned": 0}}]
+    out, m = [], {}
+    for i, d in enumerate(DOCS):
+        hit = flt(d)
+        m = {**{k: ("match" if flt(DOCS[k]) else "skip") for k in m}, i: "match" if hit else "read"}
+        if hit:
+            out.append([d["_id"], d["name"], d["price"], d["attributes"]["renk"]])
+        why = (T(lang, "Both conditions are true, so the document goes to the result.", "İki koşul da doğru, bu yüzden doküman sonuca gider.") if hit else
+               T(lang, "category is '" + d["category"] + "' and attributes.renk is '" + d["attributes"]["renk"] + "'. At least one condition is false.",
+                 "category '" + d["category"] + "', attributes.renk '" + d["attributes"]["renk"] + "'. En az bir koşul yanlış."))
+        steps.append({"say": T(lang, f"Document {d['_id']}: ", f"Doküman {d['_id']}: ") + why, "marks": {"d": dict(m)}, "out": deepcopy(out),
+                      "outmarks": {len(out) - 1: "new"} if hit else {}, "count": {"docs examined": i + 1, "docs returned": len(out)}})
+    steps.append({"say": T(lang, f"COLLSCAN done: {len(DOCS)} documents examined, {len(out)} returned. The projection {{ name: 1, price: 1, 'attributes.renk': 1 }} then sends only these fields.",
+                           f"COLLSCAN bitti: {len(DOCS)} doküman incelendi, {len(out)} döndü. Sonra {{ name: 1, price: 1, 'attributes.renk': 1 }} projection'ı sadece bu alanları gönderir."),
+                  "marks": {"d": {k: ("match" if flt(d) else "skip") for k, d in enumerate(DOCS)}}, "out": out, "count": {"docs examined": len(DOCS), "docs returned": len(out)}})
+    return {"tables": [{"id": "d", "name": "products (collection)", "cols": DOC_COLS, "rows": rows, "key": [0], "ref": []}],
+            "out": {"name": T(lang, "result (after the projection)", "sonuç (projection'dan sonra)"), "cols": ["_id", "name", "price", "attributes.renk"]}, "steps": steps}
+
+
+def doc_index(lang):
+    entries = sorted(((d["category"], -d["rating"], d["_id"]) for d in DOCS))
+    idx = [[c, -r, pid] for c, r, pid in entries]
+    want = "Kitap"
+    steps = [{"say": T(lang, "The compound index { category: 1, rating: -1 } keeps one entry per document: first sorted by category, then by rating from high to low. Each entry points to its document. Query: category 'Kitap', sorted by rating.",
+                       "{ category: 1, rating: -1 } compound index'i doküman başına bir entry tutar: önce category'ye göre, sonra rating'e göre yüksekten düşüğe sıralı. Her entry kendi dokümanını gösterir. Query: category 'Kitap', rating'e göre sıralı."),
+              "marks": {}, "out": [], "count": {"index entries read": 0, "docs examined": 0}}]
+    first = next(i for i, e in enumerate(idx) if e[0] == want)
+    steps.append({"say": T(lang, f"IXSCAN: the B-tree goes straight to the first entry with category 'Kitap' (entry {first + 1}). The entries before it are never read.",
+                           f"IXSCAN: B-tree doğrudan category değeri 'Kitap' olan ilk entry'ye gider ({first + 1}. entry). Ondan önceki entry'ler hiç okunmaz."),
+                  "marks": {"i": {first: "read"}}, "out": [], "count": {"index entries read": 1, "docs examined": 0}})
+    out, m, reads = [], {}, 0
+    for i in range(first, len(idx)):
+        reads += 1
+        if idx[i][0] != want:
+            m[i] = "skip"
+            steps.append({"say": T(lang, f"The next entry has category '{idx[i][0]}'. The range of 'Kitap' is over, so the scan stops.",
+                                   f"Sonraki entry'nin category değeri '{idx[i][0]}'. 'Kitap' aralığı bitti, bu yüzden tarama durur."),
+                          "marks": {"i": dict(m)}, "out": deepcopy(out), "count": {"index entries read": reads, "docs examined": len(out)}})
+            break
+        m[i] = "match"
+        d = next(x for x in DOCS if x["_id"] == idx[i][2])
+        out.append([d["_id"], d["name"], d["rating"]])
+        steps.append({"say": T(lang, f"Entry {i + 1}: Kitap, rating {idx[i][1]}, points to {idx[i][2]}. FETCH reads that one document. The order is already right, so no SORT stage is necessary.",
+                               f"Entry {i + 1}: Kitap, rating {idx[i][1]}, {idx[i][2]}'yi gösterir. FETCH sadece o dokümanı okur. Sıra zaten doğru, bu yüzden SORT aşamasına gerek yok."),
+                      "marks": {"i": dict(m), "d": {DOCS.index(d): "match"}}, "out": deepcopy(out), "outmarks": {len(out) - 1: "new"},
+                      "count": {"index entries read": reads, "docs examined": len(out)}})
+    steps.append({"say": T(lang, f"Done: {len(out)} documents examined for {len(out)} results. A COLLSCAN would examine all {len(DOCS)} documents and then sort the matches in memory.",
+                           f"Bitti: {len(out)} sonuç için {len(out)} doküman incelendi. Bir COLLSCAN {len(DOCS)} dokümanın hepsini inceler ve sonra eşleşenleri bellekte sıralardı."),
+                  "marks": {"i": dict(m)}, "out": out, "count": {"index entries read": reads, "docs examined": len(out)}})
+    return {"tables": [{"id": "i", "name": "index category_1_rating_-1", "cols": ["category", "rating", T(lang, "points to", "gösterdiği")], "rows": idx, "key": [0, 1], "ref": [2]},
+                       {"id": "d", "name": "products", "cols": ["_id", "name", "category", "rating"], "rows": [[d["_id"], d["name"], d["category"], d["rating"]] for d in DOCS], "key": [0], "ref": []}],
+            "out": {"name": T(lang, "result", "sonuç"), "cols": ["_id", "name", "rating"]}, "steps": steps}
+
+
+def doc_pipeline(lang):
+    unwound, groups, steps = [], {}, []
+    steps.append({"say": T(lang, "Pipeline: $unwind '$tags', then $group by tag with a count and an average price. Stage 1 turns each document with two tags into two documents.",
+                           "Pipeline: $unwind '$tags', sonra tag'e göre bir sayı ve ortalama fiyatla $group. Aşama 1, iki tag'li her dokümanı iki dokümana çevirir."),
+                  "marks": {}, "rows": {"u": []}, "out": [], "count": {"documents in": 0, "documents after $unwind": 0}})
+    for i, d in enumerate(DOCS):
+        for t in d["tags"]:
+            unwound.append([d["_id"], t, d["price"]])
+        steps.append({"say": T(lang, f"$unwind {d['_id']}: tags {d['tags']} becomes {len(d['tags'])} documents, one for each tag.",
+                               f"$unwind {d['_id']}: {d['tags']} tag'leri, her tag için bir tane olmak üzere {len(d['tags'])} doküman olur."),
+                      "marks": {"d": {i: "read"}, "u": {len(unwound) - 1: "new", len(unwound) - 2: "new"}}, "rows": {"u": deepcopy(unwound)}, "out": [],
+                      "count": {"documents in": i + 1, "documents after $unwind": len(unwound)}})
+    for k, (pid, t, price) in enumerate(unwound):
+        g = groups.setdefault(t, [0, 0.0])
+        g[0] += 1
+        g[1] += price
+    out = sorted(([t, n, round(s / n, 2)] for t, (n, s) in groups.items()), key=lambda r: (-r[1], r[0]))
+    steps.append({"say": T(lang, f"$group: the {len(unwound)} documents go into one group per tag. Each group gives one result: the count and the average price. $sort puts the most common tag first.",
+                           f"$group: {len(unwound)} doküman, tag başına bir gruba girer. Her grup bir sonuç verir: sayı ve ortalama fiyat. $sort en yaygın tag'i öne koyar."),
+                  "marks": {}, "rows": {"u": deepcopy(unwound)}, "out": out, "outmarks": {0: "match"},
+                  "count": {"documents in": len(DOCS), "documents after $unwind": len(unwound)}})
+    return {"tables": [{"id": "d", "name": "products", "cols": ["_id", "tags", "price"], "rows": [[d["_id"], ", ".join(d["tags"]), d["price"]] for d in DOCS], "key": [0], "ref": []},
+                       {"id": "u", "name": T(lang, "after $unwind", "$unwind'dan sonra"), "cols": ["_id", "tags", "price"], "rows": [], "key": [], "ref": [0]}],
+            "out": {"name": T(lang, "after $group and $sort", "$group ve $sort'tan sonra"), "cols": ["_id (tag)", "products", "avg_price"]}, "steps": steps}
+
+
+DOC_CANDS = ["DocumentDB", "Aurora PostgreSQL", "DynamoDB", "OpenSearch", "ElastiCache (Valkey)"]
+
+
+def docdb(lang):
+    w1 = verdicts(DOC_CANDS, [
+        V((1, "each document has its own fields", "her dokümanın kendi alanları var"), (1, "JSONB column, or many tables", "JSONB column ya da birçok table"), (1, "items have free attributes", "item'ların serbest attribute'ları var"),
+          (1, "documents with free fields", "serbest alanlı dokümanlar"), (1, "hash fields", "hash alanları")),
+        V((1, "find on any field, also nested", "her alanda find, iç içe olanlar da"), (1, "SQL and JSONB operators", "SQL ve JSONB operatörleri"), (0, "a new question needs a new index design", "yeni soru yeni bir index tasarımı ister"),
+          (1, "queries on any field", "her alanda query"), (0, "access by key only", "sadece key ile erişim")),
+        V((1, "durable cluster volume", "kalıcı cluster volume"), (1, "durable", "kalıcı"), (0, "removed earlier", "daha önce elendi"),
+          (0, "a search index, best as a copy of a source of truth", "bir arama index'i, en iyi bir kaynak verinin kopyası olarak"), (0, "removed earlier", "daha önce elendi")),
+        V((1, "the MongoDB API and drivers", "MongoDB API'si ve driver'ları"), (0, "a different API (SQL)", "farklı bir API (SQL)"), (0, "removed earlier", "daha önce elendi"),
+          (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi")),
+    ])
+    w2 = verdicts(DOC_CANDS, [
+        V((1, "multi-document transactions", "çok-dokümanlı transaction'lar"), (1, "transactions", "transaction'lar"), (1, "TransactWriteItems", "TransactWriteItems"),
+          (0, "no multi-document transactions", "çok-dokümanlı transaction yok"), (0, "no rollback", "rollback yok")),
+        V((0, "no foreign keys or CHECK across collections", "koleksiyonlar arası foreign key ya da CHECK yok"), (1, "foreign keys, CHECK", "foreign key'ler, CHECK"),
+          (0, "no foreign keys", "foreign key yok"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi")),
+    ])
+    w3 = verdicts(DOC_CANDS, [
+        V((0, "one writer instance per cluster (elastic clusters can shard)", "cluster başına tek writer instance (elastic cluster'lar shard'layabilir)"), (0, "one writer instance", "tek writer instance"),
+          (1, "partitions spread the writes", "partition'lar yazmaları dağıtır"), (0, "indexing at this rate is expensive", "bu hızda index'leme pahalı"), (1, "fast writes in memory", "bellekte hızlı yazmalar")),
+        V((0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (1, "durable in several AZs", "birkaç AZ'de kalıcı"), (0, "removed earlier", "daha önce elendi"),
+          (0, "memory first, not a durable record", "önce bellek, kalıcı kayıt değil")),
+    ])
+    spec = {
+        "decide_catalog": decide_generic(lang, ("A product catalog: 200,000 products, each type with different attributes, read and filtered on many fields", "Bir ürün kataloğu: her türün farklı attribute'ları olan 200.000 ürün, birçok alanda okunur ve filtrelenir"),
+                                         [("Each item can have its own set of fields", "Her öğenin kendi alan kümesi olabilir"),
+                                          ("Filters on any field, also on nested fields, without a new design", "Yeni bir tasarım olmadan her alanda, iç içe alanlarda da filtreler"),
+                                          ("It is the source of truth for the catalog", "Kataloğun kaynak verisidir (source of truth)"),
+                                          ("The team already writes code for the MongoDB API", "Ekip zaten MongoDB API'si için kod yazıyor")], DOC_CANDS, w1),
+        "decide_checkout": decide_generic(lang, ("Checkout: stock, order and order lines change together, with rules between them", "Checkout: stok, sipariş ve order line'lar birlikte değişir, aralarında kurallar var"),
+                                          [("Several records change as one all-or-nothing unit", "Birkaç kayıt ya-hep-ya-hiç tek bir birim olarak değişir"),
+                                           ("The database enforces rules between collections or tables", "Database koleksiyonlar ya da table'lar arası kuralları uygular")], DOC_CANDS, w2),
+        "decide_devices": decide_generic(lang, ("The last state of 5 million IoT devices, one write per device every second", "5 milyon IoT cihazının son durumu, her cihazdan her saniye bir yazma"),
+                                         [("About 5 million writes per second, each to its own key", "Saniyede yaklaşık 5 milyon yazma, her biri kendi key'ine"),
+                                          ("Each write is durable", "Her yazma kalıcıdır")], DOC_CANDS, w3),
+        "scan": doc_scan(lang), "index": doc_index(lang), "pipeline": doc_pipeline(lang),
+    }
+    return {k: _localize(v, lang) for k, v in spec.items()}
+
+
+COUNT_TR.update({"docs examined": "incelenen doküman", "docs returned": "dönen doküman", "documents in": "giren doküman", "documents after $unwind": "$unwind sonrası doküman"})
+SIMS["docdb"] = docdb
