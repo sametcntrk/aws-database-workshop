@@ -9,6 +9,7 @@ from redis.cluster import RedisCluster
 from .. import catalog, simlimit, trace
 from ..base import env, secret
 from ..visitor import PERSONAS, persona_id, visitor_id
+from . import table as result_table
 
 META = catalog.META["elasticache"]
 PAGES = catalog.PAGES["elasticache"]
@@ -227,3 +228,108 @@ def learn_item(lesson, key):
         rec["değer"] = {"ilk 10 üye (puana göre, büyükten küçüğe)": value}
     return {"title": key, "sub": "Bellekte tek bir anahtar ve değeri. Diskte tablo, satır veya sorgu planı yok.",
             "record": rec, "marks": {"anahtar": "kept", "TTL": "kept"}}
+
+
+# ---------------------------------------------------------------- E2E tutorial queries (templates/e2e/elasticache.html)
+# Tutorial keys start with lm:tut: and expire after 10 minutes, so they never pile up.
+TUT_TTL = 600
+
+
+def _e2e_deal():
+    t = cmd("TYPE", "TYPE lm:deal", lambda: r().type("lm:deal"))
+    deal = cmd("HGETALL", "HGETALL lm:deal", lambda: r().hgetall("lm:deal"))
+    t2 = cmd("TYPE", "TYPE lm:deal:stock", lambda: r().type("lm:deal:stock"))
+    stock = cmd("GET", "GET lm:deal:stock", lambda: r().get("lm:deal:stock"))
+    rows = [["lm:deal", t, f, v] for f, v in deal.items()] + [["lm:deal:stock", t2, "(value)", stock]]
+    return result_table(["key", "type", "field", "value"], rows)
+
+
+def _e2e_string():
+    cmd("SET", f"SET lm:tut:greeting \"merhaba\" EX {TUT_TTL}", lambda: r().set("lm:tut:greeting", "merhaba", ex=TUT_TTL))
+    v = cmd("GET", "GET lm:tut:greeting", lambda: r().get("lm:tut:greeting"))
+    ttl = cmd("TTL", "TTL lm:tut:greeting", lambda: r().ttl("lm:tut:greeting"))
+    return result_table(["key", "value", "TTL (seconds left)"], [["lm:tut:greeting", v, ttl]])
+
+
+def _e2e_counter():
+    rows = []
+    for _ in range(3):
+        rows.append(["INCR lm:tut:visits", cmd("INCR", "INCR lm:tut:visits", lambda: r().incr("lm:tut:visits"))])
+    cmd("EXPIRE", f"EXPIRE lm:tut:visits {TUT_TTL}", lambda: r().expire("lm:tut:visits", TUT_TTL))
+    rows.append(["INCRBY lm:tut:visits 10", cmd("INCRBY", "INCRBY lm:tut:visits 10", lambda: r().incrby("lm:tut:visits", 10))])
+    return result_table(["command", "reply (the new value)"], rows, note="Each run continues from the last value, until the key expires.")
+
+
+def _e2e_hash():
+    key = "lm:tut:cart:demo"
+    cmd("HSET", f"HSET {key} P0001 2 P0044 1", lambda: r().hset(key, mapping={"P0001": 2, "P0044": 1}))
+    cmd("HINCRBY", f"HINCRBY {key} P0001 1", lambda: r().hincrby(key, "P0001", 1))
+    cmd("EXPIRE", f"EXPIRE {key} {TUT_TTL}", lambda: r().expire(key, TUT_TTL))
+    h = cmd("HGETALL", f"HGETALL {key}", lambda: r().hgetall(key))
+    return result_table(["field", "value"], list(h.items()), note="HSET sets P0001 to 2 again on each run, then HINCRBY adds 1. So P0001 is 3 after each run.")
+
+
+def _e2e_zset():
+    key = "lm:tut:board"
+    scores = {"Ayşe": 36708.47, "Mert": 98210.10, "Elif": 1599.41, "Lukas": 45120.00, "Zeynep": 27300.55}
+    cmd("ZADD", f"ZADD {key} " + " ".join(f"{v} {k}" for k, v in scores.items()), lambda: r().zadd(key, scores))
+    cmd("ZINCRBY", f"ZINCRBY {key} 20000 Elif", lambda: r().zincrby(key, 20000, "Elif"))
+    cmd("EXPIRE", f"EXPIRE {key} {TUT_TTL}", lambda: r().expire(key, TUT_TTL))
+    top = cmd("ZREVRANGE", f"ZREVRANGE {key} 0 2 WITHSCORES", lambda: r().zrevrange(key, 0, 2, withscores=True))
+    rank = cmd("ZREVRANK", f"ZREVRANK {key} Elif", lambda: r().zrevrank(key, "Elif"))
+    rows = [[i + 1, m, s] for i, (m, s) in enumerate(top)] + [["Elif is at rank", rank + 1 if rank is not None else None, "(ZREVRANK + 1)"]]
+    return result_table(["rank", "member", "score"], rows,
+                        note="ZADD resets the five scores on each run. ZINCRBY then moves Elif from 1,599.41 to 21,599.41.")
+
+
+def _e2e_ttl():
+    key = "lm:tut:short"
+    cmd("SET", f"SET {key} \"I expire soon\" EX 5", lambda: r().set(key, "I expire soon", ex=5))
+    rows = []
+    for wait in (0, 2, 4, 6):
+        if wait:
+            time.sleep(2)
+        rows.append([f"after {wait} s", cmd("TTL", f"TTL {key}", lambda: r().ttl(key)), cmd("EXISTS", f"EXISTS {key}", lambda: r().exists(key))])
+    return result_table(["time", "TTL (seconds left, -2 = no key)", "EXISTS"], rows)
+
+
+def _e2e_race():
+    """Two ways to sell 10 pieces to 60 buyers in 20 threads: GET then SET, and DECR."""
+    out = []
+    for mode in ("naive", "atomic"):
+        key = f"lm:tut:race:{mode}:{visitor_id()}"
+        r().set(key, 10, ex=TUT_TTL)
+        sold = 0
+
+        def buy(_):
+            if mode == "atomic":
+                if r().decr(key) >= 0:
+                    return 1
+                r().incr(key)
+                return 0
+            v = int(r().get(key))
+            if v > 0:
+                time.sleep(0.002)            # the app does some work between the read and the write
+                r().set(key, v - 1, ex=TUT_TTL)
+                return 1
+            return 0
+        text = (f"SET {key} 10\n60 buyers, 20 threads: " +
+                ("GET stock; if > 0: SET stock (value - 1)" if mode == "naive" else "DECR stock; if < 0: INCR stock"))
+        with trace.call("Load (60 buyers)", text, {"mode": mode}) as t:
+            with ThreadPoolExecutor(max_workers=20) as pool:
+                sold = sum(pool.map(buy, range(60)))
+            left = int(r().get(key))
+            t.result(items=sold)
+        out.append(["GET, then SET" if mode == "naive" else "DECR", 10, sold, left, "oversold" if sold > 10 else "correct"])
+    return result_table(["mode", "stock at start", "pieces sold", "stock at end", "result"], out)
+
+
+def _e2e_board():
+    top = cmd("ZREVRANGE", "ZREVRANGE lm:leaderboard 0 4 WITHSCORES", lambda: r().zrevrange("lm:leaderboard", 0, 4, withscores=True))
+    n = cmd("ZCARD", "ZCARD lm:leaderboard", lambda: r().zcard("lm:leaderboard"))
+    rows = [[i + 1, m, r().get(f"lm:name:{m}"), round(s, 2)] for i, (m, s) in enumerate(top)]
+    return result_table(["rank", "member", "name (from lm:name:<id>)", "revenue (score)"], rows, note=f"The sorted set has {n} members.")
+
+
+E2E = {"V1": _e2e_deal, "V2": _e2e_string, "V3": _e2e_counter, "V4": _e2e_hash, "V5": _e2e_zset, "V6": _e2e_ttl,
+       "V7": _e2e_race, "V8": _e2e_board}

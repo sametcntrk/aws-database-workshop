@@ -1,0 +1,193 @@
+{% extends "e2e/_base.html" %}
+{% import "e2e/_macros.html" as k with context %}
+{% block body %}
+
+<h2 id="goal" data-short="What you will learn"><span class="sec">00</span>What you will learn</h2>
+<p>Lale Market keeps its fastest-changing data in Amazon ElastiCache Serverless with the Valkey engine.
+   This data is the flash deal stock, the sessions, the live leaderboard and some counters. Each Visitor reads this data on each page. Some values change many times each second.</p>
+<p>After this tutorial, you can do these tasks:</p>
+<ol>
+  <li>Explain why a read from memory is much faster than a read from disk, and what this costs.</li>
+  <li>Select the Valkey data type for a job: string, counter, hash or sorted set.</li>
+  <li>Show, with a measurement, why one atomic command is correct and "read, then write" is not.</li>
+  <li>Use a TTL to make data delete itself.</li>
+  <li>Say which data can live only in a cache, and which data needs a database of record.</li>
+</ol>
+
+<h2 id="memory" data-short="Why memory"><span class="sec">01</span>Why memory is fast</h2>
+<p>A computer keeps data on layers of storage. The layers near the CPU are fast, small and expensive. The layers far from the CPU are slow, large and cheap.
+   A disk-based database keeps its data on SSDs and holds the busy part in memory. An {{ k.term("in-memory database") }} keeps all of its data in RAM.</p>
+{{ k.fig("elasticache-memory-hierarchy.png", "random access memory (RAM) is in the middle of the pyramid: \"fast, affordable\" and \"power on, very short term\". Disks are lower: larger and slower. Valkey keeps the full data set in RAM.") }}
+<p>The consequence for you: a GET from Valkey inside the VPC takes well under a millisecond in the Behind-the-scenes panel of Lale Market.
+   The price is the capacity. RAM is more expensive per GB than SSD, so you keep small, hot data in memory, not your full history.</p>
+{% call k.callout("analogy", "Analogy") %}
+<p>Memory is the counter of a shop. The cashier reaches what is on the counter in one second. The stockroom (the disk) holds much more, but each trip takes time.
+   You put on the counter the items that customers ask for each minute, not the full stock.</p>
+{% endcall %}
+
+<h2 id="model" data-short="Keys and types"><span class="sec">02</span>The model: keys and typed values</h2>
+<p>Valkey is a {{ k.term("key-value store") }}. Each entry has a key (a text) and a value. Unlike DynamoDB, the value has a data type, and each type has its own commands.
+   Lale Market uses four types. These are the real keys (from <code>META.model</code> of the Engine App):</p>
+<table class="data">
+  <thead><tr><th class="key">key</th><th>type</th><th>example value</th><th>commands that Lale Market uses</th></tr></thead>
+  <tbody>
+    <tr><td class="key mono">lm:deal</td><td>hash</td><td><code>product_id → P0001, name → Alpen Kablosuz Kulaklık 1, price → 2024.30, ends_at → 1793...</code></td><td>HGETALL, HSET</td></tr>
+    <tr><td class="key mono">lm:deal:stock</td><td>string (counter)</td><td><code>49</code></td><td>GET, DECR, INCR</td></tr>
+    <tr><td class="key mono">lm:session:&lt;visitor&gt;</td><td>hash with a TTL</td><td><code>persona → C00001, last_page → /cart</code></td><td>HSET, EXPIRE, HGETALL, TTL</td></tr>
+    <tr><td class="key mono">lm:leaderboard</td><td>sorted set</td><td><code>C00001 → 1200345.50, C00002 → 980100.10, ...</code></td><td>ZINCRBY, ZREVRANGE</td></tr>
+    <tr><td class="key mono">lm:active</td><td>sorted set</td><td><code>&lt;visitor&gt; → &lt;last seen, Unix time&gt;</code></td><td>ZADD, ZCOUNT</td></tr>
+  </tbody>
+</table>
+<p>The colon in the key names is a convention, not a feature. Valkey has no tables. <code>lm:</code> marks the keys of Lale Market, and the rest names the thing.</p>
+{{ k.fig("elasticache-hash-table.png", "a hash function changes each key into a slot, and the slot holds the value. Valkey finds a key in the same way, so a GET takes about the same time with 100 keys or 100 million keys.") }}
+{% call k.query("elasticache", "V1", "Read the flash deal: a hash and a counter") %}
+<pre><code>TYPE lm:deal
+HGETALL lm:deal
+TYPE lm:deal:stock
+GET lm:deal:stock</code></pre>
+<p>Purpose: see two types in the real data. <code>HGETALL</code> returns all fields of a hash. <code>GET</code> returns a string.</p>
+{% endcall %}
+{% call k.query("elasticache", "V2", "A string with an expiry") %}
+<pre><code>SET lm:tut:greeting "merhaba" EX 600
+GET lm:tut:greeting
+TTL lm:tut:greeting</code></pre>
+<p>All tutorial keys start with <code>lm:tut:</code> and expire after 600 seconds.</p>
+{% endcall %}
+{% call k.query("elasticache", "V4", "A hash: a small object under one key") %}
+<pre><code>HSET lm:tut:cart:demo P0001 2 P0044 1
+HINCRBY lm:tut:cart:demo P0001 1
+HGETALL lm:tut:cart:demo</code></pre>
+<p>A hash keeps several fields under one key. <code>HINCRBY</code> changes one field without a read and a write of the full object.</p>
+{% endcall %}
+
+<h2 id="atomic" data-short="Atomic commands"><span class="sec">03</span>Atomic commands: the flash deal</h2>
+<p>Valkey uses "a mostly single threaded design for command execution"
+   (<a href="https://valkey.io/topics/latency/">Valkey: latency</a>). The commands of all clients go into one line, and Valkey runs them one after the other.
+   So a single command is {{ k.term("atomic") }}: no other command can run in the middle of it.</p>
+<p>The flash deal has 10 pieces and 60 buyers. Two programs can sell the pieces:</p>
+<table class="data">
+  <thead><tr><th>"Read, then write" (two commands)</th><th>"DECR" (one command)</th></tr></thead>
+  <tbody><tr>
+    <td><pre><code>v = GET stock          <span class="c"># 1st command</span>
+if v &gt; 0:
+    SET stock v - 1    <span class="c"># 2nd command</span>
+    sell()</code></pre></td>
+    <td><pre><code>left = DECR stock      <span class="c"># one command</span>
+if left &gt;= 0:
+    sell()
+else:
+    INCR stock         <span class="c"># give it back</span></code></pre></td>
+  </tr></tbody>
+</table>
+{% call k.predict("Twenty buyers run at the same time. With \"Read, then write\", how many pieces can the shop sell from a stock of 10? With DECR?") %}
+<p>With "Read, then write": more than 10 is possible. Between one buyer's GET and SET, other buyers run their GET and see the same value.
+   Each of them writes "v - 1", so several sales take away only one piece. With DECR: exactly 10. Each DECR reads and changes the value in one step.
+   Run V7 to measure it.</p>
+{% endcall %}
+{% call k.query("elasticache", "V7", "Sell 10 pieces to 60 buyers, two ways") %}
+<pre><code>SET lm:tut:race:naive:&lt;you&gt; 10      → 60 buyers, 20 threads: GET, then SET value - 1
+SET lm:tut:race:atomic:&lt;you&gt; 10     → 60 buyers, 20 threads: DECR, and INCR if below 0</code></pre>
+<p>Look at "pieces sold". The naive mode usually sells more than 10. The result changes from run to run, because it depends on the timing of the threads.
+   That is the nature of a {{ k.term("race condition") }}: it is not always visible, so a test can pass and production can fail.</p>
+{% endcall %}
+{% call k.query("elasticache", "V3", "INCR as a counter") %}
+<pre><code>INCR lm:tut:visits
+INCR lm:tut:visits
+INCR lm:tut:visits
+INCRBY lm:tut:visits 10</code></pre>
+<p>INCR returns the new value. Lale Market counts the orders of the day with <code>INCR lm:orders:today</code>. Many Engine App threads can count at the same time, and no count is lost.</p>
+{% endcall %}
+{{ k.quiz("ec-q1", "Why is DECR safe for the flash deal stock, but GET then SET is not?",
+   ["DECR reads and writes in one command", "DECR stores the value on a disk", "DECR is faster than two commands", "DECR locks the key for one second"],
+   0, "Valkey runs one command at a time. Between two separate commands, other clients can run theirs.") }}
+
+<h2 id="zset" data-short="Sorted sets"><span class="sec">04</span>Sorted sets: a leaderboard that is always sorted</h2>
+<p>A {{ k.term("sorted set") }} holds unique members, and each member has a number, the score. Valkey keeps the members in score order at each write.
+   Adding or changing a member is O(log N), where N is the number of members
+   (<a href="https://valkey.io/topics/sorted-sets/">Valkey: sorted sets</a>). So "the top 10" is ready at any time, with no sort at read time.</p>
+<p>The Lale Market leaderboard has one member per customer, with the revenue as the score. Each checkout sends <code>ZINCRBY lm:leaderboard &lt;order total&gt; &lt;persona&gt;</code>.</p>
+{% call k.query("elasticache", "V5", "Build a small leaderboard and move one member") %}
+<pre><code>ZADD lm:tut:board 36708.47 Ayşe 98210.10 Mert 1599.41 Elif 45120.00 Lukas 27300.55 Zeynep
+ZINCRBY lm:tut:board 20000 Elif
+ZREVRANGE lm:tut:board 0 2 WITHSCORES      <span class="c"># top 3, highest score first</span>
+ZREVRANK lm:tut:board Elif                 <span class="c"># 0-based position from the top</span></code></pre>
+{% endcall %}
+{% call k.query("elasticache", "V8", "The real Lale Market leaderboard") %}
+<pre><code>ZREVRANGE lm:leaderboard 0 4 WITHSCORES
+ZCARD lm:leaderboard</code></pre>
+{% endcall %}
+{{ k.quiz("ec-q2", "Elif has score 1,599.41 and gets ZINCRBY 20000. In V5, what is her new place?",
+   ["Second place", "Third place", "Fourth place", "Fifth place"],
+   3, "21,599.41 is below Mert (98,210.10), Lukas (45,120.00), Ayşe (36,708.47) and Zeynep (27,300.55). ZREVRANK returns 4, because it counts from 0.") }}
+
+<h2 id="ttl" data-short="TTL"><span class="sec">05</span>TTL: data that deletes itself</h2>
+<p>Each key can have a {{ k.term("TTL") }} (time to live) in seconds. When it gets to zero, Valkey deletes the key. The session of each Visitor is a hash with a TTL of 30 minutes.
+   Each page view sends EXPIRE again, so an active session stays, and an abandoned session goes away with no cleanup job.</p>
+{% call k.query("elasticache", "V6", "Watch a key expire") %}
+<pre><code>SET lm:tut:short "I expire soon" EX 5
+TTL lm:tut:short        <span class="c"># at 0, 2, 4 and 6 seconds</span>
+EXISTS lm:tut:short</code></pre>
+<p>This query takes about 6 seconds, because it waits between the reads. <code>TTL</code> returns -2 when the key does not exist.</p>
+{% endcall %}
+
+<h2 id="serverless" data-short="ElastiCache Serverless"><span class="sec">06</span>ElastiCache Serverless</h2>
+<p>With ElastiCache Serverless, you do not select nodes. You get one endpoint. A proxy layer receives the connections and sends each command to a cache node.
+   ElastiCache "continuously monitors the memory, compute, and network bandwidth utilization of your cache and scales both vertically and horizontally".
+   It also replicates the data across multiple Availability Zones
+   (<a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.corecomponents.html">How ElastiCache works</a>).</p>
+{{ k.fig("elasticache-serverless.png", "the application in each Availability Zone connects to a VPC endpoint. The proxy nodes in the service VPC send each request to the cache nodes. The application does not know how many cache nodes exist.") }}
+<p>The cost has two parts: the data stored (GB-hours) and ElastiCache Processing Units (ECPUs). A simple GET or SET of up to 1 KB uses 1 ECPU.
+   Serverless runs Valkey in {{ k.term("cluster mode") }}. In cluster mode, the keys spread over shards by a hash of the key name.
+   A command that uses several keys works only when all of its keys are in one shard. This is why each Lale Market command uses one key.</p>
+
+<h2 id="role" data-short="Cache or database?"><span class="sec">07</span>Cache or database of record?</h2>
+<p>Many apps use ElastiCache as a cache in front of a database. The common pattern is {{ k.term("cache-aside") }}:</p>
+<ol class="steps">
+  <li>The app looks for the key in the cache.</li>
+  <li>On a hit, it returns the value. On a miss, it reads the database.</li>
+  <li>It writes the value into the cache with a TTL, and returns it.</li>
+</ol>
+<p>Lale Market uses Valkey in a second way: as the main store of short-lived, rebuildable data. The leaderboard comes from the orders.
+   The Seed step of the Admin Console builds it again from the order history. The orders themselves stay in <a href="/e2etutorial/aurora">Aurora</a>.</p>
+{{ k.quiz("ec-q3", "Which Lale Market data must NOT exist only in ElastiCache?",
+   ["The session of a Visitor", "The flash deal countdown", "The committed orders of customers", "The number of active Visitors"],
+   2, "Orders are the record of what the shop sold. They need durable storage, constraints and transactions. The other three can be rebuilt or are short-lived.") }}
+
+<h2 id="usecases" data-short="Use cases"><span class="sec">08</span>When to use it, and when not</h2>
+<table class="data">
+  <thead><tr><th>Good fit</th><th>Valkey type</th></tr></thead>
+  <tbody>
+    <tr><td>Cache in front of a slower database</td><td>string or hash, with a TTL</td></tr>
+    <tr><td>Sessions, rate limits, short-lived tokens</td><td>hash or string with a TTL, INCR for counters</td></tr>
+    <tr><td>Leaderboards, "top N" lists, "active in the last 5 minutes"</td><td>sorted set</td></tr>
+    <tr><td>Flash sales and inventory counters under heavy contention</td><td>string with DECR</td></tr>
+  </tbody>
+</table>
+<table class="data">
+  <thead><tr><th>Weak fit</th><th>Better choice</th></tr></thead>
+  <tbody>
+    <tr><td>Large data sets that are rarely read</td><td><a href="/e2etutorial/s3">S3</a> or a disk-based database. RAM is the expensive layer.</td></tr>
+    <tr><td>Questions on any field ("all sessions from Ankara")</td><td>Valkey finds data by key. Use <a href="/e2etutorial/aurora">Aurora</a> or <a href="/e2etutorial/opensearch">OpenSearch</a>.</td></tr>
+    <tr><td>Multi-step business transactions with rules between tables</td><td><a href="/e2etutorial/aurora">Aurora</a></td></tr>
+  </tbody>
+</table>
+
+<h2 id="recall" data-short="Recall test"><span class="sec">09</span>Recall test</h2>
+{{ k.quiz("ec-r1", "Which type gives \"the 10 customers with the most revenue\" without a sort at read time?",
+   ["A hash", "A string", "A sorted set", "A list"],
+   2, "A sorted set keeps members in score order at each write.") }}
+{{ k.quiz("ec-r2", "A test of the read-then-write flash deal sold exactly 10 pieces. What does this prove?",
+   ["Nothing, the race does not always show", "The code is correct for all timings", "Valkey added a lock by itself", "The shop needs more threads"],
+   0, "A race condition depends on timing. One clean run does not prove that the code is correct.") }}
+{{ k.quiz("ec-r3", "What makes an abandoned session go away in Lale Market?",
+   ["A nightly cleanup job", "The TTL on the session key", "The browser deletes the key", "A Lambda function scans keys"],
+   1, "Each page view sets EXPIRE again. With no page view, the TTL gets to zero, and Valkey deletes the key.") }}
+
+<section class="lesson-foot">
+  <h2>Go deeper</h2>
+  <p><b>Primary source:</b> <a href="https://valkey.io/topics/data-types/">Valkey data types</a>, then
+     <a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.corecomponents.html">How ElastiCache works</a>.</p>
+  <p><b>Use it in the shop:</b> the <a href="/free-e-commerce-app/deals">Flash deal page</a> has the atomic and the read-then-write rush, and the session TTL. The <a href="/free-e-commerce-app/admin/live">Live leaderboard</a> reads the sorted set.</p>
+  <p><b>Ask questions.</b> If a part is not clear, ask your instructor or your AI assistant. Bring one piece of data from your app, and decide together if it can live only in memory.</p>
+</section>
+{% endblock %}
