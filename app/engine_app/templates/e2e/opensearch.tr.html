@@ -1,0 +1,268 @@
+{% extends "e2e/_base.html" %}
+{% import "e2e/_macros.html" as k with context %}
+{# Turkish version of opensearch.html. Terms stay in English; the explanations are Turkish. Keep both files in step. #}
+{% block body %}
+
+<h2 id="goal" data-short="Ne öğreneceksin"><span class="sec">00</span>Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
+<p>Bölüm 01 mimarın kararını verir: Amazon OpenSearch Service nereye oturur, nereye oturmaz. Sonra tutorial iki bölümden oluşur.
+   Bölüm 1, bir search engine'in nasıl çalıştığını öğretir: analyzer'lar, inverted index, relevance score'ları, yazım hatası toleransı, facet'ler ve coğrafi arama. Bölüm 2, AWS servisini ve Lale Market'in onu nasıl kullandığını gösterir.</p>
+<p>Örnekler Lale Market'in arama kutusundan ve mağaza bulucusundan gelir. Bazen başka bir örnek bir fikri daha kolay gösterir. O zaman tutorial onu kullanır: bir kitabın arkasındaki dizin, bir kütüphane kart kataloğu, pusulalı bir harita.</p>
+<p>Bu tutorial'ın sonunda şunları yapabilirsin:</p>
+<ol>
+  <li>Bir search engine'in hangi iş yükleri için doğru seçim olduğunu ve neden genellikle başka bir database'in kopyası olduğunu söylemek.</li>
+  <li>Bir analyzer'ın metni nasıl token'lara çevirdiğini ve aynı analyzer'ın neden query üzerinde de çalışması gerektiğini açıklamak.</li>
+  <li>Bir inverted index çizmek ve bir aramayı onunla elle cevaplamak.</li>
+  <li>Fuzziness'ı edit distance ile açıklamak.</li>
+  <li>Filter, aggregation ve geo_distance query'si içeren bir search request'i okumak.</li>
+  <li>Shard'ları ve replica'ları, yönetilen servisin senin için ne yaptığını açıklamak.</li>
+</ol>
+<p>Dört tür kutu sana yardım eder. <b>Simülasyon</b>: Oynat'a ya da Sonraki adım'a bas. <b>Önce tahmin et</b>: cevabı açmadan önce kendi cevabını yaz.
+   <b>Checkpoint</b>: tek doğru cevabı olan bir soru. <b>Analoji</b>: günlük hayattan bir resim.</p>
+
+<h2 id="architect" data-short="Mimar gözüyle: ne zaman"><span class="sec">01</span>Mimar gözüyle: OpenSearch nereye oturur</h2>
+<p><b>Önce bu bölümü oku.</b> Kararı bu bölüm verir. Sonraki bölümler bir search engine'in nasıl çalıştığını öğretir.</p>
+<p><b>Kısaca:</b> Amazon OpenSearch Service, bir arama ve analitik engine'i olan OpenSearch'ü çalıştırır. Document'ları içlerindeki kelimelerle bulur ve relevance'a göre sıralar.
+   Yazım hatalarını kabul eder, sonuçları aynı request içinde kategoriye göre sayar ve konuma göre arar. Genellikle, source of truth'u başka bir database'de duran verinin hızlı bir kopyasıdır.</p>
+<p>Anahtar yapı {{ k.term("inverted index") }}'tir. Bir database index'i "bu değere sahip row nerede?" sorusunu cevaplar. Bir inverted index ise "hangi document'lar bu kelimeyi içeriyor?" sorusunu cevaplar.</p>
+
+<h3>Bir iş yükünde OpenSearch'ü işaret eden sinyaller</h3>
+<table class="data">
+  <thead><tr><th>Sinyal</th><th>Gerçek bir projede nasıl görünür</th><th>Onu cevaplayan özellik</th></tr></thead>
+  <tbody>
+    <tr><td>Kullanıcılar serbest metin yazar</td><td>Ürünler, makaleler, destek talepleri ya da dokümanlar için bir arama kutusu.</td><td>Analyzer'lar ve inverted index (bölüm 03 ve 04)</td></tr>
+    <tr><td>En iyi sonuçlar önce gelmeli</td><td>"kablosuz kulaklık", kulaklık kablolarından önce kulaklıkları göstermeli.</td><td>Relevance score (BM25) (bölüm 04)</td></tr>
+    <tr><td>Yazım hataları ve dil varyantları</td><td>"kulaklk", "kulaklik" ve "Kulaklık" aynı ürünleri bulmalı.</td><td>Fuzziness ve dil analyzer'ları (bölüm 03 ve 05)</td></tr>
+    <tr><td>Sonuçların yanında sayılarıyla filtreler</td><td>"Elektronik (40), Kitap (12)", sayılarıyla fiyat aralıkları.</td><td>Aynı request içinde aggregation'lar (bölüm 06)</td></tr>
+    <tr><td>Konuma göre arama</td><td>Yakınımdaki mağazalar, bir bölgedeki teslimatlar.</td><td>geo_point ve geo_distance (bölüm 07)</td></tr>
+    <tr><td>İnsanların içinde arama yaptığı log'lar ve event'ler</td><td>Uygulama log'larında bir hata id'si, IP adresine göre güvenlik event'leri.</td><td>Log analytics, OpenSearch Dashboards</td></tr>
+  </tbody>
+</table>
+
+<h3>Use case'ler, nedeni ve özelliğiyle</h3>
+<table class="data">
+  <thead><tr><th>Use case</th><th>Veri</th><th>Neden bir search engine</th><th>İşi yapan özellik</th></tr></thead>
+  <tbody>
+    <tr><td>Ürün arama (Lale Market)</td><td>İsimler, açıklamalar, kategoriler, fiyatlar.</td><td>Serbest metin, yazım hataları, Türkçe harfler, facet'ler.</td><td>tr_folded analyzer, fuzziness, terms ve range aggregation'ları</td></tr>
+    <tr><td>Mağaza bulucu (Lale Market)</td><td>Koordinatlı mağazalar.</td><td>"25 km içindeki mağazalar, en yakın önce".</td><td>geo_point, geo_distance, mesafeye göre sort</td></tr>
+    <tr><td>Yazarken arama önerileri</td><td>Ürün isimleri.</td><td>Kullanıcı yazarken sonuçlar.</td><td>match_phrase_prefix ya da completion field'ları</td></tr>
+    <tr><td>Yardım merkezi ve doküman arama</td><td>Başlıklı ve metinli makaleler.</td><td>Relevance ve eşleşen kelimelerin vurgulanması.</td><td>Full-text query'ler, highlighting</td></tr>
+    <tr><td>Log analytics ve observability</td><td>Uygulama ve erişim log'ları.</td><td>Milyarlarca satırda arama, zaman içinde grafik.</td><td>Gün başına index, aggregation'lar, Dashboards</td></tr>
+    <tr><td>Güvenlik analitiği (SIEM)</td><td>Firewall, giriş ve API event'leri.</td><td>Birçok kaynakta pattern'leri hızlı bulmak.</td><td>Full-text ve yapılandırılmış query'ler, alerting</td></tr>
+    <tr><td>Semantik ve vector arama</td><td>Metinlerin ya da görsellerin embedding'leri.</td><td>"Bunun gibi ürünleri bul", anlama göre arama.</td><td>k-NN vector search</td></tr>
+    <tr><td>Emlak ve seyahat arama</td><td>Metinli, filtreli ve konumlu ilanlar.</td><td>Tek request'te metin, birçok filtre ve bir harita.</td><td>bool query'ler, aggregation'lar, geo query'ler</td></tr>
+  </tbody>
+</table>
+{{ k.fig("opensearch-uses.png", "log dosyaları, mesajlar, metrikler, konfigürasyon verisi ve dokümanlar OpenSearch Service'e girer. Çıktı; uygulama izleme, güvenlik analitiği (SIEM) ve aramadır.") }}
+
+<h3>OpenSearch'ten uzaklaştıran sinyaller</h3>
+<table class="data">
+  <thead><tr><th>İş yükündeki sinyal</th><th>OpenSearch neden zayıf bir seçim</th><th>Daha iyi seçim</th></tr></thead>
+  <tbody>
+    <tr><td>Verinin tek ve resmi kopyası olmalı</td><td>Bir arama index'i genellikle bir kaynaktan yeniden kurulur. Lale Market onu Seed ile yeniden kurar.</td><td><a href="/e2etutorial/docdb">DocumentDB</a>, <a href="/e2etutorial/aurora">Aurora</a>, <a href="/e2etutorial/dynamodb">DynamoDB</a></td></tr>
+    <tr><td>Birkaç kayıt kurallarla birlikte değişir</td><td>Çoklu document transaction'ı yok.</td><td><a href="/e2etutorial/aurora">Aurora</a></td></tr>
+    <tr><td>Sadece key ile birebir okuma</td><td>Bir search engine gerekenden fazla iş yapar.</td><td><a href="/e2etutorial/dynamodb">DynamoDB</a></td></tr>
+    <tr><td>Geçmiş üzerinde join'ler ve SQL raporları</td><td>Index'ler arasında JOIN yok.</td><td><a href="/e2etutorial/redshift">Redshift</a></td></tr>
+    <tr><td>Birçok adım üzerinden ilişkiler</td><td>Document'lar birbirine bağlanmaz.</td><td><a href="/e2etutorial/neptune">Neptune</a></td></tr>
+  </tbody>
+</table>
+
+<h3>Bir mimarın sorduğu sorular, bu sırayla</h3>
+<ol>
+  <li><b>Source of truth nerede?</b> Değişikliklerin index'e nasıl ulaşacağına karar ver: bir event, bir stream, bir zero-ETL entegrasyonu ya da yeniden kurma.</li>
+  <li><b>Arama sonuçları ne kadar eski olabilir?</b> Bir kopya için saniyeler normaldir.</li>
+  <li><b>Hangi dil ve hangi yazım sorunları?</b> Analyzer'lara bunlar karar verir.</li>
+  <li><b>Sayfa hangi filtreleri ve sayıları gösteriyor?</b> Keyword field'larına ve aggregation'lara bunlar karar verir.</li>
+  <li><b>Ne kadar veri, saniyede kaç query?</b> Shard'lara, replica'lara ve instance boyutlarına ya da OpenSearch Serverless kullanımına bunlar karar verir.</li>
+  <li><b>Arama mı, log analytics mi?</b> Log'lar her gün büyür ve eski index'leri silen bir policy gerektirir.</li>
+</ol>
+
+<h3>AWS'te OpenSearch ve akrabaları</h3>
+<table class="data">
+  <thead><tr><th>Seçenek</th><th>Nedir</th><th>Ne zaman seç</th></tr></thead>
+  <tbody>
+    <tr><td>OpenSearch Service, yönetilen domain</td><td>AWS'in kurduğu, patch'lediği ve yedeklediği bir node cluster'ı. Instance type'larını ve node sayısını sen seçersin.</td><td>Sabit arama trafiği, ince kontrol. Lale Market VPC içinde bir domain kullanır.</td></tr>
+    <tr><td>OpenSearch Serverless</td><td>Boyutlandırılacak node'u olmayan collection'lar. Compute ve storage kullanımı için ödersin.</td><td>Değişken trafik ya da cluster ayarı istemeyen bir ekip.</td></tr>
+    <tr><td>DynamoDB'den zero-ETL</td><td>Bir index'i bir DynamoDB table'ı ile senkron tutan yönetilen bir pipeline.</td><td>Source of truth DynamoDB ise.</td></tr>
+    <tr><td>Database içinde metin arama</td><td>Örneğin PostgreSQL full-text search.</td><td>Küçük bir veri setinde basit arama, ikinci bir sistem olmadan.</td></tr>
+  </tbody>
+</table>
+
+<h3>Lale Market'te OpenSearch'ün yeri</h3>
+<p>Katalog DocumentDB'de yaşar. Seed her ürünün altı field'ını <code>products</code> index'ine kopyalar: isim, açıklama, kategori, marka, fiyat ve puan.
+   Mağazaları da <code>stores</code> index'ine kopyalar. Arama sayfası, header önerileri ve mağaza bulucu sadece OpenSearch'ten okur.
+   Gerçek bir mağazada her ürün değişikliği index'e bir event olarak ulaşırdı, böylece index katalogdan birkaç saniye geride kalırdı.</p>
+
+<h3>Simülasyon: gereksinimler seçsin</h3>
+{{ k.sim("decide_search", "İş yükü 1: mağazanın arama kutusu") }}
+{{ k.sim("decide_orders", "İş yükü 2: mağazanın siparişleri") }}
+
+{{ k.quiz("os-a1", "Bir destek ekibi talepleri metinlerindeki kelimelerle, yazım hatalarıyla birlikte bulmak istiyor. Sonuçların yanında ürün başına talep sayısını da istiyor. En iyi ne oturur?",
+   ["Talep database'inden beslenen OpenSearch", "Talep id'si key olan DynamoDB", "Taleplerin gecelik kopyasıyla Redshift", "Talep başına bir key ile ElastiCache"],
+   0, "Serbest metin, yazım hataları ve aynı cevapta sayılar search engine özellikleridir. Talepler kendi database'lerinde kalır, OpenSearch bir kopya tutar.") }}
+{{ k.quiz("os-a2", "Bir ekip ürün kataloğunu sadece OpenSearch'te tutmayı planlıyor. Ana risk nedir?",
+   ["Yeniden kurma ya da mapping değişikliği, yüklenecek bir kaynak gerektirir", "OpenSearch sayı ya da tarih saklayamaz", "OpenSearch ondan fazla document döndüremez", "Daha çok shard ile aramalar yavaşlar"],
+   0, "Birçok değişiklik (yeni bir analyzer, yeni bir field type) bir kaynaktan yeniden doldurulan yeni bir index gerektirir. Source of truth olmadan bu zordur.") }}
+
+<div class="part"><b>Bölüm 1</b><h2 id="part1" data-short="BÖLÜM 1: Arama nasıl çalışır">Bir search engine nasıl çalışır</h2>
+<p>Analyzer'lar, inverted index, score'lar, fuzziness, facet'ler ve geo arama.</p></div>
+
+<h2 id="why" data-short="Neden bir search engine?"><span class="sec">02</span>Neden bir search engine? Kitabın arkasındaki dizin</h2>
+<p>Bir database bir row'u tam olarak bildiğin bir değerle bulur: bir ürün id'si, bir fiyat. İnsanlar farklı arar. Birkaç kelime yazarlar; herhangi bir sırayla, yazım hatalarıyla, Türkçe harfler olmadan.
+   "kulaklik kablosuz" query'si için "Kablosuz Kulaklık"ı bulmak için engine bütün değerleri değil, kelimeleri karşılaştırmalıdır.</p>
+{% call k.callout("analogy", "Analoji") %}
+<p>Bir kitabın arkasındaki dizin, her önemli kelimeyi ve geçtiği sayfaları listeler. "transaction" hakkındaki sayfaları bulmak için kitabı okumazsın. Bir kelimeye bakar ve bir sayfa listesi alırsın.
+   Bir inverted index, her document'ın her kelimesi için bu listedir.</p>
+{% endcall %}
+<p>Bu sayfanın altı öğretici document'ı şunlardır (Lale Market'in gerçek ürün isimleri):</p>
+{{ k.sample("os_docs", "products index: altı örnek document", key=["_id"]) }}
+<p>Identifier'lar: ürün id'sinin sahibi katalogdur (DocumentDB). Index onu document <code>_id</code>'si olarak ödünç alır; böylece bir arama sonucu ürün sayfasına bağlanabilir.
+   OpenSearch aynı <code>_id</code>'ye sahip bir document'ı değiştirir, bu yüzden tekrarlanan bir yükleme kopya oluşturmaz.</p>
+
+<h2 id="analyze" data-short="Analyzer'lar ve token'lar"><span class="sec">03</span>Analyzer'lar: metinden token'lara</h2>
+<p>OpenSearch bir text field'ı saklamadan önce bir {{ k.term("analyzer") }} metni {{ k.term("token") }}'lara böler ve her token'ı değiştirir. Aynı analyzer query üzerinde de çalışır, böylece iki taraf eşleşir.
+   Lale Market Türkçe isimler için özel bir analyzer tanımlar (<code>engines/opensearch.py</code> içinden):</p>
+{% call k.sql("M1", "products index'inin analyzer'ı ve mapping'i") %}
+<pre><code>"settings": {"analysis": {
+  "filter":   {"tr_lower": {"type": "lowercase", "language": "turkish"}},
+  "analyzer": {"tr_folded": {"tokenizer": "standard", "filter": ["tr_lower", "asciifolding"]}}}},
+"mappings": {"properties": {
+  "name":     {"type": "text", "analyzer": "tr_folded", "fields": {"std": {"type": "text", "analyzer": "standard"}}},
+  "category": {"type": "keyword"},
+  "price":    {"type": "float"}}}</code></pre>
+<table class="clause">
+  <tr><td>"tokenizer": "standard"</td><td>Metni boşluklarda ve noktalama işaretlerinde kelimelere böl.</td></tr>
+  <tr><td>"tr_lower": lowercase, turkish</td><td>Türkçe kurallarla küçük harfe çevir: "I", "ı" olur ve "İ", "i" olur.</td></tr>
+  <tr><td>"asciifolding"</td><td>Harfleri sade biçimlerine çevir: "ı", "i" olur; "ş", "s" olur; "ğ", "g" olur.</td></tr>
+  <tr><td>"name": text, tr_folded</td><td><code>name</code> field'ı full-text arama için bu analyzer'ı kullanır.</td></tr>
+  <tr><td>"fields": {"std": ...}</td><td>Aynı field'ın standard analyzer'lı ikinci bir kopyası: <code>name.std</code>. Arama sayfası onu "standard" deneyi için kullanır.</td></tr>
+  <tr><td>"category": keyword</td><td>Bir keyword field analiz edilmez. Değeri birebir tutar, bu yüzden filtreler ve sayımlar için doğrudur.</td></tr>
+</table>
+{% endcall %}
+{{ k.sim("analyze", "Bir isim, iki analyzer") }}
+<p>Herhangi bir metnin token'larını <code>_analyze</code> API'ı ile görebilirsin (<a href="https://docs.opensearch.org/latest/analyzers/">OpenSearch: Text analysis</a>).</p>
+{{ k.quiz("os-q1", "Bir müşteri name.std'de (standard analyzer) \"kulaklik\" arıyor. İsim \"Kulaklık\". Token eşleşir mi?",
+   ["Evet, standard analyzer Türkçe harfleri sade harflere çevirir", "Hayır, standard token ı harfiyle \"kulaklık\"tır", "Evet, her arama büyük/küçük harfi ve aksanları yok sayar", "Hayır, çünkü name.std bir keyword field'dır"],
+   1, "Standard analyzer küçük harfe çevirir ama ı'yı korur. Query token'ı i harfiyle \"kulaklik\"tir. İkisi farklı token'lardır.") }}
+
+<h2 id="inverted" data-short="Inverted index ve score'lar"><span class="sec">04</span>Inverted index ve relevance score</h2>
+<p>OpenSearch dokümantasyonu onu şöyle tanımlar: "An inverted index maps words to the documents in which they occur", yani bir inverted index kelimeleri geçtikleri document'lara eşler
+   (<a href="https://docs.opensearch.org/latest/getting-started/intro/">Intro to OpenSearch</a>). Bir token'ın document listesi onun {{ k.term("posting list") }}'idir.</p>
+{% call k.sql("Q1", "Ürün ismi üzerinde bir arama") %}
+<pre><code>GET products/_search
+{ "query": { "match": { "name": "kablosuz kulaklik" } } }</code></pre>
+<table class="clause">
+  <tr><td>GET products/_search</td><td><code>products</code> index'inde ara.</td></tr>
+  <tr><td>"match": { "name": ... }</td><td><code>name</code> field'ı üzerinde full-text bir query. OpenSearch query metnini field'ın analyzer'ı (tr_folded) ile analiz eder.</td></tr>
+  <tr><td>"kablosuz kulaklik"</td><td>İki token. Varsayılan olarak bir document, en az birini içeriyorsa eşleşir. İki token'ı da içeren document'lar daha yüksek score alır.</td></tr>
+</table>
+{% endcall %}
+{% call k.predict("Altı document'ı kullan. Hangi document'lar \"kablosuz kulaklik\" ile eşleşir ve hangileri önce gelir?") %}
+<p>P0001, P0031 ve P0081 iki token'ı da içerir, bu yüzden en yüksek score'larla eşleşirler. Başka hiçbir document iki token'dan birini içermez.</p>
+{% endcall %}
+{{ k.sim("inverted", "Inverted index'te iki token'a bak") }}
+<p>"OpenSearch uses the BM25 ranking algorithm to calculate document relevance scores", yani OpenSearch relevance score'larını BM25 algoritmasıyla hesaplar (<a href="https://docs.opensearch.org/latest/getting-started/intro/">Intro to OpenSearch</a>).
+   Basit sözlerle üç kural geçerlidir. Az document'ta geçen bir token daha çok sayılır. Kısa bir field'da sık geçen bir token daha çok sayılır. Daha çok eşleşen token daha yüksek score verir.</p>
+
+<h2 id="fuzzy" data-short="Fuzziness"><span class="sec">05</span>Fuzziness: yazım hatalarını kabul eden bir arama</h2>
+<p>İki kelime arasındaki {{ k.term("edit distance") }}, birini diğerine çeviren tek harflik değişikliklerin sayısıdır. OpenSearch Damerau–Levenshtein mesafesiyle sayar. Şu değişikliklerin her biri bir edit sayılır:
+   eklenen bir harf, silinen bir harf, değiştirilen bir harf ya da yer değiştiren iki komşu harf
+   (<a href="https://docs.opensearch.org/latest/query-dsl/fuzziness/">OpenSearch: Fuzziness</a>).
+   <code>fuzziness: AUTO</code> ile izin verilen edit sayısı terimin uzunluğuna bağlıdır. Dokümantasyon örneği: 6 karakterlik bir terim 2 edit'e izin verir.</p>
+{% call k.sql("Q2", "Yazım hatası toleranslı bir arama") %}
+<pre><code>GET products/_search
+{ "query": { "match": { "name": { "query": "kulaklk", "fuzziness": "AUTO" } } } }</code></pre>
+<table class="clause">
+  <tr><td>"query": "kulaklk"</td><td>Müşterinin yazdığı metin. Bir harf eksik.</td></tr>
+  <tr><td>"fuzziness": "AUTO"</td><td>Birkaç edit uzaklıktaki index terimlerini de kabul et. Sayı terimin uzunluğuna bağlıdır.</td></tr>
+</table>
+{% endcall %}
+{{ k.sim("fuzzy", "Hangi index terimleri \"kulaklk\"a yakın?") }}
+{{ k.quiz("os-q2", "\"kulaklk\" ile \"kulaklik\" arasında kaç edit var?",
+   ["Sıfır edit", "Bir edit", "İki edit", "Üç edit"],
+   1, "Bir harf (i) ekle, kelimeler eşit olur. Bu bir edit'tir.") }}
+
+<h2 id="facets" data-short="Filtreler ve facet'ler"><span class="sec">06</span>Aynı request içinde filtreler ve facet'ler</h2>
+<p>Bir arama sayfası hit'leri ve solda kategoriye ve fiyat aralığına göre sayıları gösterir. Bu sayılar {{ k.term("aggregation") }}'lardır. OpenSearch onları aynı request içinde hesaplar. Lale Market arama sayfasının gerçek request'i budur:</p>
+{% call k.sql("Q3", "Hit'ler, bir kategori filtresi ve iki aggregation") %}
+<pre><code>GET products/_search
+{ "query": { "bool": {
+    "must":   [ { "multi_match": { "query": "kablosuz kulaklik", "fields": ["name^3", "description"], "fuzziness": "AUTO" } } ],
+    "filter": [ { "term": { "category": "Elektronik" } } ] } },
+  "size": 24,
+  "aggs": { "categories": { "terms": { "field": "category" } },
+            "price": { "range": { "field": "price", "ranges": [ {"to": 500}, {"from": 500, "to": 2000}, {"from": 2000} ] } } } }</code></pre>
+<table class="clause">
+  <tr><td>"bool": { "must": [...] }</td><td>Eşleşmesi gereken ve score'u değiştiren koşullar.</td></tr>
+  <tr><td>"multi_match", "fields": ["name^3", "description"]</td><td>İki field'da ara. <code>^3</code>, isimdeki bir eşleşmeyi açıklamadakinden üç kat daha önemli yapar.</td></tr>
+  <tr><td>"filter": [ { "term": { "category": ... } } ]</td><td>Bir filtre eşleşmelidir ama score'u değiştirmez. OpenSearch filtreleri cache'leyebilir, bu yüzden ucuzdurlar.</td></tr>
+  <tr><td>"size": 24</td><td>En iyi 24 hit'i döndür.</td></tr>
+  <tr><td>"aggs": "categories": terms</td><td><code>category</code> keyword field'ının her değeri için eşleşen document'ları say.</td></tr>
+  <tr><td>"aggs": "price": range</td><td>Eşleşen document'ları üç fiyat aralığında say.</td></tr>
+</table>
+{% endcall %}
+
+<h2 id="geo" data-short="Geo arama"><span class="sec">07</span>Coğrafi arama</h2>
+<p>{{ k.term("geo_point") }} type'ında bir field bir enlem ve bir boylam saklar. Bir geo_distance query'si bir dairenin içindeki document'ları tutar ve bir sort en yakını öne koyar.
+   Aşağıdaki mağaza koordinatları Lale Market'in gerçek mağazalarına yakın örneklerdir.</p>
+{% call k.sql("Q4", "25 km içindeki mağazalar, en yakın önce") %}
+<pre><code>GET stores/_search
+{ "query": { "geo_distance": { "distance": "25km", "location": { "lat": 41.0082, "lon": 28.9784 } } },
+  "sort":  [ { "_geo_distance": { "location": { "lat": 41.0082, "lon": 28.9784 }, "order": "asc", "unit": "km" } } ] }</code></pre>
+<table class="clause">
+  <tr><td>"geo_distance": { "distance": "25km", ... }</td><td><code>location</code>'ı noktaya en fazla 25 km uzaklıkta olan mağazaları tut.</td></tr>
+  <tr><td>"sort": "_geo_distance", "order": "asc"</td><td>Mağazaları mesafeye göre sırala, en yakın önce. Her hit'in sort değeri km cinsinden mesafedir.</td></tr>
+</table>
+{% endcall %}
+{{ k.sim("geo", "Merkezi İstanbul çevresinde 25 km'lik bir daire") }}
+{{ k.quiz("os-q3", "Hangi field type OpenSearch'ün mesafeye göre filtrelemesini sağlar?",
+   ["Şehri içeren bir keyword field", "Adresi içeren bir text field", "Konumu içeren bir geo_point field", "Sadece enlemi içeren bir float field"],
+   2, "Sadece bir geo field (geo_point ya da geo_shape), bir mesafe query'sinin kullanabileceği koordinatları saklar.") }}
+
+<div class="part"><b>Bölüm 2</b><h2 id="part2" data-short="BÖLÜM 2: OpenSearch Service">Amazon OpenSearch Service: AWS servisi</h2>
+<p>Shard'lar ve replica'lar, ve AWS'in senin için çalıştırdıkları.</p></div>
+
+<h2 id="service" data-short="Shard, replica, servis"><span class="sec">08</span>Shard'lar, replica'lar ve yönetilen servis</h2>
+<p>Bir index {{ k.term("shard") }}'lara bölünür. Her shard, document'ların bir kısmını tutan küçük ve tam bir index'tir. Shard'lar bir index'in tek bir node'u aşmasını ve birkaç node'un paralel aramasını sağlar.
+   Her primary shard'ın başka node'larda {{ k.term("replica") }} shard'ları olabilir. Bir replica, arızalar için bir kopya ve aramalar için daha çok kapasite verir.</p>
+{{ k.fig("opensearch-index-shards.png", "iki shard'a bölünmüş bir index. Her shard document'ların bir kısmını tutar.") }}
+{{ k.fig("opensearch-replicas.png", "iki node. Her primary shard'ın diğer node'da bir replica shard'ı vardır, bu yüzden bir node'un kaybı veri kaybettirmez.") }}
+<p>OpenSearch'ü kendin çalıştırdığında node'ları kurarsın, heap belleğini ayarlarsın, shard'ları planlarsın, arızalı node'ları değiştirirsin, snapshot alırsın ve versiyonu yükseltirsin.
+   Amazon OpenSearch Service bu görevleri yapar. Sen instance type'larını, node sayısını ve storage'ı seçersin. Domain'i bir VPC'ye yerleştirip Availability Zone'lara yayabilirsin.</p>
+<table class="data">
+  <thead><tr><th>Görev</th><th>Kendi OpenSearch cluster'ın</th><th>Amazon OpenSearch Service</th></tr></thead>
+  <tbody>
+    <tr><td>Node'lar</td><td>Sen kurar, ayarlar ve değiştirirsin.</td><td>AWS çalıştırır ve değiştirir. Type'ı ve sayıyı sen seçersin.</td></tr>
+    <tr><td>Snapshot'lar</td><td>Bir repository ve bir zamanlama ayarlarsın.</td><td>Otomatik snapshot'lar.</td></tr>
+    <tr><td>Yükseltmeler</td><td>Rolling upgrade'leri sen planlarsın.</td><td>Yönetilen versiyon yükseltmeleri.</td></tr>
+    <tr><td>Erişim</td><td>Bir security plugin eklersin.</td><td>IAM (SigV4), VPC yerleşimi, fine-grained access control.</td></tr>
+    <tr><td>Dashboards</td><td>OpenSearch Dashboards'u sen kurarsın.</td><td>Dahil.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="lalemarket" data-short="Lale Market'te OpenSearch"><span class="sec">09</span>Lale Market'te OpenSearch</h2>
+<ul>
+  <li>VPC içinde, iki index'li bir OpenSearch Service domain'i: <code>products</code> (200 document, tr_folded ve standard analyzer'lar) ve <code>stores</code> (geo_point).</li>
+  <li>OpenSearch Engine App her request'i kendi IAM role'ü ile imzalar (SigV4). Şifre yoktur.</li>
+  <li>Canlı <code>products</code> index'inin 5 primary shard'ı ve her birinin 1 replica'sı vardır.</li>
+  <li>Arama sayfasında fuzziness ve analyzer deneyleri, mağaza bulucuda yarıçap deneyi vardır.</li>
+</ul>
+
+<h2 id="recall" data-short="Hatırlama testi"><span class="sec">10</span>Hatırlama testi</h2>
+{{ k.quiz("os-r1", "Aynı analyzer neden hem document'lar hem query üzerinde çalışmalı?",
+   ["İki taraf aynı token'ları üretsin diye", "OpenSearch daha az shard kullanabilsin diye", "Query bir transaction içinde çalışsın diye", "Document'lar _id'lerini korusun diye"],
+   0, "Eşleşme token'ları karşılaştırır. İki taraf farklı token'lar üretirse eşit kelimeler eşleşmez.") }}
+{{ k.quiz("os-r2", "Bir bool query'de filter ile must clause arasındaki fark nedir?",
+   ["Filter score'u değiştirir, must değiştirmez", "Filter score'u değiştirmez", "Filter sadece text field'larda çalışır", "Filter eşleşmeyen document'ları döndürür"],
+   1, "Bir filter document'ları sadece dahil eder ya da dışarıda bırakır. Relevance score'u değiştirmez ve OpenSearch onu cache'leyebilir.") }}
+{{ k.quiz("os-r3", "Bir mağazada OpenSearch neden genellikle başka bir database'in kopyasıdır?",
+   ["Birden fazla field saklayamaz", "Analyzer değişiklikleri bir kaynaktan yeniden kurma gerektirir", "Her gece bütün veriyi kaybeder", "Bir dakikadan kısa sürede cevap veremez"],
+   1, "Birçok değişiklik, bir kaynağın yeniden doldurduğu yeni bir index gerektirir. Source of truth, işin kurallarıyla birlikte bir database'de kalır.") }}
+
+<section class="lesson-foot">
+  <h2>Daha derine in</h2>
+  <p><b>Ana kaynak:</b> <a href="https://docs.opensearch.org/latest/getting-started/intro/">Intro to OpenSearch</a>, sonra
+     <a href="https://docs.aws.amazon.com/opensearch-service/latest/developerguide/what-is.html">What is Amazon OpenSearch Service</a>.</p>
+  <p><b>Mağazada kullan:</b> <a href="/free-e-commerce-app/search?q=kulaklk">Arama sayfasında</a> fuzziness ve analyzer deneyleri var. <a href="/free-e-commerce-app/stores">Mağaza bulucuda</a> yarıçap deneyi var.</p>
+  <p><b>Soru sor.</b> Bir kısım net değilse eğitmenine ya da AI asistanına sor. Kullanıcılarının yaptığı bir aramayı getir ve onun analyzer'ını birlikte tasarlayın.</p>
+</section>
+{% endblock %}

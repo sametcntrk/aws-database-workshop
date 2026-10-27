@@ -1126,3 +1126,166 @@ def keyspaces(lang):
 
 COUNT_TR.update({"partitions read": "okunan partition"})
 SIMS["keyspaces"] = keyspaces
+
+
+# ================================================================ OpenSearch
+OS_DOCS = [["P0001", "Alpen Kablosuz Kulaklık 1"], ["P0031", "Alpen Kablosuz Kulaklık 31"], ["P0081", "Kapadokya Kablosuz Kulaklık 81"],
+           ["P0016", "Nordwind Powerbank 16"], ["P0044", "Kapadokya Bulut Mimarisi 44"], ["P0175", "Toros Bluetooth Hoparlör 175"]]
+EXTRA_TABLES["os_docs"] = {"cols": ["_id", "name"], "rows": OS_DOCS}
+_FOLD = str.maketrans("ıİşŞğĞüÜöÖçÇ", "iisSgGuUoOcC")
+
+
+def _tokens(text, folded):
+    out = []
+    for w in text.split():
+        w = w.lower() if not folded else w.replace("I", "ı").replace("İ", "i").lower().translate(_FOLD)
+        out.append(w)
+    return out
+
+
+def os_analyze(lang):
+    text = "Alpen Kablosuz Kulaklık 1"
+    steps = [{"say": T(lang, f"The text \"{text}\" goes through two analyzers. An analyzer splits the text into words (tokens) and changes each token, for example to lowercase.",
+                       f"\"{text}\" metni iki analyzer'dan geçer. Bir analyzer metni kelimelere (token) böler ve her token'ı değiştirir, örneğin küçük harfe çevirir."),
+              "marks": {}, "out": [], "count": {}}]
+    out = []
+    std, fold = _tokens(text, False), _tokens(text, True)
+    for i, (a, b) in enumerate(zip(std, fold)):
+        out.append([text.split()[i], a, b])
+        steps.append({"say": T(lang, f"Word {i + 1}: \"{text.split()[i]}\". The standard analyzer makes \"{a}\". tr_folded makes \"{b}\"" + (". Here the two differ: tr_folded changed ı to i." if a != b else ". Here both are the same."),
+                               f"Kelime {i + 1}: \"{text.split()[i]}\". standard analyzer \"{a}\" yapar. tr_folded \"{b}\" yapar" + (". Burada ikisi farklı: tr_folded ı'yı i yaptı." if a != b else ". Burada ikisi aynı.")),
+                      "marks": {}, "out": deepcopy(out), "outmarks": {i: "bad" if a != b else "new"}, "count": {}})
+    steps.append({"say": T(lang, "Result: the query word \"kulaklik\" (typed without Turkish letters) equals the tr_folded token \"kulaklik\", but not the standard token \"kulaklık\". The analyzer, not the search, decides this.",
+                           "Sonuç: Türkçe harfsiz yazılan \"kulaklik\" sorgu kelimesi tr_folded token'ı \"kulaklik\"e eşittir, ama standard token \"kulaklık\"a eşit değildir. Buna arama değil, analyzer karar verir."),
+                  "marks": {}, "out": out, "outmarks": {2: "match"}, "count": {}})
+    return {"tables": [], "out": {"name": T(lang, "tokens", "token'lar"), "cols": [T(lang, "word", "kelime"), "standard", "tr_folded"]}, "steps": steps}
+
+
+def os_inverted(lang):
+    index = {}
+    for pid, name in OS_DOCS:
+        for t in _tokens(name, True):
+            if not t.isdigit():
+                index.setdefault(t, []).append(pid)
+    rows = [[t, ", ".join(ids)] for t, ids in sorted(index.items())]
+    steps = [{"say": T(lang, "At index time, OpenSearch turned the six product names into tokens. The inverted index lists, for each token, the documents that contain it (the posting list).",
+                       "Index zamanında OpenSearch altı ürün adını token'lara çevirdi. Inverted index, her token için onu içeren dokümanları listeler (posting list)."),
+              "marks": {}, "out": [], "count": {"tokens looked up": 0, "documents read": 0}}]
+    q = ["kablosuz", "kulaklik"]
+    score = {}
+    for n, t in enumerate(q, start=1):
+        ri = next(i for i, r in enumerate(rows) if r[0] == t)
+        for pid in index[t]:
+            score[pid] = score.get(pid, 0) + 1
+        out = sorted(([pid, sc] for pid, sc in score.items()), key=lambda r: (-r[1], r[0]))
+        steps.append({"say": T(lang, f"The query \"kablosuz kulaklik\" goes through the same analyzer: token {n} is \"{t}\". OpenSearch looks it up in the sorted index and gets its posting list: {', '.join(index[t])}. It reads no product name.",
+                               f"\"kablosuz kulaklik\" sorgusu aynı analyzer'dan geçer: {n}. token \"{t}\". OpenSearch onu sıralı index'te arar ve posting list'ini alır: {', '.join(index[t])}. Hiçbir ürün adı okumaz."),
+                      "marks": {"inv": {ri: "match"}}, "out": out, "count": {"tokens looked up": n, "documents read": 0}})
+    out = sorted(([pid, sc] for pid, sc in score.items()), key=lambda r: (-r[1], r[0]))
+    steps.append({"say": T(lang, f"The documents that contain both tokens get a higher score. The real score is BM25: rare tokens and short fields count more. OpenSearch read {len(q)} index entries, not {len(OS_DOCS)} documents. With 10 million products, it still reads 2 entries.",
+                           f"İki token'ı da içeren dokümanlar daha yüksek skor alır. Gerçek skor BM25'tir: nadir token'lar ve kısa alanlar daha çok sayılır. OpenSearch {len(OS_DOCS)} doküman değil, {len(q)} index entry'si okudu. 10 milyon üründe de hâlâ 2 entry okur."),
+                  "marks": {"inv": {i: "match" for i, r in enumerate(rows) if r[0] in q}}, "out": out, "outmarks": {0: "new", 1: "new", 2: "new"}, "count": {"tokens looked up": 2, "documents read": 0}})
+    return {"tables": [{"id": "inv", "name": T(lang, "inverted index of the field name (tr_folded)", "name alanının inverted index'i (tr_folded)"), "cols": ["token", "posting list"], "rows": rows, "key": [0], "ref": [1]}],
+            "out": {"name": T(lang, "matching documents", "eşleşen dokümanlar"), "cols": ["_id", T(lang, "matched tokens", "eşleşen token")]}, "steps": steps}
+
+
+def _edits(a, b):
+    d = [[i + j if i * j == 0 else 0 for j in range(len(b) + 1)] for i in range(len(a) + 1)]
+    for i in range(1, len(a) + 1):
+        for j in range(1, len(b) + 1):
+            d[i][j] = min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] != b[j - 1]))
+    return d[-1][-1]
+
+
+def os_fuzzy(lang):
+    q = "kulaklk"
+    terms = sorted({t for _, n in OS_DOCS for t in _tokens(n, True) if not t.isdigit()})
+    allowed = 2 if len(q) > 5 else (1 if len(q) > 2 else 0)
+    steps = [{"say": T(lang, f"The shopper types \"{q}\" (one letter is missing). With fuzziness AUTO, a term of {len(q)} characters may differ by up to {allowed} edits. An edit is one added, removed or changed letter.",
+                       f"Alışverişçi \"{q}\" yazıyor (bir harf eksik). Fuzziness AUTO ile {len(q)} karakterlik bir terim en fazla {allowed} edit farklı olabilir. Bir edit, eklenen, silinen ya da değiştirilen tek bir harftir."),
+              "marks": {}, "out": [], "count": {"terms compared": 0, "terms accepted": 0}}]
+    out, m = [], {}
+    for i, t in enumerate(terms):
+        e = _edits(q, t)
+        ok = e <= allowed
+        m = {**{k: ("match" if _edits(q, terms[k]) <= allowed else "skip") for k in m}, i: "match" if ok else "read"}
+        if ok:
+            out.append([t, e])
+        steps.append({"say": T(lang, f"\"{t}\" is {e} edit(s) away from \"{q}\". " + ("This is within the limit, so the term counts as a match." if ok else "This is over the limit."),
+                               f"\"{t}\", \"{q}\"dan {e} edit uzaklıkta. " + ("Bu sınırın içinde, bu yüzden terim eşleşme sayılır." if ok else "Bu sınırın dışında.")),
+                      "marks": {"t": dict(m)}, "out": deepcopy(out), "outmarks": {len(out) - 1: "new"} if ok else {}, "count": {"terms compared": i + 1, "terms accepted": len(out)}})
+    steps.append({"say": T(lang, "Only \"kulaklik\" is close enough. Its posting list gives the three headphones. Without fuzziness, \"kulaklk\" is not in the index, and the search finds nothing. OpenSearch uses an automaton over the index, so it does not compare each term one by one like this simulation.",
+                           "Sadece \"kulaklik\" yeterince yakın. Onun posting list'i üç kulaklığı verir. Fuzziness olmadan \"kulaklk\" index'te yoktur ve arama hiçbir şey bulmaz. OpenSearch index üzerinde bir otomat kullanır, bu yüzden bu simülasyon gibi her terimi tek tek karşılaştırmaz."),
+                  "marks": {"t": {k: ("match" if _edits(q, x) <= allowed else "skip") for k, x in enumerate(terms)}}, "out": out, "count": {"terms compared": len(terms), "terms accepted": len(out)}})
+    return {"tables": [{"id": "t", "name": T(lang, "terms in the index", "index'teki terimler"), "cols": ["term"], "rows": [[t] for t in terms], "key": [0], "ref": []}],
+            "out": {"name": T(lang, "accepted terms", "kabul edilen terimler"), "cols": ["term", "edits"]}, "steps": steps}
+
+
+STORES = [["S001", "İstanbul Mağaza 1", 41.0457, 29.0283], ["S010", "İstanbul Mağaza 2", 41.0612, 28.9341], ["S019", "İstanbul Mağaza 3", 40.9911, 29.1102],
+          ["S002", "Ankara Mağaza 1", 39.9334, 32.8597], ["S003", "İzmir Mağaza 1", 38.4237, 27.1428], ["S004", "Bursa Mağaza 1", 40.1885, 29.0610]]
+
+
+def _km(a, b, c, d):
+    import math
+    r = 6371.0
+    p1, p2 = math.radians(a), math.radians(c)
+    dp, dl = math.radians(c - a), math.radians(d - b)
+    h = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return round(2 * r * math.asin(math.sqrt(h)), 1)
+
+
+def os_geo(lang):
+    here = (41.0082, 28.9784)
+    km = 25
+    steps = [{"say": T(lang, f"The shopper stands at 41.0082, 28.9784 (central İstanbul). Query: geo_distance {km} km on the field location (type geo_point), sorted by distance.",
+                       f"Alışverişçi 41.0082, 28.9784 noktasında (İstanbul merkezi). Query: location alanında (type geo_point) {km} km geo_distance, mesafeye göre sıralı."),
+              "marks": {}, "out": [], "count": {"stores in the circle": 0}}]
+    out, m = [], {}
+    for i, s in enumerate(STORES):
+        d = _km(here[0], here[1], s[2], s[3])
+        ok = d <= km
+        m[i] = "match" if ok else "skip"
+        if ok:
+            out.append([s[0], s[1], d])
+            out.sort(key=lambda r: r[2])
+        steps.append({"say": T(lang, f"{s[1]}: {d} km. " + ("Inside the circle." if ok else "Outside the circle."), f"{s[1]}: {d} km. " + ("Dairenin içinde." if ok else "Dairenin dışında.")),
+                      "marks": {"s": dict(m)}, "out": deepcopy(out), "count": {"stores in the circle": len(out)}})
+    steps.append({"say": T(lang, "The sort by _geo_distance puts the nearest store first. OpenSearch uses a spatial index on the geo_point field, so it does not calculate the distance to every store in a large index.",
+                           "_geo_distance'a göre sıralama en yakın mağazayı öne koyar. OpenSearch geo_point alanında bir spatial index kullanır, bu yüzden büyük bir index'te her mağazaya olan mesafeyi hesaplamaz."),
+                  "marks": {"s": m}, "out": out, "outmarks": {0: "match"}, "count": {"stores in the circle": len(out)}})
+    return {"tables": [{"id": "s", "name": "stores (location: geo_point)", "cols": ["_id", "name", "lat", "lon"], "rows": STORES, "key": [0], "ref": []}],
+            "out": {"name": T(lang, "result, nearest first", "sonuç, en yakın önce"), "cols": ["_id", "name", "km"]}, "steps": steps}
+
+
+OS_CANDS = ["OpenSearch", "Aurora PostgreSQL", "DocumentDB", "DynamoDB", "Redshift"]
+
+
+def opensearch(lang):
+    w1 = verdicts(OS_CANDS, [
+        V((1, "analyzers, fuzziness", "analyzer'lar, fuzziness"), (0, "basic text search, no typo tolerance by default", "temel metin araması, varsayılan olarak yazım hatası toleransı yok"),
+          (0, "exact filters and basic text index", "kesin filtreler ve temel metin index'i"), (0, "exact key match only", "sadece kesin key eşleşmesi"), (0, "not built for search", "arama için yapılmadı")),
+        V((1, "BM25 score", "BM25 skoru"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi")),
+        V((1, "aggregations in the same request", "aynı istekte aggregation'lar"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi")),
+    ])
+    w2 = verdicts(OS_CANDS, [
+        V((0, "a search index, best as a copy", "bir arama index'i, en iyi bir kopya olarak"), (1, "durable, ACID", "kalıcı, ACID"), (1, "durable", "kalıcı"), (1, "durable", "kalıcı"), (1, "durable", "kalıcı")),
+        V((0, "removed earlier", "daha önce elendi"), (1, "transactions, constraints", "transaction'lar, constraint'ler"), (1, "multi-document transactions", "çok-dokümanlı transaction'lar"),
+          (1, "TransactWriteItems", "TransactWriteItems"), (0, "not for many small transactions", "çok sayıda küçük transaction için değil")),
+        V((0, "removed earlier", "daha önce elendi"), (1, "foreign keys, CHECK", "foreign key'ler, CHECK"), (0, "no rules between collections", "koleksiyonlar arası kural yok"), (0, "no foreign keys", "foreign key yok"), (0, "removed earlier", "daha önce elendi")),
+    ])
+    spec = {
+        "decide_search": decide_generic(lang, ("The search box of a shop: 200,000 products, typos, Turkish letters, filters by category and price", "Bir mağazanın arama kutusu: 200.000 ürün, yazım hataları, Türkçe harfler, kategori ve fiyat filtreleri"),
+                                        [("Match words with typos and without Turkish letters", "Yazım hatalı ve Türkçe harfsiz kelimeleri eşleştir"),
+                                         ("Sort the hits by relevance", "Sonuçları relevance'a göre sırala"),
+                                         ("Counts per category and price range in the same answer", "Aynı cevapta kategori ve fiyat aralığı başına sayılar")], OS_CANDS, w1),
+        "decide_orders": decide_generic(lang, ("The orders of the shop", "Mağazanın siparişleri"),
+                                        [("The database is the source of truth", "Database kaynak veridir (source of truth)"),
+                                         ("Several records change as one unit", "Birkaç kayıt tek bir birim olarak değişir"),
+                                         ("Rules between tables are enforced", "Table'lar arası kurallar uygulanır")], OS_CANDS, w2),
+        "analyze": os_analyze(lang), "inverted": os_inverted(lang), "fuzzy": os_fuzzy(lang), "geo": os_geo(lang),
+    }
+    return {k: _localize(v, lang) for k, v in spec.items()}
+
+
+COUNT_TR.update({"tokens looked up": "aranan token", "documents read": "okunan doküman", "terms compared": "karşılaştırılan terim", "terms accepted": "kabul edilen terim", "stores in the circle": "dairedeki mağaza"})
+SIMS["opensearch"] = opensearch
