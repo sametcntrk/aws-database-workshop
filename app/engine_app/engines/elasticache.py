@@ -177,3 +177,61 @@ def reset_visitors():
 
 def status():
     return {"deal stock": r().get("lm:deal:stock"), "leaderboard members": r().zcard("lm:leaderboard")}
+
+
+KEY_GROUPS = [("lm:deal", "Flash deal"), ("lm:session:", "Oturumlar (session)"), ("lm:leaderboard", "Sıralama ve sayaçlar"),
+              ("lm:active", "Sıralama ve sayaçlar"), ("lm:orders", "Sıralama ve sayaçlar"), ("lm:name:", "İsimler"), ("lm:sim", "Load Simulation")]
+TYPE_TR = {"string": "string (metin veya sayaç)", "hash": "hash (alan → değer)", "zset": "sorted set (puana göre sıralı)",
+           "set": "set", "list": "list"}
+
+
+def learn_overview(lesson, focus):
+    """101: every lm:* key as a tile, grouped by use. `focus` = the keys that the call touched; your session key is marked too."""
+    mine = f"lm:session:{visitor_id()}"
+    f = set(focus) | ({mine} if lesson == "session" else set())
+    with trace.call("SCAN", "SCAN 0 MATCH lm:* COUNT 500   # on every shard, at most 400 keys", {}) as t:
+        keys = []
+        for k in r().scan_iter(match="lm:*", count=500):
+            keys.append(k)
+            if len(keys) >= 400:
+                break
+        t.result(items=len(keys), note="SCAN walks the key space in small steps, so it does not block the cache like KEYS does.")
+    keys = sorted(set(keys) | {k for k in f if k.startswith("lm:")})
+    groups = {}
+    for k in keys:
+        label = next((g for prefix, g in KEY_GROUPS if k.startswith(prefix)), "Öteki")
+        groups.setdefault(label, []).append(k)
+    for label in groups:   # the keys of the call first, then the others
+        groups[label].sort(key=lambda k: (k not in f, k))
+        groups[label] = groups[label][:60]
+    order = [g for _, g in KEY_GROUPS]
+    return {"title": "ElastiCache (Valkey): anahtar uzayı", "text": "Bellekteki her anahtar bir kare. Raflar anahtarın işi (adındaki önek).",
+            "facts": [[len(keys), "anahtar (en fazla 400 sayılır)"], [len(groups), "grup"], [len([k for k in keys if k in f]), "anahtar senin çağrında"]],
+            "groups": [{"label": g, "items": [{"id": k, "title": k, "hit": k in f} for k in groups[g]]}
+                       for g in sorted(groups, key=lambda g: order.index(g) if g in order else 99)],
+            "hit_label": "Senin çağrının okuduğu veya yazdığı anahtarlar"}
+
+
+def learn_item(lesson, key):
+    with trace.call("TYPE + read", f"TYPE {key}; <read by type>; TTL {key}", {}) as t:
+        kind = r().type(key)
+        if kind == "hash":
+            value = r().hgetall(key)
+        elif kind == "zset":
+            value = {m: sc for m, sc in r().zrevrange(key, 0, 9, withscores=True)}
+        elif kind == "string":
+            value = r().get(key)
+        elif kind == "set":
+            value = sorted(r().smembers(key))[:20]
+        elif kind == "list":
+            value = r().lrange(key, 0, 19)
+        else:
+            value = None
+        ttl = r().ttl(key)
+        t.result(items=1 if value is not None else 0)
+    rec = {"anahtar": key, "tip": TYPE_TR.get(kind, kind), "değer": value,
+           "TTL": "süresiz (-1)" if ttl == -1 else ("anahtar yok (-2)" if ttl == -2 else f"{ttl} saniye sonra silinecek")}
+    if kind == "zset":
+        rec["değer"] = {"ilk 10 üye (puana göre, büyükten küçüğe)": value}
+    return {"title": key, "sub": "Bellekte tek bir anahtar ve değeri. Diskte tablo, satır veya sorgu planı yok.",
+            "record": rec, "marks": {"anahtar": "kept", "TTL": "kept"}}

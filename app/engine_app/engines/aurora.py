@@ -117,6 +117,80 @@ FROM orders WHERE visitor_id IS NOT NULL GROUP BY 1 ORDER BY 1"""
         return jsonify(trace.payload({"segments": seg, "workshop": hours, "plan": plan}))
 
 
+def _rows(cur):
+    cols = [d.name for d in cur.description]
+    clean = lambda v: float(v) if hasattr(v, "as_integer_ratio") and not isinstance(v, (int, float)) else (v.isoformat() if hasattr(v, "isoformat") else v)
+    return [{c: clean(v) for c, v in zip(cols, r)} for r in cur.fetchall()]
+
+
+def learn_overview(lesson, focus):
+    """101: the four tables as shelves. Your orders, their items, products and the persona customer are marked."""
+    vid, cid = visitor_id(), persona_id()
+    with conn() as c, c.cursor() as cur:
+        sql(cur, "SELECT (counts)", "SELECT (SELECT count(*) FROM customers), (SELECT count(*) FROM products), "
+            "(SELECT count(*) FROM orders), (SELECT count(*) FROM order_items)")
+        counts = cur.fetchone()
+        sql(cur, "SELECT (your orders)", "SELECT o.order_id, oi.product_id FROM orders o JOIN order_items oi USING (order_id) "
+            "WHERE o.visitor_id = %(vid)s ORDER BY o.order_date DESC LIMIT 60", {"vid": vid})
+        mine = cur.fetchall()
+        my_orders = list(dict.fromkeys(o for o, _ in mine))
+        my_products = list(dict.fromkeys(p for _, p in mine))
+        sample = {}
+        for tbl, key, order in (("customers", "customer_id", "customer_id"), ("products", "product_id", "product_id"),
+                                ("orders", "order_id", "order_date DESC"), ("order_items", "order_id || '|' || product_id", "order_id DESC")):
+            sql(cur, f"SELECT ({tbl})", f"SELECT {key} FROM {tbl} ORDER BY {order} LIMIT 40")
+            sample[tbl] = [r[0] for r in cur.fetchall()]
+    hits = {"customers": {cid}, "products": set(my_products), "orders": set(my_orders),
+            "order_items": {f"{o}|{p}" for o, p in mine}}
+    first = {"customers": [cid], "products": my_products, "orders": my_orders, "order_items": [f"{o}|{p}" for o, p in mine]}
+    labels = {"customers": "customers", "products": "products", "orders": "orders", "order_items": "order_items"}
+    groups = []
+    for tbl in ("customers", "orders", "order_items", "products"):
+        ids = list(dict.fromkeys(first[tbl] + sample[tbl]))[:48]
+        groups.append({"label": labels[tbl], "items": [{"id": f"{tbl}:{i}", "title": f"{tbl}: {i}", "hit": i in hits[tbl]} for i in ids]})
+    return {"title": "Aurora PostgreSQL: shop veritabanı", "text": "Dört tablo, her biri bir raf. Her kare bir satır (her tablodan en fazla 48 satır gösteriliyor).",
+            "facts": [[counts[0], "müşteri"], [counts[1], "ürün"], [counts[2], "sipariş"], [counts[3], "sipariş satırı"], [len(my_orders), "sipariş senin"]],
+            "groups": groups, "hit_label": "Senin siparişlerin ve onlara bağlı satırlar"}
+
+
+def learn_item(lesson, item_id):
+    tbl, _, key = item_id.partition(":")
+    with conn() as c, c.cursor() as cur:
+        if tbl == "orders":
+            sql(cur, "SELECT", "SELECT * FROM orders WHERE order_id = %(k)s", {"k": key})
+            row = (_rows(cur) or [{}])[0]
+            sql(cur, "SELECT (JOIN)", "SELECT oi.*, p.name, p.category FROM order_items oi JOIN products p USING (product_id) WHERE oi.order_id = %(k)s", {"k": key})
+            items = _rows(cur)
+            sql(cur, "SELECT", "SELECT * FROM customers WHERE customer_id = %(c)s", {"c": row.get("customer_id")})
+            cust = (_rows(cur) or [None])[0]
+            rec = {**row, "order_items (JOIN, order_id ile)": [{"product_id": i["product_id"], "qty": i["qty"], "unit_price": i["unit_price"],
+                                                                 "products (JOIN, product_id ile)": {"name": i["name"], "category": i["category"]}} for i in items],
+                   "customers (JOIN, customer_id ile)": cust}
+            marks = {"order_id": "kept", "customer_id": "kept"}
+            return {"title": f"Sipariş {key}", "sub": "orders tablosunda bir satır. Altında, anahtarlarla bağlı öteki tabloların satırları var (JOIN).",
+                    "record": rec, "marks": marks}
+        if tbl == "order_items":
+            oid, _, pid = key.partition("|")
+            sql(cur, "SELECT (JOIN)", "SELECT oi.*, p.name FROM order_items oi JOIN products p USING (product_id) WHERE order_id = %(o)s AND product_id = %(p)s",
+                {"o": oid, "p": pid})
+            row = (_rows(cur) or [{}])[0]
+            return {"title": f"Sipariş satırı {oid} / {pid}", "sub": "order_items: bir siparişin bir ürünü. order_id ve product_id öteki tablolara işaret eder.",
+                    "record": row, "marks": {"order_id": "kept", "product_id": "kept"}}
+        keycol = {"customers": "customer_id", "products": "product_id"}.get(tbl)
+        if not keycol:
+            return {"title": item_id, "sub": "Bilinmeyen tablo.", "record": {}}
+        sql(cur, "SELECT", f"SELECT * FROM {tbl} WHERE {keycol} = %(k)s", {"k": key})
+        row = (_rows(cur) or [{}])[0]
+        if tbl == "customers":
+            sql(cur, "SELECT", "SELECT order_id, order_date, total FROM orders WHERE customer_id = %(k)s ORDER BY order_date DESC LIMIT 5", {"k": key})
+            row["orders (son 5, customer_id ile)"] = _rows(cur)
+        else:
+            sql(cur, "SELECT", "SELECT count(*) AS satir, coalesce(sum(qty), 0) AS adet FROM order_items WHERE product_id = %(k)s", {"k": key})
+            row["order_items içinde (sayım)"] = _rows(cur)[0]
+    return {"title": f"{tbl}: {key}", "sub": f"{tbl} tablosunda bir satır. Her sütunun tipi tabloyu kurarken bir kez belirlendi.",
+            "record": row, "marks": {keycol: "kept"}}
+
+
 def seed(ds):
     with conn() as c, c.cursor() as cur:
         with trace.call("DDL + COPY", DDL + "\nCOPY ... FROM STDIN  -- 4 tables, one transaction", {}) as t:

@@ -72,7 +72,8 @@
     callNo += 1;
     const engine = (url.match(/^\/(\w+)\//) || [])[1];
     const k = entries.length ? keepForLesson({ label, url, method, entries, ms, ok, engine, data }) : null;
-    const learn = (e, i) => engine ? `/${engine}/learn?${new URLSearchParams({ op: e.op, ...(k ? { k, i } : {}) })}` : "";
+    const api = new URL(url, location.origin).pathname.replace(/^\/\w+/, "");
+    const learn = (e, i) => engine ? `/${engine}/learn?${new URLSearchParams({ op: e.op, api, method, ...(k ? { k, i } : {}) })}` : "";
     const li = document.createElement("li");
     li.className = "call" + (ok ? "" : " failed") + (background ? " background" : "");
     const maxMs = Math.max(...entries.map((e) => e.ms || 0), 1);

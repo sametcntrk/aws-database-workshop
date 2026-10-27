@@ -140,3 +140,41 @@ def reset_visitors():
 
 def status():
     return {"keyspace": env("KEYSPACE"), "table": env("TABLE_NAME")}
+
+
+def learn_overview(lesson, focus):
+    """101: partitions (one per user_id) as shelves, rows (event_time DESC) as tiles. Your partition comes first."""
+    mine = visitor_id()
+    with trace.call("SELECT", f"SELECT user_id, event_time, event_id, event_type FROM {table()} LIMIT 1500", {}) as t:
+        rows = list(s().execute(f"SELECT user_id, event_time, event_id, event_type FROM {table()} LIMIT 1500"))
+        t.result(items=len(rows))
+    with trace.call("SELECT", f"SELECT user_id, event_time, event_id, event_type FROM {table()} WHERE user_id = '{mine}' LIMIT 60", {}) as t:
+        own = list(s().execute(f"SELECT user_id, event_time, event_id, event_type FROM {table()} WHERE user_id = %s LIMIT 60", (mine,)))
+        t.result(items=len(own))
+    parts = {}
+    for row in rows:
+        parts.setdefault(row.user_id, []).append(row)
+    parts[mine] = own
+    order = sorted(parts, key=lambda u: (u != mine, u))[:20]
+    rid = lambda row: f"{row.user_id}|{row.event_time.isoformat()}|{row.event_id}"
+    short = lambda u: u if len(u) <= 18 else u[:16] + "…"
+    groups = [{"label": "Senin geçmişin" if u == mine else short(u),
+               "items": [{"id": rid(x), "title": f"{x.event_time:%Y-%m-%d %H:%M:%S}  {x.event_type}", "hit": u == mine}
+                         for x in sorted(parts[u], key=lambda x: x.event_time, reverse=True)[:40]]} for u in order]
+    return {"title": f"Keyspaces: {table()} tablosu", "text": "Her raf bir partition (bir kullanıcı), her kare bir olay; en yeni olay solda. İlk 20 partition gösteriliyor.",
+            "facts": [[len(rows), "satır örnekte"], [len(parts), "partition örnekte"], [len(own), "olay senin partition'ında"], ["7 gün", "TTL"]],
+            "groups": groups, "hit_label": "Senin partition'ın (user_id = senin id)"}
+
+
+def learn_item(lesson, item_id):
+    uid, ts, eid = item_id.split("|")
+    cql = f"SELECT * FROM {table()} WHERE user_id = %s AND event_time = %s AND event_id = %s"
+    with trace.call("SELECT", cql.replace("%s", "?"), {}) as t:
+        row = s().execute(cql, (uid, datetime.fromisoformat(ts), uuid.UUID(eid))).one()
+        t.result(items=1 if row else 0)
+    if not row:
+        return {"title": eid, "sub": "Bu satır artık yok (TTL ile silinmiş olabilir).", "record": {}}
+    rec = {k: (v.isoformat() if hasattr(v, "isoformat") else str(v) if isinstance(v, uuid.UUID) else v) for k, v in row._asdict().items()}
+    order = ["user_id", "event_time", "event_id"] + [k for k in rec if k not in ("user_id", "event_time", "event_id")]
+    return {"title": f"{rec.get('event_type')} olayı", "sub": "Bir satır. user_id partition key; event_time ve event_id clustering key (partition içindeki sıra).",
+            "record": {k: rec[k] for k in order}, "marks": {"user_id": "kept", "event_time": "kept", "event_id": "kept"}}

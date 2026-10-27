@@ -150,3 +150,37 @@ def reset_visitors():
 def status():
     resp = s3().list_objects_v2(Bucket=env("BUCKET_NAME"), Prefix="products/", MaxKeys=1000)
     return {"product images": resp.get("KeyCount", 0)}
+
+
+def learn_overview(lesson, focus):
+    """101: the bucket's keys by prefix. Your uploads and the objects of the call are marked."""
+    mine = f"uploads/{visitor_id()}/"
+    f = set(focus)
+    groups, total, size = {}, 0, 0
+    with trace.call("ListObjectsV2", "s3.list_objects_v2(Bucket=..., Prefix='products/' | 'uploads/')", {}) as t:
+        for prefix in ("products/", "uploads/"):
+            resp = s3().list_objects_v2(Bucket=env("BUCKET_NAME"), Prefix=prefix, MaxKeys=400)
+            for o in resp.get("Contents", []):
+                total += 1
+                size += o["Size"]
+                label = "Senin yüklediklerin" if o["Key"].startswith(mine) else ("products/" if prefix == "products/" else "uploads/ (öteki ziyaretçiler)")
+                groups.setdefault(label, []).append(o["Key"])
+        t.result(items=total)
+    hit = lambda k: k in f or k.startswith(mine) or any(k.endswith(f"/{x}.jpg") for x in f)
+    order = ["Senin yüklediklerin", "products/", "uploads/ (öteki ziyaretçiler)"]
+    return {"title": "S3: ürün görselleri bucket'ı", "text": "Her kare bir nesne (object). Raflar anahtarın öneki; klasör gibi görünür ama S3'te klasör yoktur.",
+            "facts": [[total, "nesne"], [f"{size / 1048576:.1f} MB", "toplam"], ["versioning", "açık"], [sum(1 for ks in groups.values() for k in ks if hit(k)), "nesne senin çağrında"]],
+            "groups": [{"label": g, "items": [{"id": k, "title": k, "hit": hit(k)} for k in sorted(groups[g], key=lambda k: (not hit(k), k))[:120]]}
+                       for g in order if g in groups],
+            "hit_label": "Senin çağrının okuduğu veya yazdığı nesneler"}
+
+
+def learn_item(lesson, key):
+    with trace.call("HeadObject", f"s3.head_object(Bucket=..., Key='{key}')", {}) as t:
+        h = s3().head_object(Bucket=env("BUCKET_NAME"), Key=key)
+        t.result(note="HEAD returns the metadata without the bytes.")
+    rec = {"Key": key, "ContentLength (bayt)": h["ContentLength"], "ContentType": h.get("ContentType"), "ETag": h.get("ETag", "").strip('"'),
+           "LastModified": h["LastModified"].isoformat(), "StorageClass": h.get("StorageClass", "STANDARD"), "VersionId": h.get("VersionId"),
+           "ServerSideEncryption": h.get("ServerSideEncryption"), "Metadata (x-amz-meta-*)": h.get("Metadata", {})}
+    return {"title": key.rsplit("/", 1)[-1], "sub": "Bir nesne: baytlar (burada okunmadı) ve onları tarif eden metadata. Sarı: anahtar ve senin yazdığın metadata.",
+            "record": rec, "marks": {"Key": "kept", "Metadata (x-amz-meta-*)": "kept"}}

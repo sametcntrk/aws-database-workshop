@@ -48,6 +48,33 @@ def tutorials(engine):
 
 
 @lru_cache(maxsize=None)
+def lessons(engine):
+    """101 lessons of one Engine (lessons/<engine>.yaml, Turkish). Every Engine App has every file, so any app can list all."""
+    path = HERE / "lessons" / f"{engine}.yaml"
+    return yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+
+def find_lesson(engine, method, api, op):
+    """The lesson for a clicked call: the longest matching "[METHOD ]/api/path" wins, then the Engine op name."""
+    best = None
+    for lid, lesson in lessons(engine).items():
+        for key in lesson.get("apis", []):
+            m, _, path = key.rpartition(" ")
+            if (not m or m == method) and api.startswith(path) and (best is None or len(path) > best[0]):
+                best = (len(path), lid)
+    if best:
+        return best[1]
+    return next((lid for lid, lesson in lessons(engine).items() if op in lesson.get("ops", [])), None)
+
+
+ENGINE_IDS = ["docdb", "opensearch", "dynamodb", "aurora", "redshift", "elasticache", "keyspaces", "influxdb", "neptune", "s3"]
+
+
+def lesson_index():
+    return [{"engine": e, "id": lid, "title": l["title"]} for e in ENGINE_IDS for lid, l in lessons(e).items()]
+
+
+@lru_cache(maxsize=None)
 def journey():
     return yaml.safe_load((HERE / "tutorials" / "journey.yaml").read_text(encoding="utf-8"))
 
@@ -59,6 +86,7 @@ def create_app():
     prefix = f"/{engine_id}"
 
     app = Flask(__name__, static_folder=None)
+    app.json.sort_keys = False   # 101 lessons show records in their real field order
     bp = Blueprint("engine", __name__, static_folder="static", static_url_path="/static")
 
     @bp.before_request
@@ -75,17 +103,26 @@ def create_app():
 
     @bp.get("/learn")
     def learn():
-        """101 lesson for one Engine operation. The browser gives the clicked call (localStorage key) to the page."""
+        """101 lesson for one Engine call. The browser gives the clicked call (a localStorage key) to the page."""
         op = request.args.get("op", "")
-        lessons = getattr(engine, "LESSONS", {})
-        lesson = lessons.get(op) or next((v for k, v in lessons.items() if op.startswith(k)), None)
-        ctx = dict(meta=meta, prefix=prefix, op=op, lesson=lesson, lessons=sorted(set(lessons.values())))
-        if lesson:
-            try:
-                return render_template(f"learn/{engine_id}/{lesson}.html", **ctx)
-            except TemplateNotFound:
-                pass
-        return render_template("learn/missing.html", **ctx)
+        lid = request.args.get("lesson") or find_lesson(engine_id, request.args.get("method", "GET"), request.args.get("api", ""), op)
+        lesson = lessons(engine_id).get(lid)
+        ctx = dict(meta=meta, prefix=prefix, op=op, lesson=lid, content=lesson, index=lesson_index())
+        if not lesson:
+            return render_template("learn/missing.html", **ctx)
+        return render_template(lesson.get("template") or "learn/lesson.html", **ctx)
+
+    if hasattr(engine, "learn_overview"):
+        @bp.get("/api/learn/overview")
+        def learn_overview():
+            """Big picture for a lesson: every record (or a sample) as a tile, grouped; `focus` marks the records of the call."""
+            focus = [f for f in request.args.get("focus", "").split(",") if f]
+            return jsonify(trace.payload(engine.learn_overview(request.args.get("lesson", ""), focus)))
+
+        @bp.get("/api/learn/item")
+        def learn_item():
+            """One record of the big picture, with its nested structure."""
+            return jsonify(trace.payload(engine.learn_item(request.args.get("lesson", ""), request.args.get("id", ""))))
 
     engine.register(bp)
     admin.register(bp, engine)

@@ -120,3 +120,57 @@ def reset_visitors():
 def status():
     r = _q("MATCH (n) RETURN count(n) AS vertices")
     return {"vertices": r[0]["vertices"] if r else 0}
+
+
+def learn_overview(lesson, focus):
+    """101: every Product node by category, and some Customer nodes (the persona first). `focus` marks the nodes of the call."""
+    f = set(focus) | {persona_id()}
+    q = "MATCH (p:Product) RETURN p.`~id` AS id, p.name AS name, p.category AS category ORDER BY id"
+    with trace.call("openCypher", f"POST /openCypher\n{q}", {}) as t:
+        products = _q(q)
+        t.result(items=len(products))
+    q2 = "MATCH (c:Customer) RETURN c.`~id` AS id, c.name AS name ORDER BY id LIMIT 60"
+    with trace.call("openCypher", f"POST /openCypher\n{q2}", {}) as t:
+        customers = _q(q2)
+        t.result(items=len(customers))
+    q3 = "MATCH ()-[b:BOUGHT]->() RETURN count(b) AS edges"
+    with trace.call("openCypher", f"POST /openCypher\n{q3}", {}) as t:
+        edges = _q(q3)[0]["edges"]
+        t.result(items=1)
+    cats = sorted({p["category"] for p in products})
+    return {"title": "Neptune: müşteri ve ürün grafı", "text": "Her kare bir düğüm (node). Ürünler kategori raflarında, en altta müşterilerden bir örnek.",
+            "facts": [[len(products), "Product düğümü"], [edges, "BOUGHT kenarı"], [len([x for x in products + customers if x["id"] in f]), "düğüm senin çağrında"]],
+            "groups": [{"label": c, "items": [{"id": p["id"], "title": f"{p['id']}: {p['name']}", "hit": p["id"] in f}
+                                              for p in products if p["category"] == c]} for c in cats]
+                      + [{"label": "Müşteriler", "items": [{"id": x["id"], "title": f"{x['id']}: {x['name']}", "hit": x["id"] in f}
+                                                          for x in sorted(customers, key=lambda x: x["id"] not in f)]}],
+            "hit_label": "Senin çağrının dokunduğu düğümler (ve persona'n)"}
+
+
+def learn_item(lesson, node_id):
+    if node_id.startswith("C"):
+        q = """MATCH (c:Customer {`~id`: $id}) OPTIONAL MATCH (c)-[b:BOUGHT]->(p:Product)
+RETURN c.name AS name, c.city AS city, collect({product: p.`~id`, name: p.name, order_id: b.order_id})[0..10] AS bought, count(b) AS n"""
+        with trace.call("openCypher", f"POST /openCypher\n{q}", {"id": node_id}) as t:
+            rows = _q(q, {"id": node_id})
+            t.result(items=len(rows))
+        r0 = rows[0] if rows else {}
+        rec = {"~id": node_id, "~label": "Customer", "name": r0.get("name"), "city": r0.get("city"),
+               f"BOUGHT kenarları (giden, {r0.get('n', 0)} tane, ilk 10)": [{"→ Product": b["product"], "name": b["name"], "order_id": b["order_id"]}
+                                                                          for b in r0.get("bought") or [] if b.get("product")]}
+        return {"title": r0.get("name") or node_id, "sub": "Bir Customer düğümü ve ondan çıkan BOUGHT kenarları. Kenar da bir kayıttır: order_id taşır.",
+                "record": rec, "marks": {"~id": "kept", "~label": "kept"}}
+    q = """MATCH (p:Product {`~id`: $id}) OPTIONAL MATCH (p)<-[b:BOUGHT]-(c:Customer)
+WITH p, collect(DISTINCT {id: c.`~id`, name: c.name})[0..5] AS buyers, count(b) AS n
+OPTIONAL MATCH (p)<-[:BOUGHT]-(:Customer)-[:BOUGHT]->(o:Product) WHERE o <> p
+RETURN p.name AS name, p.category AS category, buyers, n, o.`~id` AS other, o.name AS other_name, count(*) AS score
+ORDER BY score DESC LIMIT 5"""
+    with trace.call("openCypher", f"POST /openCypher\n{q}", {"id": node_id}) as t:
+        rows = _q(q, {"id": node_id})
+        t.result(items=len(rows))
+    r0 = rows[0] if rows else {}
+    rec = {"~id": node_id, "~label": "Product", "name": r0.get("name"), "category": r0.get("category"),
+           f"BOUGHT kenarları (gelen, {r0.get('n', 0)} tane), ilk 5 müşteri": [{"← Customer": b["id"], "name": b["name"]} for b in r0.get("buyers") or [] if b.get("id")],
+           "2 adım ötede: birlikte alınanlar": [{"Product": x["other"], "name": x["other_name"], "ortak müşteri": x["score"]} for x in rows if x.get("other")]}
+    return {"title": r0.get("name") or node_id, "sub": "Bir Product düğümü, ona gelen kenarlar ve iki adım ötedeki ürünler (öneri bu yoldan çıkar).",
+            "record": rec, "marks": {"~id": "kept", "~label": "kept", "2 adım ötede: birlikte alınanlar": "kept"}}

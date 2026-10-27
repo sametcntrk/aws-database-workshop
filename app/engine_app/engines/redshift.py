@@ -5,6 +5,7 @@ from flask import jsonify, request
 
 from .. import trace
 from ..base import env, secret
+from ..visitor import visitor_id
 from . import page
 
 META = {
@@ -141,3 +142,65 @@ def reset_visitors():
 def status():
     _, rows = run("SELECT", "SELECT count(*) FROM sales")
     return {"history rows": rows[0][0] if rows else 0, "integration": integration_id()}
+
+
+SALES_COLS = ["order_id", "order_date", "customer_id", "city", "category", "product_id", "qty", "amount"]
+DIM_COLS = {"month": "order_date", "category": "category", "city": "city"}
+
+
+def _v(v):
+    return v.isoformat() if hasattr(v, "isoformat") else float(v) if hasattr(v, "as_integer_ratio") and not isinstance(v, (int, float)) else v
+
+
+def learn_overview(lesson, focus):
+    """101. report: the sales table drawn as columns (each shelf is one column, each tile one value).
+    zeroetl: the Aurora orders that zero-ETL copied into the aurora_live database; your orders are marked."""
+    if lesson == "zeroetl":
+        _, cnt = run("SELECT (counts)", f"SELECT (SELECT count(*) FROM {LIVE_DB}.public.orders), (SELECT count(*) FROM {LIVE_DB}.public.order_items),"
+                     f" (SELECT count(*) FROM {LIVE_DB}.public.customers), (SELECT count(*) FROM {LIVE_DB}.public.products)")
+        _, rows = run("SELECT", f"SELECT order_id, visitor_id FROM {LIVE_DB}.public.orders ORDER BY order_date DESC LIMIT 96")
+        vid = visitor_id()
+        mine = [r for r in rows if r[1] == vid]
+        others = [r for r in rows if r[1] != vid]
+        return {"title": f"Redshift: {LIVE_DB} veritabanı (zero-ETL kopyası)",
+                "text": "Aurora'daki orders tablosunun Redshift'teki kopyası. Her kare bir sipariş; en yeni 96 sipariş gösteriliyor.",
+                "facts": [[cnt[0][0], "sipariş"], [cnt[0][1], "sipariş satırı"], [cnt[0][2], "müşteri"], [cnt[0][3], "ürün"], [len(mine), "sipariş senin"]],
+                "groups": [{"label": "Senin siparişlerin", "items": [{"id": f"o:{r[0]}", "title": r[0], "hit": True} for r in mine]},
+                           {"label": "Öteki siparişler", "items": [{"id": f"o:{r[0]}", "title": r[0], "hit": False} for r in others]}],
+                "hit_label": "Senin checkout'ta verdiğin siparişler"}
+    used = {DIM_COLS.get(f, f) for f in focus} | {"order_id", "qty", "amount"} if focus else {"order_date", "order_id", "qty", "amount"}
+    _, cnt = run("SELECT", "SELECT count(*) FROM sales")
+    _, rows = run("SELECT", f"SELECT {', '.join(SALES_COLS)} FROM sales ORDER BY order_date LIMIT 36")
+    return {"title": "Redshift: sales tablosu, sütun sütun",
+            "text": "Redshift tabloyu satır satır değil, sütun sütun saklar. Her raf bir sütun, her kare o sütunun bir değeri (ilk 36 satır).",
+            "facts": [[cnt[0][0], "satır"], [len(SALES_COLS), "sütun"], ["customer_id", "DISTKEY"], ["order_date", "SORTKEY"],
+                      [len(used), "sütun senin sorgunda"]],
+            "groups": [{"label": col, "items": [{"id": f"c:{col}:{i}", "title": f"{col} = {_v(r[j])}", "hit": col in used}
+                                                for i, r in enumerate(rows)]} for j, col in enumerate(SALES_COLS)],
+            "hit_label": "Senin raporunun okuduğu sütunlar"}
+
+
+def learn_item(lesson, item_id):
+    kind, _, rest = item_id.partition(":")
+    if kind == "o":
+        oid = rest.replace("'", "")
+        cols, rows = run("SELECT", f"SELECT * FROM {LIVE_DB}.public.orders WHERE order_id = '{oid}'")
+        order = {c: _v(v) for c, v in zip(cols, rows[0])} if rows else {}
+        cols, rows = run("SELECT", f"SELECT product_id, qty, unit_price FROM {LIVE_DB}.public.order_items WHERE order_id = '{oid}'")
+        order["order_items (aynı veritabanında)"] = [{c: _v(v) for c, v in zip(cols, r)} for r in rows]
+        return {"title": f"Sipariş {oid}", "sub": "Aurora'da yazılan satırın Redshift'teki kopyası. Bunu kimse kopyalamadı: zero-ETL kopyaladı.",
+                "record": order, "marks": {"order_id": "kept", "order_date": "kept"}}
+    col, _, idx = rest.partition(":")
+    if col not in SALES_COLS:
+        return {"title": col, "sub": "Bilinmeyen sütun.", "record": {}}
+    _, st = run("SELECT", f"SELECT count(DISTINCT {col}), min({col}), max({col}) FROM sales")
+    _, sample = run("SELECT", f"SELECT {col} FROM sales ORDER BY order_date LIMIT 36")
+    _, typ = run("SELECT", f"SELECT type, encoding, distkey, sortkey FROM pg_table_def WHERE tablename = 'sales' AND \"column\" = '{col}'")
+    t = typ[0] if typ else ("?", "?", False, 0)
+    i = int(idx or 0)
+    return {"title": f"Sütun: {col}", "sub": f"Bu sütunun bütün değerleri diskte yan yana durur ve birlikte sıkıştırılır ({t[1]}).",
+            "record": {"sütun": col, "tip": t[0], "sıkıştırma (encoding)": t[1], "DISTKEY": bool(t[2]), "SORTKEY sırası": t[3],
+                       "farklı değer sayısı": st[0][0], "en küçük": _v(st[0][1]), "en büyük": _v(st[0][2]),
+                       "seçtiğin kare": {"satır": i + 1, "değer": _v(sample[i][0]) if i < len(sample) else None},
+                       "ilk 8 değer (diskteki sırayla)": [_v(r[0]) for r in sample[:8]]},
+            "marks": {"seçtiğin kare": "kept"}}

@@ -170,3 +170,47 @@ def reset_visitors():
 def status():
     d = table().meta.client.describe_table(TableName=env("TABLE_NAME"))["Table"]
     return {"items (approx.)": d.get("ItemCount"), "billing": d.get("BillingModeSummary", {}).get("BillingMode")}
+
+
+def learn_overview(lesson, focus):
+    """101: the table as partitions (one row per partition key) of items (sort keys). Your cart partition comes first."""
+    mine = f"CART#{visitor_id()}"
+    with trace.call("Scan + DescribeTable", "table.scan(ProjectionExpression='pk, sk', Limit=3000); describe_table()", {}) as t:
+        resp = table().scan(ProjectionExpression="pk, sk", Limit=3000, ReturnConsumedCapacity="TOTAL")
+        desc = table().meta.client.describe_table(TableName=table().name)["Table"]
+        t.result(items=resp["Count"], capacity=_units(resp, "Read")[0])
+    parts = {}
+    for it in resp["Items"]:
+        parts.setdefault(it["pk"], []).append(it["sk"])
+    with trace.call("Query", f"table.query(KeyConditionExpression=Key('pk').eq('{mine}'), ProjectionExpression='pk, sk')", {}) as t:
+        own = table().query(KeyConditionExpression=Key("pk").eq(mine), ProjectionExpression="pk, sk")["Items"]
+        t.result(items=len(own))
+    if own:
+        parts[mine] = [it["sk"] for it in own]
+    order = sorted(parts, key=lambda k: (k != mine, not k.startswith("CART#"), k))[:24]
+    short = lambda pk: pk if len(pk) <= 22 else pk[:20] + "…"
+    groups = [{"label": ("Senin sepetin" if pk == mine else short(pk)),
+               "items": [{"id": f"{pk}|{sk}", "title": f"pk={pk}  sk={sk}", "hit": pk == mine} for sk in sorted(parts[pk])]}
+              for pk in order]
+    mode = desc.get("BillingModeSummary", {}).get("BillingMode", "PROVISIONED")
+    return {"title": f"DynamoDB: {table().name} tablosu",
+            "text": "Her satır bir partition (aynı pk), her kare o partition'daki bir item (sk). İlk 24 partition gösteriliyor.",
+            "facts": [[desc.get("ItemCount", resp["Count"]), "item (yaklaşık, 6 saatte bir güncellenir)"], [len(parts), "partition örnekte"],
+                      [mode.replace("PAY_PER_REQUEST", "on-demand"), "kapasite modu"], [len(parts.get(mine, [])), "item senin sepetinde"]],
+            "groups": groups, "hit_label": "Senin sepetinin item'ları (pk = CART#<senin id>)"}
+
+
+def learn_item(lesson, item_id):
+    pk, _, sk = item_id.partition("|")
+    with trace.call("GetItem", f"table.get_item(Key={{'pk': '{pk}', 'sk': '{sk}'}})", {}) as t:
+        it = table().get_item(Key={"pk": pk, "sk": sk}).get("Item")
+        t.result(items=1 if it else 0)
+    if not it:
+        return {"title": sk, "sub": "Bu item artık yok (TTL ile silinmiş olabilir).", "record": {}}
+    rec = {k: (float(v) if isinstance(v, Decimal) else v) for k, v in it.items()}
+    rec = {k: (int(v) if isinstance(v, float) and v.is_integer() else v) for k, v in rec.items()}
+    order = ["pk", "sk"] + sorted(k for k in rec if k not in ("pk", "sk"))
+    exp = rec.get("expires_at")
+    left = f" TTL: süresi {max(0, int(exp - time.time())) // 60} dakika sonra doluyor." if exp else ""
+    return {"title": f"{pk}  /  {sk}", "sub": f"Bir item: {len(rec)} attribute.{left} Sarı: anahtar (pk + sk) ve TTL.",
+            "record": {k: rec[k] for k in order}, "marks": {"pk": "kept", "sk": "kept", "expires_at": "kept"}}

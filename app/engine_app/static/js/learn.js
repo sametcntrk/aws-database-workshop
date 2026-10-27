@@ -90,5 +90,70 @@
     return { select };
   }
 
-  window.L = { $, esc, tl, rec, entry, call, sample, showCall, jsonView, tree, zoom };
+  /* ---------------- Generic lesson (templates/learn/lesson.html, content from lessons/<engine>.yaml) */
+  function walk(v, fn) {
+    if (Array.isArray(v)) v.forEach((x) => walk(x, fn));
+    else if (v && typeof v === "object") { fn(v); Object.values(v).forEach((x) => walk(x, fn)); }
+  }
+  /** Values from the call that the big picture marks. spec: "path" | "query:<name>" | "data:<key>" | "keys" (one or a list) */
+  function focusOf(spec, r) {
+    if (!spec || !r) return [];
+    const u = new URL(r.url, location.origin), out = [];
+    for (const one of [].concat(spec)) {
+      if (one === "path") out.push(decodeURIComponent(u.pathname.split("/").pop()));
+      else if (one.startsWith("query:")) { const v = u.searchParams.get(one.slice(6)); if (v) out.push(v); }
+      else if (one.startsWith("data:")) { const key = one.slice(5); walk(r.data, (o) => { if (o[key] !== undefined && o[key] !== null) out.push(String(o[key])); }); }
+      else if (one === "keys") r.entries.forEach((e) => { const m = (e.request || "").match(/^[A-Z]+\s+(\S+)/); if (m) out.push(m[1]); });
+    }
+    return [...new Set(out)].slice(0, 80);
+  }
+
+  function stepHtml(op, x, en) {
+    const facts = en ? [en.items !== undefined ? `<span><b>${en.items}</b> kayıt</span>` : "", `<span><b>${en.ms}</b> ms</span>`,
+      en.capacity ? `<span>Kapasite: <b>${esc(en.capacity)}</b></span>` : "", en.cost ? `<span>Maliyet: <b>${esc(en.cost)}</b></span>` : ""].join("") : "";
+    return `<li><h3>${esc(x.title || op)} <code>${esc(op)}</code></h3><div class="sp">${x.text || ""}
+      ${en ? `<div class="facts">${facts}</div>
+        ${en.note ? `<p class="enote"><span>Paneldeki not:</span> ${esc(en.note)}</p>` : ""}
+        ${en.error ? `<p class="enote bad">${esc(en.error)}</p>` : ""}
+        <details class="req"><summary>Gerçek istek</summary><pre>${esc(en.request)}</pre>${en.plan ? `<pre>${esc(en.plan)}</pre>` : ""}</details>` : ""}</div></li>`;
+  }
+
+  async function renderLesson() {
+    const C = window.LESSON, P = window.LEARN.prefix;
+    let r = rec, e = entry;
+    if (!r && C.sample) { try { ({ rec: r, entry: e } = await sample(C.sample.url, C.sample.label)); } catch (err) { r = null; } }
+    if (r) showCall(r, e);
+    else if (C.need) { const box = $("#yourcall"); box.hidden = false; box.innerHTML = `<p class="yourcall-note">${C.need}</p>`; }
+
+    if (C.big) {
+      try {
+        const focus = focusOf(C.focus, r).join(",");
+        const ov = (await call(`${P}/api/learn/overview?${new URLSearchParams({ lesson: C.id, focus })}`)).data;
+        const first = ov.groups.flatMap((g) => g.items);
+        zoom($("#zoom"), {
+          overview: `<h3>${esc(ov.title)}</h3><p>${esc(ov.text || "")}</p>
+            <div class="facts">${(ov.facts || []).map(([v, l]) => `<span><b>${esc(v)}</b> ${esc(l)}</span>`).join("")}</div>`,
+          groups: ov.groups.map((g) => ({ label: g.label, items: g.items.map((it) => ({ id: it.id, title: it.title, cls: it.hit ? "hit" : "" })) })),
+          legend: `<span><i class="h"></i>${esc(ov.hit_label || "Senin çağrının kullandığı")}</span><span><i class="s"></i>Seçili</span><span><i class="d"></i>Öteki kayıtlar</span>`,
+          selected: ov.selected || (first.find((it) => it.hit) || first[0] || {}).id,
+          onSelect: async (id) => {
+            const it = (await call(`${P}/api/learn/item?${new URLSearchParams({ lesson: C.id, id })}`)).data;
+            return `<div class="lens-head"><span class="tile sel"></span><div><h3>${esc(it.title)}</h3><p>${esc(it.sub || "")}</p></div></div>
+              ${tree(it.record, (p) => (it.marks || {})[p] || "")}
+              ${C.big.legend ? `<div class="legend">${C.big.legend}</div>` : ""}`;
+          },
+        });
+      } catch (err) { $("#zoom").innerHTML = `<p>Büyük resim okunamadı: ${esc(err.message)}</p>`; }
+    }
+
+    const ex = C.explain || {};
+    if (r) {
+      $("#qsteps").innerHTML = r.entries.map((en) => stepHtml(en.op, ex[en.op] || {}, en)).join("");
+    } else {
+      $("#steps-intro").textContent = "Henüz bir çağrın yok. Bu işlemler mağazada genelde şu sırayla çalışır:";
+      $("#qsteps").innerHTML = Object.entries(ex).map(([op, x]) => stepHtml(op, x, null)).join("");
+    }
+  }
+
+  window.L = { $, esc, tl, rec, entry, call, sample, showCall, jsonView, tree, zoom, focusOf, renderLesson };
 })();

@@ -1,0 +1,62 @@
+# 101 lessons for Amazon Keyspaces (Turkish).
+activity:
+  title: "Keyspaces 101: etkinlik geçmişi ve geniş sütun"
+  apis: ["/api/events", "/api/activity", "/api/recent", "/api/simulate"]
+  kicker: "Keyspaces 101: geniş sütun (wide column) veritabanı"
+  headline: "Gezdiğin her sayfa nereye yazılıyor ve neden en yenisi hep en üstte?"
+  lead: "Bir ürüne baktığında, sepete eklediğinde ya da aradığında Lale Market Keyspaces'e bir olay yazdı. Etkinlik sayfası bu olayları en yeniden eskiye okudu. Bu sayfa olayların nasıl dizildiğini gösteriyor."
+  sample: { url: "/keyspaces/api/activity", label: "Load my activity" }
+  big:
+    title: "Büyük resim: partition'lar ve senin geçmişin"
+    text: "Her raf bir <b>partition</b>: tek bir kullanıcının bütün olayları. Her kare bir olay; en yeni olay solda. En üstteki raf seninki. <code>SIM-</code> rafları Load Simulation'ın sanal alışverişçileri."
+    legend: '<span><i class="k"></i>Primary key: partition key + clustering key</span>'
+  sections:
+    - title: "Kaynakta veri böyleydi, Keyspaces'te böyle duruyor"
+      html: |
+        <p>Kaynakta veri bir olay akışıdır: kim, ne zaman, ne yaptı. Milyonlarca kullanıcıdan sürekli gelir ve neredeyse hiç güncellenmez, hep eklenir.</p>
+        <div class="src-store">
+          <div><h3>Kaynak: olay akışı</h3><pre>14:02:11  7f3c…  view    P0001
+        14:02:40  9a1b…  search  "kulaklik"
+        14:03:05  7f3c…  cart    P0001
+        …</pre></div>
+          <div><h3>Keyspaces'te: kullanıcı başına sıralı satırlar</h3><pre>PRIMARY KEY ((user_id), event_time, event_id)
+        CLUSTERING ORDER BY (event_time DESC)
+
+        partition 7f3c…: 14:03:05 cart, 14:02:11 view, …</pre></div>
+        </div>
+        <ul>
+          <li><b>user_id (partition key)</b> olayların hangi partition'a gideceğini belirler. Bir kullanıcının bütün geçmişi aynı yerde durur.</li>
+          <li><b>event_time, event_id (clustering key)</b> partition içindeki sırayı belirler. Tablo bu sırayı yazarken korur; okurken sıralama yapılmaz.</li>
+          <li><b>TTL 7 gün:</b> eski olaylar kendiliğinden silinir.</li>
+        </ul>
+        <p>Keyspaces, Apache Cassandra ile uyumlu bir hizmettir: aynı CQL dili ve aynı sürücüler çalışır, ama sunucu yoktur.</p>
+  explain:
+    INSERT:
+      title: "Olayı yazmak"
+      text: "Olay senin partition'ına eklendi. Yazma <code>LOCAL_QUORUM</code> ile yapıldı: 3 kopyanın en az 2'si onayladı."
+    SELECT:
+      title: "Geçmişi okumak"
+      text: "Tek bir partition okundu; satırlar zaten en yeniden eskiye sıralı geldi. <code>LOCAL_ONE</code> tek kopyadan okur ve yarı fiyatına mal olur, ama son yazdığın olay henüz orada olmayabilir."
+    "INSERT × N":
+      title: "Yüzlerce eşzamanlı yazma"
+      text: "500 sanal alışverişçi, 500 farklı partition'a yazdı. Yük partition'lara dağıldığı için yazmalar paralel ilerledi. Bu satırlar 10 dakika sonra silinir."
+  analogy:
+    icon: "📓"
+    html: "<p>Her kullanıcı için ayrı bir günlük defteri düşün. Her olay deftere yeni bir satır olarak yazılır ve defter en yeni sayfadan açılır. <q>Son baktıklarım</q> sorusu için yalnız kendi defterinin ilk sayfasına bakarsın; başkalarının defterlerine dokunmazsın.</p>"
+  alternatives:
+    engine: "Keyspaces"
+    criteria: ["Çok yüksek yazma hacmi", "Kullanıcı başına sıralı okuma", "Eski veriyi silme", "Cassandra uyumu", "Kim işletir"]
+    rows:
+      - { name: "Amazon Keyspaces", chosen: true, cells: [[y, "Sunucusuz, yatay"], [y, "Clustering order"], [y, "TTL"], [y, "CQL, aynı sürücüler"], [y, "AWS"]] }
+      - { name: "DynamoDB", sub: "pk = kullanıcı, sk = zaman", cells: [[y, "Sunucusuz"], [y, "Sort key ile"], [y, "TTL"], [n, "Farklı API"], [y, "AWS"]] }
+      - { name: "Aurora PostgreSQL", sub: "events tablosu", cells: [[p, "Tek yazar instance"], [y, "Index ile"], [p, "Zamanlanmış DELETE"], [n, "SQL"], [y, "AWS"]] }
+      - { name: "EC2 üzerinde Cassandra", sub: "kendi kümen", cells: [[y, "Yatay"], [y, "Aynı"], [y, "Aynı"], [y, "Tam"], [n, "Sen: düğüm, onarım, yama"]] }
+    verdict: "Etkinlik akışı sürekli eklenen, kullanıcı başına zaman sırasıyla okunan ve eskiyince atılan bir veridir; geniş sütun modelinin tam alanı. DynamoDB de bu işi yapabilir. Keyspaces, Cassandra bilen ekiplere aynı dili ve araçları sunucusuz olarak verdiği için seçildi."
+  try:
+    - { href: "/account/activity", label: "Etkinlik sayfasında LOCAL_ONE dene" }
+    - { href: "/search?q=kulaklik", label: "Bir arama yap, olayın düştüğünü gör" }
+  glossary:
+    - ["Partition key", "Satırların hangi partition'da duracağını belirleyen sütun."]
+    - ["Clustering key", "Partition içindeki satırların sırasını belirleyen sütunlar."]
+    - ["CQL", "Cassandra Query Language; SQL'e benzeyen sorgu dili."]
+    - ["LOCAL_QUORUM", "Aynı bölgedeki kopyaların çoğunluğunun onayı."]

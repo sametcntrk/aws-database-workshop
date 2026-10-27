@@ -101,6 +101,35 @@ def register(bp):
         return jsonify(trace.payload(_doc(d)))
 
 
+def learn_overview(lesson, focus):
+    """101: every product document as a tile, by category; `focus` = the product ids that the call returned or read."""
+    f = set(focus)
+    with trace.call("find + collStats", "db.products.find({}, { name: 1, category: 1 }); db.runCommand({ collStats: 'products' })", {}) as t:
+        docs = list(db().products.find({}, {"name": 1, "category": 1}).sort("_id", 1))
+        stats = db().command("collStats", "products")
+        indexes = db().products.index_information()
+        t.result(items=len(docs))
+    cats = sorted({d["category"] for d in docs})
+    return {"title": "DocumentDB: products koleksiyonu", "text": "Kataloğun asıl kaydı. Her kare bir JSON belgesi; raflar kategoriler.",
+            "facts": [[stats.get("count", len(docs)), "belge"], [f"{int(stats.get('avgObjSize', 0))} bayt", "ortalama belge boyutu"],
+                      [len(indexes), "index (_id dahil)"], [len(f & {d["_id"] for d in docs}), "belge senin çağrında"]],
+            "groups": [{"label": c, "items": [{"id": d["_id"], "title": f"{d['_id']}: {d['name']}", "hit": d["_id"] in f}
+                                              for d in docs if d["category"] == c]} for c in cats],
+            "hit_label": "Senin çağrının okuduğu belgeler"}
+
+
+def learn_item(lesson, pid):
+    with trace.call("find_one", f"db.products.find_one({{ _id: '{pid}' }})", {}) as t:
+        d = db().products.find_one({"_id": pid})
+        t.result(items=1 if d else 0)
+    if not d:
+        return {"title": pid, "sub": "Bu belge yok.", "record": {}}
+    size = len(json.dumps(d, default=str, ensure_ascii=False).encode())
+    marks = {"_id": "kept", "category": "kept", "rating": "kept", "attributes.renk": "kept"}
+    return {"title": d["name"], "sub": f"products koleksiyonunda bir belge: {len(d)} alan, {size} bayt. Sarı alanların index'i var.",
+            "record": d, "marks": marks}
+
+
 def seed(ds):
     with trace.call("drop + insert_many + create_index", "db.products.drop(); db.products.insert_many([...]); create_index(...)", {}) as t:
         db().products.drop()

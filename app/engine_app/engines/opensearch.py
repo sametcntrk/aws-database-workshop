@@ -15,8 +15,6 @@ META = {
              "index stores:   name, city (keyword), location (geo_point)",
 }
 PAGES = [page("search", "search", "Search", "/search"), page("stores", "stores", "Find a store", "/stores")]
-# Trace op -> 101 lesson template (templates/learn/opensearch/<lesson>.html)
-LESSONS = {"_search": "search", "_search (prefix)": "suggest", "_search (geo_distance)": "geo"}
 
 _client = None
 
@@ -98,8 +96,8 @@ def register(bp):
             t.result(items=len(out))
         return jsonify(trace.payload(out))
 
-    @bp.get("/api/learn/overview")
-    def api_learn_overview():
+    @bp.get("/api/learn/index")
+    def api_learn_index():
         """101 lesson: the big picture of the products index (every document id, name and category, and index facts)."""
         with trace.call("_search (match_all) + _stats", "GET products/_search { match_all, _source: [name, category] }; GET products/_stats", {}) as t:
             r = client().search(index="products", body={"query": {"match_all": {}}, "size": 1000, "_source": ["name", "category"],
@@ -159,3 +157,32 @@ def reset_visitors():
 
 def status():
     return {"products": client().count(index="products")["count"], "stores": client().count(index="stores")["count"]}
+
+
+def learn_overview(lesson, focus):
+    """101 for the suggest and geo lessons: the products or stores index as tiles; `focus` = the ids that the call returned."""
+    f = set(focus)
+    index = "stores" if lesson == "geo" else "products"
+    group_field = "city" if index == "stores" else "category"
+    with trace.call("_search (match_all)", f"GET {index}/_search {{ match_all, size: 1000 }}", {}) as t:
+        r = client().search(index=index, body={"query": {"match_all": {}}, "size": 1000, "_source": ["name", group_field]})
+        t.result(items=len(r["hits"]["hits"]))
+    docs = [(h["_id"], h["_source"]) for h in r["hits"]["hits"]]
+    groups = sorted({d[group_field] for _, d in docs})
+    return {"title": f"OpenSearch: {index} index'i", "text": "Her kare bir belge. " + ("Raflar şehirler." if index == "stores" else "Raflar kategoriler."),
+            "facts": [[len(docs), "belge"], [len(groups), "şehir" if index == "stores" else "kategori"], [len(f & {i for i, _ in docs}), "belge senin sonucunda"]],
+            "groups": [{"label": g, "items": [{"id": i, "title": f"{i}: {d['name']}", "hit": i in f} for i, d in sorted(docs) if d[group_field] == g]}
+                       for g in groups],
+            "hit_label": "Senin çağrının döndürdüğü belgeler"}
+
+
+def learn_item(lesson, doc_id):
+    index = "stores" if lesson == "geo" else "products"
+    with trace.call("GET _doc", f"GET {index}/_doc/{doc_id}", {}) as t:
+        d = client().get(index=index, id=doc_id)
+        t.result(items=1)
+    rec = {"_index": d["_index"], "_id": d["_id"], "_source": d["_source"]}
+    marks = {"_source.location": "kept"} if index == "stores" else {"_source.name": "kept"}
+    sub = ("Bir mağaza belgesi. location alanı geo_point: OpenSearch enlem ve boylamı bir harita ızgarasında index'ler." if index == "stores"
+           else "OpenSearch'teki belge. name alanı hem kelimelere bölünür hem de yazdıkça öneri için önek (prefix) aramasına açıktır.")
+    return {"title": d["_source"].get("name", doc_id), "sub": sub, "record": rec, "marks": marks}
