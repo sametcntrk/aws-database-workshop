@@ -75,9 +75,9 @@
     const api = new URL(url, location.origin).pathname.replace(/^\/\w+/, "");
     const learn = (e, i) => engine ? `/${engine}/learn?${new URLSearchParams({ op: e.op, api, method, ...(k ? { k, i } : {}) })}` : "";
     const li = document.createElement("li");
-    li.className = "call" + (ok ? "" : " failed") + (background ? " background" : "");
+    li.className = `call eng-${engine}` + (ok ? "" : " failed") + (background ? " background" : "");
     const maxMs = Math.max(...entries.map((e) => e.ms || 0), 1);
-    li.innerHTML = `<div class="call-head"><strong>${callNo}. ${esc(label)}</strong><span class="ms">${ms} ms</span>
+    li.innerHTML = `<div class="call-head"><span class="call-no" aria-hidden="true">${callNo}</span><strong><span class="sr">${callNo}. </span>${esc(label)}</strong><span class="ms">${ms} ms</span>
       <span class="src">${esc(method)} ${esc(url)} → ${esc(ENGINE_LABEL[engine] || engine)} Engine App</span></div>
       ${entries.map((e, i) => renderEntry(e, maxMs, learn(e, i))).join("") || '<div class="entry"><p class="note">The Engine App answered without an Engine call.</p></div>'}`;
     if (source) {
@@ -111,6 +111,14 @@
     if (json.ok === false) { const e = new Error(json.error || "The call failed."); e.payload = json; throw e; }
     return json.data;
   }
+
+  /* ---------------- Engine colours on the shop's Engine tags (same colour as the calls in the panel) */
+  const ENGINE_ID = Object.fromEntries(Object.entries(ENGINE_LABEL).map(([id, name]) => [name.toLowerCase(), id]));
+  document.querySelectorAll(".engine-tag").forEach((el) => {
+    const id = ENGINE_ID[el.textContent.trim().toLowerCase()];
+    if (id) el.classList.add(`eng-${id}`);
+  });
+  document.querySelectorAll("[data-engine-tag]").forEach((el) => el.classList.add(`eng-${el.dataset.engineTag}`));
 
   /* ---------------- Cart badge (kept in localStorage; the cart page refreshes it from DynamoDB) */
   function setCartCount(n) { localStorage.setItem("lm_cart_count", String(n)); $("#cart-count").textContent = n; }
