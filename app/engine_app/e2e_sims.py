@@ -47,7 +47,12 @@ ORDERS = {
 
 def tables():
     """The sample tables for the page text (the same data as the simulations)."""
-    return {"customers": CUSTOMERS, "products": PRODUCTS, "orders": ORDERS, "order_items": ITEMS}
+    out = {"customers": CUSTOMERS, "products": PRODUCTS, "orders": ORDERS, "order_items": ITEMS}
+    out.update(EXTRA_TABLES)
+    return out
+
+
+EXTRA_TABLES = {}   # teaching tables of the other Engines (filled below their builders)
 
 
 def money(v):
@@ -483,3 +488,226 @@ def _aurora(lang):
 
 
 SIMS = {"aurora": aurora}
+
+
+# ================================================================ Generic helpers for the other Engines (same as simkit.py of the skill)
+def decide_generic(lang, workload, requirements, candidates, verdicts):
+    """Architecture decision: each requirement removes the candidates that cannot meet it.
+    verdicts: {requirement index: {candidate: (1 or 0, reason_en, reason_tr)}}"""
+    yes, no = T(lang, "yes", "evet"), T(lang, "no", "hayır")
+    left = T(lang, "candidates left", "kalan aday")
+    cols = [T(lang, "candidate", "aday")] + [f"R{i + 1}" for i in range(len(requirements))] + [T(lang, "status", "durum")]
+    start = [[c] + ["?"] * len(requirements) + [T(lang, "in the race", "yarışta")] for c in candidates]
+    rows, alive = deepcopy(start), list(candidates)
+    steps = [{"say": T(lang, f"Workload: {workload[0]}. {len(candidates)} candidates start. Each requirement removes the candidates that cannot meet it.",
+                       f"İş yükü: {workload[1]}. {len(candidates)} aday başlar. Her gereksinim, onu karşılayamayan adayları eler."),
+              "marks": {}, "rows": {"cand": deepcopy(rows)}, "count": {left: len(alive)}}]
+    for i, req in enumerate(requirements):
+        out = []
+        for k, c in enumerate(candidates):
+            ok, en, tr = verdicts[i][c]
+            rows[k][i + 1] = f"{yes if ok else no}: {T(lang, en, tr)}"
+            if not ok and c in alive:
+                alive.remove(c)
+                out.append(c)
+                rows[k][-1] = T(lang, f"out at R{i + 1}", f"R{i + 1}'de elendi")
+        marks = {k: ("match" if c in alive else ("bad" if c in out else "skip")) for k, c in enumerate(candidates)}
+        steps.append({"say": T(lang, f"R{i + 1}: {req[0]}. " + (f"Out: {', '.join(out)}." if out else "Nobody drops out here."),
+                               f"R{i + 1}: {req[1]}. " + (f"Elenen: {', '.join(out)}." if out else "Burada kimse elenmez.")),
+                      "marks": {"cand": marks, "req": {i: "read"}}, "rows": {"cand": deepcopy(rows)}, "count": {left: len(alive)}})
+    for k, c in enumerate(candidates):
+        if c in alive:
+            rows[k][-1] = T(lang, "chosen", "seçildi")
+    steps.append({"say": T(lang, f"Result: {' and '.join(alive) or 'no candidate'}. The requirements made the decision, so you can explain it to anybody.",
+                           f"Sonuç: {' ve '.join(alive) or 'hiçbir aday'}. Kararı gereksinimler verdi, bu yüzden onu herkese açıklayabilirsin."),
+                  "marks": {"cand": {k: ("new" if c in alive else "skip") for k, c in enumerate(candidates)}}, "rows": {"cand": deepcopy(rows)},
+                  "count": {left: len(alive)}})
+    return {"tables": [{"id": "req", "name": T(lang, "requirements of the workload", "iş yükünün gereksinimleri"), "cols": ["id", T(lang, "requirement", "gereksinim")],
+                        "rows": [[f"R{i + 1}", T(lang, *r)] for i, r in enumerate(requirements)], "key": [0], "ref": []},
+                       {"id": "cand", "name": T(lang, "candidates", "adaylar"), "cols": cols, "rows": start, "key": [0], "ref": []}],
+            "out": None, "steps": steps}
+
+
+def V(*cells):
+    """Verdict row helper: V((1, en, tr), (0, en, tr), ...) in the order of the candidates."""
+    return cells
+
+
+def verdicts(candidates, table):
+    return {i: dict(zip(candidates, row)) for i, row in enumerate(table)}
+
+
+# ================================================================ DynamoDB
+CART = {"cols": ["pk", "sk", "name", "qty", "unit_price", "expires_at"],
+        "rows": [["CART#7f3a", "ITEM#P0001", "Alpen Kablosuz Kulaklık 1", 2, 3373.84, 1793433600],
+                 ["CART#7f3a", "ITEM#P0044", "Kapadokya Bulut Mimarisi 44", 1, 2651.39, 1793433600],
+                 ["CART#7f3a", "ITEM#P0142", "Ege Hava Temizleyici 142", 1, 2693.65, 1793433600],
+                 ["CART#3c8d", "ITEM#P0179", "Toros Python ile Veri 179", 10, 767.49, 1793437200],
+                 ["CART#3c8d", "ITEM#P0001", "Alpen Kablosuz Kulaklık 1", 5, 3373.84, 1793437200],
+                 ["CART#a1f2", "ITEM#P0095", "Anadolu Yün Kazak 95", 1, 2721.65, 1793440800],
+                 ["CART#a1f2", "ITEM#P0044", "Kapadokya Bulut Mimarisi 44", 2, 2651.39, 1793440800],
+                 ["CART#d405", "ITEM#P0142", "Ege Hava Temizleyici 142", 3, 2693.65, 1793444400]]}
+
+
+def _hash(pk, n=3):
+    """A small teaching hash: the sum of the character codes, modulo the number of partitions. DynamoDB uses its own internal hash."""
+    return sum(ord(ch) for ch in pk) % n
+
+
+def ddb_hash(lang):
+    rows = CART["rows"]
+    parts = [[] for _ in range(3)]
+    steps = [{"say": T(lang, "The table has three partitions. For each new item, DynamoDB calculates a hash of the partition key (pk). The hash selects the partition. This simulation uses a simple teaching hash: the sum of the character codes modulo 3.",
+                       "Table'ın üç partition'ı var. Her yeni item için DynamoDB, partition key'in (pk) hash'ini hesaplar. Hash, partition'ı seçer. Bu simülasyon basit bir öğretim hash'i kullanır: karakter kodlarının toplamının 3'e göre modu."),
+              "marks": {}, "rows": {f"p{k}": [] for k in range(3)}, "count": {"partitions touched": 0}}]
+    for i, r in enumerate(rows):
+        h = _hash(r[0])
+        parts[h].append([r[0], r[1], r[3]])
+        steps.append({"say": T(lang, f"Item {i + 1}: pk = {r[0]}. hash({r[0]}) mod 3 = {h}, so the item goes into partition {h}. Items with the same pk always land in the same partition, sorted by sk.",
+                               f"Item {i + 1}: pk = {r[0]}. hash({r[0]}) mod 3 = {h}, bu yüzden item partition {h}'ye gider. Aynı pk'li item'lar her zaman aynı partition'a, sk'ye göre sıralı olarak düşer."),
+                      "marks": {"items": {i: "read"}, f"p{h}": {len(parts[h]) - 1: "new"}},
+                      "rows": {f"p{k}": sorted(deepcopy(parts[k])) for k in range(3)}, "count": {"partitions touched": 1}})
+    target = "CART#3c8d"
+    h = _hash(target)
+    final = {f"p{k}": sorted(deepcopy(parts[k])) for k in range(3)}
+    steps.append({"say": T(lang, f"Now a Query asks for pk = {target}. DynamoDB calculates the same hash: {h}. It reads only partition {h}, and only the item collection of {target}. The other partitions do no work, at any table size.",
+                           f"Şimdi bir Query pk = {target} istiyor. DynamoDB aynı hash'i hesaplar: {h}. Sadece partition {h}'yi ve sadece {target} item collection'ını okur. Table ne kadar büyük olursa olsun diğer partition'lar iş yapmaz."),
+                  "marks": {f"p{h}": {k: "match" for k, r in enumerate(final[f'p{h}']) if r[0] == target}}, "rows": final, "count": {"partitions touched": 1}})
+    return {"tables": [{"id": "items", "name": T(lang, "items to write", "yazılacak item'lar"), "cols": ["pk", "sk", "qty"], "rows": [[r[0], r[1], r[3]] for r in rows], "key": [0, 1], "ref": []}]
+            + [{"id": f"p{k}", "name": f"partition {k}", "cols": ["pk", "sk", "qty"], "rows": [], "key": [0, 1], "ref": []} for k in range(3)],
+            "out": None, "steps": steps}
+
+
+def ddb_query_scan(lang):
+    rows = sorted(CART["rows"], key=lambda r: (r[0], r[1]))
+    tbl = [[r[0], r[1], r[3]] for r in rows]
+    steps = [{"say": T(lang, "Two questions on the same eight items. First: the cart CART#7f3a (Query). Second: every item with qty >= 2 in any cart (Scan with a filter). Each item here is smaller than 1 KB.",
+                       "Aynı sekiz item üzerinde iki soru. Birincisi: CART#7f3a sepeti (Query). İkincisi: herhangi bir sepette qty >= 2 olan her item (filtreli Scan). Buradaki her item 1 KB'tan küçük."),
+              "marks": {}, "out": [], "count": {"items read": 0, "items returned": 0}}]
+    out, marks = [], {}
+    for i, r in enumerate(tbl):
+        if r[0] != "CART#7f3a":
+            continue
+        marks[i] = "match"
+        out.append(["Query", r[0], r[1], r[2]])
+        steps.append({"say": T(lang, f"Query: DynamoDB goes straight to the item collection of CART#7f3a and reads {r[1]}.",
+                               f"Query: DynamoDB doğrudan CART#7f3a item collection'ına gider ve {r[1]}'i okur."),
+                      "marks": {"t": dict(marks)}, "out": deepcopy(out), "outmarks": {len(out) - 1: "new"}, "count": {"items read": len(marks), "items returned": len(out)}})
+    q_read = len(marks)
+    steps.append({"say": T(lang, f"Query done: {q_read} items read, {q_read} returned. The total size is far below 4 KB, so a strongly consistent Query costs 1 read request unit.",
+                           f"Query bitti: {q_read} item okundu, {q_read} döndü. Toplam boyut 4 KB'ın çok altında, bu yüzden strongly consistent bir Query 1 read request unit tutar."),
+                  "marks": {"t": dict(marks)}, "out": deepcopy(out), "count": {"items read": q_read, "items returned": q_read}})
+    s_out, smarks = [], {}
+    for i, r in enumerate(tbl):
+        hit = r[2] >= 2
+        smarks = {**{k: ("match" if tbl[k][2] >= 2 else "skip") for k in smarks}, i: "match" if hit else "read"}
+        if hit:
+            s_out.append(["Scan", r[0], r[1], r[2]])
+        steps.append({"say": T(lang, f"Scan, item {i + 1}: {r[0]} {r[1]}, qty = {r[2]}. " + ("The filter keeps it." if hit else "The filter drops it, but DynamoDB already read it, and you pay for the read."),
+                               f"Scan, item {i + 1}: {r[0]} {r[1]}, qty = {r[2]}. " + ("Filtre onu tutar." if hit else "Filtre onu atar, ama DynamoDB onu zaten okudu ve okumanın parasını ödersin.")),
+                      "marks": {"t": dict(smarks)}, "out": deepcopy(out + s_out), "outmarks": {len(out) + len(s_out) - 1: "new"} if hit else {},
+                      "count": {"items read": i + 1, "items returned": len(s_out)}})
+    steps.append({"say": T(lang, f"Scan done: {len(tbl)} items read, {len(s_out)} returned. On a table of 100 million items, the Scan reads 100 million items, and the Query still reads only the items of one cart.",
+                           f"Scan bitti: {len(tbl)} item okundu, {len(s_out)} döndü. 100 milyon item'lık bir table'da Scan 100 milyon item okur, Query ise hâlâ sadece tek bir sepetin item'larını okur."),
+                  "marks": {"t": {k: ("match" if tbl[k][2] >= 2 else "skip") for k in range(len(tbl))}}, "out": out + s_out, "count": {"items read": len(tbl), "items returned": len(s_out)}})
+    return {"tables": [{"id": "t", "name": "dbws-cart", "cols": ["pk", "sk", "qty"], "rows": tbl, "key": [0, 1], "ref": []}],
+            "out": {"name": T(lang, "results", "sonuçlar"), "cols": [T(lang, "operation", "işlem"), "pk", "sk", "qty"]}, "steps": steps}
+
+
+def ddb_condition(lang):
+    item = [["CART#7f3a", "ITEM#P0001", 2]]
+    log, steps = [], []
+
+    def snap(say, cls, extra="new"):
+        steps.append({"say": say, "marks": {"t": {0: cls}}, "rows": {"t": deepcopy(item)}, "out": deepcopy(log), "outmarks": {len(log) - 1: extra} if log else {}, "count": {}})
+    snap(T(lang, "The rule of the shop: at most 5 pieces of one product in a cart. The item has qty = 2. Two requests arrive.",
+           "Mağazanın kuralı: bir sepette bir üründen en fazla 5 adet. Item'da qty = 2. İki istek geliyor."), "read")
+    log.append(["ADD qty 4, condition qty <= 1", T(lang, "2 <= 1 is false: refused, ConditionalCheckFailedException", "2 <= 1 yanlış: reddedildi, ConditionalCheckFailedException")])
+    snap(T(lang, "Request 1 wants to add 4. The condition is qty <= 5 - 4, so qty <= 1. The current qty is 2, so the condition is false. DynamoDB does not write. The item keeps qty 2.",
+           "İstek 1, 4 eklemek istiyor. Koşul qty <= 5 - 4, yani qty <= 1. Güncel qty 2, bu yüzden koşul yanlış. DynamoDB yazmaz. Item qty 2'de kalır."), "bad", "bad")
+    item[0][2] = 5
+    log.append(["ADD qty 3, condition qty <= 2", T(lang, "2 <= 2 is true: written, qty is now 5", "2 <= 2 doğru: yazıldı, qty artık 5")])
+    snap(T(lang, "Request 2 wants to add 3. The condition is qty <= 2. The current qty is 2, so the condition is true. DynamoDB tests and writes in one step: qty becomes 5.",
+           "İstek 2, 3 eklemek istiyor. Koşul qty <= 2. Güncel qty 2, bu yüzden koşul doğru. DynamoDB tek adımda test eder ve yazar: qty 5 olur."), "match")
+    return {"tables": [{"id": "t", "name": T(lang, "the cart item", "sepet item'ı"), "cols": ["pk", "sk", "qty"], "rows": deepcopy([["CART#7f3a", "ITEM#P0001", 2]]), "key": [0, 1], "ref": []}],
+            "out": {"name": T(lang, "requests", "istekler"), "cols": ["UpdateItem", T(lang, "answer of DynamoDB", "DynamoDB'nin cevabı")]}, "steps": steps}
+
+
+def ddb_gsi(lang):
+    base = sorted(([r[0], r[1], r[3]] for r in CART["rows"]), key=lambda r: (r[0], r[1]))
+    gsi = sorted(([r[1], r[0], r[2]] for r in base), key=lambda r: (r[0], r[1]))
+    want = "ITEM#P0044"
+    steps = [{"say": T(lang, f"Question: which carts contain {want}? The base table is keyed by cart (pk), so the question has no partition key there. A global secondary index (GSI) keeps a copy keyed by product.",
+                       f"Soru: hangi sepetlerde {want} var? Ana table sepete göre (pk) key'lenmiş, bu yüzden orada sorunun bir partition key'i yok. Bir global secondary index (GSI), ürüne göre key'lenmiş bir kopya tutar."),
+              "marks": {}, "count": {"items read on the base table": 0, "items read on the GSI": 0}}]
+    m = {}
+    for i, r in enumerate(base):
+        m = {**{k: ("match" if base[k][1] == want else "skip") for k in m}, i: "match" if r[1] == want else "read"}
+        steps.append({"say": T(lang, f"Without the GSI, only a Scan helps: item {i + 1} ({r[0]}, {r[1]}).", f"GSI olmadan sadece bir Scan yardım eder: item {i + 1} ({r[0]}, {r[1]})."),
+                      "marks": {"b": dict(m)}, "count": {"items read on the base table": i + 1, "items read on the GSI": 0}})
+    hits = {k: "match" for k, r in enumerate(gsi) if r[0] == want}
+    steps.append({"say": T(lang, f"With the GSI: Query the index with partition key {want}. DynamoDB reads only the {len(hits)} entries of that product. DynamoDB keeps the index up to date at each write of the base table, and these index writes also cost write units.",
+                           f"GSI ile: index'i {want} partition key'iyle sorgula. DynamoDB sadece o ürünün {len(hits)} entry'sini okur. DynamoDB ana table'a her yazmada index'i günceller ve bu index yazmaları da write unit tüketir."),
+                  "marks": {"b": {k: ("match" if r[1] == want else "skip") for k, r in enumerate(base)}, "g": hits},
+                  "count": {"items read on the base table": len(base), "items read on the GSI": len(hits)}})
+    return {"tables": [{"id": "b", "name": T(lang, "base table (pk = cart)", "ana table (pk = sepet)"), "cols": ["pk", "sk", "qty"], "rows": base, "key": [0, 1], "ref": []},
+                       {"id": "g", "name": T(lang, "GSI by product (pk = sk of the base table)", "ürüne göre GSI (pk = ana table'ın sk'si)"), "cols": ["gsi pk", "gsi sk", "qty"], "rows": gsi, "key": [0, 1], "ref": []}],
+            "out": None, "steps": steps}
+
+
+DDB_CANDS = ["DynamoDB", "Aurora PostgreSQL", "ElastiCache (Valkey)", "Redshift", "Keyspaces"]
+
+
+def dynamodb(lang):
+    w1 = verdicts(DDB_CANDS, [
+        V((1, "on-demand mode scales per request", "on-demand mod istek başına ölçeklenir"), (1, "Serverless v2 scales capacity", "Serverless v2 kapasiteyi ölçekler"),
+          (1, "Serverless scales by itself", "Serverless kendi kendine ölçeklenir"), (0, "built for analytic scans", "analitik tarama için yapıldı"),
+          (1, "on-demand mode", "on-demand mod")),
+        V((1, "each write is stored in several AZs", "her yazma birkaç AZ'de saklanır"), (1, "six copies in three AZs", "üç AZ'de altı kopya"),
+          (0, "memory first, not a durable record", "önce bellek, kalıcı kayıt değil"), (1, "durable storage", "kalıcı storage"), (1, "three replicas", "üç replica")),
+        V((1, "pay per request, no instance", "istek başına ödeme, instance yok"), (0, "you pay capacity per hour (ACU-hours)", "kapasiteyi saat başına ödersin (ACU-saat)"),
+          (1, "pay for data and requests", "veri ve istek başına ödeme"), (0, "compute per hour", "saat başına compute"), (1, "pay per request", "istek başına ödeme")),
+        V((1, "only the key is required", "sadece key zorunlu"), (1, "JSONB column", "JSONB column"), (1, "hash fields", "hash alanları"),
+          (1, "SUPER type", "SUPER type"), (0, "each column must be in the schema", "her column schema'da olmalı")),
+    ])
+    w2 = verdicts(DDB_CANDS, [
+        V((0, "no JOIN, each question needs a key design", "JOIN yok, her soru bir key tasarımı ister"), (1, "SQL on any column", "her column'da SQL"),
+          (0, "access by key only", "sadece key ile erişim"), (1, "SQL", "SQL"), (0, "no JOIN", "JOIN yok")),
+        V((1, "many small writes", "çok sayıda küçük yazma"), (1, "OLTP transactions", "OLTP transaction'ları"), (1, "fast writes", "hızlı yazmalar"),
+          (0, "not for many small writes", "çok sayıda küçük yazma için değil"), (1, "fast writes", "hızlı yazmalar")),
+    ])
+    w3 = verdicts(DDB_CANDS, [
+        V((1, "TTL attribute", "TTL attribute"), (0, "a cleanup job is necessary", "bir temizlik işi gerekir"), (1, "EXPIRE", "EXPIRE"), (0, "no TTL", "TTL yok"), (1, "TTL on the table or row", "table ya da row TTL'i")),
+        V((1, "each write is stored in several AZs", "her yazma birkaç AZ'de saklanır"), (1, "durable", "kalıcı"), (0, "memory first", "önce bellek"), (1, "durable", "kalıcı"), (1, "durable", "kalıcı")),
+        V((1, "conditional write on one item", "tek item'da koşullu yazma"), (1, "UNIQUE and transactions", "UNIQUE ve transaction'lar"), (0, "removed earlier", "daha önce elendi"),
+          (0, "no enforced keys", "uygulanan key yok"), (1, "lightweight transactions (IF NOT EXISTS)", "lightweight transaction'lar (IF NOT EXISTS)")),
+        V((1, "items can have any attributes", "item'lar her attribute'a sahip olabilir"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"),
+          (0, "removed earlier", "daha önce elendi"), (0, "each column must be in the schema", "her column schema'da olmalı")),
+    ])
+    spec = {
+        "decide_cart": decide_generic(lang, ("Shopping carts of all visitors, with a 50 times traffic jump on a sale day", "Bütün ziyaretçilerin sepetleri, indirim gününde 50 kat trafik artışıyla"),
+                                      [("Traffic can jump 50 times in minutes, with no capacity plan", "Trafik, kapasite planı olmadan dakikalar içinde 50 kat artabilir"),
+                                       ("Every confirmed write must survive the loss of a data center", "Onaylanan her yazma bir veri merkezinin kaybından sağ çıkmalı"),
+                                       ("No servers to size, and the bill follows the requests", "Boyutlandırılacak sunucu yok, fatura istekleri takip eder"),
+                                       ("Items of different shapes: a cart line, a coupon, a gift note", "Farklı şekillerde item'lar: bir sepet satırı, bir kupon, bir hediye notu")],
+                                      DDB_CANDS, w1),
+        "decide_report": decide_generic(lang, ("A finance report that joins carts, orders and products in new ways each month", "Her ay yeni şekillerde sepetleri, siparişleri ve ürünleri join eden bir finans raporu"),
+                                        [("New questions with JOIN on any column, without a redesign", "Yeniden tasarım yapmadan, her column'da JOIN ile yeni sorular"),
+                                         ("The same system also takes many small writes each second", "Aynı sistem saniyede çok sayıda küçük yazma da alır")],
+                                        DDB_CANDS, w2),
+        "decide_holds": decide_generic(lang, ("Seat holds for a concert: a hold expires after 10 minutes, and two people must never hold the same seat", "Bir konser için koltuk tutma: tutma 10 dakika sonra düşer ve iki kişi asla aynı koltuğu tutmamalı"),
+                                       [("Each hold deletes itself after a time", "Her tutma bir süre sonra kendini siler"),
+                                        ("A confirmed hold must survive a crash", "Onaylanan bir tutma çökmeden sağ çıkmalı"),
+                                        ("A second hold of the same seat must fail", "Aynı koltuğun ikinci tutması başarısız olmalı"),
+                                        ("The hold carries free extra fields (price class, promo code)", "Tutma serbest ek alanlar taşır (fiyat sınıfı, promosyon kodu)")],
+                                       DDB_CANDS, w3),
+        "hash": ddb_hash(lang), "queryscan": ddb_query_scan(lang), "condition": ddb_condition(lang), "gsi": ddb_gsi(lang),
+    }
+    return {k: _localize(v, lang) for k, v in spec.items()}
+
+
+COUNT_TR.update({"partitions touched": "dokunulan partition", "items read": "okunan item", "items returned": "dönen item",
+                 "items read on the base table": "ana table'da okunan item", "items read on the GSI": "GSI'da okunan item", "candidates left": "kalan aday"})
+SIMS["dynamodb"] = dynamodb
+
+EXTRA_TABLES["cart"] = CART

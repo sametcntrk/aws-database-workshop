@@ -2,219 +2,384 @@
 {% import "e2e/_macros.html" as k with context %}
 {% block body %}
 
-<h2 id="goal" data-short="What you will learn"><span class="sec">00</span>What you will learn</h2>
-<p>Lale Market keeps each shopping cart in Amazon DynamoDB. Each page reads the cart, the cart changes often, and it must stay fast at any number of shoppers.
-   DynamoDB gives the same fast read at any table size, but only if you design the key for the questions that the app asks.</p>
+<h2 id="goal" data-short="What you will learn"><span class="sec">00</span>What you will learn, and how to use this page</h2>
+<p>Section 01 gives the architect's decision: where Amazon DynamoDB fits and where it does not. Then the tutorial has two parts.
+   Part 1 teaches the idea behind DynamoDB: key-value storage spread over partitions by a hash of the key. Part 2 shows the AWS service: what AWS runs for you, and how Lale Market uses it.</p>
+<p>The examples come from the shopping cart of Lale Market. When a different example makes an idea easier to see, the tutorial uses it: a cloakroom, a post office, a concert ticket desk.</p>
 <p>After this tutorial, you can do these tasks:</p>
 <ol>
+  <li>Say for which workloads DynamoDB is the right choice, and for which it is not.</li>
   <li>Explain how the partition key decides where DynamoDB stores an item.</li>
-  <li>Design a primary key (partition key + sort key) from a list of access patterns.</li>
-  <li>Tell when to use GetItem, Query and Scan, and predict their cost in read request units.</li>
-  <li>Use a condition and an atomic ADD to keep a rule without a lock.</li>
-  <li>Say when DynamoDB is the correct Engine, and when a relational database is better.</li>
+  <li>Design a primary key from a list of access patterns.</li>
+  <li>Predict the cost of GetItem, Query and Scan in read request units.</li>
+  <li>Use a condition and an atomic ADD to keep a business rule without a lock.</li>
+  <li>Explain what DynamoDB runs for you, and which options (DAX, global tables, Streams) change a design.</li>
+</ol>
+<p>Four kinds of boxes help you. <b>Simulation</b>: press Play or Next step. <b>Predict first</b>: write your answer before you open it.
+   <b>Checkpoint</b>: a question with one right answer. <b>Analogy</b>: a picture from daily life.</p>
+
+<h2 id="architect" data-short="Architect's view: when to use"><span class="sec">01</span>The architect's view: where DynamoDB fits</h2>
+<p><b>Read this section first.</b> It gives the decision. The sections after it teach how DynamoDB works, for readers who want to go deeper.</p>
+<p><b>In short:</b> DynamoDB is a serverless key-value and document database. It answers each request by key in single-digit milliseconds, at any table size and at any request rate.
+   You get this speed only if you know your questions in advance and design the key for them.</p>
+<p>The important word is {{ k.term("access pattern") }}. An access pattern is a question that the application asks, together with the values that it knows at that moment.
+   "Show the cart of the browser with id 7f3a" is an access pattern. "Show all carts that contain a book, sorted by value" is a different access pattern.
+   DynamoDB answers the first one with one cheap request. For the second one it needs either a special index or a full read of the table.</p>
+
+<h3>Signals in a workload that point to DynamoDB</h3>
+<table class="data">
+  <thead><tr><th>Signal</th><th>What it looks like in a real project</th><th>The DynamoDB feature that answers it</th></tr></thead>
+  <tbody>
+    <tr><td>The application always knows the key</td><td>Get the cart of this visitor. Get the profile of this user. Get the state of this device.</td><td>GetItem and Query by primary key (section 05)</td></tr>
+    <tr><td>Traffic is very large or very spiky</td><td>A sale multiplies the traffic by 50 for one hour. A new game brings a million players on its first day.</td><td>Partitions that spread the load, on-demand capacity (sections 04 and 10)</td></tr>
+    <tr><td>The team wants no servers</td><td>No instances to size, patch or fail over. The bill follows the requests.</td><td>Serverless service, on-demand mode (section 10)</td></tr>
+    <tr><td>Simple rules on one item, or a few items</td><td>At most 5 pieces of one product. Take a seat only if it is free.</td><td>ConditionExpression and TransactWriteItems (section 06)</td></tr>
+    <tr><td>Data that should delete itself</td><td>Abandoned carts after a day, sessions after an hour, temporary holds after ten minutes.</td><td>Time to live (TTL) (section 08)</td></tr>
+    <tr><td>Other systems must react to each change</td><td>When an order status changes, send an e-mail and update a search index.</td><td>DynamoDB Streams (section 08)</td></tr>
+    <tr><td>Users in several Regions write at the same time</td><td>A global game or app with players on three continents.</td><td>Global tables (section 10)</td></tr>
+  </tbody>
+</table>
+
+<h3>Use cases, with the reason and the feature</h3>
+<table class="data">
+  <thead><tr><th>Use case</th><th>Data and access patterns</th><th>Why DynamoDB</th><th>The feature that does the work</th></tr></thead>
+  <tbody>
+    <tr><td>Shopping carts (Lale Market)</td><td>One cart per visitor. Read the cart, add or change one line, empty the cart.</td><td>Every request knows the visitor id. Sale days bring sudden peaks.</td><td>Partition key per cart, sort key per product, conditional UpdateItem, TTL</td></tr>
+    <tr><td>User profiles and preferences</td><td>One item per user, read on every page.</td><td>Millions of users, always read by user id.</td><td>GetItem by key, items with free attributes</td></tr>
+    <tr><td>Sessions and login tokens</td><td>One item per session, with an expiry.</td><td>Very many short-lived items that must survive a server restart.</td><td>TTL, strongly consistent reads when necessary</td></tr>
+    <tr><td>Game state and player inventory</td><td>One partition per player, items for each object.</td><td>Large bursts on the first day of a game, low latency for every player.</td><td>Query on one partition, atomic ADD for counters, global tables</td></tr>
+    <tr><td>Internet of Things: the latest state of each device</td><td>One item per device, many writes per second.</td><td>Millions of devices write in parallel, each to its own key.</td><td>Spread of partition keys, on-demand capacity</td></tr>
+    <tr><td>Idempotency keys for payments and APIs</td><td>One item per request id, written only if it is new.</td><td>A retry must not charge a card two times.</td><td><code>attribute_not_exists</code> condition on PutItem, TTL</td></tr>
+    <tr><td>Ticket and seat holds</td><td>One item per seat and event, held for ten minutes.</td><td>Two people must never hold one seat, and old holds must go away.</td><td>Conditional PutItem, TTL</td></tr>
+    <tr><td>Serverless, event-driven back ends</td><td>Orders, statuses, notifications.</td><td>No servers, and each change starts the next step.</td><td>DynamoDB Streams with AWS Lambda</td></tr>
+    <tr><td>Metadata of files in S3</td><td>One item per object: owner, tags, status.</td><td>Find the file of a user without a list of the bucket.</td><td>Query by owner, GSI by status</td></tr>
+    <tr><td>Advertising and recommendation lookups</td><td>One item per user or segment, read in a few milliseconds during a page request.</td><td>Very high read rates with a strict time limit.</td><td>GetItem, DAX for microsecond reads</td></tr>
+  </tbody>
+</table>
+
+<h3>Signals that point away from DynamoDB</h3>
+<table class="data">
+  <thead><tr><th>Signal in the workload</th><th>Why DynamoDB is a weak fit</th><th>Better choice</th></tr></thead>
+  <tbody>
+    <tr><td>New questions every month, with JOIN on any column</td><td>Each new question needs a new key design or a new index. There is no JOIN.</td><td><a href="/e2etutorial/aurora">Aurora PostgreSQL</a></td></tr>
+    <tr><td>Rules between many tables (foreign keys, CHECK)</td><td>DynamoDB checks conditions on the items in one request. It has no foreign keys.</td><td><a href="/e2etutorial/aurora">Aurora PostgreSQL</a></td></tr>
+    <tr><td>Reports that scan and group years of data</td><td>A Scan reads and bills every item. There is no GROUP BY.</td><td><a href="/e2etutorial/redshift">Redshift</a> (DynamoDB has a zero-ETL integration with Redshift)</td></tr>
+    <tr><td>Search with words, typos and relevance</td><td>DynamoDB compares whole values. It does not rank text.</td><td><a href="/e2etutorial/opensearch">OpenSearch</a> (DynamoDB has a zero-ETL integration with OpenSearch Service)</td></tr>
+    <tr><td>Answers in less than one millisecond</td><td>DynamoDB answers in single-digit milliseconds.</td><td>DAX in front of DynamoDB, or <a href="/e2etutorial/elasticache">ElastiCache</a></td></tr>
+    <tr><td>Items larger than 400 KB (images, documents)</td><td>The maximum item size is 400 KB
+        (<a href="https://aws.amazon.com/dynamodb/faqs/">DynamoDB FAQ</a>).</td><td><a href="/e2etutorial/s3">S3</a> for the file. DynamoDB keeps the S3 key and the metadata.</td></tr>
+    <tr><td>Paths through relations ("friends of friends")</td><td>Each hop is one more request, and the application must join the results.</td><td><a href="/e2etutorial/neptune">Neptune</a></td></tr>
+  </tbody>
+</table>
+
+<h3>The questions that an architect asks, in this order</h3>
+<ol>
+  <li><b>Can you list every access pattern now?</b> If yes, DynamoDB can serve each one with a key. If the questions are open, prefer a relational database.</li>
+  <li><b>Which value does the application know at each request?</b> That value is a candidate for the partition key.</li>
+  <li><b>Does the partition key have many different values, used evenly?</b> One busy value can become a hot partition.</li>
+  <li><b>Which order must the results have?</b> The order of a Query comes from the sort key.</li>
+  <li><b>Which rules must hold?</b> One item: a condition. Up to 100 items: a transaction. Rules between tables: a relational database.</li>
+  <li><b>How fast and how often?</b> Single-digit milliseconds at any rate is the normal case. Microseconds need DAX or a cache.</li>
+  <li><b>How many Regions write?</b> One Region is normal. Several Regions that write need global tables.</li>
+  <li><b>Who else needs the data?</b> Analytics, search and other services get it through Streams or zero-ETL, not through Scans.</li>
 </ol>
 
-<h2 id="model" data-short="Items and keys"><span class="sec">01</span>The model: items found by a key</h2>
-<p>A DynamoDB table holds {{ k.term("item", "item") }}s. An item is a set of attributes (name and value), like one JSON object.
-   Two items in one table can have different attributes. Each item must have the {{ k.term("primary key") }}. The other attributes are free.</p>
+<h3>DynamoDB and its relatives on AWS</h3>
+<table class="data">
+  <thead><tr><th>Option</th><th>What it is</th><th>Choose it when</th></tr></thead>
+  <tbody>
+    <tr><td>DynamoDB, on-demand mode</td><td>You pay for each read and write request. No capacity plan.</td><td>Traffic is new, spiky or hard to predict.</td></tr>
+    <tr><td>DynamoDB, provisioned mode</td><td>You set the read and write capacity per second, optionally with auto scaling.</td><td>Traffic is steady and predictable, and cost matters most.</td></tr>
+    <tr><td>DynamoDB Accelerator (DAX)</td><td>An in-memory cache in front of DynamoDB that uses the same API.</td><td>Hot items are read very often and need microsecond reads.</td></tr>
+    <tr><td>Global tables</td><td>"A fully managed, multi-Region, and multi-active database feature". Any replica can serve reads and writes
+        (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GlobalTables.html">Global tables</a>).</td><td>Users in several Regions, or business continuity across Regions.</td></tr>
+    <tr><td>Zero-ETL integrations</td><td>Managed copies of a table to Redshift and to OpenSearch Service. The Redshift copy updates "every 15-30 minutes"
+        (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/RedshiftforDynamoDB-zero-etl.html">DynamoDB zero-ETL with Redshift</a>).</td><td>Analysts or a search feature need the data, and the table must not see Scans.</td></tr>
+    <tr><td><a href="/e2etutorial/keyspaces">Amazon Keyspaces</a></td><td>A serverless, Cassandra-compatible wide-column database.</td><td>The team already uses Apache Cassandra and CQL.</td></tr>
+  </tbody>
+</table>
+
+<h3>Where DynamoDB sits in Lale Market</h3>
+<p>Lale Market keeps every shopping cart in the table <code>dbws-cart</code>. The product page adds items. The cart page reads them. Checkout reads the cart strongly consistent,
+   and Aurora writes the order. After the commit, the browser empties the cart in DynamoDB.
+   The cart is a good fit. Every request knows the visitor id, and the carts are independent of each other. A lost cart after 24 hours costs nothing.
+   The order is not a good fit for DynamoDB in this shop, because it needs rules over stock, orders and lines together. That is the job of Aurora.</p>
+
+<h3>Simulation: let the requirements choose</h3>
+<p>Five candidates start in each workload. Each requirement eliminates the candidates that cannot meet it. Before you press Play, guess the winner.</p>
+{{ k.sim("decide_cart", "Workload 1: shopping carts on a sale day") }}
+{{ k.sim("decide_report", "Workload 2: a finance report with new questions each month") }}
+{{ k.sim("decide_holds", "Workload 3: seat holds for a concert") }}
+<p>Two notes. In workload 1, Aurora Serverless v2 also scales, but you pay for capacity per hour and not per request. In workload 3, Aurora could also do the job with a cleanup job for old holds.
+   The simulation eliminates a candidate at the first requirement that it misses. In a real decision, also write down how much work each "almost" would cost.</p>
+
+{{ k.quiz("ddb-a1", "A payment API must never charge a card two times when a client retries a request. Each request has a unique request id. What fits best?",
+   ["A DynamoDB PutItem with attribute_not_exists on the request id", "A Redshift table with one row for each request id", "An ElastiCache sorted set of all request ids", "A Scan of the payments table before each charge"],
+   0, "The conditional PutItem writes the request id only if it is new, in one step. A retry with the same id fails the condition, so the program knows that it already charged.") }}
+{{ k.quiz("ddb-a2", "A product manager wants a new report each week: sales by region, by campaign and by device type. Is DynamoDB a good place for these questions?",
+   ["Yes, a Scan with a filter answers each report", "No, open questions with grouping fit SQL better", "Yes, if each report gets a new partition key", "No, because DynamoDB cannot store numbers"],
+   1, "The questions change every week and need grouping. Put them in Redshift (for example with zero-ETL from DynamoDB) or in a relational database.") }}
+{{ k.quiz("ddb-a3", "A game has 2 million players. Each request reads or writes the state of one player by player_id. What makes DynamoDB a good fit here?",
+   ["The player_id has many values, so the load spreads over partitions", "DynamoDB joins the player table with the item table fast", "DynamoDB keeps the full table in the memory of one server", "A Scan of all players is free in on-demand mode"],
+   0, "Each request knows one key, and the keys are many and evenly used. DynamoDB spreads them over partitions, so each request stays fast.") }}
+
+<div class="part"><b>Part 1</b><h2 id="part1" data-short="PART 1: Key-value design">Key-value storage and partitions: the idea</h2>
+<p>How a database that finds data only by key can stay fast at any size.</p></div>
+
+<h2 id="why" data-short="Why key-value?"><span class="sec">02</span>Why a key-value database? The cloakroom</h2>
+<p>A theatre has a cloakroom with 5,000 hooks. When you leave your coat, you get a ticket with a number. At the end of the play, 5,000 people come back at the same time.
+   With a ticket, an attendant walks straight to one hook. The time is the same for hook 12 and for hook 4,812.
+   Without a ticket ("a blue coat with a red scarf"), the attendant must look at every hook. That takes a long time, and the queue grows.</p>
+{% call k.callout("analogy", "Analogy") %}
+<p>The ticket number is the key. The hook is the place where the data lives. A key-value database is a cloakroom: it is very fast when you bring the ticket,
+   and slow when you only describe the coat. A large theatre adds more attendants and splits the hooks into rooms. That is a partition.</p>
+{% endcall %}
+<p>A relational database (see the <a href="/e2etutorial/aurora">Aurora tutorial</a>) can answer any question with SQL. The price is that one server runs all writes,
+   and the planner must decide how to answer each new question. A key-value database makes a different trade. It answers only questions by key.
+   In return, it can split the data over many machines, and each machine answers its share alone. So the speed of one request does not depend on the size of the table.</p>
+
+<h2 id="model" data-short="Items and keys"><span class="sec">03</span>The model: items, attributes and the primary key</h2>
+<p>A DynamoDB table holds {{ k.term("item", "item") }}s. An item is a set of attributes: a name and a value each, like one JSON object.
+   Two items in one table can have different attributes. Only the {{ k.term("primary key") }} must be in each item.</p>
 {{ k.fig("dynamodb-table.png", "item 101 has Phone, item 102 has Address, and item 103 has FavoriteColor and Address. Only the primary key PersonID is in each item. The table has no schema for the other attributes.") }}
 <p>The primary key has one or two parts:</p>
 <ul>
-  <li>Each table has a {{ k.term("partition key") }} (pk). DynamoDB uses it to select the storage partition of the item.</li>
-  <li>The {{ k.term("sort key") }} (sk) is optional. DynamoDB keeps the items with the same partition key together, sorted by the sort key.</li>
+  <li>The {{ k.term("partition key") }} (pk) is required. DynamoDB uses its value to select the storage partition of the item (section 04).</li>
+  <li>The {{ k.term("sort key") }} (sk) is optional. DynamoDB keeps the items with the same partition key together, in the order of the sort key.
+      All items with the same partition key form an {{ k.term("item collection") }}.</li>
 </ul>
-<p>This is the real table definition of Lale Market (from <code>cloudformation/workshop.yaml</code>):</p>
-<pre><code>TableName: dbws-cart
-BillingMode: PAY_PER_REQUEST          <span class="c"># on-demand: no capacity plan, pay per request</span>
-KeySchema:
-  - AttributeName: pk   KeyType: HASH     <span class="c"># partition key</span>
-  - AttributeName: sk   KeyType: RANGE    <span class="c"># sort key</span>
-TimeToLiveSpecification: { AttributeName: expires_at, Enabled: true }</code></pre>
-{% call k.query("dynamodb", "D1", "Describe the table") %}
-<pre><code>client.describe_table(TableName='dbws-cart')</code></pre>
-<p>Purpose: see the key schema and the capacity mode. <code>ItemCount</code> is approximate. DynamoDB updates it about every six hours.</p>
+<p>This is the real definition of the Lale Market table (from <code>cloudformation/workshop.yaml</code>):</p>
+{% call k.sql("T1", "The cart table") %}
+<pre><code>CartTable:
+  Type: AWS::DynamoDB::Table
+  Properties:
+    TableName: dbws-cart
+    BillingMode: PAY_PER_REQUEST
+    AttributeDefinitions:
+      - AttributeName: pk
+        AttributeType: S
+      - AttributeName: sk
+        AttributeType: S
+    KeySchema:
+      - AttributeName: pk
+        KeyType: HASH
+      - AttributeName: sk
+        KeyType: RANGE
+    PointInTimeRecoverySpecification:
+      PointInTimeRecoveryEnabled: true
+    TimeToLiveSpecification:
+      AttributeName: expires_at
+      Enabled: true</code></pre>
+<table class="clause">
+  <tr><td>TableName: dbws-cart</td><td>The name of the table. Requests use this name.</td></tr>
+  <tr><td>BillingMode: PAY_PER_REQUEST</td><td>On-demand mode. You pay for each read and write. You do not set a capacity in advance.</td></tr>
+  <tr><td>AttributeDefinitions: pk S, sk S</td><td>The types of the key attributes only. <code>S</code> means string. The other attributes need no definition, because DynamoDB has no schema for them.</td></tr>
+  <tr><td>KeySchema: pk HASH</td><td><code>pk</code> is the partition key. The word HASH says that DynamoDB uses a hash of this value to place the item.</td></tr>
+  <tr><td>KeySchema: sk RANGE</td><td><code>sk</code> is the sort key. The word RANGE says that DynamoDB keeps the items of one partition key in the order of this value. So a request can read a range.</td></tr>
+  <tr><td>PointInTimeRecoveryEnabled: true</td><td>DynamoDB keeps continuous backups, so you can restore the table to a point in time.</td></tr>
+  <tr><td>TimeToLiveSpecification: expires_at</td><td>An item whose <code>expires_at</code> (a Unix time in seconds) is in the past expires. DynamoDB deletes it later in the background (section 08).</td></tr>
+</table>
 {% endcall %}
 
-<h2 id="partitions" data-short="Partitions and hashing"><span class="sec">02</span>Partitions: why a key lookup stays fast</h2>
-<p>DynamoDB spreads a table over many {{ k.term("partition") }}s. A partition is a unit of storage on SSDs, with copies in more than one Availability Zone.
-   To store an item, DynamoDB gives the partition key value to a hash function. The output selects the partition
-   (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.Partitions.html">Partitions and data distribution</a>).</p>
-{{ k.fig("dynamodb-hash-table.png", "a hash function changes a key (John Smith) into a slot number (873). The same key always gives the same number, so a lookup goes straight to one slot. DynamoDB uses the same idea to go from a partition key to one partition.") }}
-{{ k.fig("dynamodb-partition-key.png", "the item with AnimalType Dog goes into the third partition, because the hash of \"Dog\" points there. To read it, DynamoDB calculates the same hash and reads only that partition.") }}
-<p>This is the core trade of DynamoDB. A read with the full key is one hash and one partition read, at any table size.
-   A question that does not give the key has no partition to go to. It must read the full table.</p>
-{% call k.callout("analogy", "Analogy") %}
-<p>A cloakroom gives you a numbered ticket. With the ticket, the attendant goes straight to one hook, if the room has 100 coats or 100,000 coats.
-   Without the ticket ("the blue coat with a scarf"), the attendant must look at each hook. The partition key is the ticket.</p>
-{% endcall %}
-<p>Each partition can serve at most 3,000 read units and 1,000 write units per second
-   (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html">Partition key design</a>).
-   So a good partition key has many different values, and the traffic spreads over them. A key with few values (for example, the country) puts the load on few partitions.
-   This is a {{ k.term("hot partition") }}.</p>
-
-{{ k.quiz("ddb-q1", "Which partition key spreads the Lale Market cart traffic best?",
-   ["The city of the shopper", "The browser id of the shopper", "The date of the cart", "The category of the product"],
-   1, "Each Visitor has a different browser id, so the carts spread over many partition key values. City, date and category have few values, and some values are very busy.") }}
-
-<h2 id="design" data-short="Key design"><span class="sec">03</span>Design the key from the questions</h2>
-<p>In a relational database, you design the tables first, and you write any query later. In DynamoDB, you list the {{ k.term("access pattern") }}s first.
-   An access pattern is a question that the app asks, with the values that it knows at that moment. Then you design the key so that each question is one GetItem or one Query.</p>
+<h3>The teaching data and its identifiers</h3>
+<p>This is a small copy of the cart table with four carts. The product names and prices come from the real Lale Market catalog. The cart ids are short examples:
+   the real partition key is <code>CART#</code> and the full browser id.</p>
+{{ k.sample("cart", "dbws-cart: the teaching copy (8 items in 4 carts)", key=["pk", "sk"]) }}
+<p>Read the ownership of each identifier as a sentence:</p>
 <table class="data">
-  <thead><tr><th>Access pattern of the cart</th><th>The app knows</th><th>Operation</th></tr></thead>
+  <thead><tr><th>Identifier</th><th>Who owns it</th><th>Who borrows it</th></tr></thead>
+  <tbody>
+    <tr><td>The visitor id (for example <code>7f3a</code>)</td><td>The shop owns it. The browser keeps it in the cookie <code>lm_visitor</code>, and every Engine App reads it from there.</td><td>The cart table borrows it inside its partition key: <code>CART#7f3a</code>.</td></tr>
+    <tr><td>The primary key (<code>pk</code> + <code>sk</code>)</td><td>The cart table owns it. No two items can have the same pair. A write with an existing pair replaces the old item.</td><td>Nobody borrows it. Other systems refer to a cart by the visitor id.</td></tr>
+    <tr><td>The product id (for example <code>P0001</code>)</td><td>The catalog owns it. It lives in DocumentDB and in Aurora.</td><td>The cart table borrows it inside the sort key: <code>ITEM#P0001</code>. DynamoDB does not check that the product exists. The application must do it.</td></tr>
+    <tr><td>The key of a global secondary index</td><td>The index owns its own key, for example the product id (section 07).</td><td>It borrows the attribute values from the items of the base table. DynamoDB copies them for you.</td></tr>
+  </tbody>
+</table>
+<p>The prefixes <code>CART#</code> and <code>ITEM#</code> are a convention. One table can hold several kinds of items, and the prefix shows the kind.
+   The Load Simulation of the cart page writes items with <code>pk = SIM#...</code> into the same table, and they never collide with carts.</p>
+
+{{ k.quiz("ddb-q0", "Look at the teaching table. Which request returns exactly one item?",
+   ["GetItem with pk = CART#7f3a and sk = ITEM#P0044", "Query with pk = CART#7f3a and no sort key condition", "Scan with a filter on qty >= 2", "Query with pk = CART#3c8d"],
+   0, "GetItem needs the full primary key, and one pair names one item. The Query of CART#7f3a returns three items, and the Query of CART#3c8d returns two.") }}
+
+<h2 id="partitions" data-short="Partitions and hashing"><span class="sec">04</span>Partitions: why a lookup by key stays fast</h2>
+<p>DynamoDB spreads a table over many {{ k.term("partition") }}s. A partition is a unit of storage with its own share of the data and its own share of the throughput.
+   To place an item, DynamoDB gives the partition key to a hash function. A {{ k.term("hash function") }} turns any value into a number, and the same value always gives the same number.
+   The number selects the partition (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.Partitions.html">Partitions and data distribution</a>).</p>
+{{ k.fig("dynamodb-hash-table.png", "a hash function turns a name (John Smith) into a slot number (873). To find John Smith again, the program calculates the same number and goes straight to that slot. DynamoDB uses the same idea to go from a partition key to a partition.") }}
+{{ k.fig("dynamodb-partition-key.png", "the item with AnimalType Dog goes into the third partition, because the hash of \"Dog\" points there. To read it, DynamoDB calculates the same hash and reads only that partition.") }}
+{% call k.predict("Look at the teaching table. Three partitions, and four carts. Is it possible that two carts land in the same partition? Does that break anything?") %}
+<p>Yes, two carts can land in the same partition. Nothing breaks. A partition holds many item collections. Inside the partition, each item collection stays together and sorted by sk.
+   The hash only decides which partition does the work for a key.</p>
+{% endcall %}
+{{ k.sim("hash", "Eight items, three partitions, one hash") }}
+<p>The simulation uses a small teaching hash (the sum of the character codes, modulo 3). DynamoDB uses its own internal hash function, and the number of partitions grows as the table grows.
+   The idea is the same: the key alone decides the partition, so DynamoDB does not need to look anywhere else.</p>
+<p>Each partition has a limit. Every partition "is designed to deliver a maximum capacity of 3,000 read units per second and 1,000 write units per second"
+   (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html">Partition key design</a>).
+   So a good partition key has many different values. The requests must spread evenly over them. If one value gets most of the traffic, its partition reaches the limit
+   while the others are idle. This is a {{ k.term("hot partition") }}.</p>
+{{ k.quiz("ddb-q1", "Which partition key spreads the cart traffic of Lale Market best?",
+   ["The city of the visitor", "The browser id of the visitor", "The date of the cart", "The category of the product"],
+   1, "Each visitor has a different browser id, so the traffic spreads over very many key values. The city, the date and the category have few values, and some values are very busy.") }}
+
+<h2 id="reads" data-short="GetItem, Query, Scan"><span class="sec">05</span>Reads: GetItem, Query and Scan, and what they cost</h2>
+<p>DynamoDB has three ways to read. They differ in one thing: how much of the key the request gives.</p>
+<table class="data">
+  <thead><tr><th>Operation</th><th>What the request gives</th><th>What DynamoDB reads</th></tr></thead>
+  <tbody>
+    <tr><td>GetItem</td><td>The full primary key (pk and sk)</td><td>Exactly one item, or nothing</td></tr>
+    <tr><td>Query</td><td>The partition key, and optionally a condition on the sort key</td><td>One item collection, or a range of it, in sort key order</td></tr>
+    <tr><td>Scan</td><td>No key at all</td><td>Every item of the table, page by page</td></tr>
+  </tbody>
+</table>
+{% call k.sql("Q1", "Show the cart of visitor 7f3a") %}
+<pre><code>table.query(
+    KeyConditionExpression=Key('pk').eq('CART#7f3a'),
+    ConsistentRead=True,
+    ReturnConsumedCapacity='TOTAL')</code></pre>
+<table class="clause">
+  <tr><td>table.query(...)</td><td>The Query operation of the AWS SDK for Python (boto3), on the table <code>dbws-cart</code>.</td></tr>
+  <tr><td>KeyConditionExpression=Key('pk').eq('CART#7f3a')</td><td>The partition key must equal <code>CART#7f3a</code>. A Query must always name one partition key value.</td></tr>
+  <tr><td>ConsistentRead=True</td><td>A strongly consistent read: the answer contains every write that succeeded before the read. The default is an eventually consistent read.</td></tr>
+  <tr><td>ReturnConsumedCapacity='TOTAL'</td><td>Ask DynamoDB to report the read units that this request used. The Behind-the-scenes panel of the shop shows this number.</td></tr>
+</table>
+{% endcall %}
+{% call k.sql("Q2", "Every cart line with two or more pieces (a Scan)") %}
+<pre><code>table.scan(FilterExpression=Attr('qty').gte(2))</code></pre>
+<table class="clause">
+  <tr><td>table.scan(...)</td><td>Read the table from the first item to the last, page by page (up to 1 MB per page).</td></tr>
+  <tr><td>FilterExpression=Attr('qty').gte(2)</td><td>After the read, keep only the items with <code>qty &gt;= 2</code>. The filter does not reduce the read. You pay for every item that DynamoDB read.</td></tr>
+</table>
+{% endcall %}
+<p>The cost unit for reads is the {{ k.term("read request unit") }} (RRU) in on-demand mode. The rules
+   (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/read-write-operations.html">Read and write operations</a>):</p>
+<ul>
+  <li>A strongly consistent read of up to 4 KB costs one read unit. An eventually consistent read of up to 4 KB costs one half.</li>
+  <li>A Query adds the sizes of all items that it reads and rounds the total up to the next 4 KB.</li>
+  <li>A Scan "considers the size of the items that are evaluated, not the size of the items returned".</li>
+</ul>
+{% call k.predict("Use the teaching table. The Query of CART#7f3a reads how many items? The Scan with qty >= 2 reads how many, and returns how many?") %}
+<p>The Query reads the 3 items of CART#7f3a, and returns 3. The Scan reads all 8 items and returns the 5 items with qty of 2 or more.
+   All items here are small, so the Query costs 1 read unit when it is strongly consistent. The Scan pays for 8 items, not for 5.</p>
+{% endcall %}
+{{ k.sim("queryscan", "Query one cart, then Scan the table") }}
+<p>An eventually consistent read can miss a write from the last moment. Lale Market reads the cart eventually consistent for a quick preview,
+   and strongly consistent at checkout, because the order must contain the last quantity.</p>
+
+<h2 id="writes" data-short="Conditions, transactions"><span class="sec">06</span>Writes: rules without a lock</h2>
+<p>DynamoDB has no "SELECT, then UPDATE under a row lock". Instead, a write can carry a {{ k.term("condition expression") }}.
+   DynamoDB tests the condition on the current item and writes in one step. If the condition is false, it does not write, and it returns <code>ConditionalCheckFailedException</code>.</p>
+<p>The rule of Lale Market is: at most 5 pieces of one product in a cart. This is the real request of the product page (from <code>engines/dynamodb.py</code>):</p>
+{% call k.sql("Q3", "Add pieces to a cart line, with the limit of 5") %}
+<pre><code>table.update_item(
+    Key={'pk': 'CART#7f3a', 'sk': 'ITEM#P0001'},
+    UpdateExpression='ADD qty :q SET #n = :n, unit_price = :p, expires_at = :e',
+    ConditionExpression='attribute_not_exists(qty) OR qty &lt;= :max',   # :max = 5 - :q
+    ReturnConsumedCapacity='TOTAL')</code></pre>
+<table class="clause">
+  <tr><td>Key={'pk': ..., 'sk': ...}</td><td>The full primary key of one item. UpdateItem changes the item, or creates it if it does not exist.</td></tr>
+  <tr><td>ADD qty :q</td><td>Add the number <code>:q</code> to the current value of <code>qty</code>. If two requests add at the same time, DynamoDB applies both. No addition is lost.</td></tr>
+  <tr><td>SET #n = :n, unit_price = :p, expires_at = :e</td><td>Write the name, the price and the new expiry time. <code>#n</code> stands for the attribute name <code>name</code>, because "name" is a reserved word.</td></tr>
+  <tr><td>ConditionExpression='attribute_not_exists(qty) OR qty &lt;= :max'</td><td>Write only if the line is new, or if the current quantity leaves room for the new pieces. The application sets <code>:max</code> to 5 minus the pieces to add.</td></tr>
+</table>
+{% endcall %}
+{{ k.sim("condition", "Two requests on one cart line with qty = 2") }}
+<p>A refused conditional write still costs write capacity, because DynamoDB read the item to test the condition.</p>
+<p>For a rule over several items, DynamoDB has {{ k.term("TransactWriteItems") }}. It groups "up to 100 write actions in a single all-or-nothing operation".
+   The items can be in one or more tables of the same account and Region
+   (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis.html">DynamoDB transactions</a>).
+   Example: take a seat and write the booking together, and fail both if the seat is taken. A transactional write costs two write units for each item of up to 1 KB.</p>
+{{ k.quiz("ddb-q2", "Why does the cart use a ConditionExpression and not a GetItem before the UpdateItem?",
+   ["A GetItem costs more than the UpdateItem", "The test and the write happen in one step", "UpdateItem cannot read the current value", "A condition makes the read strongly consistent"],
+   1, "Between a GetItem and a later UpdateItem, a second browser tab can add pieces. DynamoDB tests the condition at the moment of the write.") }}
+
+<h2 id="design" data-short="Key design and GSI"><span class="sec">07</span>Design the key from the questions</h2>
+<p>In a relational database, you design the tables first and write any query later. In DynamoDB, you list the access patterns first, and then design the key so that each pattern
+   is one GetItem or one Query. This is the main skill of DynamoDB.</p>
+<table class="data">
+  <thead><tr><th>Access pattern of the cart</th><th>The application knows</th><th>Operation</th></tr></thead>
   <tbody>
     <tr><td>Show my cart</td><td>my browser id</td><td>Query pk = <code>CART#&lt;browser id&gt;</code></td></tr>
-    <tr><td>Change the quantity of one product</td><td>browser id, product id</td><td>UpdateItem pk + sk = <code>ITEM#&lt;product id&gt;</code></td></tr>
-    <tr><td>Delete one product from the cart</td><td>browser id, product id</td><td>DeleteItem pk + sk</td></tr>
-    <tr><td>Empty the cart after checkout</td><td>browser id</td><td>Query, then BatchWriteItem (delete)</td></tr>
+    <tr><td>Change the quantity of one product</td><td>browser id and product id</td><td>UpdateItem with pk and sk = <code>ITEM#&lt;product id&gt;</code></td></tr>
+    <tr><td>Delete one product from the cart</td><td>browser id and product id</td><td>DeleteItem with pk and sk</td></tr>
+    <tr><td>Empty the cart after checkout</td><td>browser id</td><td>Query, then BatchWriteItem with up to 25 deletes per request</td></tr>
   </tbody>
 </table>
-<p>So Lale Market uses <code>pk = CART#&lt;browser id&gt;</code> and <code>sk = ITEM#&lt;product id&gt;</code>. All items of one cart are in one item collection,
-   sorted by product id. This is the tutorial cart that the queries below write and read:</p>
-<table class="data">
-  <caption>dbws-cart, item collection pk = CART#tutorial-demo</caption>
-  <thead><tr><th class="key">pk</th><th class="key">sk</th><th>name</th><th class="num">qty</th><th class="num">unit_price</th><th class="num">expires_at</th></tr></thead>
-  <tbody>
-    <tr><td class="key mono">CART#tutorial-demo</td><td class="key mono">ITEM#P0001</td><td>Alpen Kablosuz Kulaklık 1</td><td class="num">2</td><td class="num">3373.84</td><td class="num mono">now + 86400</td></tr>
-    <tr><td class="key mono">CART#tutorial-demo</td><td class="key mono">ITEM#P0044</td><td>Kapadokya Bulut Mimarisi 44</td><td class="num">1</td><td class="num">2651.39</td><td class="num mono">now + 86400</td></tr>
-    <tr><td class="key mono">CART#tutorial-demo</td><td class="key mono">ITEM#P0142</td><td>Ege Hava Temizleyici 142</td><td class="num">1</td><td class="num">2693.65</td><td class="num mono">now + 86400</td></tr>
-  </tbody>
-</table>
-{{ k.fig("dynamodb-sort-key.png", "three items have the partition key Dog. DynamoDB keeps them in one partition and in the order of the sort key Name: Bowser, Fido, Rover. The Lale Market cart works the same way: one pk per cart, items sorted by sk.") }}
-<p>The prefixes <code>CART#</code> and <code>ITEM#</code> are a convention. They let one table hold different kinds of items without a key collision.
-   The Load Simulation, for example, writes items with <code>pk = SIM#...</code> into the same table.</p>
-
-<h2 id="ops" data-short="Put, Get, Query"><span class="sec">04</span>Write and read: PutItem, GetItem, Query</h2>
-{% call k.query("dynamodb", "D2", "Write the three items of the tutorial cart") %}
-<pre><code>table.put_item(Item={'pk': 'CART#tutorial-demo', 'sk': 'ITEM#P0001', 'name': 'Alpen Kablosuz Kulaklık 1',
-                     'qty': 2, 'unit_price': 3373.84, 'expires_at': &lt;now + 86400&gt;})
-<span class="c"># ... and the same for ITEM#P0044 and ITEM#P0142</span></code></pre>
-<p>Purpose: put the example data into the table. PutItem replaces an item with the same pk and sk, so the result is the same each time you run it.
-   A write of an item up to 1 KB costs one {{ k.term("write request unit") }} (WRU).</p>
-{% endcall %}
-{% call k.query("dynamodb", "D5", "Read one item with the full primary key") %}
-<pre><code>table.get_item(Key={'pk': 'CART#tutorial-demo', 'sk': 'ITEM#P0044'})</code></pre>
-<p>Purpose: read exactly one item. GetItem needs both parts of the key. It returns zero or one item.</p>
-{% endcall %}
-
-{% call k.predict("The tutorial cart has three items, each smaller than 1 KB. A strongly consistent Query reads all three. How many read request units does it cost?") %}
-<p>1 RRU. A Query adds the sizes of all items that it reads, then rounds the total up to the next 4 KB. Three small items are far below 4 KB.
-   One strongly consistent read of up to 4 KB costs 1 read unit
-   (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/read-write-operations.html">Read and write operations</a>).
-   Three GetItem calls would cost 3 RRU, one for each item.</p>
-{% endcall %}
-{% call k.query("dynamodb", "D3", "Show the cart: Query one partition key (strongly consistent)") %}
-<pre><code>table.query(KeyConditionExpression=Key('pk').eq('CART#tutorial-demo'),
-            ConsistentRead=True, ReturnConsumedCapacity='TOTAL')</code></pre>
-<ol class="walk">
-  <li>Hash <code>CART#tutorial-demo</code> to find the partition.</li>
-  <li>Go to the start of the item collection of that key.</li>
-  <li>Read the items in sort key order until the collection ends (or a limit or 1 MB of data).</li>
-</ol>
-{% endcall %}
-{% call k.query("dynamodb", "D6", "Query with a sort key condition") %}
-<pre><code>table.query(KeyConditionExpression=Key('pk').eq('CART#tutorial-demo')
-                                   &amp; Key('sk').between('ITEM#P0001', 'ITEM#P0099'))</code></pre>
-<p>Purpose: read a range inside one item collection. The sort key condition can be <code>=</code>, <code>&lt;</code>, <code>&gt;</code>, <code>between</code> or <code>begins_with</code>.
-   Because DynamoDB keeps the items in sort key order, it reads only the range. The result has P0001 and P0044, but not P0142.</p>
-{% endcall %}
-
-{{ k.quiz("ddb-q2", "Which request can DynamoDB answer with a Query on this table?",
-   ["All carts that contain product P0044", "All carts with a total above 5,000", "All items of the cart of one browser id", "All items that expire in the next hour"],
-   2, "A Query needs one partition key value. Only the cart of one browser id gives it. The other three questions do not know the partition key.") }}
-
-<h2 id="scan" data-short="Scan and its cost"><span class="sec">05</span>Scan: the question without a key</h2>
-<p>"Which carts have two or more pieces of a product?" This question gives no partition key. The only operation that can answer it is a {{ k.term("Scan") }}.
-   A Scan reads each item of the table, page by page. A filter expression drops items after the read, so you pay for each item that DynamoDB read, not only for the items that you get.</p>
-{% call k.query("dynamodb", "D7", "Count the items with qty >= 2 (full Scan)") %}
-<pre><code>table.scan(Select='COUNT', FilterExpression=Attr('qty').gte(2))   <span class="c"># repeat with ExclusiveStartKey until the last page</span></code></pre>
-<p>Compare <code>ScannedCount</code> (items read) with <code>Count</code> (items that match). The read request units follow ScannedCount.
-   On a table of a billion items, this question costs a billion item reads.</p>
-{% endcall %}
-<p>If the app needs this question often, you add a {{ k.term("global secondary index") }} (GSI). A GSI is a copy of selected attributes with a different key.
-   DynamoDB keeps the copy up to date for you. Each write to the table then also writes to the index. The Lale Market cart table has no GSI, because the cart has no such question.</p>
+{{ k.fig("dynamodb-sort-key.png", "three items have the partition key Dog. DynamoDB keeps them in one partition and in the order of the sort key Name: Bowser, Fido, Rover. The Lale Market cart works the same way: one partition key per cart, items sorted by product.") }}
+<p>Now a new question arrives: "Which carts contain the book P0044?" The partition key of the table is the cart, so this question has no key.
+   The answer is a {{ k.term("global secondary index") }} (GSI). A GSI is a second copy of selected attributes with a different key. DynamoDB keeps it up to date for you,
+   and each write to the table also writes to the index.</p>
 {{ k.fig("dynamodb-gsi.png", "the index GameTitleIndex has the partition key GameTitle and the sort key TopScore. \"Top scores of Galaxy Invaders\" is now one Query. On the base table, keyed by UserId, the same question needs a Scan.") }}
+{{ k.sim("gsi", "Which carts contain P0044? Scan of the base table, then Query of a GSI") }}
+<p>The Lale Market cart table has no GSI, because the shop never asks this question. Add an index only for a real access pattern: each index adds write cost to every write.</p>
 
-<h2 id="consistency" data-short="Consistency and cost"><span class="sec">06</span>Read consistency and capacity</h2>
-<p>DynamoDB keeps copies of each partition in more than one Availability Zone. A write goes to the copies, and the copies agree after a short time.</p>
-<ul>
-  <li>A {{ k.term("strongly consistent read") }} returns the result of all writes that succeeded before the read. It costs 1 read unit per 4 KB.</li>
-  <li>An {{ k.term("eventually consistent read") }} can miss a very new write. It costs one half read unit per 4 KB. It is the default.</li>
-</ul>
-{% call k.query("dynamodb", "D4", "The same Query, eventually consistent") %}
-<pre><code>table.query(KeyConditionExpression=Key('pk').eq('CART#tutorial-demo'),
-            ConsistentRead=False, ReturnConsumedCapacity='TOTAL')</code></pre>
-<p>Compare the consumed units with D3. The result is the same here, because nobody wrote in the last second.</p>
-{% endcall %}
-<p>Lale Market reads the cart strongly consistent at checkout, because the order must have the last quantity. The cart page lets you try both modes.</p>
-
-<h2 id="conditions" data-short="Conditions and counters"><span class="sec">07</span>Rules without locks: conditions and atomic ADD</h2>
-<p>DynamoDB has no SELECT ... then UPDATE with a row lock. Instead, a write can carry a {{ k.term("condition expression") }}.
-   DynamoDB tests the condition and writes in one step. If the condition is false, DynamoDB does not write and returns <code>ConditionalCheckFailedException</code>.</p>
-<p>The Lale Market rule is "at most 5 pieces of one product in a cart". This is the real request of the product page (from <code>engines/dynamodb.py</code>):</p>
-<pre><code>table.update_item(
-  Key={'pk': 'CART#&lt;browser id&gt;', 'sk': 'ITEM#P0001'},
-  UpdateExpression='ADD qty :q SET #n = :n, unit_price = :p, expires_at = :e',
-  ConditionExpression='attribute_not_exists(qty) OR qty &lt;= :max',   <span class="c"># :max = 5 - :q</span>
-  ReturnConsumedCapacity='TOTAL')</code></pre>
-{% call k.predict("The tutorial item ITEM#P0001 has qty 2. A request adds 5. The condition is qty <= 0 (5 - 5). What does DynamoDB do?") %}
-<p>It refuses the write. 2 &lt;= 0 is false. The item keeps qty 2. The refused write still costs write units, because DynamoDB read the item to test the condition.</p>
-{% endcall %}
-{% call k.query("dynamodb", "D8", "A conditional write that DynamoDB refuses") %}
-<pre><code>table.update_item(Key={'pk': 'CART#tutorial-demo', 'sk': 'ITEM#P0001'},
-                  UpdateExpression='ADD qty :q',
-                  ConditionExpression='attribute_not_exists(qty) OR qty &lt;= :max',
-                  ExpressionAttributeValues={':q': 5, ':max': 0})</code></pre>
-{% endcall %}
-<p><code>ADD</code> is also an atomic counter. Two requests that add at the same time do not lose an update, because DynamoDB applies each ADD to the current value.</p>
-{% call k.query("dynamodb", "D9", "Atomic ADD") %}
-<pre><code>table.update_item(Key={'pk': 'CART#tutorial-demo', 'sk': 'ITEM#P0044'},
-                  UpdateExpression='ADD qty :one', ReturnValues='UPDATED_NEW')</code></pre>
-<p>Run it two times. The quantity goes up by one each time. Run D2 to reset the tutorial cart.</p>
-{% endcall %}
-{{ k.quiz("ddb-q3", "Why does the cart rule use a ConditionExpression, and not a GetItem before the UpdateItem?",
-   ["A GetItem costs more than an UpdateItem", "The test and the write happen in one step", "UpdateItem cannot read the current value", "A condition makes the write strongly consistent"],
-   1, "Between a GetItem and a later UpdateItem, a second tab can add pieces. DynamoDB tests the condition at the moment of the write.") }}
-
-<h2 id="ttl" data-short="TTL"><span class="sec">08</span>Time to live: carts that delete themselves</h2>
+<h2 id="ttl" data-short="TTL and Streams"><span class="sec">08</span>Time to live and Streams</h2>
 <p>An abandoned cart is useless after a day. Each cart item has <code>expires_at</code>, a Unix time in seconds. The table has {{ k.term("TTL") }} on this attribute.
-   DynamoDB deletes expired items "within a few days of their expiration time, without consuming write throughput"
+   DynamoDB "automatically deletes expired items within a few days of their expiration time, without consuming write throughput"
    (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html">Time to live</a>).
-   Until the delete, an expired item can still appear in a read. An app that must not show it uses a filter on <code>expires_at</code>.</p>
+   Until the delete, an expired item can still appear in a read. A program that must not show it uses a filter on <code>expires_at</code>.</p>
+<p>{{ k.term("DynamoDB Streams") }} records each change of an item: insert, update and delete. For each item, the changes keep their order.
+   A consumer, for example an AWS Lambda function, reads the stream and reacts. It sends an e-mail, updates a search index, or writes a copy for analytics. This is how a DynamoDB table becomes the start of an event-driven design.
+   Lale Market does not use Streams. A production shop could use them to empty the cart after an order event, instead of a call from the browser.</p>
 
-<h2 id="usecases" data-short="Use cases"><span class="sec">09</span>When to use it, and when not</h2>
+<div class="part"><b>Part 2</b><h2 id="part2" data-short="PART 2: Amazon DynamoDB">Amazon DynamoDB: the AWS service</h2>
+<p>What AWS runs for you, and which options change a design.</p></div>
+
+<h2 id="selfrun" data-short="Running it yourself"><span class="sec">09</span>What you must do when you run a key-value store yourself</h2>
+<p>Open-source key-value and wide-column databases (for example Apache Cassandra) use the same partition idea. When you run one yourself, you must solve these tasks:</p>
+<ol>
+  <li><b>Machines.</b> Select, buy or rent the servers, and install the database on each one.</li>
+  <li><b>Copies.</b> Keep each partition on several machines in different data centers, and build a new copy after a failure.</li>
+  <li><b>Growth.</b> Add machines when the data grows, and move partitions to them without downtime.</li>
+  <li><b>Capacity.</b> Plan for the peak of the year. Machines that wait for the peak cost money all year.</li>
+  <li><b>Backups and patches.</b> Back up each node, test a restore, and update the software of every node.</li>
+</ol>
+
+<h2 id="service" data-short="DynamoDB as a service"><span class="sec">10</span>What DynamoDB does for you</h2>
+<p>DynamoDB is serverless. You create a table and send requests. You never see a server. DynamoDB stores each partition in more than one Availability Zone,
+   adds partitions when the data or the traffic grows, and moves the data for you.</p>
 <table class="data">
-  <thead><tr><th>Good fit</th><th>Why</th></tr></thead>
+  <thead><tr><th>Task</th><th>Your own key-value cluster</th><th>Amazon DynamoDB</th></tr></thead>
   <tbody>
-    <tr><td>Carts, sessions, user profiles, game state</td><td>The app always knows the key. Reads and writes stay fast at any number of users.</td></tr>
-    <tr><td>Very spiky traffic (a sale, a campaign)</td><td>On-demand mode needs no capacity plan. Try the Load Simulation on the cart page.</td></tr>
-    <tr><td>Event-driven systems</td><td>DynamoDB Streams sends each change to consumers such as AWS Lambda.</td></tr>
+    <tr><td>Machines</td><td>You select and operate them.</td><td>None to see. You work with tables and requests.</td></tr>
+    <tr><td>Copies in several data centers</td><td>You configure the replication and keep it working.</td><td>DynamoDB keeps the copies in several Availability Zones.</td></tr>
+    <tr><td>Growth</td><td>You add nodes and move data.</td><td>DynamoDB adds partitions and moves data by itself.</td></tr>
+    <tr><td>Peak traffic</td><td>You buy machines for the peak.</td><td>On-demand mode charges per request. Provisioned mode with auto scaling follows the load.</td></tr>
+    <tr><td>Backups</td><td>You plan, store and test them.</td><td>Point-in-time recovery and on-demand backups, with no load on the table.</td></tr>
+    <tr><td>Several Regions</td><td>You build the replication and the conflict handling.</td><td>Global tables replicate to other Regions, and any replica can take writes.</td></tr>
   </tbody>
 </table>
-<table class="data">
-  <thead><tr><th>Weak fit</th><th>Better choice</th></tr></thead>
-  <tbody>
-    <tr><td>Ad hoc questions that you cannot list in advance</td><td><a href="/e2etutorial/aurora">Aurora</a> (SQL on any column)</td></tr>
-    <tr><td>Reports over all items (sums, groups)</td><td><a href="/e2etutorial/redshift">Redshift</a></td></tr>
-    <tr><td>Many related writes with joins and constraints</td><td><a href="/e2etutorial/aurora">Aurora</a>. DynamoDB has transactions (TransactWriteItems), but no joins and no foreign keys.</td></tr>
-  </tbody>
-</table>
+<p>The options of section 01 (DAX, global tables, Streams, zero-ETL) are all parts of the same service. You turn them on for a table. You do not install them.</p>
 
-<h2 id="recall" data-short="Recall test"><span class="sec">10</span>Recall test</h2>
+<h2 id="lalemarket" data-short="DynamoDB in Lale Market"><span class="sec">11</span>DynamoDB in Lale Market</h2>
+<ul>
+  <li>One table, <code>dbws-cart</code>, in on-demand mode, with point-in-time recovery, TTL on <code>expires_at</code> and encryption at rest.</li>
+  <li>The DynamoDB Engine App runs on an EC2 instance in a private subnet. It reaches DynamoDB through a gateway VPC endpoint, so the traffic does not go to the internet.</li>
+  <li>Authentication uses the IAM role of the instance (SigV4). There is no password. The role allows only the cart table and only the actions that the app uses.</li>
+  <li>The cart page has two experiments: strongly or eventually consistent reads, and a Load Simulation that writes from 200 synthetic shoppers in parallel.</li>
+</ul>
+
+<h2 id="recall" data-short="Recall test"><span class="sec">12</span>Recall test</h2>
+<p>Answer without a look back at the sections.</p>
 {{ k.quiz("ddb-r1", "A Scan with a filter returns 10 items. ScannedCount is 50,000. What do you pay for?",
-   ["The 10 items that the Scan returned", "The 50,000 items that the Scan read", "Only the first page of the Scan", "Nothing, a filter makes the Scan free"],
+   ["The 10 items that the Scan returned", "The 50,000 items that the Scan read", "Only the first page of the Scan", "Nothing, because a filter makes the Scan free"],
    1, "DynamoDB charges for the items that it evaluates. The filter runs after the read.") }}
 {{ k.quiz("ddb-r2", "Which operation needs both the partition key and the sort key?",
-   ["GetItem", "Query", "Scan", "DescribeTable"],
-   0, "GetItem reads exactly one item, so it needs the full primary key. Query needs only the partition key.") }}
-{{ k.quiz("ddb-r3", "Put these steps of a DynamoDB design in order: key, access patterns, code.",
+   ["Query", "Scan", "GetItem", "BatchWriteItem"],
+   2, "GetItem reads exactly one item, so it needs the full primary key. Query needs only the partition key.") }}
+{{ k.quiz("ddb-r3", "Put these steps of a DynamoDB design in the right order: write the code, list the access patterns, design the key.",
    ["Key, code, access patterns", "Code, access patterns, key", "Access patterns, key, code", "Access patterns, code, key"],
    2, "The key comes from the questions. If you design the key first, a question can end up as a Scan.") }}
+{{ k.quiz("ddb-r4", "One partition key value gets most of the traffic. What is the name of this problem, and what is the usual remedy?",
+   ["A hot partition. Use a key with many evenly used values.", "A lost update. Add a ConditionExpression to each write.", "A cold start. Turn on DAX for the whole table.", "A full Scan. Add a filter on the hot value."],
+   0, "Each partition has a throughput limit. A key with many values, used evenly, spreads the load over many partitions.") }}
 
 <section class="lesson-foot">
   <h2>Go deeper</h2>
   <p><b>Primary source:</b> <a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.CoreComponents.html">Core components of DynamoDB</a>, then
      <a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-general-nosql-design.html">NoSQL design for DynamoDB</a>.</p>
-  <p><b>Use it in the shop:</b> three steps of the <a href="/guided-e-commerce-app/">Guided mission</a> use this table. Look for "A condition stops a bad write".</p>
-  <p><b>Ask questions.</b> If a part is not clear, ask your instructor or your AI assistant. Bring one access pattern of your own app and design its key together.</p>
+  <p><b>Use it in the shop:</b> in the <a href="/guided-e-commerce-app/">Guided mission</a>, look for "A condition stops a bad write". The <a href="/free-e-commerce-app/cart">cart page</a> of the Free app has the consistency experiment.</p>
+  <p><b>Ask questions.</b> If a part is not clear, ask your instructor or your AI assistant. Bring one access pattern of your own application, and design its key together.</p>
 </section>
 {% endblock %}
