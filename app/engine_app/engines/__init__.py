@@ -19,3 +19,25 @@ def usd(value):
     if value is None:
         return None
     return f"≈ ${value:.10f}".rstrip("0").rstrip(".") if value < 0.01 else f"≈ ${value:.4f}"
+
+
+def clean(v):
+    """A JSON-safe value: Decimal → float, datetime → ISO text, UUID and other objects → text."""
+    if v is None or isinstance(v, (bool, int, float, str)):
+        return v
+    if isinstance(v, (list, tuple, set)):
+        return [clean(x) for x in v]
+    if isinstance(v, dict):
+        return {str(k): clean(x) for k, x in v.items()}
+    if hasattr(v, "as_integer_ratio"):
+        return float(v)
+    if hasattr(v, "isoformat"):
+        return v.isoformat()
+    if isinstance(v, bytes):
+        return v.decode("utf-8", "replace")
+    return str(v)
+
+
+def table(columns, rows, note=None, **extra):
+    """Result of an E2E query as a table: {"columns": [...], "rows": [[...], ...]}."""
+    return {"columns": list(columns), "rows": [[clean(v) for v in r] for r in rows], "note": note, **extra}

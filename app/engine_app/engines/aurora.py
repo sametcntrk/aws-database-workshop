@@ -9,6 +9,7 @@ from flask import jsonify, request
 from .. import catalog, trace
 from ..base import env, secret
 from ..visitor import persona_id, visitor_id
+from . import table
 
 META = catalog.META["aurora"]
 PAGES = catalog.PAGES["aurora"]
@@ -218,3 +219,60 @@ def status():
         cur.execute("SELECT (SELECT count(*) FROM orders), (SELECT count(*) FROM orders WHERE visitor_id IS NOT NULL)")
         a, b = cur.fetchone()
     return {"orders": a, "visitor orders": b, "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+
+
+# ---------------------------------------------------------------- E2E tutorial queries (templates/e2e/aurora.html)
+def _e2e(steps, note=None, rollback=False):
+    """Run statements in one connection. The last statement gives the result table. rollback: the writes do not stay."""
+    with conn() as c, c.cursor() as cur:
+        c.autocommit = True
+        result = None
+        if rollback:
+            sql(cur, "BEGIN", "BEGIN;")
+        try:
+            for op, text in steps:
+                sql(cur, op, text)
+            result = table([d.name for d in cur.description], cur.fetchall(), note=note)
+        except psycopg.Error as e:
+            result = table(["PostgreSQL refused the statement"], [[f"{type(e).__name__}: {str(e).strip()}"]], note=note)
+        if rollback:
+            sql(cur, "ROLLBACK", "ROLLBACK;", note="The tutorial query keeps no change.")
+        return result
+
+
+E2E = {
+    "A1": lambda: _e2e([("SELECT (row counts)", """SELECT 'customers' AS table_name, count(*) AS rows FROM customers
+UNION ALL SELECT 'products', count(*) FROM products
+UNION ALL SELECT 'orders', count(*) FROM orders
+UNION ALL SELECT 'order_items', count(*) FROM order_items""")]),
+    "A2": lambda: _e2e([("SELECT (one row)", "SELECT * FROM customers WHERE customer_id = 'C00001'")]),
+    "A3": lambda: _e2e([("SELECT (JOIN)", """SELECT o.order_id, o.order_date::date AS order_date, c.name AS customer,
+       p.name AS product, oi.qty, oi.unit_price, oi.qty * oi.unit_price AS line_total
+FROM orders o
+JOIN customers   c  ON c.customer_id = o.customer_id
+JOIN order_items oi ON oi.order_id   = o.order_id
+JOIN products    p  ON p.product_id  = oi.product_id
+WHERE o.order_id = 'O000001'""")]),
+    "A4": lambda: _e2e([("SELECT (GROUP BY)", """SELECT p.category, count(DISTINCT o.order_id) AS orders,
+       sum(oi.qty) AS pieces, round(sum(oi.qty * oi.unit_price), 2) AS revenue
+FROM order_items oi
+JOIN orders o   ON o.order_id = oi.order_id
+JOIN products p ON p.product_id = oi.product_id
+WHERE o.status <> 'cancelled'
+GROUP BY p.category
+ORDER BY revenue DESC""")]),
+    "A5": lambda: _e2e([("SELECT (indexes)", """SELECT tablename, indexname, indexdef
+FROM pg_indexes WHERE schemaname = 'public' ORDER BY tablename, indexname""")]),
+    "A6": lambda: _e2e([("EXPLAIN ANALYZE (by key)", "EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM customers WHERE customer_id = 'C00450'")],
+                       note="Index Scan: PostgreSQL walks the B-tree of the primary key to one row."),
+    "A7": lambda: _e2e([("EXPLAIN ANALYZE (no index)", "EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM customers WHERE email = 'ayse.yilmaz@example.com'")],
+                       note="Seq Scan: no index on email, so PostgreSQL reads each row of the table and tests the filter."),
+    "A8": lambda: _e2e([("INSERT (bad foreign key)", "INSERT INTO order_items VALUES ('O000001', 'P9999', 1, 10.00)")], rollback=True,
+                       note="The foreign key stops an order item that points to no product."),
+    "A9": lambda: _e2e([("UPDATE (breaks CHECK)", "UPDATE products SET stock = stock - 100000 WHERE product_id = 'P0001'")], rollback=True,
+                       note="The CHECK (stock >= 0) constraint stops a negative stock."),
+    "A10": lambda: _e2e([("UPDATE (conditional)", """UPDATE products SET stock = stock - 1
+WHERE product_id = 'P0001' AND stock >= 1
+RETURNING product_id, stock AS stock_after""")], rollback=True,
+                        note="One statement tests and changes the row under a row lock. The ROLLBACK puts the stock back."),
+}

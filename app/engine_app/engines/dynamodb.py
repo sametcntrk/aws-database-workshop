@@ -10,7 +10,7 @@ from flask import jsonify, request
 from .. import catalog, simlimit, trace
 from ..base import env, region
 from ..visitor import visitor_id
-from . import PRICE_READ_RU, PRICE_WRITE_RU, usd
+from . import PRICE_READ_RU, PRICE_WRITE_RU, table as result_table, usd
 
 META = catalog.META["dynamodb"]
 PAGES = catalog.PAGES["dynamodb"]
@@ -211,3 +211,122 @@ def learn_item(lesson, item_id):
     left = f" TTL: süresi {max(0, int(exp - time.time())) // 60} dakika sonra doluyor." if exp else ""
     return {"title": f"{pk}  /  {sk}", "sub": f"Bir item: {len(rec)} attribute.{left} Sarı: anahtar (pk + sk) ve TTL.",
             "record": {k: rec[k] for k in order}, "marks": {"pk": "kept", "sk": "kept", "expires_at": "kept"}}
+
+
+# ---------------------------------------------------------------- E2E tutorial queries (templates/e2e/dynamodb.html)
+DEMO_PK = "CART#tutorial-demo"
+DEMO_ITEMS = [("ITEM#P0001", "Alpen Kablosuz Kulaklık 1", 2, "3373.84"), ("ITEM#P0044", "Kapadokya Bulut Mimarisi 44", 1, "2651.39"),
+              ("ITEM#P0142", "Ege Hava Temizleyici 142", 1, "2693.65")]
+COLS = ["pk", "sk", "name", "qty", "unit_price", "expires_at"]
+
+
+def _items(items):
+    return [[it.get(c) for c in COLS] for it in items]
+
+
+def _e2e_describe():
+    with trace.call("DescribeTable", f"client.describe_table(TableName='{table().name}')", {}) as t:
+        d = table().meta.client.describe_table(TableName=table().name)["Table"]
+        t.result(note="ItemCount and TableSizeBytes are updated about every six hours.")
+    keys = ", ".join(f"{k['AttributeName']} ({k['KeyType']})" for k in d["KeySchema"])
+    return result_table(["TableName", "KeySchema", "BillingMode", "ItemCount", "TableSizeBytes", "GlobalSecondaryIndexes"],
+                        [[d["TableName"], keys, d.get("BillingModeSummary", {}).get("BillingMode", "PROVISIONED"),
+                          d.get("ItemCount"), d.get("TableSizeBytes"), len(d.get("GlobalSecondaryIndexes", []))]])
+
+
+def _e2e_put():
+    expires = int(time.time()) + CART_TTL
+    total = 0.0
+    for sk, name, qty, price in DEMO_ITEMS:
+        req = f"table.put_item(Item={{'pk': '{DEMO_PK}', 'sk': '{sk}', 'name': '{name}', 'qty': {qty}, 'unit_price': {price}, 'expires_at': {expires}}})"
+        with trace.call("PutItem", req, {}) as t:
+            r = table().put_item(Item={"pk": DEMO_PK, "sk": sk, "name": name, "qty": qty, "unit_price": Decimal(price), "expires_at": expires},
+                                 ReturnConsumedCapacity="TOTAL")
+            units, cost = _units(r, "Write")
+            total += r["ConsumedCapacity"]["CapacityUnits"]
+            t.result(capacity=units, cost=cost)
+    return result_table(["items written", "write request units (WRU)"], [[len(DEMO_ITEMS), total],],
+                        note="PutItem replaces an item with the same pk and sk. So you can run this query again and again.")
+
+
+def _e2e_query(consistent):
+    req = f"table.query(KeyConditionExpression=Key('pk').eq('{DEMO_PK}'), ConsistentRead={consistent}, ReturnConsumedCapacity='TOTAL')"
+    with trace.call("Query", req, {"ConsistentRead": consistent}) as t:
+        r = table().query(KeyConditionExpression=Key("pk").eq(DEMO_PK), ConsistentRead=consistent, ReturnConsumedCapacity="TOTAL")
+        units, cost = _units(r, "Read")
+        t.result(items=r["Count"], capacity=units, cost=cost)
+    return result_table(COLS, _items(r["Items"]), note=f"Consumed: {units}. The items come back sorted by sk." if units else None)
+
+
+def _e2e_get():
+    req = f"table.get_item(Key={{'pk': '{DEMO_PK}', 'sk': 'ITEM#P0044'}}, ReturnConsumedCapacity='TOTAL')"
+    with trace.call("GetItem", req, {}) as t:
+        r = table().get_item(Key={"pk": DEMO_PK, "sk": "ITEM#P0044"}, ReturnConsumedCapacity="TOTAL")
+        units, _ = _units(r, "Read")
+        t.result(items=1 if "Item" in r else 0, capacity=units)
+    return result_table(COLS, _items([r["Item"]] if "Item" in r else []),
+                        note="No item: run D2 first." if "Item" not in r else "GetItem needs the full primary key: pk and sk.")
+
+
+def _e2e_range():
+    req = (f"table.query(KeyConditionExpression=Key('pk').eq('{DEMO_PK}') & Key('sk').between('ITEM#P0001', 'ITEM#P0099'),\n"
+           "  ReturnConsumedCapacity='TOTAL')")
+    with trace.call("Query (sort key range)", req, {}) as t:
+        r = table().query(KeyConditionExpression=Key("pk").eq(DEMO_PK) & Key("sk").between("ITEM#P0001", "ITEM#P0099"),
+                          ReturnConsumedCapacity="TOTAL")
+        t.result(items=r["Count"], capacity=_units(r, "Read")[0])
+    return result_table(COLS, _items(r["Items"]), note="Only the sort keys from ITEM#P0001 to ITEM#P0099 come back. ITEM#P0142 is outside the range.")
+
+
+def _e2e_scan():
+    req = "table.scan(Select='COUNT', FilterExpression=Attr('qty').gte(2), ReturnConsumedCapacity='TOTAL')  # all pages"
+    from boto3.dynamodb.conditions import Attr
+    scanned = count = 0
+    units = 0.0
+    with trace.call("Scan (all pages)", req, {}) as t:
+        kw = {"Select": "COUNT", "FilterExpression": Attr("qty").gte(2), "ReturnConsumedCapacity": "TOTAL"}
+        pages = 0
+        while True:
+            r = table().scan(**kw)
+            pages += 1
+            scanned += r["ScannedCount"]
+            count += r["Count"]
+            units += r["ConsumedCapacity"]["CapacityUnits"]
+            if "LastEvaluatedKey" not in r or pages >= 20:
+                break
+            kw["ExclusiveStartKey"] = r["LastEvaluatedKey"]
+        t.result(items=count, capacity=f"{units} RRU", cost=usd(units * PRICE_READ_RU))
+    return result_table(["pages read", "ScannedCount (items read)", "Count (items that match)", "read request units"],
+                        [[pages, scanned, count, round(units, 1)]],
+                        note="A Scan reads each item of the table. The filter removes items after the read, so you pay for ScannedCount, not Count.")
+
+
+def _e2e_condition():
+    req = ("table.update_item(Key={'pk': '%s', 'sk': 'ITEM#P0001'},\n  UpdateExpression='ADD qty :q',\n"
+           "  ConditionExpression='attribute_not_exists(qty) OR qty <= :max',\n  ExpressionAttributeValues={':q': 5, ':max': 0})" % DEMO_PK)
+    outcome = None
+    with trace.call("UpdateItem (conditional)", req, {"qty": 5, "max per product": MAX_QTY}) as t:
+        try:
+            table().update_item(Key={"pk": DEMO_PK, "sk": "ITEM#P0001"}, UpdateExpression="ADD qty :q",
+                                ConditionExpression="attribute_not_exists(qty) OR qty <= :max",
+                                ExpressionAttributeValues={":q": 5, ":max": MAX_QTY - 5}, ReturnConsumedCapacity="TOTAL")
+            outcome = "written"
+            t.result(note="The condition was true, so DynamoDB wrote.")
+        except table().meta.client.exceptions.ConditionalCheckFailedException:
+            outcome = "ConditionalCheckFailedException"
+            t.result(note="The condition was false. DynamoDB did not change the item.", capacity="1 WRU (a refused conditional write also costs)")
+    return result_table(["request", "outcome"], [["ADD qty 5 to ITEM#P0001 (qty 2), only if qty <= 0", outcome]])
+
+
+def _e2e_counter():
+    req = f"table.update_item(Key={{'pk': '{DEMO_PK}', 'sk': 'ITEM#P0044'}}, UpdateExpression='ADD qty :one', ReturnValues='UPDATED_NEW')"
+    with trace.call("UpdateItem (ADD)", req, {}) as t:
+        r = table().update_item(Key={"pk": DEMO_PK, "sk": "ITEM#P0044"}, UpdateExpression="ADD qty :one",
+                                ExpressionAttributeValues={":one": 1}, ReturnValues="UPDATED_NEW", ReturnConsumedCapacity="TOTAL")
+        t.result(capacity=_units(r, "Write")[0])
+    return result_table(["sk", "qty after ADD"], [["ITEM#P0044", r["Attributes"]["qty"]]],
+                        note="Run it again: the number goes up by one each time. Run D2 to reset it to 1.")
+
+
+E2E = {"D1": _e2e_describe, "D2": _e2e_put, "D3": lambda: _e2e_query(True), "D4": lambda: _e2e_query(False), "D5": _e2e_get,
+       "D6": _e2e_range, "D7": _e2e_scan, "D8": _e2e_condition, "D9": _e2e_counter}
