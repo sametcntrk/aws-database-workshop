@@ -5,6 +5,7 @@ from opensearchpy import AWSV4SignerAuth, OpenSearch, RequestsHttpConnection, he
 
 from .. import catalog, trace
 from ..base import env, region
+from . import table as result_table
 
 META = catalog.META["opensearch"]
 PAGES = catalog.PAGES["opensearch"]
@@ -179,3 +180,102 @@ def learn_item(lesson, doc_id):
     sub = ("Bir mağaza belgesi. location alanı geo_point: OpenSearch enlem ve boylamı bir harita ızgarasında index'ler." if index == "stores"
            else "OpenSearch'teki belge. name alanı hem kelimelere bölünür hem de yazdıkça öneri için önek (prefix) aramasına açıktır.")
     return {"title": d["_source"].get("name", doc_id), "sub": sub, "record": rec, "marks": marks}
+
+
+# ---------------------------------------------------------------- E2E tutorial queries (templates/e2e/opensearch.html)
+def _search(op, index, body, note=None):
+    with trace.call(op, f"GET {index}/_search\n{_show(body)}", {}) as t:
+        r = client().search(index=index, body=body)
+        t.result(items=r["hits"]["total"]["value"], note=f"OpenSearch took {r['took']} ms.")
+    return r
+
+
+def _e2e_analyze():
+    text = "Alpen Kablosuz Kulaklık 1"
+    rows = []
+    with trace.call("_analyze", f"POST products/_analyze {{ analyzer: tr_folded | standard, text: '{text}' }}", {}) as t:
+        for analyzer in ("tr_folded", "standard"):
+            toks = client().indices.analyze(index="products", body={"analyzer": analyzer, "text": text})["tokens"]
+            rows.append([analyzer, " | ".join(tok["token"] for tok in toks), len(toks)])
+        t.result(items=2)
+    return result_table(["analyzer", "tokens", "count"], rows, note=f"Input text: {text}")
+
+
+def _e2e_postings():
+    rows = []
+    for field, tok in (("name", "kablosuz"), ("name", "kulaklik"), ("name", "kulaklık"), ("name.std", "kulaklık"), ("name.std", "kulaklik"), ("name", "alpen")):
+        body = {"query": {"term": {field: tok}}, "size": 5, "_source": False, "track_total_hits": True}
+        r = _search("_search (term)", "products", body)
+        rows.append([field, tok, r["hits"]["total"]["value"], ", ".join(h["_id"] for h in r["hits"]["hits"])])
+    return result_table(["field", "token", "documents", "first ids (the posting list)"], rows,
+                        note="A term query looks up one token in the inverted index of one field, with no analysis.")
+
+
+def _e2e_match():
+    body = {"query": {"match": {"name": "kablosuz kulaklik"}}, "size": 6, "_source": ["name", "category"]}
+    r = _search("_search (match)", "products", body)
+    return result_table(["_id", "name", "category", "_score"], [[h["_id"], h["_source"]["name"], h["_source"]["category"], round(h["_score"], 3)]
+                                                                 for h in r["hits"]["hits"]], total=r["hits"]["total"]["value"])
+
+
+def _e2e_fuzzy():
+    rows = []
+    for fuzz in ("AUTO", None):
+        m = {"query": "kulaklk"}
+        if fuzz:
+            m["fuzziness"] = fuzz
+        r = _search("_search (match)", "products", {"query": {"match": {"name": m}}, "size": 3, "_source": ["name"]})
+        rows.append([fuzz or "off", r["hits"]["total"]["value"], ", ".join(h["_source"]["name"] for h in r["hits"]["hits"])])
+    return result_table(["fuzziness", "hits", "first names"], rows, note='"kulaklk" is one edit (a missing letter) away from "kulaklik".')
+
+
+def _e2e_facets():
+    body = {"size": 3, "_source": ["name", "price"],
+            "query": {"bool": {"must": [{"match": {"description": "hafif"}}],
+                               "filter": [{"range": {"price": {"lte": 2000}}}]}},
+            "aggs": {"categories": {"terms": {"field": "category"}},
+                     "price": {"range": {"field": "price", "ranges": [{"to": 500}, {"from": 500, "to": 1000}, {"from": 1000}]}}}}
+    r = _search("_search (bool + aggs)", "products", body)
+    rows = [["category", b["key"], b["doc_count"]] for b in r["aggregations"]["categories"]["buckets"]]
+    rows += [["price range", b["key"], b["doc_count"]] for b in r["aggregations"]["price"]["buckets"]]
+    return result_table(["aggregation", "bucket", "documents"], rows, total=r["hits"]["total"]["value"],
+                        note=f'{r["hits"]["total"]["value"]} products match. The buckets count them in the same request.')
+
+
+def _e2e_explain():
+    body = {"query": {"match": {"name": "kablosuz kulaklik"}}, "size": 1, "explain": True, "_source": ["name"]}
+    r = _search("_search (explain)", "products", body)
+    h = r["hits"]["hits"][0]
+    rows = []
+
+    def walk(node, depth):
+        if depth > 3:
+            return
+        rows.append([depth, round(node["value"], 4), node["description"][:140]])
+        for d in node.get("details", [])[:4]:
+            walk(d, depth + 1)
+    walk(h["_explanation"], 0)
+    return result_table(["depth", "value", "description"], rows, note=f'Why {h["_source"]["name"]} has score {round(h["_score"], 3)}.')
+
+
+def _e2e_geo():
+    body = {"query": {"geo_distance": {"distance": "25km", "location": {"lat": 41.0082, "lon": 28.9784}}},
+            "sort": [{"_geo_distance": {"location": {"lat": 41.0082, "lon": 28.9784}, "order": "asc", "unit": "km"}}], "size": 10}
+    r = _search("_search (geo_distance)", "stores", body)
+    return result_table(["_id", "name", "city", "location", "distance_km"],
+                        [[h["_id"], h["_source"]["name"], h["_source"]["city"], h["_source"]["location"], round(h["sort"][0], 2)] for h in r["hits"]["hits"]])
+
+
+def _e2e_mapping():
+    with trace.call("GET _mapping + _settings", "GET products/_mapping; GET products/_settings", {}) as t:
+        props = client().indices.get_mapping(index="products")["products"]["mappings"]["properties"]
+        st = client().indices.get_settings(index="products")["products"]["settings"]["index"]
+        t.result()
+    rows = [[f, p.get("type"), p.get("analyzer", ""), ", ".join(f"{k} ({v.get('analyzer', v.get('type'))})" for k, v in p.get("fields", {}).items())]
+            for f, p in props.items()]
+    return result_table(["field", "type", "analyzer", "sub-fields"], rows,
+                        note=f"Index products: {st.get('number_of_shards')} primary shard(s), {st.get('number_of_replicas')} replica(s) of each.")
+
+
+E2E = {"O1": _e2e_analyze, "O2": _e2e_postings, "O3": _e2e_match, "O4": _e2e_fuzzy, "O5": _e2e_facets, "O6": _e2e_explain,
+       "O7": _e2e_geo, "O8": _e2e_mapping}
