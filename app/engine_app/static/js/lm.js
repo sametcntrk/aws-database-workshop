@@ -142,7 +142,9 @@
   const tutorOn = () => localStorage.getItem("lm_tutor_off") !== "1";
   const pageDone = () => localStorage.getItem(doneKey) === "1";
   const smooth = () => (matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth");
-  const mini = $("#tutor-mini");
+  const mini = $("#tutor-mini"), nav = $("#tutor .tutor-nav"), topbar = $(".topbar");
+  let navVisible = true;
+  const syncMini = () => { mini.hidden = tutor.hidden || navVisible; };
   function renderTutor(move = false) {
     document.querySelectorAll(".spotlight").forEach((el) => el.classList.remove("spotlight"));
     if (!steps.length || !tutorOn() || pageDone()) { tutor.hidden = true; mini.hidden = true; syncToggle(); return; }
@@ -162,6 +164,7 @@
     if (move && targets[0]) targets[0].scrollIntoView({ behavior: smooth(), block: "center" });
     localStorage.setItem(tKey, String(stepNo));
     syncToggle();
+    checkNav();
   }
   function closeForPage() { localStorage.setItem(doneKey, "1"); localStorage.removeItem(tKey); renderTutor(); }
   document.querySelectorAll("[data-tutor=next]").forEach((b) => b.addEventListener("click", () => {
@@ -178,8 +181,18 @@
     renderTutor();
     if (!tutor.hidden) window.scrollTo({ top: 0, behavior: smooth() });
   });
-  // When the Tutorial box is out of view (the step target is lower on the page), a small bar keeps Back and Next near.
-  new IntersectionObserver(([en]) => { mini.hidden = tutor.hidden || en.isIntersecting; }).observe(tutor);
+  // When the Tutorial buttons are not fully visible below the sticky header (the step target is lower on the page),
+  // a small bar keeps Back, Next and Close near. Without it the buttons sit under the header and a click hits the header.
+  function checkNav() {
+    const n = nav.getBoundingClientRect(), h = topbar.getBoundingClientRect();
+    const stuck = h.top <= 0.5;                       // the sticky header sits at the top and covers what scrolls under it
+    navVisible = n.bottom > 0 && n.top >= 0 && !(stuck && n.top < h.bottom);
+    syncMini();
+  }
+  let navTick = 0;
+  const onScroll = () => { if (!navTick) navTick = requestAnimationFrame(() => { navTick = 0; checkNav(); }); };
+  addEventListener("scroll", onScroll, { passive: true });
+  addEventListener("resize", onScroll);
 
   /* ---------------- Guided shopping journey */
   const jbar = $("#journey"), stops = (LM.journey && LM.journey.stops) || [];
