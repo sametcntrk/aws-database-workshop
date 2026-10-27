@@ -111,6 +111,14 @@ def _series_key(v):
     return v["_measurement"], tags, v["_field"]
 
 
+def rng_q(q):
+    return q.split("range(start: ", 1)[1].split(")", 1)[0]
+
+
+def win_q(q):
+    return q.split("every: ", 1)[1].split(",", 1)[0]
+
+
 def learn_overview(lesson, focus):
     """101: each series (measurement + tags + field) as a shelf; each tile is one time window of the call's query."""
     rng = next((f for f in focus if f in RANGES), "-6h")
@@ -121,6 +129,13 @@ def learn_overview(lesson, focus):
   |> filter(fn: (r) => r._measurement == "warehouse_env" or r._measurement == "orders")
   |> aggregateWindow(every: {window}, fn: count, createEmpty: false)'''
     tables = flux("Flux query (count per window)", q)
+    widened = None
+    for wider, wwin in (("-24h", "1h"), ("-7d", "6h")):   # the seed data ends at seed time; look further back if the range is empty
+        if any(tb.records for tb in tables):
+            break
+        widened, rng, window = wider, wider, wwin
+        tables = flux("Flux query (count per window)", q.replace(f"range(start: {rng_q(q)})", f"range(start: {rng})")
+                      .replace(f"every: {win_q(q)}", f"every: {window}"))
     groups, total = [], 0
     for tb in tables:
         recs = tb.records
@@ -134,7 +149,9 @@ def learn_overview(lesson, focus):
         groups.append({"label": label, "items": [{"id": f"{key}|{x.get_time().isoformat()}|{window}",
                                                    "title": f"{x.get_time():%H:%M}: {x.get_value()} ham nokta", "hit": hit} for x in recs[-48:]]})
     groups.sort(key=lambda g: (not g["items"] or not g["items"][0]["hit"], g["label"]))
-    return {"title": "Timestream for InfluxDB: metrics bucket'ı", "text": f"Her raf bir seri (measurement + tag'ler). Her kare {window}'lık bir zaman penceresi; en yeni sağda.",
+    note = (f" Seçtiğin aralıkta nokta yok (örnek veri yüklendiği anda bitiyor), bu yüzden {widened.lstrip('-')} geriye bakıldı."
+            if widened else "")
+    return {"title": "Timestream for InfluxDB: metrics bucket'ı", "text": f"Her raf bir seri (measurement + tag'ler). Her kare {window}'lık bir zaman penceresi; en yeni sağda." + note,
             "facts": [[len(groups), "seri"], [total, f"ham nokta ({rng.lstrip('-')} içinde)"], [window, "pencere"],
                       [sum(1 for g in groups if g["items"] and g["items"][0]["hit"]), "seri senin grafiğinde"]],
             "groups": groups, "hit_label": "Senin grafiğinin okuduğu seriler"}
@@ -144,7 +161,7 @@ def learn_item(lesson, item_id):
     key, ts, window = item_id.rsplit("|", 2)
     m, tags, field = json.loads(key)
     stop = datetime.fromisoformat(ts)
-    minutes = {"1m": 1, "5m": 5, "15m": 15, "1h": 60}.get(window, 15)
+    minutes = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "6h": 360}.get(window, 15)
     cond = " and ".join([f'r._measurement == "{m}"', f'r._field == "{field}"'] + [f'r.{k} == "{v}"' for k, v in tags.items()])
     q = f'''from(bucket: "metrics")
   |> range(start: {(stop - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")}, stop: {stop.strftime("%Y-%m-%dT%H:%M:%SZ")})

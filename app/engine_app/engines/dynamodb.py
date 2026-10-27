@@ -187,14 +187,16 @@ def learn_overview(lesson, focus):
         t.result(items=len(own))
     if own:
         parts[mine] = [it["sk"] for it in own]
+    parts.setdefault(mine, [])   # your partition is always shown, empty or not
     order = sorted(parts, key=lambda k: (k != mine, not k.startswith("CART#"), k))[:24]
     short = lambda pk: pk if len(pk) <= 22 else pk[:20] + "…"
-    groups = [{"label": ("Senin sepetin" if pk == mine else short(pk)),
+    groups = [{"label": ("Senin sepetin" + ("" if parts[pk] else " (boş)") if pk == mine else short(pk)),
                "items": [{"id": f"{pk}|{sk}", "title": f"pk={pk}  sk={sk}", "hit": pk == mine} for sk in sorted(parts[pk])]}
               for pk in order]
     mode = desc.get("BillingModeSummary", {}).get("BillingMode", "PROVISIONED")
     return {"title": f"DynamoDB: {table().name} tablosu",
-            "text": "Her satır bir partition (aynı pk), her kare o partition'daki bir item (sk). İlk 24 partition gösteriliyor.",
+            "text": "Her satır bir partition (aynı pk), her kare o partition'daki bir item (sk). İlk 24 partition gösteriliyor."
+                    + ("" if parts[mine] else " Senin sepetin şu an boş: sepete bir ürün ekle, sonra bu sayfayı yeniden aç."),
             "facts": [[desc.get("ItemCount", resp["Count"]), "item (yaklaşık, 6 saatte bir güncellenir)"], [len(parts), "partition örnekte"],
                       [mode.replace("PAY_PER_REQUEST", "on-demand"), "kapasite modu"], [len(parts.get(mine, [])), "item senin sepetinde"]],
             "groups": groups, "hit_label": "Senin sepetinin item'ları (pk = CART#<senin id>)"}
