@@ -99,6 +99,12 @@ def e2e_index():
     return yaml.safe_load((HERE / "e2e" / "index.yaml").read_text(encoding="utf-8"))
 
 
+def e2e_glossary():
+    """The terms of the E2E tutorials, sorted by term (e2e/glossary.yaml)."""
+    g = yaml.safe_load((HERE / "e2e" / "glossary.yaml").read_text(encoding="utf-8"))
+    return [{"id": k, **v} for k, v in sorted(g.items(), key=lambda kv: kv[1]["term"].lower())]
+
+
 @lru_cache(maxsize=None)
 def e2e_images():
     """Source and licence of each E2E tutorial image (e2e/images.yaml)."""
@@ -233,7 +239,8 @@ def create_app():
             return render_template(name, **ctx(eid=eid, entry=entry, meta=catalog.META.get(eid, {}),
                                                lang=lang, has_tr=has_tr, ui=e2e_ui()[lang],
                                                sims=e2e_sims.SIMS[eid](lang) if eid in e2e_sims.SIMS else {},
-                                               sample_data=e2e_sims.tables()))
+                                               sample_data=e2e_sims.tables(),
+                                               glossary=e2e_glossary() if eid == "glossary" else []))
 
         for mode in MODES.values():
             for e in ENGINE_IDS:
