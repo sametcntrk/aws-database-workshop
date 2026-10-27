@@ -863,3 +863,140 @@ def docdb(lang):
 
 COUNT_TR.update({"docs examined": "incelenen doküman", "docs returned": "dönen doküman", "documents in": "giren doküman", "documents after $unwind": "$unwind sonrası doküman"})
 SIMS["docdb"] = docdb
+
+
+# ================================================================ ElastiCache (Valkey)
+VKEYS = {"cols": ["key", "type", "value", "TTL (s)"],
+         "rows": [["lm:deal", "hash", "product_id=P0001, name=Alpen Kablosuz Kulaklık 1, price=2024.30", "-1"],
+                  ["lm:deal:stock", "string", "10", "-1"],
+                  ["lm:session:7f3a", "hash", "persona=C00001, last_page=/cart", "1800"],
+                  ["lm:leaderboard", "sorted set", "C00002=98210.10, C00004=45120.00, C00001=36708.47", "-1"],
+                  ["lm:orders:today", "string", "42", "-1"]]}
+EXTRA_TABLES["valkey_keys"] = VKEYS
+
+
+def vk_race(lang, atomic):
+    """Two buyers, 1 piece left. Each step is one command in the single line of Valkey."""
+    stock = 1
+    rows = lambda: [["lm:deal:stock", stock]]
+    log, steps, sold = [], [], 0
+
+    def snap(say, cls, extra="new"):
+        steps.append({"say": say, "marks": {"k": {0: cls}}, "rows": {"k": rows()}, "out": deepcopy(log), "outmarks": {len(log) - 1: extra} if log else {},
+                      "count": {"pieces sold": sold}})
+    snap(T(lang, "One piece is left. Buyer A and buyer B press Buy in the same millisecond. Valkey runs the commands of all clients one after the other, in one line.",
+           "Bir adet kaldı. A alıcısı ve B alıcısı aynı milisaniyede Satın al'a basıyor. Valkey bütün istemcilerin komutlarını tek bir sırada, birbiri ardına çalıştırır."), "read")
+    if not atomic:
+        log.append(["1", "A", "GET lm:deal:stock", "1"]); snap(T(lang, "Command 1: A reads the stock. Valkey answers 1. A decides in its own program that it can sell.", "Komut 1: A stoğu okur. Valkey 1 cevabını verir. A kendi programında satabileceğine karar verir."), "read")
+        log.append(["2", "B", "GET lm:deal:stock", "1"]); snap(T(lang, "Command 2: B reads the stock before A writes. Valkey answers 1 again.", "Komut 2: B, A yazmadan önce stoğu okur. Valkey yine 1 cevabını verir."), "read")
+        stock = 0; sold += 1
+        log.append(["3", "A", "SET lm:deal:stock 0", "OK"]); snap(T(lang, "Command 3: A writes 1 - 1 = 0 and sells the piece.", "Komut 3: A, 1 - 1 = 0 yazar ve adedi satar."), "done")
+        sold += 1
+        log.append(["4", "B", "SET lm:deal:stock 0", "OK"]); snap(T(lang, "Command 4: B also writes 1 - 1 = 0 and sells. Two pieces left the shop, but it had one. Each command was correct alone. The error is the gap between GET and SET.",
+                                                                  "Komut 4: B de 1 - 1 = 0 yazar ve satar. Mağazadan iki adet çıktı ama bir adedi vardı. Her komut tek başına doğruydu. Hata, GET ile SET arasındaki boşluktadır."), "bad", "bad")
+    else:
+        stock = 0; sold += 1
+        log.append(["1", "A", "DECR lm:deal:stock", "0"]); snap(T(lang, "Command 1: A sends DECR. Valkey reads, lowers and stores the value in one command and returns 0. 0 is not below zero, so A sells.",
+                                                                  "Komut 1: A, DECR gönderir. Valkey değeri tek komutta okur, düşürür, saklar ve 0 döndürür. 0 sıfırın altında değil, bu yüzden A satar."), "done")
+        stock = -1
+        log.append(["2", "B", "DECR lm:deal:stock", "-1"]); snap(T(lang, "Command 2: B sends DECR. The value is now -1. B's program sees a value below zero, so it does not sell.",
+                                                                   "Komut 2: B, DECR gönderir. Değer artık -1. B'nin programı sıfırın altında bir değer görür, bu yüzden satmaz."), "lock")
+        stock = 0
+        log.append(["3", "B", "INCR lm:deal:stock", "0"]); snap(T(lang, "Command 3: B gives the piece back with INCR. The stock is 0 again. The shop sold exactly one piece, with no lock.",
+                                                                   "Komut 3: B, INCR ile adedi geri verir. Stok yine 0. Mağaza tam olarak bir adet sattı, hiç lock olmadan."), "match", "match")
+    return {"tables": [{"id": "k", "name": T(lang, "the key in memory", "bellekteki key"), "cols": ["key", "value"], "rows": [["lm:deal:stock", 1]], "key": [0], "ref": []}],
+            "out": {"name": T(lang, "the single line of commands", "komutların tek sırası"), "cols": ["#", T(lang, "client", "istemci"), T(lang, "command", "komut"), T(lang, "reply", "cevap")]},
+            "steps": steps}
+
+
+def vk_zset(lang):
+    members = [["C00002", 98210.10], ["C00004", 45120.00], ["C00001", 36708.47], ["C00005", 27300.55], ["C00003", 1599.41]]
+    order = lambda: sorted(deepcopy(members), key=lambda r: -r[1])
+    steps = [{"say": T(lang, "The leaderboard is a sorted set: members (customer ids) with scores (revenue). Valkey keeps the members in score order at each write.",
+                       "Leaderboard bir sorted set'tir: skorlu (gelir) üyeler (müşteri id'leri). Valkey her yazmada üyeleri skor sırasıyla tutar."),
+              "marks": {}, "rows": {"z": order()}, "out": [], "count": {}}]
+    members[4][1] += 20000
+    z = order(); pos = next(i for i, r in enumerate(z) if r[0] == "C00003")
+    steps.append({"say": T(lang, f"ZINCRBY lm:leaderboard 20000 C00003: Elif places an order of 20,000. Her score becomes 21,599.41. Valkey moves her to her new place at once. The cost is O(log N).",
+                           f"ZINCRBY lm:leaderboard 20000 C00003: Elif 20.000'lik bir sipariş verir. Skoru 21.599,41 olur. Valkey onu hemen yeni yerine taşır. Maliyet O(log N)'dir."),
+                  "marks": {"z": {pos: "new"}}, "rows": {"z": z}, "out": [], "count": {}})
+    members[3][1] += 30000
+    z = order(); pos = next(i for i, r in enumerate(z) if r[0] == "C00005")
+    steps.append({"say": T(lang, "ZINCRBY lm:leaderboard 30000 C00005: Zeynep jumps from fourth place to second place.", "ZINCRBY lm:leaderboard 30000 C00005: Zeynep dördüncü sıradan ikinci sıraya atlar."),
+                  "marks": {"z": {pos: "new"}}, "rows": {"z": z}, "out": [], "count": {}})
+    steps.append({"say": T(lang, "ZREVRANGE lm:leaderboard 0 2 WITHSCORES: the top three are ready. Valkey reads the first three members. It does not sort anything at read time.",
+                           "ZREVRANGE lm:leaderboard 0 2 WITHSCORES: ilk üç hazır. Valkey ilk üç üyeyi okur. Okuma anında hiçbir şey sıralamaz."),
+                  "marks": {"z": {0: "match", 1: "match", 2: "match"}}, "rows": {"z": z}, "out": [[i + 1, r[0], round(r[1], 2)] for i, r in enumerate(z[:3])], "count": {}})
+    return {"tables": [{"id": "z", "name": "lm:leaderboard (sorted set)", "cols": ["member", "score"], "rows": order(), "key": [0], "ref": []}],
+            "out": {"name": "ZREVRANGE 0 2", "cols": ["rank", "member", "score"]}, "steps": steps}
+
+
+def vk_cache_aside(lang):
+    db = [["P0001", "Alpen Kablosuz Kulaklık 1", 3373.84], ["P0044", "Kapadokya Bulut Mimarisi 44", 2651.39], ["P0095", "Anadolu Yün Kazak 95", 2721.65]]
+    cache, steps, hits, misses = [], [], 0, 0
+    reqs = ["P0001", "P0044", "P0001", "P0001", "P0095", "P0044"]
+    steps.append({"say": T(lang, "Cache-aside: the app asks the cache first. On a miss, it reads the database and writes the answer into the cache with a TTL. Six product page views arrive.",
+                           "Cache-aside: uygulama önce cache'e sorar. Bir miss'te database'i okur ve cevabı bir TTL ile cache'e yazar. Altı ürün sayfası görüntülemesi geliyor."),
+                  "marks": {}, "rows": {"c": []}, "count": {"cache hits": 0, "database reads": 0}})
+    for n, pid in enumerate(reqs, start=1):
+        ci = next((i for i, r in enumerate(cache) if r[0] == f"product:{pid}"), None)
+        if ci is not None:
+            hits += 1
+            steps.append({"say": T(lang, f"View {n}: GET product:{pid} finds the key in memory (a hit). The database does no work.", f"Görüntüleme {n}: GET product:{pid} key'i bellekte bulur (hit). Database hiç iş yapmaz."),
+                          "marks": {"c": {ci: "match"}}, "rows": {"c": deepcopy(cache)}, "count": {"cache hits": hits, "database reads": misses}})
+        else:
+            misses += 1
+            di = next(i for i, r in enumerate(db) if r[0] == pid)
+            cache.append([f"product:{pid}", db[di][1], 300])
+            steps.append({"say": T(lang, f"View {n}: GET product:{pid} finds nothing (a miss). The app reads the database, then SET product:{pid} ... EX 300 stores a copy for 5 minutes.",
+                                   f"Görüntüleme {n}: GET product:{pid} hiçbir şey bulmaz (miss). Uygulama database'i okur, sonra SET product:{pid} ... EX 300 bir kopyayı 5 dakika saklar."),
+                          "marks": {"d": {di: "read"}, "c": {len(cache) - 1: "new"}}, "rows": {"c": deepcopy(cache)}, "count": {"cache hits": hits, "database reads": misses}})
+    steps.append({"say": T(lang, f"Result: {hits} of {len(reqs)} views came from memory. The database answered only {misses} times. The price: for up to 5 minutes, a changed price can still show the old value.",
+                           f"Sonuç: {len(reqs)} görüntülemenin {hits} tanesi bellekten geldi. Database sadece {misses} kez cevap verdi. Bedeli: 5 dakikaya kadar, değişmiş bir fiyat hâlâ eski değeri gösterebilir."),
+                  "marks": {}, "rows": {"c": deepcopy(cache)}, "count": {"cache hits": hits, "database reads": misses}})
+    return {"tables": [{"id": "d", "name": T(lang, "database (slow, durable)", "database (yavaş, kalıcı)"), "cols": ["product_id", "name", "price"], "rows": db, "key": [0], "ref": []},
+                       {"id": "c", "name": T(lang, "cache in memory (fast)", "bellekteki cache (hızlı)"), "cols": ["key", "name", "TTL (s)"], "rows": [], "key": [0], "ref": []}],
+            "out": None, "steps": steps}
+
+
+VK_CANDS = ["ElastiCache (Valkey)", "DynamoDB", "Aurora PostgreSQL", "Redshift", "OpenSearch"]
+
+
+def elasticache(lang):
+    w1 = verdicts(VK_CANDS, [
+        V((1, "data in memory, microseconds", "veri bellekte, mikrosaniyeler"), (0, "single-digit milliseconds", "tek haneli milisaniyeler"), (0, "milliseconds, disk-based", "milisaniyeler, disk tabanlı"),
+          (0, "analytic queries", "analitik query'ler"), (0, "search queries", "arama query'leri")),
+        V((1, "sorted set, ZINCRBY", "sorted set, ZINCRBY"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi")),
+        V((1, "Seed rebuilds it from the orders", "Seed onu siparişlerden yeniden kurar"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"),
+          (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi")),
+    ])
+    w2 = verdicts(VK_CANDS, [
+        V((0, "memory first, not the system of record", "önce bellek, system of record değil"), (1, "durable in several AZs", "birkaç AZ'de kalıcı"), (1, "durable, six copies", "kalıcı, altı kopya"),
+          (1, "durable", "kalıcı"), (0, "a copy for search", "arama için bir kopya")),
+        V((0, "removed earlier", "daha önce elendi"), (0, "conditions on items, no foreign keys", "item'larda koşullar, foreign key yok"), (1, "transactions and constraints", "transaction'lar ve constraint'ler"),
+          (0, "not for many small transactions", "çok sayıda küçük transaction için değil"), (0, "removed earlier", "daha önce elendi")),
+    ])
+    w3 = verdicts(VK_CANDS, [
+        V((1, "INCR with EXPIRE per window", "pencere başına EXPIRE ile INCR"), (1, "atomic ADD with TTL", "TTL ile atomik ADD"), (0, "a row update on each request is heavy", "her istekte bir row güncellemesi ağır"),
+          (0, "not for many small writes", "çok sayıda küçük yazma için değil"), (0, "not for counters", "sayaçlar için değil")),
+        V((1, "sub-millisecond", "milisaniyenin altında"), (0, "single-digit milliseconds", "tek haneli milisaniyeler"), (0, "removed earlier", "daha önce elendi"),
+          (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi")),
+    ])
+    spec = {
+        "decide_board": decide_generic(lang, ("A live leaderboard of the top customers, read every 5 seconds by many screens", "Birçok ekranın her 5 saniyede okuduğu, en iyi müşterilerin canlı leaderboard'u"),
+                                       [("Each read in less than one millisecond", "Her okuma bir milisaniyeden kısa"),
+                                        ("The top N is ready at every write, with no sort at read time", "İlk N, her yazmada hazır; okuma anında sıralama yok"),
+                                        ("The data can be rebuilt from another source", "Veri başka bir kaynaktan yeniden kurulabilir")], VK_CANDS, w1),
+        "decide_orders": decide_generic(lang, ("The committed orders of the shop", "Mağazanın commit edilmiş siparişleri"),
+                                        [("A confirmed write must never be lost", "Onaylanan bir yazma asla kaybolmamalı"),
+                                         ("Rules between orders, lines and stock", "Siparişler, satırlar ve stok arasında kurallar")], VK_CANDS, w2),
+        "decide_ratelimit": decide_generic(lang, ("An API rate limit: at most 100 calls per user per minute, checked on every call", "Bir API hız sınırı: kullanıcı başına dakikada en fazla 100 çağrı, her çağrıda kontrol edilir"),
+                                           [("An atomic counter per user that resets itself every minute", "Kullanıcı başına, her dakika kendini sıfırlayan atomik bir sayaç"),
+                                            ("The check adds less than one millisecond to each call", "Kontrol her çağrıya bir milisaniyeden az ekler")], VK_CANDS, w3),
+        "race_naive": vk_race(lang, False), "race_atomic": vk_race(lang, True), "zset": vk_zset(lang), "cache": vk_cache_aside(lang),
+    }
+    return {k: _localize(v, lang) for k, v in spec.items()}
+
+
+COUNT_TR.update({"pieces sold": "satılan adet", "cache hits": "cache hit", "database reads": "database okuması"})
+SIMS["elasticache"] = elasticache
