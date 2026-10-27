@@ -3,7 +3,7 @@
 {% block body %}
 
 <h2 id="goal" data-short="What you will learn"><span class="sec">00</span>What you will learn, and how to use this page</h2>
-<p>This tutorial has two parts. Part 1 teaches PostgreSQL itself. You learn how it stores data and how it answers a question.
+<p>Section 01 gives the architect's decision: where Aurora PostgreSQL fits and where it does not. Then the tutorial has two parts. Part 1 teaches PostgreSQL itself. You learn how it stores data and how it answers a question.
    You also learn how it keeps data correct when many people write at the same time. Everything in Part 1 is true for any PostgreSQL server, on your laptop or in a data center.
    Part 2 shows what Amazon Aurora PostgreSQL changes. Aurora runs the same PostgreSQL, but it replaces the storage and the operations around it.</p>
 <p>The examples come from Lale Market, the shop of this workshop. Lale Market keeps its orders in Aurora PostgreSQL.
@@ -25,10 +25,127 @@
   <li><b>Analogy</b>: a picture from daily life. An analogy helps you remember, but the text before it is the exact rule.</li>
 </ul>
 
+<h2 id="architect" data-short="Architect's view: when to use"><span class="sec">01</span>The architect's view: where Aurora PostgreSQL fits</h2>
+<p><b>Read this section first.</b> A solution architect must put the right database in the right place. A wrong choice is expensive to undo:
+   the data, the code and the team habits all grow around it. To operate a database well is useful. To choose the right one is worth more.
+   This section gives you the decision. The sections after it teach how the database works, for readers who want to go deeper.</p>
+<p><b>In short:</b> Aurora PostgreSQL is the system of record for related business data. This data must stay correct while many users write at the same time.
+   You must also be able to query it in ways that you cannot list in advance.</p>
+<p>A {{ k.term("system of record") }} is the one place that holds the official version of a fact. Other systems can hold copies for speed or for reports.
+   When a copy and the system of record disagree, the system of record is right. In Lale Market, the orders in Aurora are the official orders.</p>
+
+<h3>Signals in a workload that point to Aurora PostgreSQL</h3>
+<table class="data">
+  <thead><tr><th>Signal</th><th>What it looks like in a real project</th><th>The PostgreSQL or Aurora feature that answers it</th></tr></thead>
+  <tbody>
+    <tr><td>Several related writes must succeed together</td><td>An order lowers the stock, writes a header and writes lines. A transfer takes money from one account and puts it into another.</td><td>Transactions with COMMIT and ROLLBACK (section 09)</td></tr>
+    <tr><td>Two users compete for the same thing</td><td>The last seat on a flight, the last room in a hotel, the last piece of a product, the balance of one wallet.</td><td>Row locks and conditional UPDATE (section 09)</td></tr>
+    <tr><td>The data has a clear structure and clear relations</td><td>Customers have orders, orders have lines, lines point to products. The business can draw it on a whiteboard.</td><td>Tables, primary keys, foreign keys (sections 03 and 04)</td></tr>
+    <tr><td>Bad data is expensive</td><td>A negative stock, an invoice for a customer who does not exist, a payment with no order.</td><td>Constraints that the database enforces on every write (section 08)</td></tr>
+    <tr><td>The questions change over time</td><td>Today the shop asks for orders by customer. Next month finance asks for revenue by city and segment.</td><td>SQL, JOIN, GROUP BY and new indexes, with no change to the data model (sections 05 to 07)</td></tr>
+    <tr><td>The team needs the PostgreSQL ecosystem</td><td>Geographic data, JSON documents next to rows, or vector embeddings for AI search next to business data.</td><td>PostgreSQL types and extensions, for example JSONB, PostGIS and pgvector</td></tr>
+    <tr><td>The database must survive the loss of a data center with little work</td><td>The shop must stay open when one Availability Zone fails.</td><td>Six copies of the data in three AZs, automatic failover to a replica (section 11)</td></tr>
+  </tbody>
+</table>
+
+<h3>Use cases, with the reason and the feature</h3>
+<p>The same signals appear in many industries. Each row is a common use case. Read the last column: it names the part of the database that does the important work.</p>
+<table class="data">
+  <thead><tr><th>Use case</th><th>Data and operations</th><th>Why Aurora PostgreSQL</th><th>The feature that does the work</th></tr></thead>
+  <tbody>
+    <tr><td>Online shop: checkout, orders, stock (Lale Market)</td><td>Customers, products, orders and order lines. Thousands of checkouts per hour.</td><td>An order must never exist without its stock change, and the stock must never go below zero.</td><td>Transaction, CHECK (stock &gt;= 0), conditional UPDATE</td></tr>
+    <tr><td>Payments, wallets, ledgers (fintech)</td><td>Accounts, entries and transfers. Every amount must balance.</td><td>A double-entry ledger needs two entries in one unit, and the balances must always add up.</td><td>Transaction, CHECK, foreign keys, the SERIALIZABLE isolation level for the strictest cases</td></tr>
+    <tr><td>Reservations and ticketing (flights, hotels, cinemas, doctors)</td><td>resources, time slots, bookings</td><td>Two people must never get the same seat or overlapping times in the same room.</td><td>UNIQUE (showing, seat) and row locks. PostgreSQL exclusion constraints can refuse overlapping time ranges.</td></tr>
+    <tr><td>SaaS applications for many customer companies (multi-tenant)</td><td>one database, each row carries a tenant_id</td><td>Tenant A must never see the rows of tenant B, even when the application has a bug.</td><td>PostgreSQL row-level security policies on tenant_id</td></tr>
+    <tr><td>ERP, CRM, HR and back-office systems</td><td>dozens of related entities, many reports</td><td>The relations are the business. Reports change every quarter.</td><td>Schema, foreign keys, SQL, reader instances for reports</td></tr>
+    <tr><td>Healthcare records, insurance claims</td><td>patients, visits, prescriptions, claims</td><td>Errors have a legal cost. Every change must be complete and traceable.</td><td>Transactions, constraints, encryption at rest, point-in-time restore</td></tr>
+    <tr><td>Logistics and delivery</td><td>shipments, stops, drivers, delivery zones</td><td>Business data and geographic questions ("which zone contains this address?") in one query.</td><td>PostGIS extension with spatial indexes, plus normal JOIN</td></tr>
+    <tr><td>Games: player accounts, purchases, in-game currency</td><td>players, items, purchases</td><td>A purchase must take the currency and give the item together.</td><td>Transactions and row locks. (The live leaderboard belongs in ElastiCache.)</td></tr>
+    <tr><td>Generative AI search over business data (RAG)</td><td>Documents with embeddings, next to products and customers.</td><td>The search for similar text must also filter by business rules, for example "only products in stock".</td><td>The pgvector extension, which Aurora PostgreSQL supports, next to normal SQL filters
+        (<a href="https://docs.aws.amazon.com/prescriptive-guidance/latest/retrieval-augmented-generation-options/rag-custom-retrievers.html">AWS: Aurora PostgreSQL and pgvector</a>)</td></tr>
+    <tr><td>Move away from a commercial database (Oracle, SQL Server)</td><td>An existing relational schema and SQL code.</td><td>The relational model stays. The license cost and the server operations go away.</td><td>PostgreSQL compatibility. AWS DMS and AWS SCT help to move the schema and the data.</td></tr>
+  </tbody>
+</table>
+
+<h3>Signals that point away from Aurora PostgreSQL</h3>
+<p>A good architect also knows when not to use a database. These workloads fit a different engine better. Lale Market uses each of these engines next to Aurora.</p>
+<table class="data">
+  <thead><tr><th>Signal in the workload</th><th>Why Aurora is a weak fit</th><th>Better choice</th></tr></thead>
+  <tbody>
+    <tr><td>Millions of reads and writes per second, always by a key that the app knows (carts, sessions, device state)</td><td>One writer instance does all writes. Joins and constraints are not needed, so you pay for features that you do not use.</td><td><a href="/e2etutorial/dynamodb">DynamoDB</a></td></tr>
+    <tr><td>Dashboards that scan years of history</td><td>Row storage reads full rows, and large scans compete with the checkout on the same instances.</td><td><a href="/e2etutorial/redshift">Redshift</a>, fed by zero-ETL from Aurora</td></tr>
+    <tr><td>Reads in less than one millisecond: counters, sessions, leaderboards</td><td>Aurora reads from memory when it can, but it is a disk-based engine with network round trips.</td><td><a href="/e2etutorial/elasticache">ElastiCache</a></td></tr>
+    <tr><td>Search with typos, word stems and relevance ranking</td><td>PostgreSQL has text search, but ranking and typo tolerance at scale are the job of a search engine.</td><td><a href="/e2etutorial/opensearch">OpenSearch</a></td></tr>
+    <tr><td>Questions that follow many hops of relations ("friends of friends who bought ...")</td><td>Each hop is one more JOIN on a large table. Deep traversals get slow.</td><td><a href="/e2etutorial/neptune">Neptune</a></td></tr>
+    <tr><td>Metrics that arrive every second and are queried by time windows</td><td>Possible, but time-series engines compress and aggregate this data much better.</td><td><a href="/e2etutorial/influxdb">Timestream for InfluxDB</a></td></tr>
+    <tr><td>Images, videos, PDF files</td><td>Large binary values make the database large and slow to back up.</td><td><a href="/e2etutorial/s3">S3</a> for the file. Aurora keeps only its key.</td></tr>
+    <tr><td>Write volume that one writer instance cannot carry</td><td>A standard Aurora cluster has one writer.</td><td>Aurora PostgreSQL Limitless Database spreads the tables over several writers (shards)
+        (<a href="https://aws.amazon.com/blogs/aws/amazon-aurora-postgresql-limitless-database-is-now-generally-available/">AWS News Blog</a>), or DynamoDB</td></tr>
+    <tr><td>Writes in several AWS Regions at the same time (active-active)</td><td>A standard cluster writes in one Region.</td><td>Aurora DSQL, a distributed PostgreSQL-compatible database with multi-Region active-active writes
+        (<a href="https://aws.amazon.com/rds/aurora/dsql/faqs/">Aurora DSQL FAQ</a>), or DynamoDB global tables</td></tr>
+  </tbody>
+</table>
+
+<h3>The questions that an architect asks, in this order</h3>
+<ol>
+  <li><b>What is the shape of the data?</b> Rows with relations point to a relational database. Independent items with one key point to a key-value store. Files point to object storage.</li>
+  <li><b>Must several changes succeed together?</b> If yes, you need transactions. Note the scope: one item, several items, or several tables.</li>
+  <li><b>Do you know every question in advance?</b> If no, you need SQL on any column. If yes, and the questions are always "by this key", a key-value design is cheaper at scale.</li>
+  <li><b>How many writes per second, and how many reads?</b> Reads scale with replicas. Writes go to one writer in a standard Aurora cluster.</li>
+  <li><b>How fast must one answer be?</b> Milliseconds are normal for Aurora. Less than one millisecond needs memory.</li>
+  <li><b>How big will the data be, and for how long do you keep it?</b> Hot current data belongs in Aurora. Years of history for analysis belong in a warehouse or in S3.</li>
+  <li><b>How many Regions?</b> One Region with several AZs is normal for Aurora. Read copies and disaster recovery in other Regions use Aurora Global Database. Writes in several Regions need Aurora DSQL or DynamoDB.</li>
+</ol>
+
+<h3>Aurora PostgreSQL and its relatives on AWS</h3>
+<table class="data">
+  <thead><tr><th>Option</th><th>What it is</th><th>Choose it when</th></tr></thead>
+  <tbody>
+    <tr><td>Amazon RDS for PostgreSQL</td><td>Managed community PostgreSQL on instances with attached storage volumes.</td><td>You need a specific community PostgreSQL version or setting, and the workload is small or steady.</td></tr>
+    <tr><td>Aurora PostgreSQL (provisioned or Serverless v2)</td><td>PostgreSQL on the shared, distributed Aurora storage (Part 2 of this page).</td><td>The default choice for a business system of record on AWS. Serverless v2 when the load changes a lot during the day.</td></tr>
+    <tr><td>Aurora Global Database</td><td>An Aurora cluster with read-only copies in other Regions. The AWS Database Blog reports a typical lag of under one second for the secondary Regions.</td><td>Users in several Regions read local copies, or you need disaster recovery to a second Region.</td></tr>
+    <tr><td>Aurora PostgreSQL Limitless Database</td><td>One logical database spread over several writer instances (shards), with standard PostgreSQL queries.</td><td>Write throughput or size is beyond one writer.</td></tr>
+    <tr><td>Aurora DSQL</td><td>A serverless, distributed, PostgreSQL-compatible database with no primary instance and active-active writes in several Regions.</td><td>The application must read and write in several Regions with strong consistency.</td></tr>
+  </tbody>
+</table>
+
+<h3>Where Aurora sits in Lale Market</h3>
+<p>Lale Market uses ten engines, and each engine does one job. Aurora is the system of record for the money: orders and stock.
+   After Aurora commits an order, the other engines get their own updates:</p>
+<ul>
+  <li>DynamoDB empties the cart.</li>
+  <li>ElastiCache updates the leaderboard.</li>
+  <li>Keyspaces stores a purchase event.</li>
+  <li>Timestream for InfluxDB counts the order.</li>
+  <li>Neptune adds the purchase to the graph.</li>
+</ul>
+<p>A zero-ETL integration copies the Aurora tables to Redshift, where the sales reports run. In Lale Market, the browser sends the follow-up updates.
+   In a production system, these updates usually travel as events, for example with the transactional outbox pattern and a message service.
+   Then a slow follow-up never blocks the checkout.</p>
+
+<h3>Simulation: let the requirements choose</h3>
+<p>The simulations below take one workload each. Five candidate engines start. Each requirement removes the candidates that cannot meet it.
+   Before you press Play, guess which engine stays at the end.</p>
+{{ k.sim("decide_checkout", "Workload 1: checkout") }}
+{{ k.sim("decide_dashboard", "Workload 2: a five-year sales dashboard") }}
+{{ k.sim("decide_sessions", "Workload 3: visitor sessions") }}
+<p>The third result needs a note. DynamoDB also has TTL, and with the DynamoDB Accelerator (DAX) cache it can also answer in microseconds.
+   The simulation compares the base engines only. In a real decision, write down such options too, and compare their cost and complexity.</p>
+
+{{ k.quiz("aurora-a1", "A cinema chain sells seats online. Two people must never buy the same seat for the same showing, and each sale also writes a payment row. Which engine and feature fit best?",
+   ["DynamoDB with a TTL on each seat item", "Aurora PostgreSQL with a transaction and UNIQUE (showing, seat)", "Redshift with a nightly copy of the sales", "ElastiCache with a sorted set of seats"],
+   1, "Two writes must succeed together (seat and payment), and the database must refuse a second sale of the same seat. A transaction plus a UNIQUE constraint does both.") }}
+{{ k.quiz("aurora-a2", "A team wants a dashboard of ten years of orders, grouped by month and city. The orders live in Aurora. What is the best architecture?",
+   ["Run the report on the Aurora writer every minute", "Copy the orders to Redshift with zero-ETL and report there", "Move the orders from Aurora to ElastiCache", "Store each order a second time in OpenSearch"],
+   1, "Large scans belong in a columnar warehouse. Zero-ETL keeps the copy current, and the checkout database stays free for transactions.") }}
+{{ k.quiz("aurora-a3", "A mobile game has 5 million players. The app reads and writes the state of a player by player_id, about 300,000 times per second, and never joins tables. What fits best?",
+   ["DynamoDB, keyed by player_id", "Aurora PostgreSQL with one writer", "Redshift with a sort key on player_id", "Neptune with one vertex per player"],
+   0, "The access is always by one known key, at a very high rate, with no joins. DynamoDB spreads this load over partitions. One Aurora writer would be the limit.") }}
+
 <div class="part"><b>Part 1</b><h2 id="part1" data-short="PART 1: PostgreSQL">PostgreSQL: the database engine</h2>
 <p>What a relational database is, and how PostgreSQL answers questions and protects data.</p></div>
 
-<h2 id="why" data-short="Why a database?"><span class="sec">01</span>Why not a spreadsheet? The problem that a database solves</h2>
+<h2 id="why" data-short="Why a database?"><span class="sec">02</span>Why not a spreadsheet? The problem that a database solves</h2>
 <p>Think about a small bookshop with three cashiers. The owner keeps the stock in one spreadsheet file on a shared disk.
    For one person, this works well. Then the shop gets busy, and four problems appear.</p>
 <ol>
@@ -46,7 +163,7 @@
    It connects to the PostgreSQL server over the network (TCP port 5432 by default) and sends text commands in SQL, the Structured Query Language.
    The server does the work and sends back rows. In Lale Market, the application is the Aurora Engine App on an EC2 instance, and it sends SQL with the Python driver <code>psycopg</code>.</p>
 
-<h2 id="model" data-short="Table, row, column, schema"><span class="sec">02</span>Table, row, column, data type, schema</h2>
+<h2 id="model" data-short="Table, row, column, schema"><span class="sec">03</span>Table, row, column, data type, schema</h2>
 <p>A {{ k.term("relational database") }} keeps data in tables. Start with a library, because everybody knows one.
    A library has a list of books. Each book has a title, an author, a year and a number of copies. In a database, this list is a table named <code>books</code>.</p>
 <ul>
@@ -109,13 +226,13 @@ WHERE city = 'İstanbul';</code></pre>
    This way of reading is a {{ k.term("Seq Scan") }} (sequential scan). Play the simulation and watch the counter "rows read".</p>
 {% endcall %}
 {{ k.sim("where", "WHERE city = 'İstanbul' on a table with no index") }}
-<p>On 6 rows, a Seq Scan costs nothing. On 10 million rows, it reads every page of the table for each such query. Section 06 shows how an index takes this cost away.</p>
+<p>On 6 rows, a Seq Scan costs nothing. On 10 million rows, it reads every page of the table for each such query. Section 07 shows how an index takes this cost away.</p>
 
 {{ k.quiz("aurora-q0", "The customers table above has 6 rows. A query asks WHERE segment = 'premium'. With no index, how many rows does PostgreSQL read, and how many does it return?",
    ["It reads 2 rows and returns 2 rows", "It reads 6 rows and returns 2 rows", "It reads 6 rows and returns 6 rows", "It reads 1 row and returns 2 rows"],
    1, "With no index, PostgreSQL reads all 6 rows. Two of them (C00001 Ayşe Yılmaz and C00004 Lukas Weber) have segment = 'premium', so the result has 2 rows.") }}
 
-<h2 id="keys" data-short="Identifiers and ownership"><span class="sec">03</span>Identifiers: each table owns one, and borrows others</h2>
+<h2 id="keys" data-short="Identifiers and ownership"><span class="sec">04</span>Identifiers: each table owns one, and borrows others</h2>
 <p>A shop must store facts about different things: customers, products, orders, and the lines of each order. Each kind of thing gets its own table.
    Each table owns an identifier. An {{ k.term("identifier") }} is a value that names exactly one row of that table, and never changes.</p>
 <p>A table uses the identifier of a different table to say "this row is about that thing". It does not copy the other thing. It only borrows its identifier.
@@ -179,7 +296,7 @@ WHERE city = 'İstanbul';</code></pre>
    ["The foreign key order_items.product_id, which points to products", "The primary key orders.order_id, which is unique", "The column order_items.unit_price, which is numeric", "The column products.category, which is text"],
    0, "order_items borrows product_id from products. PostgreSQL checks that a product owns the value before it saves the line. P9999 has no owner, so PostgreSQL refuses the line.") }}
 
-<h2 id="join" data-short="JOIN"><span class="sec">04</span>JOIN: put the pieces of one order together again</h2>
+<h2 id="join" data-short="JOIN"><span class="sec">05</span>JOIN: put the pieces of one order together again</h2>
 <p>Normalization splits the facts over four tables. A web page needs them together: "Order O000001, Ayşe Yılmaz, four products with names and prices".
    A {{ k.term("JOIN") }} combines rows of two tables into one result row when a condition is true. The usual condition is
    "the borrowed identifier in one table equals the owned identifier in the other table".</p>
@@ -221,7 +338,7 @@ ON p.product_id = oi.product_id</td><td>For each line, find the product that own
    ["1 row, the order of Ayşe Yılmaz", "2 rows, the orders of Ayşe and Zeynep", "4 rows, all orders in the table", "2 rows, the two İstanbul customers only"],
    1, "Ayşe (C00001) and Zeynep (C00005) live in İstanbul. Ayşe has order O000001 and Zeynep has order O000104 (cancelled, but still an order). So the result has 2 rows.") }}
 
-<h2 id="aggregate" data-short="Aggregation, GROUP BY"><span class="sec">05</span>Aggregation: many rows become one number</h2>
+<h2 id="aggregate" data-short="Aggregation, GROUP BY"><span class="sec">06</span>Aggregation: many rows become one number</h2>
 <p>Until now, each result row came from input rows one to one. Some questions are different. "How much did the shop earn?" needs one number from many rows.
    A function that takes many values and returns one value is an {{ k.term("aggregate function") }}. The five common ones:</p>
 <table class="data">
@@ -300,8 +417,8 @@ ORDER BY revenue DESC;</code></pre>
    ["Kitap, because the shop cancelled a book order", "No row changes, the line was not needed", "Moda appears with 1 more order and 2,721.65 more revenue", "Elektronik, because P0001 belongs to a cancelled order"],
    2, "The only cancelled order is O000104, with one line of P0095 (Moda) at 2,721.65. Without the filter, that line goes into the Moda envelope. Moda then has 2 orders and 5,443.30.") }}
 
-<h2 id="index" data-short="Indexes and plans"><span class="sec">06</span>Indexes: find a row without reading the table</h2>
-<p>Section 02 showed a Seq Scan: to find the İstanbul customers, PostgreSQL read every row. For a table of 15 pages, that is fine.
+<h2 id="index" data-short="Indexes and plans"><span class="sec">07</span>Indexes: find a row without reading the table</h2>
+<p>Section 03 showed a Seq Scan: to find the İstanbul customers, PostgreSQL read every row. For a table of 15 pages, that is fine.
    For a table of 10 million customers (about 150,000 pages), each such query reads 150,000 pages. An index solves this.</p>
 <p>An {{ k.term("index") }} is a second structure next to the table. It holds the values of one column (or several columns) in sorted order.
    Each entry of the index says where the row with that value is in the table. Because the index keeps the values in sorted order, PostgreSQL does not read them all.
@@ -361,7 +478,7 @@ Seq Scan on customers  (cost=0.00..25.50 rows=1 width=72) (actual time=0.009..0.
    ["Add more read replicas to the database", "Add an index on orders.customer_id", "Change the type of customer_id to integer", "Run the same query two times in a row"],
    1, "PostgreSQL read about 5,000 rows to keep 10. An index on customer_id lets it go straight to those 10 rows. (Lale Market has this index: CREATE INDEX ON orders (customer_id).)") }}
 
-<h2 id="constraints" data-short="Constraints"><span class="sec">07</span>Constraints: rules that the database enforces</h2>
+<h2 id="constraints" data-short="Constraints"><span class="sec">08</span>Constraints: rules that the database enforces</h2>
 <p>An application can have bugs. A second application can write to the same database. A person can run a manual SQL command.
    A {{ k.term("constraint") }} is a rule in the schema. PostgreSQL checks it on every write, from every source, and refuses a write that breaks it.
    So the rule holds even when a program is wrong.</p>
@@ -382,7 +499,7 @@ Seq Scan on customers  (cost=0.00..25.50 rows=1 width=72) (actual time=0.009..0.
    It means: when a program deletes an order, PostgreSQL also deletes the lines of that order. Without this clause, PostgreSQL would refuse to delete an order that still has lines,
    because the lines would then borrow an identifier that nobody owns.</p>
 
-<h2 id="tx" data-short="Transactions, ACID"><span class="sec">08</span>Transactions: all or nothing</h2>
+<h2 id="tx" data-short="Transactions, ACID"><span class="sec">09</span>Transactions: all or nothing</h2>
 <p>Many business actions need more than one statement. The classic example is a bank transfer of 200 from Ayşe to Mert:</p>
 <pre><code>UPDATE accounts SET balance = balance - 200 WHERE owner = 'Ayşe';   <span class="c">-- Ayşe: 1,000 becomes 800</span>
 UPDATE accounts SET balance = balance + 200 WHERE owner = 'Mert';   <span class="c">-- Mert:   500 becomes 700</span></code></pre>
@@ -440,7 +557,7 @@ COMMIT;</code></pre>
 <div class="part"><b>Part 2</b><h2 id="part2" data-short="PART 2: Amazon Aurora">Amazon Aurora PostgreSQL: the AWS service</h2>
 <p>The same PostgreSQL, with a different storage layer and with the operations done by AWS.</p></div>
 
-<h2 id="selfrun" data-short="Running PostgreSQL yourself"><span class="sec">09</span>What you must do when you run PostgreSQL yourself</h2>
+<h2 id="selfrun" data-short="Running PostgreSQL yourself"><span class="sec">10</span>What you must do when you run PostgreSQL yourself</h2>
 <p>Everything in Part 1 works on one server: one machine with PostgreSQL and a disk. For a real shop, one server is not enough. You must solve these tasks yourself:</p>
 <ol>
   <li><b>The disk can fail.</b> You need a copy of the data on a second machine, ideally in a second data center. PostgreSQL can stream its changes to a replica server,
@@ -453,7 +570,7 @@ COMMIT;</code></pre>
 </ol>
 <p>None of these tasks is about your shop. Amazon Aurora takes most of them over.</p>
 
-<h2 id="aurora" data-short="Aurora architecture"><span class="sec">10</span>The design of Aurora: compute and storage are separate</h2>
+<h2 id="aurora" data-short="Aurora architecture"><span class="sec">11</span>The design of Aurora: compute and storage are separate</h2>
 <p>On one server, PostgreSQL and its data are on the same machine. Aurora separates them into two layers:</p>
 <ul>
   <li>The <b>compute layer</b> is one or more {{ k.term("DB instance") }}s. Each DB instance runs the PostgreSQL engine: it accepts connections, plans queries and runs transactions.
@@ -473,7 +590,7 @@ COMMIT;</code></pre>
 {{ k.fig("aurora-cluster.png", "the writer instance and the two reader instances sit in three Availability Zones. All three connect to one shared storage volume, which keeps copies of the data in each zone. A reader does not keep its own copy. The volume also sends continuous backups to Amazon S3.") }}
 <p>Play the simulation to see one write. Look at where the new row appears.</p>
 {{ k.sim("storage", "One INSERT, three Availability Zones") }}
-<p>Compare this with the six tasks of section 09:</p>
+<p>Compare this with the six tasks of section 10:</p>
 <table class="data">
   <thead><tr><th>Task</th><th>PostgreSQL on your own server</th><th>Amazon Aurora PostgreSQL</th></tr></thead>
   <tbody>
@@ -494,7 +611,7 @@ COMMIT;</code></pre>
   <li>Each instance also has its own <b>instance endpoint</b>, for special cases.</li>
 </ul>
 
-<h2 id="lalemarket" data-short="Aurora in Lale Market"><span class="sec">11</span>Aurora in Lale Market</h2>
+<h2 id="lalemarket" data-short="Aurora in Lale Market"><span class="sec">12</span>Aurora in Lale Market</h2>
 <p>This is the real setup of the workshop (from <code>cloudformation/workshop.yaml</code>):</p>
 <ul>
   <li>The cluster <code>dbws-aurora</code> runs Aurora PostgreSQL version 17.9 with encrypted storage.</li>
@@ -506,25 +623,6 @@ COMMIT;</code></pre>
   <li>The Aurora Engine App connects to the writer endpoint on port 5432 with TLS. The password comes from AWS Secrets Manager. Only the security group of the Engine App can reach the database.</li>
   <li>A zero-ETL integration copies the four tables to Amazon Redshift in near real time. The sales report of the shop uses that copy, so the large scans do not run on the checkout database.</li>
 </ul>
-
-<h2 id="usecases" data-short="Use cases"><span class="sec">12</span>When to use it, and when not</h2>
-<table class="data">
-  <thead><tr><th>Good fit</th><th>Why</th></tr></thead>
-  <tbody>
-    <tr><td>Orders, payments, stock, bookings, invoices</td><td>Several related writes must commit together. Constraints protect the rules. Row locks stop lost updates.</td></tr>
-    <tr><td>Customer accounts and other core business data</td><td>The data has a clear structure and clear relations. Questions change over time, and SQL can answer a new question without a redesign.</td></tr>
-    <tr><td>Operational reports on current data</td><td>JOIN and GROUP BY on medium amounts of data, on a reader instance.</td></tr>
-  </tbody>
-</table>
-<table class="data">
-  <thead><tr><th>Weak fit</th><th>Better AWS choice</th></tr></thead>
-  <tbody>
-    <tr><td>Scans over years of history for dashboards</td><td><a href="/e2etutorial/redshift">Amazon Redshift</a>, a columnar data warehouse</td></tr>
-    <tr><td>Millions of simple reads per second, always by one key that you know in advance</td><td><a href="/e2etutorial/dynamodb">Amazon DynamoDB</a></td></tr>
-    <tr><td>Full-text search with typos and relevance ranking</td><td><a href="/e2etutorial/opensearch">Amazon OpenSearch Service</a></td></tr>
-    <tr><td>Questions about paths between records ("customers who bought what my friends bought")</td><td><a href="/e2etutorial/neptune">Amazon Neptune</a></td></tr>
-  </tbody>
-</table>
 
 <h2 id="recall" data-short="Recall test"><span class="sec">13</span>Recall test</h2>
 <p>Answer without a look back at the sections. To remember something, you must take it out of your memory, not read it again.</p>

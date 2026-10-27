@@ -4,7 +4,7 @@
 {% block body %}
 
 <h2 id="goal" data-short="Ne öğreneceksin"><span class="sec">00</span>Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
-<p>Bu tutorial iki bölümden oluşur. Bölüm 1 doğrudan PostgreSQL'i anlatır. PostgreSQL'in veriyi nasıl sakladığını ve bir soruyu nasıl cevapladığını öğrenirsin.
+<p>Bölüm 01 mimarın kararını verir: Aurora PostgreSQL nereye oturur, nereye oturmaz. Sonra tutorial iki bölümden oluşur. Bölüm 1 doğrudan PostgreSQL'i anlatır. PostgreSQL'in veriyi nasıl sakladığını ve bir soruyu nasıl cevapladığını öğrenirsin.
    Birçok kişi aynı anda yazarken veriyi nasıl doğru tuttuğunu da öğrenirsin. Bölüm 1'deki her şey, ister senin laptop'unda ister bir veri merkezinde olsun, her PostgreSQL sunucusu için geçerlidir.
    Bölüm 2, Amazon Aurora PostgreSQL'in neyi değiştirdiğini gösterir. Aurora aynı PostgreSQL'i çalıştırır, ama storage'ı ve onun etrafındaki operasyonları değiştirir.</p>
 <p>Örnekler bu workshop'un mağazası Lale Market'ten gelir. Lale Market siparişlerini Aurora PostgreSQL'de tutar.
@@ -26,10 +26,127 @@
   <li><b>Analoji</b>: Günlük hayattan bir resim. Analoji hatırlamana yardım eder, ama kesin kural ondan önceki metindir.</li>
 </ul>
 
+<h2 id="architect" data-short="Mimar gözüyle: ne zaman"><span class="sec">01</span>Mimar gözüyle: Aurora PostgreSQL nereye oturur</h2>
+<p><b>Önce bu bölümü oku.</b> Bir solution architect doğru database'i doğru yere koymak zorundadır. Yanlış bir seçimi geri almak pahalıdır:
+   veri, kod ve ekip alışkanlıkları onun etrafında büyür. Bir database'i iyi işletmek faydalıdır. Doğru olanı seçmek ise daha değerlidir.
+   Bu bölüm sana kararı verir. Sonraki bölümler, daha derine inmek isteyenler için database'in nasıl çalıştığını öğretir.</p>
+<p><b>Kısaca:</b> Aurora PostgreSQL, birbiriyle ilişkili iş verisinin system of record'udur. Bu veri, birçok kullanıcı aynı anda yazarken doğru kalmalıdır.
+   Ayrıca onu, önceden listeleyemeyeceğin şekillerde sorgulayabilmen gerekir.</p>
+<p>{{ k.term("system of record") }}, bir bilginin resmî versiyonunu tutan tek yerdir. Diğer sistemler hız ya da raporlar için kopyalar tutabilir.
+   Bir kopya ile system of record birbirini tutmadığında, system of record haklıdır. Lale Market'te Aurora'daki siparişler resmî siparişlerdir.</p>
+
+<h3>Bir iş yükünde Aurora PostgreSQL'i işaret eden sinyaller</h3>
+<table class="data">
+  <thead><tr><th>Sinyal</th><th>Gerçek bir projede neye benzer</th><th>Ona cevap veren PostgreSQL ya da Aurora özelliği</th></tr></thead>
+  <tbody>
+    <tr><td>Birbiriyle ilişkili birkaç yazma birlikte başarılı olmalı</td><td>Bir sipariş stoğu düşürür, bir header yazar ve line'lar yazar. Bir havale bir hesaptan para alır ve başka bir hesaba koyar.</td><td>COMMIT ve ROLLBACK ile transaction'lar (bölüm 09)</td></tr>
+    <tr><td>İki kullanıcı aynı şey için yarışır</td><td>Bir uçuştaki son koltuk, bir oteldeki son oda, bir ürünün son adedi, tek bir cüzdanın bakiyesi.</td><td>Row lock'lar ve koşullu UPDATE (bölüm 09)</td></tr>
+    <tr><td>Verinin net bir yapısı ve net ilişkileri var</td><td>Müşterilerin siparişleri, siparişlerin line'ları vardır, line'lar ürünleri gösterir. İş tarafı bunu bir tahtaya çizebilir.</td><td>Table'lar, primary key'ler, foreign key'ler (bölüm 03 ve 04)</td></tr>
+    <tr><td>Kötü veri pahalıdır</td><td>Negatif bir stok, var olmayan bir müşteriye fatura, siparişi olmayan bir ödeme.</td><td>Database'in her yazmada uyguladığı constraint'ler (bölüm 08)</td></tr>
+    <tr><td>Sorular zamanla değişir</td><td>Bugün mağaza müşteriye göre siparişleri soruyor. Gelecek ay finans şehir ve segmente göre geliri soruyor.</td><td>Veri modelini değiştirmeden SQL, JOIN, GROUP BY ve yeni index'ler (bölüm 05 - 07)</td></tr>
+    <tr><td>Ekibin PostgreSQL ekosistemine ihtiyacı var</td><td>Coğrafi veri, row'ların yanında JSON dokümanlar ya da iş verisinin yanında yapay zekâ araması için vector embedding'ler.</td><td>PostgreSQL type'ları ve extension'ları, örneğin JSONB, PostGIS ve pgvector</td></tr>
+    <tr><td>Database az bir çabayla bir veri merkezinin kaybından sağ çıkmalı</td><td>Bir Availability Zone çöktüğünde mağaza açık kalmalı.</td><td>Üç AZ'de verinin altı kopyası, bir replica'ya otomatik failover (bölüm 11)</td></tr>
+  </tbody>
+</table>
+
+<h3>Kullanım alanları: sebebi ve özelliğiyle</h3>
+<p>Aynı sinyaller birçok sektörde görünür. Her satır yaygın bir kullanım alanıdır. Son column'u oku: önemli işi database'in hangi parçasının yaptığını söyler.</p>
+<table class="data">
+  <thead><tr><th>Kullanım alanı</th><th>Veri ve işlemler</th><th>Neden Aurora PostgreSQL</th><th>İşi yapan özellik</th></tr></thead>
+  <tbody>
+    <tr><td>Online mağaza: checkout, siparişler, stok (Lale Market)</td><td>Müşteriler, ürünler, siparişler ve order line'lar. Saatte binlerce checkout.</td><td>Bir sipariş hiçbir zaman stok değişikliği olmadan var olmamalı, stok da hiçbir zaman sıfırın altına inmemeli.</td><td>Transaction, CHECK (stock &gt;= 0), koşullu UPDATE</td></tr>
+    <tr><td>Ödemeler, cüzdanlar, defterler (fintech)</td><td>Hesaplar, kayıtlar ve havaleler. Her tutar denk olmalı.</td><td>Çift taraflı bir defter, iki kaydı tek bir birim içinde ister ve bakiyelerin toplamı her zaman tutmalıdır.</td><td>Transaction, CHECK, foreign key'ler, en katı durumlar için SERIALIZABLE isolation level</td></tr>
+    <tr><td>Rezervasyon ve biletleme (uçuş, otel, sinema, doktor)</td><td>Kaynaklar, zaman aralıkları, rezervasyonlar</td><td>İki kişi hiçbir zaman aynı koltuğu ya da aynı odada çakışan saatleri almamalı.</td><td>UNIQUE (showing, seat) ve row lock'lar. PostgreSQL exclusion constraint'leri çakışan zaman aralıklarını reddedebilir.</td></tr>
+    <tr><td>Birçok müşteri şirkete hizmet veren SaaS uygulamaları (multi-tenant)</td><td>Tek database, her row bir tenant_id taşır</td><td>Uygulamada bir bug olsa bile A müşterisi B müşterisinin row'larını asla görmemeli.</td><td>tenant_id üzerinde PostgreSQL row-level security policy'leri</td></tr>
+    <tr><td>ERP, CRM, İK ve back-office sistemleri</td><td>Onlarca ilişkili varlık, birçok rapor</td><td>İlişkiler işin kendisidir. Raporlar her çeyrek değişir.</td><td>Schema, foreign key'ler, SQL, raporlar için reader instance'lar</td></tr>
+    <tr><td>Sağlık kayıtları, sigorta talepleri</td><td>Hastalar, ziyaretler, reçeteler, talepler</td><td>Hataların hukuki bir maliyeti vardır. Her değişiklik eksiksiz ve izlenebilir olmalı.</td><td>Transaction'lar, constraint'ler, at-rest şifreleme, point-in-time restore</td></tr>
+    <tr><td>Lojistik ve teslimat</td><td>Gönderiler, duraklar, sürücüler, teslimat bölgeleri</td><td>İş verisi ve coğrafi sorular ("bu adres hangi bölgede?") tek bir query'de.</td><td>Spatial index'leriyle PostGIS extension'ı, artı normal JOIN</td></tr>
+    <tr><td>Oyunlar: oyuncu hesapları, satın almalar, oyun içi para</td><td>Oyuncular, eşyalar, satın almalar</td><td>Bir satın alma parayı almalı ve eşyayı birlikte vermelidir.</td><td>Transaction'lar ve row lock'lar. (Canlı leaderboard ElastiCache'e aittir.)</td></tr>
+    <tr><td>İş verisi üzerinde generative AI araması (RAG)</td><td>Ürünlerin ve müşterilerin yanında, embedding'leri olan dokümanlar.</td><td>Benzer metin araması iş kurallarına göre de filtrelemelidir, örneğin "sadece stokta olan ürünler".</td><td>Aurora PostgreSQL'in desteklediği pgvector extension'ı, normal SQL filtrelerinin yanında
+        (<a href="https://docs.aws.amazon.com/prescriptive-guidance/latest/retrieval-augmented-generation-options/rag-custom-retrievers.html">AWS: Aurora PostgreSQL and pgvector</a>)</td></tr>
+    <tr><td>Ticari bir database'den çıkış (Oracle, SQL Server)</td><td>Mevcut bir relational schema ve SQL kodu.</td><td>Relational model kalır. Lisans maliyeti ve sunucu operasyonları gider.</td><td>PostgreSQL uyumluluğu. AWS DMS ve AWS SCT, schema'yı ve veriyi taşımaya yardım eder.</td></tr>
+  </tbody>
+</table>
+
+<h3>Aurora PostgreSQL'den uzağı işaret eden sinyaller</h3>
+<p>İyi bir mimar bir database'i ne zaman kullanmayacağını da bilir. Bu iş yükleri başka bir engine'e daha iyi oturur. Lale Market bu engine'lerin her birini Aurora'nın yanında kullanır.</p>
+<table class="data">
+  <thead><tr><th>İş yükündeki sinyal</th><th>Aurora neden zayıf kalır</th><th>Daha iyi seçim</th></tr></thead>
+  <tbody>
+    <tr><td>Saniyede milyonlarca okuma ve yazma, hep uygulamanın bildiği bir key ile (sepetler, session'lar, cihaz durumu)</td><td>Bütün yazmaları tek bir writer instance yapar. Join ve constraint gerekmez, yani kullanmadığın özelliklere para ödersin.</td><td><a href="/e2etutorial/dynamodb">DynamoDB</a></td></tr>
+    <tr><td>Yılların geçmişini tarayan dashboard'lar</td><td>Row storage tam row'ları okur ve büyük taramalar aynı instance'larda checkout ile yarışır.</td><td>Aurora'dan zero-ETL ile beslenen <a href="/e2etutorial/redshift">Redshift</a></td></tr>
+    <tr><td>Bir milisaniyenin altında okumalar: sayaçlar, session'lar, leaderboard'lar</td><td>Aurora mümkün olduğunda bellekten okur, ama ağ gidiş-dönüşleri olan, disk tabanlı bir engine'dir.</td><td><a href="/e2etutorial/elasticache">ElastiCache</a></td></tr>
+    <tr><td>Yazım hatası toleranslı, kelime kökü bulan, relevance sıralamalı arama</td><td>PostgreSQL'de metin araması var, ama ölçekte sıralama ve yazım hatası toleransı bir arama motorunun işidir.</td><td><a href="/e2etutorial/opensearch">OpenSearch</a></td></tr>
+    <tr><td>İlişkilerin birçok adımını takip eden sorular ("şunu alan arkadaşların arkadaşları")</td><td>Her adım büyük bir table üzerinde bir JOIN daha demektir. Derin gezintiler yavaşlar.</td><td><a href="/e2etutorial/neptune">Neptune</a></td></tr>
+    <tr><td>Her saniye gelen ve zaman pencereleriyle sorgulanan metrikler</td><td>Mümkün, ama time-series engine'leri bu veriyi çok daha iyi sıkıştırır ve toplar.</td><td><a href="/e2etutorial/influxdb">Timestream for InfluxDB</a></td></tr>
+    <tr><td>Görseller, videolar, PDF dosyaları</td><td>Büyük binary değerler database'i büyütür ve backup'ını yavaşlatır.</td><td>Dosya için <a href="/e2etutorial/s3">S3</a>. Aurora sadece onun key'ini tutar.</td></tr>
+    <tr><td>Tek bir writer instance'ın taşıyamayacağı yazma hacmi</td><td>Standart bir Aurora cluster'ının tek bir writer'ı vardır.</td><td>Table'ları birkaç writer'a (shard) dağıtan Aurora PostgreSQL Limitless Database
+        (<a href="https://aws.amazon.com/blogs/aws/amazon-aurora-postgresql-limitless-database-is-now-generally-available/">AWS News Blog</a>) ya da DynamoDB</td></tr>
+    <tr><td>Aynı anda birkaç AWS Region'ında yazmalar (active-active)</td><td>Standart bir cluster tek bir Region'da yazar.</td><td>Multi-Region active-active yazmaları olan, dağıtık, PostgreSQL uyumlu bir database olan Aurora DSQL
+        (<a href="https://aws.amazon.com/rds/aurora/dsql/faqs/">Aurora DSQL FAQ</a>) ya da DynamoDB global tables</td></tr>
+  </tbody>
+</table>
+
+<h3>Bir mimarın sorduğu sorular, bu sırayla</h3>
+<ol>
+  <li><b>Verinin şekli ne?</b> İlişkili row'lar relational bir database'i işaret eder. Tek bir key'i olan bağımsız öğeler bir key-value store'u işaret eder. Dosyalar object storage'ı işaret eder.</li>
+  <li><b>Birkaç değişiklik birlikte başarılı olmak zorunda mı?</b> Evetse transaction'lara ihtiyacın var. Kapsamı not et: tek öğe, birkaç öğe ya da birkaç table.</li>
+  <li><b>Her soruyu önceden biliyor musun?</b> Hayırsa, her column üzerinde SQL'e ihtiyacın var. Evetse ve sorular hep "bu key ile" ise, ölçekte bir key-value tasarımı daha ucuzdur.</li>
+  <li><b>Saniyede kaç yazma ve kaç okuma var?</b> Okumalar replica'larla ölçeklenir. Standart bir Aurora cluster'ında yazmalar tek bir writer'a gider.</li>
+  <li><b>Tek bir cevap ne kadar hızlı olmalı?</b> Milisaniyeler Aurora için normaldir. Bir milisaniyenin altı bellek ister.</li>
+  <li><b>Veri ne kadar büyük olacak ve ne kadar süre saklanacak?</b> Sıcak, güncel veri Aurora'ya aittir. Analiz için yılların geçmişi bir warehouse'a ya da S3'e aittir.</li>
+  <li><b>Kaç Region?</b> Birkaç AZ'li tek bir Region Aurora için normaldir. Başka Region'larda okuma kopyaları ve felaket kurtarma için Aurora Global Database kullanılır. Birkaç Region'da yazma ise Aurora DSQL ya da DynamoDB ister.</li>
+</ol>
+
+<h3>AWS'de Aurora PostgreSQL ve akrabaları</h3>
+<table class="data">
+  <thead><tr><th>Seçenek</th><th>Nedir</th><th>Ne zaman seçilir</th></tr></thead>
+  <tbody>
+    <tr><td>Amazon RDS for PostgreSQL</td><td>Instance'lar ve onlara bağlı storage volume'ları üzerinde yönetilen community PostgreSQL.</td><td>Belirli bir community PostgreSQL sürümüne ya da ayarına ihtiyacın varsa ve iş yükü küçük ya da sabitse.</td></tr>
+    <tr><td>Aurora PostgreSQL (provisioned ya da Serverless v2)</td><td>Paylaşılan, dağıtık Aurora storage'ı üzerinde PostgreSQL (bu sayfanın Bölüm 2'si).</td><td>AWS'de bir iş sisteminin system of record'u için varsayılan seçim. Yük gün içinde çok değişiyorsa Serverless v2.</td></tr>
+    <tr><td>Aurora Global Database</td><td>Başka Region'larda salt-okuma kopyaları olan bir Aurora cluster'ı. AWS Database Blog, ikincil Region'lar için tipik gecikmeyi bir saniyenin altında olarak bildiriyor.</td><td>Birkaç Region'daki kullanıcılar yerel kopyaları okuyorsa ya da ikinci bir Region'a felaket kurtarma gerekiyorsa.</td></tr>
+    <tr><td>Aurora PostgreSQL Limitless Database</td><td>Birkaç writer instance'a (shard) dağıtılmış, standart PostgreSQL query'leriyle çalışan tek mantıksal bir database.</td><td>Yazma hacmi ya da boyut tek bir writer'ın ötesindeyse.</td></tr>
+    <tr><td>Aurora DSQL</td><td>Primary instance'ı olmayan ve birkaç Region'da active-active yazma yapan, serverless, dağıtık, PostgreSQL uyumlu bir database.</td><td>Uygulama güçlü tutarlılıkla birkaç Region'da okuyup yazmak zorundaysa.</td></tr>
+  </tbody>
+</table>
+
+<h3>Lale Market'te Aurora'nın yeri</h3>
+<p>Lale Market on engine kullanır ve her engine tek bir iş yapar. Aurora, paranın system of record'udur: siparişler ve stok.
+   Aurora bir siparişi commit ettikten sonra diğer engine'ler kendi güncellemelerini alır:</p>
+<ul>
+  <li>DynamoDB sepeti boşaltır.</li>
+  <li>ElastiCache leaderboard'u günceller.</li>
+  <li>Keyspaces bir satın alma event'i saklar.</li>
+  <li>Timestream for InfluxDB siparişi sayar.</li>
+  <li>Neptune satın almayı graph'a ekler.</li>
+</ul>
+<p>Bir zero-ETL integration, Aurora table'larını satış raporlarının çalıştığı Redshift'e kopyalar. Lale Market'te takip güncellemelerini tarayıcı gönderir.
+   Bir production sisteminde bu güncellemeler genellikle event olarak taşınır; örneğin transactional outbox pattern'i ve bir mesaj servisiyle.
+   Böylece yavaş bir takip güncellemesi checkout'u asla bloklamaz.</p>
+
+<h3>Simülasyon: bırak gereksinimler seçsin</h3>
+<p>Aşağıdaki simülasyonların her biri bir iş yükü alır. Beş aday engine başlar. Her gereksinim, onu karşılayamayan adayları eler.
+   Oynat'a basmadan önce sonunda hangi engine'in kalacağını tahmin et.</p>
+{{ k.sim("decide_checkout", "İş yükü 1: checkout") }}
+{{ k.sim("decide_dashboard", "İş yükü 2: beş yıllık satış dashboard'u") }}
+{{ k.sim("decide_sessions", "İş yükü 3: ziyaretçi session'ları") }}
+<p>Üçüncü sonuç bir not ister. DynamoDB'de de TTL vardır ve DynamoDB Accelerator (DAX) cache'iyle o da mikrosaniyeler içinde cevap verebilir.
+   Simülasyon sadece temel engine'leri karşılaştırır. Gerçek bir kararda bu seçenekleri de yaz ve maliyetlerini ve karmaşıklıklarını karşılaştır.</p>
+
+{{ k.quiz("aurora-a1", "Bir sinema zinciri online koltuk satıyor. İki kişi aynı seans için aynı koltuğu asla almamalı ve her satış ayrıca bir ödeme row'u yazıyor. Hangi engine ve özellik en iyi uyar?",
+   ["Her koltuk item'ında TTL olan DynamoDB", "Transaction ve UNIQUE (showing, seat) ile Aurora PostgreSQL", "Satışların gecelik kopyasıyla Redshift", "Koltukların sorted set'iyle ElastiCache"],
+   1, "İki yazma birlikte başarılı olmalı (koltuk ve ödeme) ve database aynı koltuğun ikinci satışını reddetmeli. Bir transaction artı bir UNIQUE constraint ikisini de yapar.") }}
+{{ k.quiz("aurora-a2", "Bir ekip, aya ve şehre göre gruplanmış on yıllık siparişlerin dashboard'unu istiyor. Siparişler Aurora'da. En iyi mimari nedir?",
+   ["Raporu her dakika Aurora writer'ında çalıştırmak", "Siparişleri zero-ETL ile Redshift'e kopyalayıp orada raporlamak", "Siparişleri Aurora'dan ElastiCache'e taşımak", "Her siparişi ikinci kez OpenSearch'te saklamak"],
+   1, "Büyük taramalar columnar bir warehouse'a aittir. Zero-ETL kopyayı güncel tutar ve checkout database'i transaction'lar için serbest kalır.") }}
+{{ k.quiz("aurora-a3", "Bir mobil oyunun 5 milyon oyuncusu var. Uygulama bir oyuncunun durumunu player_id ile, saniyede yaklaşık 300.000 kez okuyor ve yazıyor; hiç table join etmiyor. En iyi ne uyar?",
+   ["player_id key'li DynamoDB", "Tek writer'lı Aurora PostgreSQL", "player_id sort key'li Redshift", "Oyuncu başına bir vertex ile Neptune"],
+   0, "Erişim hep bilinen tek bir key ile, çok yüksek hızda ve join olmadan. DynamoDB bu yükü partition'lara dağıtır. Tek bir Aurora writer'ı sınır olurdu.") }}
+
 <div class="part"><b>Bölüm 1</b><h2 id="part1" data-short="BÖLÜM 1: PostgreSQL">PostgreSQL: database engine'i</h2>
 <p>Relational database nedir, PostgreSQL soruları nasıl cevaplar ve veriyi nasıl korur.</p></div>
 
-<h2 id="why" data-short="Neden database?"><span class="sec">01</span>Neden bir spreadsheet değil? Database'in çözdüğü problem</h2>
+<h2 id="why" data-short="Neden database?"><span class="sec">02</span>Neden bir spreadsheet değil? Database'in çözdüğü problem</h2>
 <p>Üç kasiyeri olan küçük bir kitapçı düşün. Sahibi stoğu ortak bir diskteki tek bir spreadsheet dosyasında tutuyor.
    Tek bir kişi için bu iyi çalışır. Sonra dükkân kalabalıklaşır ve dört problem ortaya çıkar.</p>
 <ol>
@@ -47,7 +164,7 @@
    Ağ üzerinden PostgreSQL sunucusuna bağlanır (varsayılan olarak TCP port 5432) ve SQL (Structured Query Language) ile metin komutları gönderir.
    Sunucu işi yapar ve row'ları geri gönderir. Lale Market'te uygulama, bir EC2 instance üzerindeki Aurora Engine App'tir ve SQL'i Python driver'ı <code>psycopg</code> ile gönderir.</p>
 
-<h2 id="model" data-short="Table, row, column, schema"><span class="sec">02</span>Table, row, column, data type, schema</h2>
+<h2 id="model" data-short="Table, row, column, schema"><span class="sec">03</span>Table, row, column, data type, schema</h2>
 <p>Bir {{ k.term("relational database") }} veriyi table'larda tutar. Bir kütüphaneyle başla, çünkü herkes bir kütüphane bilir.
    Kütüphanenin bir kitap listesi vardır. Her kitabın bir adı, bir yazarı, bir yılı ve bir kopya sayısı vardır. Database'de bu liste <code>books</code> adlı bir table'dır.</p>
 <ul>
@@ -110,13 +227,13 @@ WHERE city = 'İstanbul';</code></pre>
    Bu okuma şekli bir {{ k.term("Seq Scan") }}'dir (sequential scan). Simülasyonu oynat ve "okunan row" sayacını izle.</p>
 {% endcall %}
 {{ k.sim("where", "Index'i olmayan bir table'da WHERE city = 'İstanbul'") }}
-<p>6 row'da bir Seq Scan'in maliyeti yok gibidir. 10 milyon row'da ise her böyle query table'ın her page'ini okur. Bölüm 06, bir index'in bu maliyeti nasıl ortadan kaldırdığını gösterir.</p>
+<p>6 row'da bir Seq Scan'in maliyeti yok gibidir. 10 milyon row'da ise her böyle query table'ın her page'ini okur. Bölüm 07, bir index'in bu maliyeti nasıl ortadan kaldırdığını gösterir.</p>
 
 {{ k.quiz("aurora-q0", "Yukarıdaki customers table'ının 6 row'u var. Bir query WHERE segment = 'premium' istiyor. Index yoksa PostgreSQL kaç row okur ve kaç row döndürür?",
    ["2 row okur ve 2 row döndürür", "6 row okur ve 2 row döndürür", "6 row okur ve 6 row döndürür", "1 row okur ve 2 row döndürür"],
    1, "Index yoksa PostgreSQL 6 row'un hepsini okur. İkisinin (C00001 Ayşe Yılmaz ve C00004 Lukas Weber) segment değeri 'premium', bu yüzden sonuçta 2 row vardır.") }}
 
-<h2 id="keys" data-short="Identifier ve sahiplik"><span class="sec">03</span>Identifier'lar: her table birinin sahibidir, diğerlerini ödünç alır</h2>
+<h2 id="keys" data-short="Identifier ve sahiplik"><span class="sec">04</span>Identifier'lar: her table birinin sahibidir, diğerlerini ödünç alır</h2>
 <p>Bir mağaza farklı şeyler hakkında bilgi saklamak zorundadır: müşteriler, ürünler, siparişler ve her siparişin line'ları. Her şey türü için ayrı bir table vardır.
    Her table bir identifier'ın sahibidir. {{ k.term("identifier") }}, o table'ın tam olarak bir row'unu adlandıran ve hiç değişmeyen bir değerdir.</p>
 <p>Bir table, "bu row şu şeyle ilgili" demek için başka bir table'ın identifier'ını kullanır. Öteki şeyi kopyalamaz. Sadece onun identifier'ını ödünç alır.
@@ -180,7 +297,7 @@ WHERE city = 'İstanbul';</code></pre>
    ["products'ı gösteren foreign key order_items.product_id", "Unique olan primary key orders.order_id", "Numeric olan column order_items.unit_price", "Text olan column products.category"],
    0, "order_items, product_id'yi products'tan ödünç alır. PostgreSQL line'ı kaydetmeden önce değerin sahibi olan bir ürün olup olmadığını kontrol eder. P9999'un sahibi yok, bu yüzden PostgreSQL line'ı reddeder.") }}
 
-<h2 id="join" data-short="JOIN"><span class="sec">04</span>JOIN: bir siparişin parçalarını yeniden birleştir</h2>
+<h2 id="join" data-short="JOIN"><span class="sec">05</span>JOIN: bir siparişin parçalarını yeniden birleştir</h2>
 <p>Normalization bilgileri dört table'a böler. Bir web sayfası ise onlara birlikte ihtiyaç duyar: "O000001 siparişi, Ayşe Yılmaz, adları ve fiyatlarıyla dört ürün".
    {{ k.term("JOIN") }}, bir koşul doğru olduğunda iki table'ın row'larını tek bir sonuç row'unda birleştirir. Genel koşul şudur:
    "bir table'daki ödünç alınan identifier, diğer table'daki sahip olunan identifier'a eşittir".</p>
@@ -222,7 +339,7 @@ ON p.product_id = oi.product_id</td><td>Her line için, line'ın product_id'sini
    ["1 row, Ayşe Yılmaz'ın siparişi", "2 row, Ayşe ve Zeynep'in siparişleri", "4 row, table'daki bütün siparişler", "2 row, sadece iki İstanbul müşterisi"],
    1, "Ayşe (C00001) ve Zeynep (C00005) İstanbul'da yaşıyor. Ayşe'nin O000001, Zeynep'in O000104 siparişi var (iptal edilmiş ama yine de bir sipariş). Bu yüzden sonuçta 2 row vardır.") }}
 
-<h2 id="aggregate" data-short="Aggregation, GROUP BY"><span class="sec">05</span>Aggregation: birçok row tek bir sayıya dönüşür</h2>
+<h2 id="aggregate" data-short="Aggregation, GROUP BY"><span class="sec">06</span>Aggregation: birçok row tek bir sayıya dönüşür</h2>
 <p>Şimdiye kadar her sonuç row'u input row'larından birebir geldi. Bazı sorular farklıdır. "Mağaza ne kadar kazandı?" birçok row'dan tek bir sayı ister.
    Birçok değer alıp tek bir değer döndüren fonksiyona {{ k.term("aggregate function") }} denir. En yaygın beş tanesi:</p>
 <table class="data">
@@ -301,8 +418,8 @@ ORDER BY revenue DESC;</code></pre>
    ["Kitap, çünkü mağaza bir kitap siparişini iptal etti", "Hiçbir row değişmez, o satır gereksizdi", "Moda 1 sipariş ve 2,721.65 gelir daha fazla gösterir", "Elektronik, çünkü P0001 iptal edilmiş bir siparişte"],
    2, "Tek iptal edilmiş sipariş O000104'tür ve 2,721.65 tutarında tek bir P0095 (Moda) line'ı vardır. Filtre olmadan o line Moda zarfına girer. Moda'nın artık 2 siparişi ve 5,443.30 geliri olur.") }}
 
-<h2 id="index" data-short="Index ve plan"><span class="sec">06</span>Index'ler: table'ı okumadan bir row bul</h2>
-<p>Bölüm 02 bir Seq Scan gösterdi: İstanbul müşterilerini bulmak için PostgreSQL her row'u okudu. 15 page'lik bir table için bu sorun değil.
+<h2 id="index" data-short="Index ve plan"><span class="sec">07</span>Index'ler: table'ı okumadan bir row bul</h2>
+<p>Bölüm 03 bir Seq Scan gösterdi: İstanbul müşterilerini bulmak için PostgreSQL her row'u okudu. 15 page'lik bir table için bu sorun değil.
    10 milyon müşterili bir table'da (yaklaşık 150.000 page) her böyle query 150.000 page okur. Bir index bunu çözer.</p>
 <p>{{ k.term("index") }}, table'ın yanında duran ikinci bir yapıdır. Bir column'un (ya da birkaç column'un) değerlerini sıralı tutar.
    Index'in her entry'si, o değere sahip row'un table'da nerede olduğunu söyler. Index değerleri sıralı tuttuğu için PostgreSQL hepsini okumaz.
@@ -362,7 +479,7 @@ Seq Scan on customers  (cost=0.00..25.50 rows=1 width=72) (actual time=0.009..0.
    ["Database'e daha fazla read replica eklemek", "orders.customer_id üzerine bir index eklemek", "customer_id'nin type'ını integer yapmak", "Aynı query'yi art arda iki kez çalıştırmak"],
    1, "PostgreSQL 10 row tutmak için yaklaşık 5.000 row okudu. customer_id üzerindeki bir index onu doğrudan o 10 row'a götürür. (Lale Market'te bu index var: CREATE INDEX ON orders (customer_id).)") }}
 
-<h2 id="constraints" data-short="Constraint'ler"><span class="sec">07</span>Constraint'ler: database'in uyguladığı kurallar</h2>
+<h2 id="constraints" data-short="Constraint'ler"><span class="sec">08</span>Constraint'ler: database'in uyguladığı kurallar</h2>
 <p>Bir uygulamada bug olabilir. İkinci bir uygulama aynı database'e yazabilir. Bir kişi elle bir SQL komutu çalıştırabilir.
    {{ k.term("constraint") }}, schema'daki bir kuraldır. PostgreSQL onu her kaynaktan gelen her yazmada kontrol eder ve onu bozan bir yazmayı reddeder.
    Böylece bir program yanlış olsa bile kural geçerli kalır.</p>
@@ -383,7 +500,7 @@ Seq Scan on customers  (cost=0.00..25.50 rows=1 width=72) (actual time=0.009..0.
    Anlamı şudur: bir program bir siparişi sildiğinde PostgreSQL o siparişin line'larını da siler. Bu clause olmasaydı PostgreSQL, hâlâ line'ları olan bir siparişi silmeyi reddederdi,
    çünkü o line'lar artık kimsenin sahibi olmadığı bir identifier'ı ödünç almış olurdu.</p>
 
-<h2 id="tx" data-short="Transaction, ACID"><span class="sec">08</span>Transaction'lar: ya hepsi ya hiçbiri</h2>
+<h2 id="tx" data-short="Transaction, ACID"><span class="sec">09</span>Transaction'lar: ya hepsi ya hiçbiri</h2>
 <p>Birçok iş işlemi birden fazla statement ister. Klasik örnek, Ayşe'den Mert'e 200 liralık bir banka havalesidir:</p>
 <pre><code>UPDATE accounts SET balance = balance - 200 WHERE owner = 'Ayşe';   <span class="c">-- Ayşe: 1,000, 800 olur</span>
 UPDATE accounts SET balance = balance + 200 WHERE owner = 'Mert';   <span class="c">-- Mert:   500, 700 olur</span></code></pre>
@@ -441,7 +558,7 @@ COMMIT;</code></pre>
 <div class="part"><b>Bölüm 2</b><h2 id="part2" data-short="BÖLÜM 2: Amazon Aurora">Amazon Aurora PostgreSQL: AWS servisi</h2>
 <p>Aynı PostgreSQL; farklı bir storage katmanıyla ve operasyonları AWS'nin yaptığı şekilde.</p></div>
 
-<h2 id="selfrun" data-short="PostgreSQL'i kendin çalıştırmak"><span class="sec">09</span>PostgreSQL'i kendin çalıştırdığında yapman gerekenler</h2>
+<h2 id="selfrun" data-short="PostgreSQL'i kendin çalıştırmak"><span class="sec">10</span>PostgreSQL'i kendin çalıştırdığında yapman gerekenler</h2>
 <p>Bölüm 1'deki her şey tek bir sunucuda çalışır: PostgreSQL'in ve bir diskin olduğu tek bir makine. Gerçek bir mağaza için tek sunucu yetmez. Şu işleri kendin çözmen gerekir:</p>
 <ol>
   <li><b>Disk bozulabilir.</b> Verinin ikinci bir makinede, tercihen ikinci bir veri merkezinde bir kopyası gerekir. PostgreSQL değişikliklerini bir replica sunucuya akıtabilir,
@@ -454,7 +571,7 @@ COMMIT;</code></pre>
 </ol>
 <p>Bu işlerin hiçbiri senin mağazanla ilgili değildir. Amazon Aurora bunların çoğunu devralır.</p>
 
-<h2 id="aurora" data-short="Aurora mimarisi"><span class="sec">10</span>Aurora'nın tasarımı: compute ve storage ayrıdır</h2>
+<h2 id="aurora" data-short="Aurora mimarisi"><span class="sec">11</span>Aurora'nın tasarımı: compute ve storage ayrıdır</h2>
 <p>Tek bir sunucuda PostgreSQL ve verisi aynı makinededir. Aurora onları iki katmana ayırır:</p>
 <ul>
   <li><b>Compute katmanı</b> bir ya da daha fazla {{ k.term("DB instance") }}'tır. Her DB instance PostgreSQL engine'ini çalıştırır: bağlantıları kabul eder, query'leri planlar ve transaction'ları çalıştırır.
@@ -474,7 +591,7 @@ COMMIT;</code></pre>
 {{ k.fig("aurora-cluster.png", "writer instance ve iki reader instance üç Availability Zone'da duruyor. Üçü de, her zone'da verinin kopyalarını tutan tek bir paylaşılan storage volume'a bağlı. Bir reader kendi kopyasını tutmaz. Volume ayrıca Amazon S3'e sürekli backup gönderir.") }}
 <p>Tek bir yazmayı görmek için simülasyonu oynat. Yeni row'un nerede ortaya çıktığına bak.</p>
 {{ k.sim("storage", "Bir INSERT, üç Availability Zone") }}
-<p>Bunu bölüm 09'daki altı işle karşılaştır:</p>
+<p>Bunu bölüm 10'daki altı işle karşılaştır:</p>
 <table class="data">
   <thead><tr><th>İş</th><th>Kendi sunucunda PostgreSQL</th><th>Amazon Aurora PostgreSQL</th></tr></thead>
   <tbody>
@@ -495,7 +612,7 @@ COMMIT;</code></pre>
   <li>Her instance'ın ayrıca özel durumlar için kendi <b>instance endpoint</b>'i vardır.</li>
 </ul>
 
-<h2 id="lalemarket" data-short="Lale Market'te Aurora"><span class="sec">11</span>Lale Market'te Aurora</h2>
+<h2 id="lalemarket" data-short="Lale Market'te Aurora"><span class="sec">12</span>Lale Market'te Aurora</h2>
 <p>Bu, workshop'un gerçek kurulumudur (<code>cloudformation/workshop.yaml</code> dosyasından):</p>
 <ul>
   <li><code>dbws-aurora</code> cluster'ı, şifreli storage ile Aurora PostgreSQL 17.9 sürümünü çalıştırır.</li>
@@ -507,25 +624,6 @@ COMMIT;</code></pre>
   <li>Aurora Engine App, writer endpoint'e port 5432 üzerinden TLS ile bağlanır. Parola AWS Secrets Manager'dan gelir. Database'e sadece Engine App'in security group'u ulaşabilir.</li>
   <li>Bir zero-ETL integration dört table'ı neredeyse gerçek zamanlı olarak Amazon Redshift'e kopyalar. Mağazanın satış raporu bu kopyayı kullanır; böylece büyük taramalar checkout database'inde çalışmaz.</li>
 </ul>
-
-<h2 id="usecases" data-short="Kullanım alanları"><span class="sec">12</span>Ne zaman kullanılır, ne zaman kullanılmaz</h2>
-<table class="data">
-  <thead><tr><th>Uygun</th><th>Neden</th></tr></thead>
-  <tbody>
-    <tr><td>Siparişler, ödemeler, stok, rezervasyonlar, faturalar</td><td>Birbiriyle ilişkili birkaç yazma birlikte commit edilmeli. Constraint'ler kuralları korur. Row lock'lar lost update'i önler.</td></tr>
-    <tr><td>Müşteri hesapları ve diğer temel iş verisi</td><td>Verinin net bir yapısı ve net ilişkileri vardır. Sorular zamanla değişir ve SQL yeni bir soruyu yeniden tasarım yapmadan cevaplayabilir.</td></tr>
-    <tr><td>Güncel veri üzerinde operasyonel raporlar</td><td>Orta miktarda veride, bir reader instance üzerinde JOIN ve GROUP BY.</td></tr>
-  </tbody>
-</table>
-<table class="data">
-  <thead><tr><th>Zayıf uyum</th><th>Daha iyi AWS seçimi</th></tr></thead>
-  <tbody>
-    <tr><td>Dashboard'lar için yılların geçmişini taramak</td><td><a href="/e2etutorial/redshift">Amazon Redshift</a>, columnar bir data warehouse</td></tr>
-    <tr><td>Saniyede milyonlarca basit okuma, hep önceden bildiğin tek bir key ile</td><td><a href="/e2etutorial/dynamodb">Amazon DynamoDB</a></td></tr>
-    <tr><td>Yazım hatası toleranslı, relevance sıralamalı full-text search</td><td><a href="/e2etutorial/opensearch">Amazon OpenSearch Service</a></td></tr>
-    <tr><td>Kayıtlar arasındaki yollarla ilgili sorular ("arkadaşlarımın aldıklarını alan müşteriler")</td><td><a href="/e2etutorial/neptune">Amazon Neptune</a></td></tr>
-  </tbody>
-</table>
 
 <h2 id="recall" data-short="Recall test"><span class="sec">13</span>Recall test</h2>
 <p>Bölümlere geri bakmadan cevapla. Bir şeyi hatırlamak için onu yeniden okumak değil, hafızandan çıkarmak gerekir.</p>

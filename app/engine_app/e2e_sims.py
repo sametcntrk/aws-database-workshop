@@ -360,6 +360,105 @@ def aurora_write(lang):
             "out": {"name": T(lang, "reads", "okumalar"), "cols": ["instance", "statement", T(lang, "result", "sonuç")]}, "steps": steps}
 
 
+# ---------------------------------------------------------------- 0. Architecture decision: requirements remove candidates
+# Each candidate answers each requirement with yes or no, and a short reason. A "no" removes the candidate.
+CANDIDATES = ["Aurora PostgreSQL", "DynamoDB", "Redshift", "ElastiCache (Valkey)", "OpenSearch"]
+REQS = {
+    "acid": (("Several rows change as one all-or-nothing unit, many times each second (OLTP)",
+              "Birçok row, saniyede birçok kez, ya-hep-ya-hiç tek bir birim olarak değişir (OLTP)"),
+             {"Aurora PostgreSQL": (1, "BEGIN ... COMMIT, row locks", "BEGIN ... COMMIT, row lock'lar"),
+              "DynamoDB": (1, "TransactWriteItems", "TransactWriteItems"),
+              "Redshift": (0, "built for analytic scans, not many small writes", "küçük ve çok sayıda yazma için değil, analitik tarama için yapıldı"),
+              "ElastiCache (Valkey)": (0, "MULTI has no rollback, data is in memory", "MULTI'de rollback yok, veri bellekte"),
+              "OpenSearch": (0, "no multi-document transactions", "çok-dokümanlı transaction yok")}),
+    "rules": (("The database itself refuses bad data: foreign keys, CHECK, NOT NULL",
+               "Database kötü veriyi kendisi reddeder: foreign key, CHECK, NOT NULL"),
+              {"Aurora PostgreSQL": (1, "constraints are enforced on every write", "constraint'ler her yazmada uygulanır"),
+               "DynamoDB": (0, "no foreign keys, only conditions on one item", "foreign key yok, sadece tek item üzerinde koşul"),
+               "Redshift": (0, "primary and foreign keys are informational only", "primary ve foreign key'ler sadece bilgi amaçlı"),
+               "ElastiCache (Valkey)": (0, "no schema", "schema yok"),
+               "OpenSearch": (0, "no relations between documents", "dokümanlar arasında ilişki yok")}),
+    "adhoc": (("New questions with JOIN and filters on any column, without a redesign",
+               "Yeniden tasarım yapmadan, JOIN ve her column üzerinde filtreyle yeni sorular"),
+              {"Aurora PostgreSQL": (1, "SQL, indexes on any column", "SQL, her column'a index"),
+               "DynamoDB": (0, "each question needs a key design", "her soru bir key tasarımı ister"),
+               "Redshift": (1, "SQL", "SQL"),
+               "ElastiCache (Valkey)": (0, "access by key only", "sadece key ile erişim"),
+               "OpenSearch": (0, "no JOIN between indexes", "index'ler arasında JOIN yok")}),
+    "scan": (("Scan billions of rows of history and read only a few columns",
+              "Milyarlarca row'luk geçmişi tarayıp sadece birkaç column okumak"),
+             {"Aurora PostgreSQL": (0, "row storage reads full rows, and the scan competes with checkout", "row storage tam row'ları okur ve tarama checkout ile yarışır"),
+              "DynamoDB": (0, "a Scan reads and bills every item", "Scan her item'ı okur ve faturalar"),
+              "Redshift": (1, "columnar storage, parallel scan", "columnar storage, paralel tarama"),
+              "ElastiCache (Valkey)": (0, "data must fit in memory", "veri belleğe sığmalı"),
+              "OpenSearch": (0, "aggregations, but no SQL joins over history", "aggregation var ama geçmiş üzerinde SQL join yok")}),
+    "sql": (("Analysts write SQL with JOIN and GROUP BY",
+             "Analistler JOIN ve GROUP BY ile SQL yazar"),
+            {"Aurora PostgreSQL": (1, "SQL", "SQL"), "DynamoDB": (0, "no SQL joins", "SQL join yok"), "Redshift": (1, "SQL", "SQL"),
+             "ElastiCache (Valkey)": (0, "no SQL", "SQL yok"), "OpenSearch": (0, "no JOIN", "JOIN yok")}),
+    "submilli": (("Each read must take less than one millisecond, at very high read rates",
+                  "Her okuma, çok yüksek okuma hızlarında bir milisaniyeden kısa sürmeli"),
+                 {"Aurora PostgreSQL": (0, "disk-based engine, milliseconds", "disk tabanlı engine, milisaniyeler"),
+                  "DynamoDB": (0, "single-digit milliseconds", "tek haneli milisaniyeler"),
+                  "Redshift": (0, "analytic queries, not point reads", "analitik query'ler, tekil okuma değil"),
+                  "ElastiCache (Valkey)": (1, "all data in memory", "bütün veri bellekte"),
+                  "OpenSearch": (0, "search, not point reads", "arama, tekil okuma değil")}),
+    "ttl": (("Each entry deletes itself after a time (TTL)",
+             "Her kayıt bir süre sonra kendini siler (TTL)"),
+            {"Aurora PostgreSQL": (0, "no row TTL, needs a cleanup job", "row TTL yok, temizlik işi gerekir"),
+             "DynamoDB": (1, "TTL attribute", "TTL attribute"),
+             "Redshift": (0, "no TTL", "TTL yok"),
+             "ElastiCache (Valkey)": (1, "EXPIRE on each key", "her key'de EXPIRE"),
+             "OpenSearch": (0, "no per-document TTL", "doküman başına TTL yok")}),
+}
+SCENARIOS = {
+    "checkout": (("Checkout: lower the stock, write the order and its lines, take the payment", "Checkout: stoğu düşür, siparişi ve line'larını yaz, ödemeyi al"),
+                 ["acid", "rules", "adhoc"]),
+    "dashboard": (("Five years of sales, grouped by month, city and category, for analysts", "Analistler için ay, şehir ve kategoriye göre gruplanmış beş yıllık satışlar"),
+                  ["scan", "sql"]),
+    "sessions": (("Sessions of 200,000 visitors, read on each page, gone after 30 minutes", "200.000 ziyaretçinin session'ları; her sayfada okunur, 30 dakika sonra gider"),
+                 ["submilli", "ttl"]),
+}
+
+
+def decide(lang, scenario):
+    title, reqs = SCENARIOS[scenario]
+    cols = [T(lang, "candidate", "aday")] + [f"R{i + 1}" for i in range(len(reqs))] + [T(lang, "status", "durum")]
+    rows = [[c] + ["?"] * len(reqs) + [T(lang, "in the race", "yarışta")] for c in CANDIDATES]
+    req_rows = [[f"R{i + 1}", T(lang, *REQS[r][0])] for i, r in enumerate(reqs)]
+    alive = set(CANDIDATES)
+    steps = [{"say": T(lang, f"Workload: {title[0]}. Five candidate engines start in the race. Each requirement (R1, R2, ...) removes the candidates that cannot meet it.",
+                       f"İş yükü: {title[1]}. Beş aday engine yarışa başlar. Her gereksinim (R1, R2, ...), onu karşılayamayan adayları yarıştan çıkarır."),
+              "marks": {}, "rows": {"cand": deepcopy(rows)}, "count": {T(lang, "candidates left", "kalan aday"): len(alive)}}]
+    for i, r in enumerate(reqs):
+        out = []
+        for k, c in enumerate(CANDIDATES):
+            ok, en, tr = REQS[r][1][c]
+            rows[k][i + 1] = (T(lang, "yes", "evet") if ok else T(lang, "no", "hayır")) + ": " + T(lang, en, tr)
+            if not ok and c in alive:
+                alive.discard(c)
+                rows[k][-1] = T(lang, f"out at R{i + 1}", f"R{i + 1}'de elendi")
+                out.append(c)
+        marks = {k: ("match" if c in alive else ("bad" if c in out else "skip")) for k, c in enumerate(CANDIDATES)}
+        steps.append({"say": T(lang, f"R{i + 1}: {REQS[r][0][0]}. " + (f"Out: {', '.join(out)}." if out else "Nobody drops out here."),
+                               f"R{i + 1}: {REQS[r][0][1]}. " + (f"Elenen: {', '.join(out)}." if out else "Burada kimse elenmez.")),
+                      "marks": {"cand": marks, "req": {i: "read"}}, "rows": {"cand": deepcopy(rows)},
+                      "count": {T(lang, "candidates left", "kalan aday"): len(alive)}})
+    win = [c for c in CANDIDATES if c in alive]
+    for k, c in enumerate(CANDIDATES):
+        if c in alive:
+            rows[k][-1] = T(lang, "chosen", "seçildi")
+    steps.append({"say": T(lang, f"Result: {' and '.join(win)}. The decision comes from the requirements, not from habit. Write the requirements down, and you can explain the choice to anybody.",
+                           f"Sonuç: {' ve '.join(win)}. Karar alışkanlıktan değil, gereksinimlerden gelir. Gereksinimleri yazarsan seçimi herkese açıklayabilirsin."),
+                  "marks": {"cand": {k: ("new" if c in alive else "skip") for k, c in enumerate(CANDIDATES)}}, "rows": {"cand": deepcopy(rows)},
+                  "count": {T(lang, "candidates left", "kalan aday"): len(alive)}})
+    return {"tables": [{"id": "req", "name": T(lang, "requirements of the workload", "iş yükünün gereksinimleri"), "cols": ["id", T(lang, "requirement", "gereksinim")],
+                        "rows": req_rows, "key": [0], "ref": []},
+                       {"id": "cand", "name": T(lang, "candidate engines", "aday engine'ler"), "cols": cols, "rows": [[c] + ["?"] * len(reqs) + [T(lang, "in the race", "yarışta")] for c in CANDIDATES],
+                        "key": [0], "ref": []}],
+            "out": None, "steps": steps}
+
+
 COUNT_TR = {"rows read": "okunan row", "rows returned": "dönen row", "index entries read": "okunan index entry",
             "table rows read": "okunan table row", "rows in result": "sonuçtaki row", "lines read": "okunan line",
             "lines in envelopes": "zarflardaki line", "writes refused": "reddedilen yazma"}
@@ -377,7 +476,8 @@ def aurora(lang):
 
 
 def _aurora(lang):
-    return {"where": where_city(lang), "index": seq_vs_index(lang), "join": join_order(lang), "group": group_by_category(lang),
+    return {"decide_checkout": decide(lang, "checkout"), "decide_dashboard": decide(lang, "dashboard"), "decide_sessions": decide(lang, "sessions"),
+            "where": where_city(lang), "index": seq_vs_index(lang), "join": join_order(lang), "group": group_by_category(lang),
             "constraints": constraints(lang), "tx": tx_rollback(lang), "lost": last_piece(lang, False), "locked": last_piece(lang, True),
             "storage": aurora_write(lang)}
 
