@@ -1289,3 +1289,189 @@ def opensearch(lang):
 
 COUNT_TR.update({"tokens looked up": "aranan token", "documents read": "okunan doküman", "terms compared": "karşılaştırılan terim", "terms accepted": "kabul edilen terim", "stores in the circle": "dairedeki mağaza"})
 SIMS["opensearch"] = opensearch
+
+
+# ================================================================ Neptune (property graph)
+G_CUST = [["C00001", "Ayşe Yılmaz"], ["C00002", "Mert Doğan"], ["C00003", "Elif Kaya"], ["C00005", "Zeynep Şahin"]]
+G_PROD = [["P0001", "Alpen Kablosuz Kulaklık 1"], ["P0016", "Nordwind Powerbank 16"], ["P0175", "Toros Bluetooth Hoparlör 175"],
+          ["P0044", "Kapadokya Bulut Mimarisi 44"], ["P0179", "Toros Python ile Veri 179"]]
+G_EDGES = [["e1", "C00001", "P0001"], ["e2", "C00001", "P0016"], ["e3", "C00002", "P0001"], ["e4", "C00002", "P0016"], ["e5", "C00002", "P0175"],
+           ["e6", "C00003", "P0001"], ["e7", "C00003", "P0175"], ["e8", "C00003", "P0044"], ["e9", "C00005", "P0044"], ["e10", "C00005", "P0179"]]
+EXTRA_TABLES["g_customers"] = {"cols": ["~id", "name"], "rows": G_CUST}
+EXTRA_TABLES["g_products"] = {"cols": ["~id", "name"], "rows": G_PROD}
+EXTRA_TABLES["g_bought"] = {"cols": ["~id", "~from", "~to", "~label"], "rows": [e + ["BOUGHT"] for e in G_EDGES]}
+G_NAME = dict(G_CUST + G_PROD)
+
+
+def _gtable(lang):
+    return {"id": "e", "name": T(lang, "BOUGHT edges", "BOUGHT edge'leri"), "cols": ["~id", "~from (Customer)", "~to (Product)"], "rows": G_EDGES, "key": [0], "ref": [1, 2]}
+
+
+def _ein(v):
+    return [i for i, e in enumerate(G_EDGES) if e[2] == v]
+
+
+def _eout(v):
+    return [i for i, e in enumerate(G_EDGES) if e[1] == v]
+
+
+def _ranked(score):
+    return [[p, G_NAME[p], len(s)] for p, s in sorted(score.items(), key=lambda kv: (-len(kv[1]), kv[0]))]
+
+
+def np_hop2(lang):
+    start = "P0001"
+    m, read = {}, 0
+    steps = [{"say": T(lang, f"Question: which products do the buyers of {start} ({G_NAME[start]}) also buy? The graph has 9 vertices and {len(G_EDGES)} BOUGHT edges. Each edge goes from a Customer to a Product.",
+                       f"Soru: {start} ({G_NAME[start]}) alıcıları başka hangi ürünleri de alıyor? Graph'ta 9 vertex ve {len(G_EDGES)} BOUGHT edge'i var. Her edge bir Customer'dan bir Product'a gider."),
+              "marks": {}, "out": [], "count": {"edges read": 0, "vertices reached": 1}}]
+    buyers = []
+    for i in _ein(start):
+        m[i] = "read"
+        buyers.append(G_EDGES[i][1])
+    read += len(buyers)
+    steps.append({"say": T(lang, f"Hop 1. Neptune starts at the vertex {start} and reads only its incoming BOUGHT edges: {', '.join(G_EDGES[i][0] for i in _ein(start))}. They lead to the customers {', '.join(buyers)}.",
+                           f"Hop 1. Neptune {start} vertex'inden başlar ve sadece onun gelen BOUGHT edge'lerini okur: {', '.join(G_EDGES[i][0] for i in _ein(start))}. Bunlar {', '.join(buyers)} müşterilerine götürür."),
+                  "marks": {"e": dict(m)}, "out": [], "count": {"edges read": read, "vertices reached": 1 + len(buyers)}})
+    score = {}
+    for c in buyers:
+        new = []
+        for i in _eout(c):
+            read += 1
+            p = G_EDGES[i][2]
+            if p == start:
+                m[i] = "skip"
+            else:
+                m[i] = "match"
+                score.setdefault(p, set()).add(c)
+                new.append(p)
+        steps.append({"say": T(lang, f"Hop 2 from {c} ({G_NAME[c]}). Neptune reads the outgoing edges of this customer only. The products other than {start} are {', '.join(new)}. Each of them gets one point for this customer." if len(new) > 1 else f"Hop 2 from {c} ({G_NAME[c]}). Neptune reads the outgoing edges of this customer only. The product other than {start} is {new[0]}. It gets one point for this customer.",
+                               f"{c} ({G_NAME[c]}) üzerinden hop 2. Neptune sadece bu müşterinin giden edge'lerini okur. {start} dışındaki ürünler: {', '.join(new)}. Her biri bu müşteri için bir puan alır." if len(new) > 1 else f"{c} ({G_NAME[c]}) üzerinden hop 2. Neptune sadece bu müşterinin giden edge'lerini okur. {start} dışındaki ürün: {new[0]}. Bu müşteri için bir puan alır."),
+                      "marks": {"e": dict(m)}, "out": _ranked(score), "count": {"edges read": read, "vertices reached": 1 + len(buyers) + len(score)}})
+    steps.append({"say": T(lang, f"Result, ordered by score: the products that the most buyers share come first. Neptune read {read} edges. The edges e9 and e10 of Zeynep Şahin were never read, because no path from {start} reaches her. With 10 million customers, the work still depends only on the neighbours of {start}.",
+                           f"Sonuç, score'a göre sıralı: en çok alıcının paylaştığı ürünler önce gelir. Neptune {read} edge okudu. Zeynep Şahin'in e9 ve e10 edge'leri hiç okunmadı, çünkü {start}'den hiçbir yol ona ulaşmaz. 10 milyon müşteride de iş sadece {start}'in komşularına bağlıdır."),
+                  "marks": {"e": m}, "out": _ranked(score), "outmarks": {0: "new", 1: "new"}, "count": {"edges read": read, "vertices reached": 1 + len(buyers) + len(score)}})
+    return {"tables": [_gtable(lang)], "out": {"name": T(lang, "recommendations", "öneriler"), "cols": ["product_id", "name", "score"]}, "steps": steps}
+
+
+def np_hop3(lang):
+    me = "C00001"
+    m, read = {}, 0
+    mine = [G_EDGES[i][2] for i in _eout(me)]
+    for i in _eout(me):
+        m[i] = "read"
+    read += len(mine)
+    steps = [{"say": T(lang, f"Question: what should {G_NAME[me]} ({me}) buy next? Hop 1 reads her outgoing BOUGHT edges. She bought {', '.join(mine)}.",
+                       f"Soru: {G_NAME[me]} ({me}) sırada ne almalı? Hop 1 onun giden BOUGHT edge'lerini okur. {', '.join(mine)} ürünlerini almış."),
+              "marks": {"e": dict(m)}, "out": [], "count": {"edges read": read, "similar customers": 0}}]
+    others = []
+    for p in mine:
+        for i in _ein(p):
+            c = G_EDGES[i][1]
+            read += 1
+            if c == me:
+                continue
+            m[i] = "read"
+            if c not in others:
+                others.append(c)
+    steps.append({"say": T(lang, f"Hop 2. Neptune reads the incoming edges of these products. Other customers who bought the same products: {', '.join(others)}. The query removes {me} herself with WHERE o <> me.",
+                           f"Hop 2. Neptune bu ürünlerin gelen edge'lerini okur. Aynı ürünleri alan diğer müşteriler: {', '.join(others)}. Query, WHERE o <> me ile {me}'in kendisini çıkarır."),
+                  "marks": {"e": dict(m)}, "out": [], "count": {"edges read": read, "similar customers": len(others)}})
+    score = {}
+    for c in others:
+        kept, dropped = [], []
+        for i in _eout(c):
+            p = G_EDGES[i][2]
+            read += 1
+            if p in mine:
+                dropped.append(p)
+                m[i] = "skip"
+            else:
+                kept.append(p)
+                m[i] = "match"
+                score.setdefault(p, set()).add(c)
+        steps.append({"say": T(lang, f"Hop 3 from {c} ({G_NAME[c]}). New products: {', '.join(kept)}. " + (f"NOT (me)-[:BOUGHT]->(rec) removes {', '.join(dropped)}, because {G_NAME[me]} already bought " + ('them.' if len(dropped) > 1 else 'it.') if dropped else ""),
+                               f"{c} ({G_NAME[c]}) üzerinden hop 3. Yeni ürünler: {', '.join(kept)}. " + (f"NOT (me)-[:BOUGHT]->(rec) filtresi {', '.join(dropped)} " + ('ürünlerini' if len(dropped) > 1 else 'ürününü') + f" çıkarır, çünkü {G_NAME[me]} zaten aldı." if dropped else "")),
+                      "marks": {"e": dict(m)}, "out": _ranked(score), "count": {"edges read": read, "similar customers": len(others)}})
+    steps.append({"say": T(lang, "The score counts the similar customers who bought each product. This answer is personal, but it needs a purchase history. A new visitor has no edges, so the shop uses the 2-hop query from a product instead.",
+                           "Score, her ürünü alan benzer müşterileri sayar. Bu cevap kişiseldir ama bir satın alma geçmişi gerektirir. Yeni bir ziyaretçinin edge'i yoktur, bu yüzden mağaza onun yerine bir üründen başlayan 2-hop query'yi kullanır."),
+                  "marks": {"e": m}, "out": _ranked(score), "outmarks": {0: "new"}, "count": {"edges read": read, "similar customers": len(others)}})
+    return {"tables": [_gtable(lang)], "out": {"name": T(lang, "recommendations", "öneriler"), "cols": ["product_id", "name", "score"]}, "steps": steps}
+
+
+def np_path(lang):
+    a, b = "C00005", "C00001"
+    seen, frontier, parent, m, read = {a}, [a], {}, {}, 0
+    steps = [{"say": T(lang, f"Question: how is {G_NAME[a]} ({a}) connected to {G_NAME[b]} ({b})? A fraud team asks this kind of question about shared cards or addresses. The search goes out from {a} one level at a time and treats each edge in both directions.",
+                       f"Soru: {G_NAME[a]} ({a}), {G_NAME[b]} ({b}) ile nasıl bağlantılı? Bir dolandırıcılık ekibi ortak kartlar ya da adresler hakkında bu tür bir soru sorar. Arama {a}'dan her seferinde bir seviye dışarı gider ve her edge'i iki yönde de kullanır."),
+              "marks": {}, "out": [[0, a, G_NAME[a], "-"]], "count": {"edges read": 0, "levels": 0}}]
+    out, level, found = [[0, a, G_NAME[a], "-"]], 0, False
+    while frontier and not found:
+        level += 1
+        nxt, found_now = [], []
+        for v in frontier:
+            for i, e in enumerate(G_EDGES):
+                if v not in (e[1], e[2]):
+                    continue
+                read += 1
+                w = e[2] if e[1] == v else e[1]
+                if w in seen:
+                    m.setdefault(i, "skip")
+                    continue
+                seen.add(w)
+                parent[w] = (v, e[0])
+                m[i] = "read"
+                nxt.append(w)
+                out.append([level, w, G_NAME[w], e[0]])
+                found_now.append(w)
+                if w == b:
+                    found = True
+        steps.append({"say": T(lang, f"Level {level}. From {', '.join(frontier)}, the new vertices are {', '.join(found_now) or 'none'}." + (f" {b} is in this level, so the search stops." if found else ""),
+                               f"Seviye {level}. {', '.join(frontier)} vertex'lerinden yeni vertex'ler: {', '.join(found_now) or 'yok'}." + (f" {b} bu seviyede, bu yüzden arama durur." if found else "")),
+                      "marks": {"e": dict(m)}, "out": deepcopy(out), "outmarks": {len(out) - 1 - k: "new" for k in range(len(found_now))}, "count": {"edges read": read, "levels": level}})
+        frontier = nxt
+    path, v = [b], b
+    while v != a:
+        v = parent[v][0]
+        path.append(v)
+    path.reverse()
+    pm = {i: "match" for i, e in enumerate(G_EDGES) if e[0] in {parent[x][1] for x in path[1:]}}
+    steps.append({"say": T(lang, f"The path has {len(path) - 1} hops: {', '.join(path)}. Zeynep and Elif both bought P0044. Elif and Ayşe both bought P0001. In SQL, an unknown number of hops needs a recursive query. In a graph, it is a normal traversal.",
+                           f"Yol {len(path) - 1} hop'tur: {', '.join(path)}. Zeynep ve Elif ikisi de P0044 aldı. Elif ve Ayşe ikisi de P0001 aldı. SQL'de bilinmeyen sayıda hop recursive bir query gerektirir. Graph'ta bu normal bir traversal'dır."),
+                  "marks": {"e": pm}, "out": [r for r in out if r[1] in path], "count": {"edges read": read, "levels": level}})
+    return {"tables": [_gtable(lang)], "out": {"name": T(lang, "vertices reached", "ulaşılan vertex'ler"), "cols": [T(lang, "level", "seviye"), "~id", "name", T(lang, "via edge", "edge")]}, "steps": steps}
+
+
+NP_CANDS = ["Neptune", "Aurora PostgreSQL", "DynamoDB", "OpenSearch", "Redshift"]
+
+
+def neptune(lang):
+    w1 = verdicts(NP_CANDS, [
+        V((1, "vertices and edges", "vertex'ler ve edge'ler"), (1, "tables and foreign keys", "table'lar ve foreign key'ler"), (0, "no joins, relations must be copied", "join yok, ilişkiler kopyalanmalı"),
+          (0, "documents do not link", "document'lar birbirine bağlanmaz"), (1, "tables and joins", "table'lar ve join'ler")),
+        V((1, "a traversal reads only the neighbours", "bir traversal sadece komşuları okur"), (0, "a variable depth needs recursive SQL, one self-join per hop", "değişken derinlik recursive SQL ister, her hop bir self-join"),
+          (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (0, "built for scans, not one visitor per request", "taramalar için yapıldı, istek başına bir ziyaretçi için değil")),
+        V((1, "a new edge counts at once", "yeni bir edge hemen sayılır"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi")),
+    ])
+    w2 = verdicts(NP_CANDS, [
+        V((0, "a query starts at vertices; a full scan is slow", "bir query vertex'lerden başlar; tam tarama yavaştır"), (1, "possible", "mümkün"), (0, "Scan of the whole table", "tüm table'ın Scan'i"),
+          (1, "aggregations", "aggregation'lar"), (1, "columnar scans", "columnar taramalar")),
+        V((0, "removed earlier", "daha önce elendi"), (1, "SQL joins", "SQL join'leri"), (0, "removed earlier", "daha önce elendi"), (0, "no joins between indexes", "index'ler arası join yok"), (1, "SQL joins", "SQL join'leri")),
+        V((0, "removed earlier", "daha önce elendi"), (0, "the report competes with checkout", "rapor checkout ile yarışır"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (1, "a separate warehouse", "ayrı bir warehouse")),
+    ])
+    spec = {
+        "decide_recs": decide_generic(lang, ("\"Customers who bought this also bought\" on every product page", "Her ürün sayfasında \"bunu alanlar şunları da aldı\""),
+                                      [("Store entities and the relations between them", "Varlıkları ve aralarındaki ilişkileri sakla"),
+                                       ("Follow 2 to 4 hops in milliseconds for each request", "Her istekte 2-4 hop'u milisaniyelerde takip et"),
+                                       ("A new purchase changes the answer at once", "Yeni bir satın alma cevabı hemen değiştirir")], NP_CANDS, w1),
+        "decide_report": decide_generic(lang, ("Monthly revenue by category over two years of orders", "İki yıllık siparişler üzerinde kategoriye göre aylık gelir"),
+                                        [("Scan millions of rows and sum columns", "Milyonlarca row'u tara ve kolonları topla"),
+                                         ("Join facts and dimensions with SQL", "Fact'leri ve dimension'ları SQL ile join'le"),
+                                         ("Do not slow the checkout database", "Checkout database'ini yavaşlatma")], NP_CANDS, w2),
+        "hop2": np_hop2(lang), "hop3": np_hop3(lang), "path": np_path(lang),
+    }
+    return {k: _localize(v, lang) for k, v in spec.items()}
+
+
+COUNT_TR.update({"edges read": "okunan edge", "vertices reached": "ulaşılan vertex", "similar customers": "benzer müşteri", "levels": "seviye"})
+SIMS["neptune"] = neptune

@@ -1,0 +1,281 @@
+{% extends "e2e/_base.html" %}
+{% import "e2e/_macros.html" as k with context %}
+{# Turkish version of neptune.html. Terms stay in English; the explanations are Turkish. Keep both files in step. #}
+{% block body %}
+
+<h2 id="goal" data-short="Ne öğreneceksin"><span class="sec">00</span>Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
+<p>Bölüm 01 mimarın kararını verir: Amazon Neptune nereye oturur, nereye oturmaz. Sonra tutorial iki bölümden oluşur.
+   Bölüm 1, property graph modelini ve query dili openCypher'ı öğretir: vertex'ler, edge'ler, pattern'ler, hop'lar ve path'ler. Bölüm 2, AWS servisini ve Lale Market'in onu nasıl kullandığını gösterir.</p>
+<p>Örnekler Lale Market'in "birlikte alınanlar" önerilerinden gelir. Bazen başka bir örnek bir fikri daha kolay gösterir. O zaman tutorial onu kullanır: bir metro haritası, bir soy ağacı, arkadaşlarının arkadaşları.</p>
+<p>Bu tutorial'ın sonunda şunları yapabilirsin:</p>
+<ol>
+  <li>Bir graph database'in hangi iş yükleri için doğru seçim olduğunu ve hangileri için olmadığını söylemek.</li>
+  <li>Vertex'ler, edge'ler, label'lar ve property'lerle küçük bir property graph çizmek.</li>
+  <li>Bir openCypher pattern'ini okuyup bir çizim üzerinde hop hop takip etmek.</li>
+  <li>Bir traversal'ın maliyetinin neden graph'ın boyutuna değil, komşulara bağlı olduğunu açıklamak.</li>
+  <li>Bir graph traversal'ını aynı sorunun SQL hâliyle karşılaştırmak.</li>
+  <li>Neptune'ün senin için neyi çalıştırdığını açıklamak: storage, replica'lar ve query endpoint'leri.</li>
+</ol>
+<p>Dört tür kutu sana yardım eder. <b>Simülasyon</b>: Oynat'a ya da Sonraki adım'a bas. <b>Önce tahmin et</b>: cevabı açmadan önce kendi cevabını yaz.
+   <b>Checkpoint</b>: tek doğru cevabı olan bir soru. <b>Analoji</b>: günlük hayattan bir resim.</p>
+
+<h2 id="architect" data-short="Mimar gözüyle: ne zaman"><span class="sec">01</span>Mimar gözüyle: Neptune nereye oturur</h2>
+<p><b>Önce bu bölümü oku.</b> Kararı bu bölüm verir. Sonraki bölümler bir graph'ın nasıl çalıştığını öğretir.</p>
+<p><b>Kısaca:</b> Amazon Neptune yönetilen bir graph database'dir. Şeyleri (vertex'ler) ve aralarındaki ilişkileri (edge'ler) aynı önemde veri olarak saklar.
+   İlişkileri takip eden soruları cevaplar: "kim ne aldı", "kim kimi tanıyor", "bu iki hesap nasıl bağlantılı". Soru ilişkilerin kendisiyse ve hop sayısı büyük ya da bilinmiyorsa onu seç.</p>
+<p>Anahtar fikir {{ k.term("traversal") }}'dır: bir query bir vertex'ten başlar ve onun edge'leri boyunca yürür. Graph'ın sadece içinden geçtiği kısmını okur.</p>
+
+<h3>Bir iş yükünde Neptune'ü işaret eden sinyaller</h3>
+<table class="data">
+  <thead><tr><th>Sinyal</th><th>Gerçek bir projede nasıl görünür</th><th>Onu cevaplayan özellik</th></tr></thead>
+  <tbody>
+    <tr><td>Soru ilişkileri takip eder</td><td>"Bunu alanlar şunları da aldı", "arkadaşların arkadaşları".</td><td>Vertex ve edge'ler üzerinde pattern'ler (bölüm 03 ve 04)</td></tr>
+    <tr><td>Hop sayısı bilinmiyor</td><td>"Bu hesap, herhangi bir adım sayısıyla, bilinen bir dolandırıcılık hesabına bağlı mı?"</td><td>Değişken uzunlukta path'ler (bölüm 06)</td></tr>
+    <tr><td>İstek başına, milisaniyelerde cevap</td><td>Her ürün sayfasında bir öneri, bir ödeme sırasında dolandırıcılık kontrolü.</td><td>Bir traversal sadece komşuları okur (bölüm 04)</td></tr>
+    <tr><td>Birçok ilişki türü</td><td>Bir kişi bir karta sahiptir, bir cihaz kullanır, bir adreste yaşar, bir şirkette çalışır.</td><td>Edge label'ları ve property'leri (bölüm 03)</td></tr>
+    <tr><td>Şema sık değişir</td><td>Her ay yeni şey ve ilişki türleri.</td><td>Yeni bir label table değişikliği gerektirmez</td></tr>
+    <tr><td>Anlamı olan bilgi</td><td>Bir tıbbi sözlük, bir ürün taksonomisi, linked open data.</td><td>RDF ve SPARQL (bölüm 08)</td></tr>
+  </tbody>
+</table>
+
+<h3>Use case'ler, nedeni ve özelliğiyle</h3>
+<table class="data">
+  <thead><tr><th>Use case</th><th>Vertex'ler ve edge'ler</th><th>Neden bir graph</th><th>İşi yapan özellik</th></tr></thead>
+  <tbody>
+    <tr><td>Öneriler (Lale Market)</td><td>Customer, Product, BOUGHT.</td><td>Her sayfa görüntülemesinde bir üründen ya da müşteriden 2 veya 3 hop.</td><td>Score olarak count() kullanan openCypher pattern'i</td></tr>
+    <tr><td>Dolandırıcılık tespiti</td><td>Person, Card, Device, Address, USES, LIVES_AT.</td><td>Bir telefonu ya da adresi paylaşan hesap halkaları.</td><td>Path'ler ve ortak komşular (aşağıdaki görseller)</td></tr>
+    <tr><td>Sosyal ağlar</td><td>Person, FRIEND, FOLLOWS.</td><td>"Tanıyor olabileceğin kişiler" arkadaşların arkadaşlarıdır.</td><td>2-hop pattern'ler</td></tr>
+    <tr><td>Identity graph ve customer 360</td><td>Cookie, Device, Email, Account.</td><td>Bir kişinin birçok sistemdeki identifier'larını birleştir.</td><td>Connected component'ler</td></tr>
+    <tr><td>Knowledge graph</td><td>Kavramlar ve adlandırılmış ilişkiler.</td><td>Anlam hakkında sorular: "bu türdeki hastalıkları tedavi eden ilaçlar".</td><td>RDF ve SPARQL</td></tr>
+    <tr><td>Ağ ve IT operasyonları</td><td>Server, Switch, Service, DEPENDS_ON.</td><td>"Bu switch arızalanırsa hangi servisler çöker?"</td><td>Değişken uzunlukta path'ler</td></tr>
+    <tr><td>Tedarik zinciri</td><td>Supplier, Part, Product, SUPPLIES.</td><td>Geciken bir parçanın dokunduğu bütün ürünleri bul.</td><td>Çok hop'lu traversal'lar</td></tr>
+    <tr><td>Erişim hakları</td><td>User, Group, Role, Resource, MEMBER_OF.</td><td>"Bu kullanıcı herhangi bir grup üzerinden bu dosyaya ulaşabilir mi?"</td><td>İç içe gruplardan geçen path'ler</td></tr>
+  </tbody>
+</table>
+{{ k.fig("neptune-social-graph.png", "Neptune User Guide'dan bir sosyal graph. Justin, Anna'nın ve Alana'nın arkadaşıdır. Kitaplara ve filmlere giden edge'ler her kişinin neyi sevdiğini gösterir.") }}
+{{ k.fig("neptune-fraud-graph.png", "Neptune User Guide'dan bir dolandırıcılık graph'ı. Kişiler ortak kişisel bilgilerle bağlanır, örneğin bir adres ya da bir telefon numarası.") }}
+
+<h3>Neptune'den uzaklaştıran sinyaller</h3>
+<table class="data">
+  <thead><tr><th>İş yükündeki sinyal</th><th>Neptune neden zayıf bir seçim</th><th>Daha iyi seçim</th></tr></thead>
+  <tbody>
+    <tr><td>Bütün kayıtları tarayıp toplayan raporlar</td><td>Bir graph query'si vertex'lerden başlar. Bütün vertex'lerin taranması yavaştır.</td><td><a href="/e2etutorial/redshift">Redshift</a></td></tr>
+    <tr><td>Belirli table'lar ve kurallarla siparişler ve ödemeler</td><td>İlişkiler basittir ve değişmez. SQL bunu iyi yapar.</td><td><a href="/e2etutorial/aurora">Aurora</a></td></tr>
+    <tr><td>Sadece key ile tek bir kaydı okuma</td><td>Takip edilecek ilişki yok.</td><td><a href="/e2etutorial/dynamodb">DynamoDB</a></td></tr>
+    <tr><td>Serbest metin arama</td><td>Analyzer ya da relevance score yok.</td><td><a href="/e2etutorial/opensearch">OpenSearch</a></td></tr>
+    <tr><td>Zaman içinde metrikler</td><td>Zaman pencereleri ya da downsampling yok.</td><td><a href="/e2etutorial/influxdb">Timestream for InfluxDB</a></td></tr>
+  </tbody>
+</table>
+
+<h3>Bir mimarın sorduğu sorular, bu sırayla</h3>
+<ol>
+  <li><b>Soru ilişkilerin kendisi mi?</b> Cevap "X'ten Y'ye, oradan Z'ye git" diye okunuyorsa bir graph yardım eder. "Bütün X'leri topla" diye okunuyorsa etmez.</li>
+  <li><b>Kaç hop, ve sayı biliniyor mu?</b> Bilinen tek bir join SQL'de kolaydır. Üç ya da daha fazlası, ya da "herhangi bir sayı", bir graph'ı işaret eder.</li>
+  <li><b>Property graph mı, RDF mi?</b> Property'li uygulama verisi genellikle bir property graph kullanır (openCypher, Gremlin). Paylaşılan sözlükler RDF kullanır (SPARQL).</li>
+  <li><b>Source of truth nerede?</b> Bir öneri graph'ı çoğunlukla sipariş database'inin bir kopyasıdır. Bir dolandırıcılık graph'ı kaynağın kendisi olabilir.</li>
+  <li><b>İstek başına query'ler mi, bütün graph üzerinde algoritmalar mı?</b> İstek başına query'ler Neptune Database kullanır. Bütün graph üzerinde algoritmalar (PageRank, community'ler) Neptune Analytics'e oturur.</li>
+  <li><b>Trafik ne kadar sabit?</b> Sabit trafik provisioned instance'lar kullanır. Değişken trafik Neptune Serverless kullanabilir.</li>
+</ol>
+
+<h3>AWS'te Neptune ve akrabaları</h3>
+<table class="data">
+  <thead><tr><th>Seçenek</th><th>Nedir</th><th>Ne zaman seç</th></tr></thead>
+  <tbody>
+    <tr><td>Neptune Database</td><td>Ortak bir storage volume üzerinde bir writer ve en fazla 15 read replica'lı bir cluster.</td><td>İstek başına query'ler: öneriler, dolandırıcılık kontrolleri. Lale Market bunu kullanır.</td></tr>
+    <tr><td>Neptune Serverless</td><td>Kapasitesi yükle birlikte artıp azalan instance'larla Neptune Database.</td><td>Değişken ya da bilinmeyen trafik.</td></tr>
+    <tr><td>Neptune Analytics</td><td>Büyük graph'lar üzerinde algoritmalar ve vector search için bellek odaklı bir graph engine'i.</td><td>Bütün graph algoritmaları, GraphRAG.</td></tr>
+    <tr><td>Aurora'da recursive SQL</td><td>Bir edge table'ı üzerinde WITH RECURSIVE.</td><td>Küçük bir graph ve az sayıda derin query, ikinci bir sistem olmadan.</td></tr>
+  </tbody>
+</table>
+
+<h3>Lale Market'te Neptune'ün yeri</h3>
+<p>Siparişler sipariş database'inde yaşar. Seed her müşteriyi ve her ürünü Neptune'e bir vertex olarak kopyalar. Her sipariş satırını da müşteriden ürüne giden bir BOUGHT edge'i olarak kopyalar.
+   Ürün sayfası "birlikte alınanlar" ürünlerini Neptune'den okur. Admin sayfası "Customer graph" bir müşterinin komşularını çizer.
+   Bir ziyaretçi mağazada bir ürün aldığında Neptune Engine App hemen yeni BOUGHT edge'leri ekler. Sonraki öneri onları zaten içerir.</p>
+
+<h3>Simülasyon: gereksinimler seçsin</h3>
+{{ k.sim("decide_recs", "İş yükü 1: ürün sayfasındaki öneriler") }}
+{{ k.sim("decide_report", "İş yükü 2: aylık gelir raporu") }}
+
+{{ k.quiz("np-a1", "Bir banka her ödeme sırasında kartın bilinen bir dolandırıcılık hesabına en fazla dört adımda bağlı olup olmadığını bilmek istiyor. Adımlar ortak cihazlardan ya da adreslerden geçer. En iyi ne oturur?",
+   ["Kartlar, cihazlar ve adresler vertex olan Neptune", "Ortak cihazların gecelik raporuyla Redshift", "Kart numarası key olan DynamoDB", "Kart başına bir document ile OpenSearch"],
+   0, "Soru birkaç hop boyunca ilişkileri takip eder ve ödeme sırasında cevaplanmalıdır. Bu bir graph database'de bir traversal'dır.") }}
+{{ k.quiz("np-a2", "Bir ekip son iki yılın her ayı için kategori başına toplam satışları istiyor. Neptune neden zayıf bir seçim?",
+   ["Neptune sayı saklayamaz", "Rapor bütün kayıtları tarar ve toplar, bir graph query'si ise vertex'lerden başlar", "Neptune veriyi sadece yedi gün tutar", "Neptune'ün query dili yok"],
+   1, "Bir traversal az vertex okuduğu için hızlıdır. Her siparişi okuyan bir rapor bir taramadır. Bir columnar warehouse bunu iyi yapar.") }}
+
+<div class="part"><b>Bölüm 1</b><h2 id="part1" data-short="BÖLÜM 1: Property graph'lar">Property graph ve openCypher</h2>
+<p>Vertex'ler, edge'ler, pattern'ler, hop'lar ve path'ler.</p></div>
+
+<h2 id="why" data-short="Neden bir graph?"><span class="sec">02</span>Neden bir graph? Metro haritası</h2>
+<p>Bir table şeyleri row'larda saklar. İki row arasındaki bir ilişki bir kolondaki değerdir: sipariş satırında bir <code>customer_id</code> ve bir <code>product_id</code> vardır.
+   Bir ilişkiyi takip etmek için database değeri bir index'te arar ve iki row'u join'ler. Bir join ucuzdur. "Bana benzeyen müşteriler" gibi sorular aynı büyük table'ın üç join'ini ister, "herhangi bir adım sayısıyla bağlantılı" ise recursive bir query ister.</p>
+{% call k.callout("analogy", "Analoji") %}
+<p>Bir metro haritası istasyonları noktalar olarak, aralarındaki hatları da çizgiler olarak gösterir. Bir istasyondan diğerine gitmek için bütün istasyonların listesini okumazsın. Parmağını kendi istasyonuna koyar ve hatları takip edersin.
+   Bir graph database veriyi bu harita gibi saklar. İlişkiler, bir query'nin araması gereken değerler değil, takip edebileceği çizgilerdir.</p>
+{% endcall %}
+
+<h2 id="model" data-short="Vertex'ler ve edge'ler"><span class="sec">03</span>Property graph: vertex'ler, edge'ler, label'lar ve property'ler</h2>
+<p>Bir {{ k.term("property graph") }}'ın iki tür elemanı vardır:</p>
+<ul>
+  <li>Bir {{ k.term("vertex") }} (ya da "node") bir şeydir: bir müşteri, bir ürün. Bir label'ı vardır, örneğin <code>Customer</code>, ve property'leri vardır, örneğin <code>name</code>.</li>
+  <li>Bir {{ k.term("edge") }}, iki vertex arasındaki bir ilişkidir. Bir yönü, bir label'ı (örneğin <code>BOUGHT</code>) ve property'leri (örneğin <code>order_id</code> ve <code>qty</code>) vardır.</li>
+</ul>
+{{ k.fig("neptune-property-graph.png", "label'lı bir property graph. Person vertex'lerinin Book vertex'lerine WROTE ve PURCHASED edge'leri var. Her edge'in bir date property'si var.") }}
+<p>Bu sayfanın öğretici graph'ı budur. Dört müşteri ve beş ürün Lale Market'in gerçek kayıtlarıdır. On BOUGHT edge'i örnektir.</p>
+{{ k.sample("g_customers", "Customer vertex'leri", key=["~id"]) }}
+{{ k.sample("g_products", "Product vertex'leri", key=["~id"]) }}
+{{ k.sample("g_bought", "BOUGHT edge'leri", key=["~id"], ref=["~from", "~to"]) }}
+<p>Identifier'lar: her vertex'in ve her edge'in kendi <code>~id</code>'si vardır. Müşteri id'sinin sahibi mağazanın müşteri table'ıdır, ürün id'sinin sahibi ise katalogdur. Seed bu id'leri vertex'lerin <code>~id</code>'si olarak ödünç alır.
+   Bir edge müşteriyi kopyalamaz. Başlangıç vertex'inin <code>~id</code>'sini <code>~from</code>'da, bitiş vertex'inin <code>~id</code>'sini <code>~to</code>'da saklar. e1 edge'i C00001 müşterisine aittir ve P0001 ürününü gösterir.
+   <code>~id</code>, <code>~from</code>, <code>~to</code> ve <code>~label</code> kolon isimleri, Neptune bulk loader'ın CSV dosyalarında kullandığı isimlerdir.</p>
+{{ k.quiz("np-q1", "Edge table'ını kullan. P0175'i hangi müşteriler aldı?",
+   ["C00001 ve C00002", "C00002 ve C00003", "C00003 ve C00005", "Sadece C00002"],
+   1, "e5 ve e7 edge'lerinde ~to = P0175'tir. ~from değerleri C00002 ve C00003'tür.") }}
+
+<h2 id="pattern" data-short="Pattern'ler ve 2 hop"><span class="sec">04</span>openCypher pattern'leri: bir üründen iki hop</h2>
+<p>openCypher aradığı pattern'i parantezler ve oklarla çizer: <code>(a)-[:BOUGHT]->(b)</code>, "b vertex'ine BOUGHT edge'i olan bir a vertex'i" demektir.
+   Ürün sayfasının gerçek query'si budur (<code>engines/neptune.py</code> içinden):</p>
+{% call k.sql("Q1", "Bunu alanlar şunları da aldı") %}
+<pre><code>MATCH (p:Product {`~id`: $pid})&lt;-[:BOUGHT]-(c:Customer)-[:BOUGHT]-&gt;(rec:Product)
+WHERE rec &lt;&gt; p
+RETURN rec.`~id` AS product_id, rec.name AS name, rec.category AS category, count(DISTINCT c) AS score
+ORDER BY score DESC, product_id LIMIT 6</code></pre>
+<table class="clause">
+  <tr><td>MATCH (p:Product {`~id`: $pid})</td><td>Bir Product vertex'inden başla. <code>$pid</code> bir parametredir, örneğin P0001. Id araması bir index kullanır, bu yüzden tek bir vertex okur.</td></tr>
+  <tr><td>&lt;-[:BOUGHT]-(c:Customer)</td><td>Hop 1. Ürüne gelen BOUGHT edge'lerini takip et. Her biri onu alan bir <code>c</code> müşterisine götürür.</td></tr>
+  <tr><td>-[:BOUGHT]-&gt;(rec:Product)</td><td>Hop 2. Bu müşterilerin her birinden çıkan BOUGHT edge'lerini takip et. Her biri bir <code>rec</code> ürününe götürür.</td></tr>
+  <tr><td>WHERE rec &lt;&gt; p</td><td>Başlangıç ürününü önerme.</td></tr>
+  <tr><td>count(DISTINCT c) AS score</td><td>Her <code>rec</code> ürünü için ona ulaşan farklı müşterileri say. Daha çok ortak alıcı daha yüksek score verir.</td></tr>
+  <tr><td>ORDER BY score DESC, product_id LIMIT 6</td><td>En iyi altı ürünü döndür. Eşit score'larda sırayı ürün id'si belirler.</td></tr>
+</table>
+{% endcall %}
+{% call k.predict("Edge table'ını kullan. Q1, P0001 için hangi ürünleri, hangi score'larla döndürür?") %}
+<p>P0001'in alıcıları C00001, C00002 ve C00003'tür. Diğer ürünleri P0016 (C00001 ve C00002), P0175 (C00002 ve C00003) ve P0044'tür (C00003). Yani P0016 ve P0175 score 2, P0044 score 1 alır.</p>
+{% endcall %}
+{{ k.sim("hop2", "P0001'den iki hop") }}
+<p>"Okunan edge" sayacına bak. Traversal başlangıç vertex'inin yakınındaki edge'leri okur. Zeynep Şahin'in edge'lerini okumaz, çünkü P0001'den hiçbir yol ona ulaşmaz.
+   Graph büyüdüğünde bir graph query'sinin hızlı kalmasının nedeni budur. Maliyeti ziyaret ettiği komşulara bağlıdır, toplam vertex sayısına değil.</p>
+
+<h2 id="hop3" data-short="Üç hop, kişisel"><span class="sec">05</span>Üç hop: kişisel bir öneri</h2>
+<p>Ürün sayfası her ziyaretçi için çalışır. Kişisel bir öneri ise müşteriden başlar ve bir hop daha ileri gider: benim ürünlerim, ürünlerimin diğer alıcıları ve onların diğer ürünleri.</p>
+{% call k.sql("Q2", "Bana benzeyen müşterilerin aldığı ürünler") %}
+<pre><code>MATCH (me:Customer {`~id`: $cid})-[:BOUGHT]-&gt;(:Product)&lt;-[:BOUGHT]-(o:Customer)-[:BOUGHT]-&gt;(rec:Product)
+WHERE o &lt;&gt; me AND NOT (me)-[:BOUGHT]-&gt;(rec)
+RETURN rec.`~id` AS product_id, rec.name AS name, rec.category AS category, count(DISTINCT o) AS score
+ORDER BY score DESC, product_id LIMIT 6</code></pre>
+<table class="clause">
+  <tr><td>(me:Customer {`~id`: $cid})-[:BOUGHT]-&gt;(:Product)</td><td>Hop 1. Benim aldığım ürünler. Query onu döndürmediği için product vertex'inin query'de bir ismi yok.</td></tr>
+  <tr><td>&lt;-[:BOUGHT]-(o:Customer)</td><td>Hop 2. Aynı ürünleri alan diğer <code>o</code> müşterileri.</td></tr>
+  <tr><td>-[:BOUGHT]-&gt;(rec:Product)</td><td>Hop 3. Bu müşterilerin aldığı ürünler.</td></tr>
+  <tr><td>WHERE o &lt;&gt; me</td><td>Ben "bana benzeyen bir müşteri" değilim.</td></tr>
+  <tr><td>AND NOT (me)-[:BOUGHT]-&gt;(rec)</td><td>Zaten aldığım bir ürünü önerme. Bu, koşul olarak kullanılan bir pattern'dir.</td></tr>
+  <tr><td>count(DISTINCT o) AS score</td><td>Ürünü alan benzer müşterilerin sayısı.</td></tr>
+</table>
+{% endcall %}
+{{ k.sim("hop3", "Ayşe Yılmaz'dan (C00001) üç hop") }}
+{{ k.quiz("np-q2", "Yeni bir ziyaretçinin hiç BOUGHT edge'i yok. Q2 bu ziyaretçi için ne döndürür?",
+   ["En çok satan altı ürünü", "Hiçbir şey, çünkü hop 1 hiçbir ürün bulamaz", "Graph'taki bütün ürünleri", "Bir hata, çünkü vertex'in edge'i yok"],
+   1, "Pattern ilk hop'tan itibaren eşleşmelidir. BOUGHT edge'i olmadan hop 1 hiçbir şey bulmaz, bu yüzden hiçbir row çıkmaz. Mağaza bu ziyaretçiler için Q1'i kullanır.") }}
+
+<h2 id="paths" data-short="Her uzunlukta path'ler"><span class="sec">06</span>Her uzunlukta path'ler</h2>
+<p>Bazı sorular hop sayısını bilmez. "Bu hesap bir dolandırıcılık hesabına bağlı mı?" iki hop da isteyebilir, altı hop da. openCypher değişken bir uzunluğu bir yıldızla yazar:</p>
+{% call k.sql("Q3", "İki müşteri arasındaki en kısa bağlantı") %}
+<pre><code>MATCH path = shortestPath((a:Customer {`~id`: 'C00005'})-[:BOUGHT*..6]-(b:Customer {`~id`: 'C00001'}))
+RETURN [n IN nodes(path) | n.`~id`] AS ids, length(path) AS hops</code></pre>
+<table class="clause">
+  <tr><td>-[:BOUGHT*..6]-</td><td>1'den 6'ya kadar BOUGHT edge'i takip et. Ok başı yok, bu yüzden query edge'leri iki yönde de takip eder.</td></tr>
+  <tr><td>shortestPath(...)</td><td>En az hop'lu path'i döndür.</td></tr>
+  <tr><td>nodes(path), length(path)</td><td>Path üzerindeki vertex'ler ve edge sayısı.</td></tr>
+</table>
+{% endcall %}
+<p>Simülasyon en kısa path'in arkasındaki fikri gösterir: bir breadth-first search. Önce 1 uzaklıktaki bütün vertex'leri, sonra 2 uzaklıktakileri ziyaret eder ve hedefi bulduğu seviyede durur.</p>
+{{ k.sim("path", "Zeynep Şahin'den Ayşe Yılmaz'a") }}
+<p>Aynı query, Neptune'ün diğer property-graph dili Gremlin'de bir adımlar zinciridir. Neptune, Gremlin'i ve openCypher'ı aynı property-graph verisi üzerinde çalıştırır
+   (<a href="https://docs.aws.amazon.com/neptune/latest/userguide/get-started-access-graph.html">Accessing graph data in Neptune</a>):</p>
+{% call k.sql("Q4", "Gremlin'de Q1") %}
+<pre><code>g.V('P0001').as('p').in('BOUGHT').out('BOUGHT').
+  where(neq('p')).groupCount().by(id).
+  order(local).by(values, desc).limit(local, 6)</code></pre>
+<table class="clause">
+  <tr><td>g.V('P0001').as('p')</td><td>P0001 id'li vertex'ten başla ve ona <code>p</code> step label'ını ver.</td></tr>
+  <tr><td>.in('BOUGHT').out('BOUGHT')</td><td>Edge yönünün tersine hop 1, sonra edge yönünde hop 2.</td></tr>
+  <tr><td>.where(neq('p'))</td><td><code>p</code> step label'ına, yani başlangıç ürününe eşit olan vertex'i at.</td></tr>
+  <tr><td>.groupCount().by(id)</td><td>Her ürünün kaç kez göründüğünü say. Bu farklı müşterileri değil, path'leri sayar. Bir müşteri bir ürünü iki kez aldıysa Q1 müşteriyi bir kez sayar, bu query ise iki path sayar.</td></tr>
+  <tr><td>.order(local)...limit(local, 6)</td><td>Sayıları en yüksek önce sırala ve altısını tut.</td></tr>
+</table>
+{% endcall %}
+
+<h2 id="sql" data-short="Aynı soru SQL'de"><span class="sec">07</span>Aynı soru SQL'de</h2>
+<p>Bir relational database Q1'i sipariş satırlarının bir self-join'i ile cevaplayabilir. Her hop, FROM clause'unda table'ın bir kopyası daha demektir:</p>
+{% call k.sql("Q5", "SQL'de Q1") %}
+<pre><code>SELECT b.product_id, count(DISTINCT b.customer_id) AS score
+FROM   bought a
+JOIN   bought b ON b.customer_id = a.customer_id
+WHERE  a.product_id = 'P0001' AND b.product_id &lt;&gt; 'P0001'
+GROUP  BY b.product_id
+ORDER  BY score DESC, b.product_id LIMIT 6;</code></pre>
+<table class="clause">
+  <tr><td>FROM bought a ... WHERE a.product_id = 'P0001'</td><td>Hop 1: P0001 alıcılarının row'ları.</td></tr>
+  <tr><td>JOIN bought b ON b.customer_id = a.customer_id</td><td>Hop 2: bu alıcıların bütün row'ları. Bu bir self-join'dir, yani bir table'ın kendisiyle join'i.</td></tr>
+  <tr><td>GROUP BY ... count(DISTINCT ...)</td><td>Q1'deki gibi score.</td></tr>
+</table>
+{% endcall %}
+<p>İki hop için bu SQL iyidir ve doğru index'lerle hızlıdır. Fark derinlikle büyür. Üç hop table'ın üçüncü bir kopyasını, "herhangi bir sayıda hop" ise WITH RECURSIVE ister.
+   Her ek hop planın ortasındaki row'ları çoğaltır. Bir graph database edge'leri öyle saklar ki bir sonraki hop doğrudan son hop'un ulaştığı vertex'ten başlar.</p>
+{{ k.quiz("np-q3", "Bir graph traversal'ının maliyeti neden graph'ın toplam boyutuyla büyümez?",
+   ["Neptune bütün graph'ları bellekte tutar", "Bir traversal sadece ulaştığı vertex'lerin edge'lerini okur", "Neptune her graph'ı bir milyon edge ile sınırlar", "openCypher query'leri edge okumaz"],
+   1, "Traversal bir vertex'ten başlar ve onun edge'lerini takip eder. Hiçbir path'in ulaşmadığı vertex'lerin maliyeti yoktur.") }}
+
+<div class="part"><b>Bölüm 2</b><h2 id="part2" data-short="BÖLÜM 2: Amazon Neptune">Amazon Neptune: AWS servisi</h2>
+<p>Bir cluster, ortak bir storage volume ve üç query dili.</p></div>
+
+<h2 id="service" data-short="Neptune cluster'ı"><span class="sec">08</span>Neptune cluster'ı ve AWS'in çalıştırdıkları</h2>
+<p>Bir Neptune DB cluster'ında bir primary instance ve en fazla 15 read replica vardır
+   (<a href="https://docs.aws.amazon.com/prescriptive-guidance/latest/neptune-well-architected-framework/reliability-pillar.html">Neptune reliability pillar</a>).
+   Primary instance okur ve yazar. Replica'lar sadece okur. Bütün instance'lar aynı cluster volume'u kullanır.
+   Neptune verinin kopyalarını üç Availability Zone'da tutar ve replikasyon miktarı instance sayısına bağlı değildir
+   (<a href="https://docs.aws.amazon.com/neptune/latest/userguide/storage.html">Neptune storage</a>).
+   Yeni bir replica zaten var olan volume'a bağlandığı için Neptune onu eklemek için graph'ı kopyalamaz.</p>
+<p>Primary instance arızalandığında Neptune bir replica'yı primary yapar. Kılavuza göre kesinti "generally less than 30 seconds", yani genellikle 30 saniyeden azdır.</p>
+<p>Bir cluster hem property-graph verisini hem RDF verisini saklayabilir. Neptune'ün bir Gremlin endpoint'i, bir openCypher endpoint'i ve bir SPARQL endpoint'i vardır.
+   Gremlin ve openCypher aynı property-graph verisini okur. SPARQL sadece RDF verisini okur (<a href="https://aws.amazon.com/neptune/faqs/">Neptune FAQs</a>).</p>
+<table class="data">
+  <thead><tr><th>Görev</th><th>Kendi graph database'in</th><th>Amazon Neptune</th></tr></thead>
+  <tbody>
+    <tr><td>Storage ve kopyalar</td><td>Diskleri ve replikasyonu sen planlarsın.</td><td>Üç Availability Zone'da kopyalar. Neptune bozuk bir kopyayı otomatik olarak değiştirir.</td></tr>
+    <tr><td>Okuma kapasitesi</td><td>Sunucu ekler ve veriyi kopyalarsın.</td><td>Aynı volume üzerinde en fazla 15 replica.</td></tr>
+    <tr><td>Failover</td><td>Sen kurar ve test edersin.</td><td>Bir replica'nın otomatik olarak primary yapılması.</td></tr>
+    <tr><td>Yedekler</td><td>Sen zamanlarsın.</td><td>Otomatik yedekler ve point-in-time restore.</td></tr>
+    <tr><td>Erişim</td><td>Şifreler ya da plugin'ler.</td><td>IAM database authentication (SigV4), sadece VPC.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="lalemarket" data-short="Lale Market'te Neptune"><span class="sec">09</span>Lale Market'te Neptune</h2>
+<ul>
+  <li>Data subnet'lerinde bir Neptune cluster'ı. Neptune Engine App cluster endpoint'ine HTTPS port 8182 üzerinden bağlanır.</li>
+  <li>Engine App her request'i kendi IAM role'ü ile imzalar (SigV4, servis adı <code>neptune-db</code>). Şifre yoktur.</li>
+  <li>Seed graph'ı siler, Customer ve Product vertex'lerini oluşturur ve iptal edilmemiş her sipariş satırı için bir BOUGHT edge'i oluşturur. Edge'leri <code>UNWIND</code> ile 500'lük gruplar hâlinde gönderir.</li>
+  <li>Ürün sayfası Q1'i çalıştırır. Persona önerileri Q2'yi çalıştırır. Admin sayfası "Customer graph" bir müşterinin komşularını çizer.</li>
+  <li>Mağazadaki bir satın alma, order id'si W ile başlayan yeni BOUGHT edge'leri oluşturur. Reset sadece bu edge'leri siler.</li>
+</ul>
+
+<h2 id="recall" data-short="Hatırlama testi"><span class="sec">10</span>Hatırlama testi</h2>
+{{ k.quiz("np-r1", "Lale Market'in property graph'ında bir edge müşterisi hakkında ne saklar?",
+   ["İsmin ve şehrin bir kopyasını", "~from içinde müşteri vertex'inin ~id'sini", "Sipariş toplamını", "Hiçbir şey, çünkü edge'lerin başlangıç vertex'i yoktur"],
+   1, "Edge, başlangıç ve bitiş vertex'lerinin ~id'sini saklar. Müşteri verisi vertex'te kalır.") }}
+{{ k.quiz("np-r2", "Q2'de NOT (me)-[:BOUGHT]->(rec) ne yapar?",
+   ["Zaten aldığım ürünleri atar", "Hiçbir şey almamış müşterileri atar", "Edge'lerin yönünü tersine çevirir", "BOUGHT edge'lerini siler"],
+   0, "WHERE içindeki bir pattern bir koşuldur. NOT, sadece benden BOUGHT edge'i olmayan ürünleri tutar.") }}
+{{ k.quiz("np-r3", "Neptune neden hızlıca bir read replica ekleyebilir?",
+   ["Replica graph'ı daha sonra arka planda kopyalar", "Replica, veriyi zaten tutan cluster volume'a bağlanır", "Replica'lar veri saklamaz", "Neptune replica'yı eklerken yazmaları durdurur"],
+   1, "Veri ortak cluster volume'da yaşar. Yeni bir replica sadece ona bağlanır.") }}
+
+<section class="lesson-foot">
+  <h2>Daha derine in</h2>
+  <p><b>Ana kaynak:</b> <a href="https://docs.aws.amazon.com/neptune/latest/userguide/graph-get-started.html">Getting started with Amazon Neptune</a>, sonra
+     <a href="https://opencypher.org/">openCypher projesi</a>.</p>
+  <p><b>Mağazada kullan:</b> bir <a href="/free-e-commerce-app/p/P0001">ürün sayfası</a> aç ve "birlikte alınanlar"a bak. Admin sayfası <a href="/free-e-commerce-app/admin/graph">Customer graph</a> bir müşterinin komşularını çizer.</p>
+  <p><b>Soru sor.</b> Bir kısım net değilse eğitmenine ya da AI asistanına sor. Projenden ilişkileri takip eden bir soru getir ve onun graph'ını birlikte çizin.</p>
+</section>
+{% endblock %}

@@ -1,0 +1,280 @@
+{% extends "e2e/_base.html" %}
+{% import "e2e/_macros.html" as k with context %}
+{% block body %}
+
+<h2 id="goal" data-short="What you will learn"><span class="sec">00</span>What you will learn, and how to use this page</h2>
+<p>Section 01 gives the architect's decision: where Amazon Neptune fits and where it does not. Then the tutorial has two parts.
+   Part 1 teaches the property graph model and the query language openCypher: vertices, edges, patterns, hops and paths. Part 2 shows the AWS service and how Lale Market uses it.</p>
+<p>The examples come from the "bought together" recommendations of Lale Market. Sometimes a different example makes an idea easier to see. Then the tutorial uses it: a subway map, a family tree, the friends of your friends.</p>
+<p>After this tutorial, you can do these tasks:</p>
+<ol>
+  <li>Say for which workloads a graph database is the right choice, and for which it is not.</li>
+  <li>Draw a small property graph with vertices, edges, labels and properties.</li>
+  <li>Read an openCypher pattern and follow it hop by hop on a drawing.</li>
+  <li>Explain why the cost of a traversal depends on the neighbours, not on the size of the graph.</li>
+  <li>Compare a graph traversal with the same question in SQL.</li>
+  <li>Explain what Neptune runs for you: storage, replicas and the query endpoints.</li>
+</ol>
+<p>Four kinds of boxes help you. <b>Simulation</b>: press Play or Next step. <b>Predict first</b>: write your answer before you open it.
+   <b>Checkpoint</b>: a question with one right answer. <b>Analogy</b>: a picture from daily life.</p>
+
+<h2 id="architect" data-short="Architect's view: when to use"><span class="sec">01</span>The architect's view: where Neptune fits</h2>
+<p><b>Read this section first.</b> It gives the decision. The sections after it teach how a graph works.</p>
+<p><b>In short:</b> Amazon Neptune is a managed graph database. It stores things (vertices) and the relations between them (edges) as data of the same importance.
+   It answers questions that follow relations: "who bought what", "who knows whom", "how are these two accounts connected". Select it when the relations are the question, and when the number of hops is large or unknown.</p>
+<p>The key idea is the {{ k.term("traversal") }}: a query starts at one vertex and walks along its edges. It reads only the part of the graph that it walks through.</p>
+
+<h3>Signals in a workload that point to Neptune</h3>
+<table class="data">
+  <thead><tr><th>Signal</th><th>What it looks like in a real project</th><th>The feature that answers it</th></tr></thead>
+  <tbody>
+    <tr><td>The question follows relations</td><td>"Customers who bought this also bought", "friends of friends".</td><td>Patterns over vertices and edges (sections 03 and 04)</td></tr>
+    <tr><td>The number of hops is unknown</td><td>"Is this account connected to a known fraud account, in any number of steps?"</td><td>Variable-length paths (section 06)</td></tr>
+    <tr><td>Answers per request, in milliseconds</td><td>A recommendation on each product page, a fraud check during a payment.</td><td>A traversal reads only the neighbours (section 04)</td></tr>
+    <tr><td>Many kinds of relations</td><td>A person owns a card, uses a device, lives at an address, works for a company.</td><td>Edge labels and properties (section 03)</td></tr>
+    <tr><td>The schema changes often</td><td>New kinds of things and relations every month.</td><td>A new label needs no table change</td></tr>
+    <tr><td>Knowledge with meaning</td><td>A medical vocabulary, a product taxonomy, linked open data.</td><td>RDF and SPARQL (section 08)</td></tr>
+  </tbody>
+</table>
+
+<h3>Use cases, with the reason and the feature</h3>
+<table class="data">
+  <thead><tr><th>Use case</th><th>Vertices and edges</th><th>Why a graph</th><th>The feature that does the work</th></tr></thead>
+  <tbody>
+    <tr><td>Recommendations (Lale Market)</td><td>Customer, Product, BOUGHT.</td><td>2 or 3 hops from a product or a customer, per page view.</td><td>openCypher pattern with count() as score</td></tr>
+    <tr><td>Fraud detection</td><td>Person, Card, Device, Address, USES, LIVES_AT.</td><td>Rings of accounts that share a phone or an address.</td><td>Paths and shared neighbours (images below)</td></tr>
+    <tr><td>Social networks</td><td>Person, FRIEND, FOLLOWS.</td><td>"People you may know" are friends of friends.</td><td>2-hop patterns</td></tr>
+    <tr><td>Identity graph and customer 360</td><td>Cookie, Device, Email, Account.</td><td>Join the identifiers of one person from many systems.</td><td>Connected components</td></tr>
+    <tr><td>Knowledge graph</td><td>Concepts and named relations.</td><td>Questions about meaning: "drugs that treat diseases of this kind".</td><td>RDF and SPARQL</td></tr>
+    <tr><td>Network and IT operations</td><td>Server, Switch, Service, DEPENDS_ON.</td><td>"Which services fail if this switch fails?"</td><td>Variable-length paths</td></tr>
+    <tr><td>Supply chain</td><td>Supplier, Part, Product, SUPPLIES.</td><td>Find all products that a late part touches.</td><td>Multi-hop traversals</td></tr>
+    <tr><td>Access rights</td><td>User, Group, Role, Resource, MEMBER_OF.</td><td>"Can this user reach this file through any group?"</td><td>Paths through nested groups</td></tr>
+  </tbody>
+</table>
+{{ k.fig("neptune-social-graph.png", "a social graph from the Neptune User Guide. Justin is a friend of Anna and Alana. The edges to books and movies show what each person likes.") }}
+{{ k.fig("neptune-fraud-graph.png", "a fraud graph from the Neptune User Guide. People connect through shared personal information, for example an address or a phone number.") }}
+
+<h3>Signals that point away from Neptune</h3>
+<table class="data">
+  <thead><tr><th>Signal in the workload</th><th>Why Neptune is a weak fit</th><th>Better choice</th></tr></thead>
+  <tbody>
+    <tr><td>Reports that scan and sum all records</td><td>A graph query starts at vertices. A scan of all vertices is slow.</td><td><a href="/e2etutorial/redshift">Redshift</a></td></tr>
+    <tr><td>Orders and payments with set tables and rules</td><td>The relations are simple and do not change. SQL does this well.</td><td><a href="/e2etutorial/aurora">Aurora</a></td></tr>
+    <tr><td>Lookup of one item by its key only</td><td>No relation to follow.</td><td><a href="/e2etutorial/dynamodb">DynamoDB</a></td></tr>
+    <tr><td>Free-text search</td><td>No analyzers or relevance scores.</td><td><a href="/e2etutorial/opensearch">OpenSearch</a></td></tr>
+    <tr><td>Metrics over time</td><td>No time windows or downsampling.</td><td><a href="/e2etutorial/influxdb">Timestream for InfluxDB</a></td></tr>
+  </tbody>
+</table>
+
+<h3>The questions that an architect asks, in this order</h3>
+<ol>
+  <li><b>Are the relations the question?</b> If the answer reads "follow X to Y to Z", a graph helps. If it reads "sum all X", it does not.</li>
+  <li><b>How many hops, and is the number known?</b> One known join is easy in SQL. Three or more, or "any number", points to a graph.</li>
+  <li><b>Property graph or RDF?</b> Application data with properties usually uses a property graph (openCypher, Gremlin). Shared vocabularies use RDF (SPARQL).</li>
+  <li><b>Where is the source of truth?</b> A recommendation graph is often a copy of the order database. A fraud graph can be the source.</li>
+  <li><b>Per-request queries or whole-graph algorithms?</b> Per-request queries use Neptune Database. Algorithms over the whole graph (PageRank, communities) fit Neptune Analytics.</li>
+  <li><b>How steady is the traffic?</b> Steady traffic uses provisioned instances. Variable traffic can use Neptune Serverless.</li>
+</ol>
+
+<h3>Neptune and its relatives on AWS</h3>
+<table class="data">
+  <thead><tr><th>Option</th><th>What it is</th><th>Choose it when</th></tr></thead>
+  <tbody>
+    <tr><td>Neptune Database</td><td>A cluster with one writer and up to 15 read replicas on a shared storage volume.</td><td>Queries per request: recommendations, fraud checks. Lale Market uses it.</td></tr>
+    <tr><td>Neptune Serverless</td><td>Neptune Database with instances that scale capacity up and down with the load.</td><td>Variable or unknown traffic.</td></tr>
+    <tr><td>Neptune Analytics</td><td>A memory-optimized graph engine for algorithms and vector search over large graphs.</td><td>Whole-graph algorithms, GraphRAG.</td></tr>
+    <tr><td>Recursive SQL in Aurora</td><td>WITH RECURSIVE over a table of edges.</td><td>A small graph and few deep queries, with no second system.</td></tr>
+  </tbody>
+</table>
+
+<h3>Where Neptune sits in Lale Market</h3>
+<p>The orders live in the order database. The Seed copies each customer and each product into Neptune as a vertex. It also copies each order line as a BOUGHT edge from the customer to the product.
+   The product page reads "bought together" products from Neptune. The admin page "Customer graph" draws the neighbours of one customer.
+   When a visitor buys a product in the shop, the Neptune Engine App adds new BOUGHT edges at once. The next recommendation already includes them.</p>
+
+<h3>Simulation: let the requirements choose</h3>
+{{ k.sim("decide_recs", "Workload 1: recommendations on the product page") }}
+{{ k.sim("decide_report", "Workload 2: the monthly revenue report") }}
+
+{{ k.quiz("np-a1", "A bank wants to know, during each payment, if the card connects to a known fraud account in up to four steps. The steps go through shared devices or addresses. What fits best?",
+   ["Neptune, with cards, devices and addresses as vertices", "Redshift, with a nightly report of shared devices", "DynamoDB, with the card number as the key", "OpenSearch, with a document per card"],
+   0, "The question follows relations over several hops, and it must answer during the payment. That is a traversal in a graph database.") }}
+{{ k.quiz("np-a2", "A team wants the total sales per category for each month of the last two years. Why is Neptune a weak fit?",
+   ["Neptune cannot store numbers", "The report scans and sums all records, and a graph query starts at vertices", "Neptune keeps data only for seven days", "Neptune has no query language"],
+   1, "A traversal is fast because it reads few vertices. A report that reads every order is a scan. A columnar warehouse does that well.") }}
+
+<div class="part"><b>Part 1</b><h2 id="part1" data-short="PART 1: Property graphs">The property graph and openCypher</h2>
+<p>Vertices, edges, patterns, hops and paths.</p></div>
+
+<h2 id="why" data-short="Why a graph?"><span class="sec">02</span>Why a graph? The subway map</h2>
+<p>A table stores things in rows. A relation between two rows is a value in a column: the order line has a <code>customer_id</code> and a <code>product_id</code>.
+   To follow a relation, the database looks up the value in an index and joins the two rows. One join is cheap. Questions like "customers like me" need three joins of the same large table, and "connected in any number of steps" needs a recursive query.</p>
+{% call k.callout("analogy", "Analogy") %}
+<p>A subway map shows stations as points and the lines between them. To go from one station to another, you do not read the list of all stations. You put your finger on your station and follow the lines.
+   A graph database stores data like this map. The relations are lines that a query can follow, not values that it must look up.</p>
+{% endcall %}
+
+<h2 id="model" data-short="Vertices and edges"><span class="sec">03</span>The property graph: vertices, edges, labels and properties</h2>
+<p>A {{ k.term("property graph") }} has two kinds of elements:</p>
+<ul>
+  <li>A {{ k.term("vertex") }} (also "node") is a thing: a customer, a product. It has a label, for example <code>Customer</code>, and properties, for example <code>name</code>.</li>
+  <li>An {{ k.term("edge") }} is a relation between two vertices. It has a direction, a label, for example <code>BOUGHT</code>, and properties, for example <code>order_id</code> and <code>qty</code>.</li>
+</ul>
+{{ k.fig("neptune-property-graph.png", "a labeled property graph. Person vertices have WROTE and PURCHASED edges to Book vertices. Each edge has a date property.") }}
+<p>This is the teaching graph of this page. The four customers and five products are real records of Lale Market. The ten BOUGHT edges are examples.</p>
+{{ k.sample("g_customers", "Customer vertices", key=["~id"]) }}
+{{ k.sample("g_products", "Product vertices", key=["~id"]) }}
+{{ k.sample("g_bought", "BOUGHT edges", key=["~id"], ref=["~from", "~to"]) }}
+<p>Identifiers: each vertex and each edge has its own <code>~id</code>. The customer table of the shop owns the customer id, and the catalog owns the product id. The Seed borrows these ids as the <code>~id</code> of the vertices.
+   An edge does not copy the customer. It stores the <code>~id</code> of its start vertex in <code>~from</code> and the <code>~id</code> of its end vertex in <code>~to</code>. The edge e1 belongs to the customer C00001 and points to the product P0001.
+   The column names <code>~id</code>, <code>~from</code>, <code>~to</code> and <code>~label</code> are the names that the Neptune bulk loader uses in CSV files.</p>
+{{ k.quiz("np-q1", "Use the edge table. Which customers bought P0175?",
+   ["C00001 and C00002", "C00002 and C00003", "C00003 and C00005", "Only C00002"],
+   1, "The edges e5 and e7 have ~to = P0175. Their ~from values are C00002 and C00003.") }}
+
+<h2 id="pattern" data-short="Patterns and 2 hops"><span class="sec">04</span>openCypher patterns: two hops from a product</h2>
+<p>openCypher draws the pattern that it looks for with brackets and arrows: <code>(a)-[:BOUGHT]->(b)</code> means "a vertex a with a BOUGHT edge to a vertex b".
+   This is the real query of the product page (from <code>engines/neptune.py</code>):</p>
+{% call k.sql("Q1", "Customers who bought this also bought") %}
+<pre><code>MATCH (p:Product {`~id`: $pid})&lt;-[:BOUGHT]-(c:Customer)-[:BOUGHT]-&gt;(rec:Product)
+WHERE rec &lt;&gt; p
+RETURN rec.`~id` AS product_id, rec.name AS name, rec.category AS category, count(DISTINCT c) AS score
+ORDER BY score DESC, product_id LIMIT 6</code></pre>
+<table class="clause">
+  <tr><td>MATCH (p:Product {`~id`: $pid})</td><td>Start at one Product vertex. <code>$pid</code> is a parameter, for example P0001. The id lookup uses an index, so it reads one vertex.</td></tr>
+  <tr><td>&lt;-[:BOUGHT]-(c:Customer)</td><td>Hop 1. Follow the BOUGHT edges that come into the product. Each one leads to a customer <code>c</code> who bought it.</td></tr>
+  <tr><td>-[:BOUGHT]-&gt;(rec:Product)</td><td>Hop 2. From each of these customers, follow the BOUGHT edges that go out. Each one leads to a product <code>rec</code>.</td></tr>
+  <tr><td>WHERE rec &lt;&gt; p</td><td>Do not recommend the start product.</td></tr>
+  <tr><td>count(DISTINCT c) AS score</td><td>For each product <code>rec</code>, count the different customers who reach it. More shared buyers give a higher score.</td></tr>
+  <tr><td>ORDER BY score DESC, product_id LIMIT 6</td><td>Return the six best products. For equal scores, the product id sets the order.</td></tr>
+</table>
+{% endcall %}
+{% call k.predict("Use the edge table. Which products does Q1 return for P0001, and with which scores?") %}
+<p>The buyers of P0001 are C00001, C00002 and C00003. Their other products are P0016 (C00001 and C00002), P0175 (C00002 and C00003) and P0044 (C00003). So P0016 and P0175 get score 2, and P0044 gets score 1.</p>
+{% endcall %}
+{{ k.sim("hop2", "Two hops from P0001") }}
+<p>Look at the counter "edges read". The traversal reads the edges near its start vertex. It does not read the edges of Zeynep Şahin, because no path from P0001 reaches her.
+   This is why a graph query stays fast when the graph grows. Its cost depends on the neighbours that it visits, not on the total number of vertices.</p>
+
+<h2 id="hop3" data-short="Three hops, personal"><span class="sec">05</span>Three hops: a personal recommendation</h2>
+<p>The product page works for every visitor. A personal recommendation starts at the customer instead and goes one hop further: my products, other buyers of my products, and their other products.</p>
+{% call k.sql("Q2", "Products that customers like me bought") %}
+<pre><code>MATCH (me:Customer {`~id`: $cid})-[:BOUGHT]-&gt;(:Product)&lt;-[:BOUGHT]-(o:Customer)-[:BOUGHT]-&gt;(rec:Product)
+WHERE o &lt;&gt; me AND NOT (me)-[:BOUGHT]-&gt;(rec)
+RETURN rec.`~id` AS product_id, rec.name AS name, rec.category AS category, count(DISTINCT o) AS score
+ORDER BY score DESC, product_id LIMIT 6</code></pre>
+<table class="clause">
+  <tr><td>(me:Customer {`~id`: $cid})-[:BOUGHT]-&gt;(:Product)</td><td>Hop 1. The products that I bought. The product vertex has no name in the query, because the query does not return it.</td></tr>
+  <tr><td>&lt;-[:BOUGHT]-(o:Customer)</td><td>Hop 2. Other customers <code>o</code> who bought the same products.</td></tr>
+  <tr><td>-[:BOUGHT]-&gt;(rec:Product)</td><td>Hop 3. The products that these customers bought.</td></tr>
+  <tr><td>WHERE o &lt;&gt; me</td><td>I am not a "customer like me".</td></tr>
+  <tr><td>AND NOT (me)-[:BOUGHT]-&gt;(rec)</td><td>Do not recommend a product that I bought already. This is a pattern used as a condition.</td></tr>
+  <tr><td>count(DISTINCT o) AS score</td><td>The number of similar customers who bought the product.</td></tr>
+</table>
+{% endcall %}
+{{ k.sim("hop3", "Three hops from Ayşe Yılmaz (C00001)") }}
+{{ k.quiz("np-q2", "A new visitor has no BOUGHT edges. What does Q2 return for this visitor?",
+   ["The six best-selling products", "Nothing, because hop 1 finds no product", "All products in the graph", "An error, because the vertex has no edges"],
+   1, "The pattern must match from the first hop. With no BOUGHT edges, hop 1 finds nothing, so no row comes out. The shop uses Q1 for such visitors.") }}
+
+<h2 id="paths" data-short="Paths of any length"><span class="sec">06</span>Paths of any length</h2>
+<p>Some questions do not know the number of hops. "Is this account connected to a fraud account?" can need two hops or six. openCypher writes a variable length with a star:</p>
+{% call k.sql("Q3", "The shortest connection between two customers") %}
+<pre><code>MATCH path = shortestPath((a:Customer {`~id`: 'C00005'})-[:BOUGHT*..6]-(b:Customer {`~id`: 'C00001'}))
+RETURN [n IN nodes(path) | n.`~id`] AS ids, length(path) AS hops</code></pre>
+<table class="clause">
+  <tr><td>-[:BOUGHT*..6]-</td><td>Follow from 1 to 6 BOUGHT edges. There is no arrow head, so the query follows the edges in both directions.</td></tr>
+  <tr><td>shortestPath(...)</td><td>Return the path with the smallest number of hops.</td></tr>
+  <tr><td>nodes(path), length(path)</td><td>The vertices on the path, and the number of edges.</td></tr>
+</table>
+{% endcall %}
+<p>The simulation shows the idea behind a shortest path: a breadth-first search. It visits all vertices at distance 1, then all at distance 2, and it stops at the level where it finds the target.</p>
+{{ k.sim("path", "From Zeynep Şahin to Ayşe Yılmaz") }}
+<p>The same query in Gremlin, the other property-graph language of Neptune, is a chain of steps. Neptune runs Gremlin and openCypher on the same property-graph data
+   (<a href="https://docs.aws.amazon.com/neptune/latest/userguide/get-started-access-graph.html">Accessing graph data in Neptune</a>):</p>
+{% call k.sql("Q4", "Q1 in Gremlin") %}
+<pre><code>g.V('P0001').as('p').in('BOUGHT').out('BOUGHT').
+  where(neq('p')).groupCount().by(id).
+  order(local).by(values, desc).limit(local, 6)</code></pre>
+<table class="clause">
+  <tr><td>g.V('P0001').as('p')</td><td>Start at the vertex with the id P0001, and give it the step label <code>p</code>.</td></tr>
+  <tr><td>.in('BOUGHT').out('BOUGHT')</td><td>Hop 1 against the edge direction, then hop 2 with the edge direction.</td></tr>
+  <tr><td>.where(neq('p'))</td><td>Drop the vertex that is equal to the step label <code>p</code>, the start product.</td></tr>
+  <tr><td>.groupCount().by(id)</td><td>Count how often each product appears. This counts paths, not different customers. If one customer bought a product twice, Q1 counts the customer once, but this query counts two paths.</td></tr>
+  <tr><td>.order(local)...limit(local, 6)</td><td>Sort the counts, highest first, and keep six.</td></tr>
+</table>
+{% endcall %}
+
+<h2 id="sql" data-short="The same question in SQL"><span class="sec">07</span>The same question in SQL</h2>
+<p>A relational database can answer Q1 with a self-join of the order lines. Each hop is one more copy of the table in the FROM clause:</p>
+{% call k.sql("Q5", "Q1 in SQL") %}
+<pre><code>SELECT b.product_id, count(DISTINCT b.customer_id) AS score
+FROM   bought a
+JOIN   bought b ON b.customer_id = a.customer_id
+WHERE  a.product_id = 'P0001' AND b.product_id &lt;&gt; 'P0001'
+GROUP  BY b.product_id
+ORDER  BY score DESC, b.product_id LIMIT 6;</code></pre>
+<table class="clause">
+  <tr><td>FROM bought a ... WHERE a.product_id = 'P0001'</td><td>Hop 1: the rows of the buyers of P0001.</td></tr>
+  <tr><td>JOIN bought b ON b.customer_id = a.customer_id</td><td>Hop 2: all rows of these buyers. This is a self-join, a join of a table with itself.</td></tr>
+  <tr><td>GROUP BY ... count(DISTINCT ...)</td><td>The score, as in Q1.</td></tr>
+</table>
+{% endcall %}
+<p>For two hops, this SQL is fine, and with the right indexes it is fast. The difference grows with the depth. Three hops need a third copy of the table, and "any number of hops" needs WITH RECURSIVE.
+   Each extra hop multiplies the rows in the middle of the plan. A graph database stores the edges so that the next hop starts directly from the vertex that the last hop reached.</p>
+{{ k.quiz("np-q3", "Why does the cost of a graph traversal not grow with the total size of the graph?",
+   ["Neptune keeps all graphs in memory", "A traversal reads only the edges of the vertices that it reaches", "Neptune limits each graph to one million edges", "openCypher queries do not read edges"],
+   1, "The traversal starts at one vertex and follows its edges. Vertices that no path reaches cost nothing.") }}
+
+<div class="part"><b>Part 2</b><h2 id="part2" data-short="PART 2: Amazon Neptune">Amazon Neptune: the AWS service</h2>
+<p>A cluster, a shared storage volume, and three query languages.</p></div>
+
+<h2 id="service" data-short="The Neptune cluster"><span class="sec">08</span>The Neptune cluster and what AWS runs</h2>
+<p>A Neptune DB cluster has one primary instance and up to 15 read replicas
+   (<a href="https://docs.aws.amazon.com/prescriptive-guidance/latest/neptune-well-architected-framework/reliability-pillar.html">Neptune reliability pillar</a>).
+   The primary instance reads and writes. The replicas only read. All instances use the same cluster volume.
+   Neptune keeps copies of the data across three Availability Zones, and the amount of replication does not depend on the number of instances
+   (<a href="https://docs.aws.amazon.com/neptune/latest/userguide/storage.html">Neptune storage</a>).
+   Because a new replica connects to the volume that already exists, Neptune does not copy the graph to add it.</p>
+<p>When the primary instance fails, Neptune promotes a replica. The guide says that the interruption is "generally less than 30 seconds".</p>
+<p>One cluster can store property-graph data and RDF data. Neptune has a Gremlin endpoint, an openCypher endpoint and a SPARQL endpoint.
+   Gremlin and openCypher read the same property-graph data. SPARQL reads only RDF data (<a href="https://aws.amazon.com/neptune/faqs/">Neptune FAQs</a>).</p>
+<table class="data">
+  <thead><tr><th>Task</th><th>Your own graph database</th><th>Amazon Neptune</th></tr></thead>
+  <tbody>
+    <tr><td>Storage and copies</td><td>You plan disks and replication.</td><td>Copies in three Availability Zones. Neptune replaces a bad copy automatically.</td></tr>
+    <tr><td>Read capacity</td><td>You add servers and copy the data.</td><td>Up to 15 replicas on the same volume.</td></tr>
+    <tr><td>Failover</td><td>You build and test it.</td><td>Automatic promotion of a replica.</td></tr>
+    <tr><td>Backups</td><td>You schedule them.</td><td>Automated backups and point-in-time restore.</td></tr>
+    <tr><td>Access</td><td>Passwords or plugins.</td><td>IAM database authentication (SigV4), VPC only.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="lalemarket" data-short="Neptune in Lale Market"><span class="sec">09</span>Neptune in Lale Market</h2>
+<ul>
+  <li>One Neptune cluster in the data subnets. The Neptune Engine App connects to the cluster endpoint on HTTPS port 8182.</li>
+  <li>The Engine App signs each request with its IAM role (SigV4, service name <code>neptune-db</code>). There is no password.</li>
+  <li>The Seed deletes the graph, creates the Customer and Product vertices, and creates one BOUGHT edge for each order line that is not cancelled. It sends the edges in groups of 500 with <code>UNWIND</code>.</li>
+  <li>The product page runs Q1. The persona recommendations run Q2. The admin page "Customer graph" draws the neighbours of one customer.</li>
+  <li>A purchase in the shop creates new BOUGHT edges with an order id that starts with W. The reset deletes only these edges.</li>
+</ul>
+
+<h2 id="recall" data-short="Recall test"><span class="sec">10</span>Recall test</h2>
+{{ k.quiz("np-r1", "In the property graph of Lale Market, what does an edge store about its customer?",
+   ["A copy of the name and the city", "The ~id of the customer vertex in ~from", "The order total", "Nothing, because edges have no start vertex"],
+   1, "The edge stores the ~id of its start vertex and of its end vertex. The customer data stays in the vertex.") }}
+{{ k.quiz("np-r2", "What does NOT (me)-[:BOUGHT]->(rec) do in Q2?",
+   ["It drops products that I bought already", "It drops customers who bought nothing", "It reverses the direction of the edges", "It deletes BOUGHT edges"],
+   0, "A pattern in WHERE is a condition. NOT keeps only the products with no BOUGHT edge from me.") }}
+{{ k.quiz("np-r3", "Why can Neptune add a read replica quickly?",
+   ["The replica copies the graph in the background later", "The replica connects to the cluster volume that already holds the data", "Replicas store no data", "Neptune stops writes while it adds the replica"],
+   1, "The data lives in the shared cluster volume. A new replica only connects to it.") }}
+
+<section class="lesson-foot">
+  <h2>Go deeper</h2>
+  <p><b>Primary source:</b> <a href="https://docs.aws.amazon.com/neptune/latest/userguide/graph-get-started.html">Getting started with Amazon Neptune</a>, then
+     <a href="https://opencypher.org/">the openCypher project</a>.</p>
+  <p><b>Use it in the shop:</b> open a <a href="/free-e-commerce-app/p/P0001">product page</a> and look at "bought together". The admin page <a href="/free-e-commerce-app/admin/graph">Customer graph</a> draws the neighbours of a customer.</p>
+  <p><b>Ask questions.</b> If a part is not clear, ask your instructor or your AI assistant. Bring a question from your project that follows relations, and draw its graph together.</p>
+</section>
+{% endblock %}
