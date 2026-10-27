@@ -1,0 +1,222 @@
+{% extends "e2e/_base.html" %}
+{% import "e2e/_macros.html" as k with context %}
+{% block body %}
+
+<h2 id="goal" data-short="What you will learn"><span class="sec">00</span>What you will learn, and how to use this page</h2>
+<p>Section 01 gives the architect's decision: where Amazon Timestream for InfluxDB fits and where it does not. Then the tutorial has two parts.
+   Part 1 teaches the open-source time-series database InfluxDB: points, series, tags and fields, the query language Flux, time windows and retention. Part 2 shows the AWS service and how Lale Market uses it.</p>
+<p>The examples come from the operations page of Lale Market: warehouse sensors and orders per minute. Sometimes a different example makes an idea easier to see. Then the tutorial uses it: a weather station, a heart monitor, the electricity meter of a house.</p>
+<p>After this tutorial, you can do these tasks:</p>
+<ol>
+  <li>Say for which workloads a time-series database is the right choice, and for which it is not.</li>
+  <li>Read and write a point in line protocol, and name its measurement, tags, fields and timestamp.</li>
+  <li>Explain a series and its cardinality, and select which values go into tags.</li>
+  <li>Read a Flux query with range, filter and aggregateWindow.</li>
+  <li>Explain how a retention period deletes old data with no delete job of your own.</li>
+  <li>Explain what Timestream for InfluxDB runs for you.</li>
+</ol>
+<p>Four kinds of boxes help you. <b>Simulation</b>: press Play or Next step. <b>Predict first</b>: write your answer before you open it.
+   <b>Checkpoint</b>: a question with one right answer. <b>Analogy</b>: a picture from daily life.</p>
+
+<h2 id="architect" data-short="Architect's view: when to use"><span class="sec">01</span>The architect's view: where Timestream for InfluxDB fits</h2>
+<p><b>Read this section first.</b> It gives the decision. The sections after it teach how a time-series database works.</p>
+<p><b>In short:</b> Amazon Timestream for InfluxDB runs the open-source InfluxDB for you. A time-series database stores measurements with a timestamp. Examples are a temperature every 5 minutes, the number of orders every minute, the CPU load every 10 seconds.
+   It writes a continuous stream of small points. It answers questions about time windows, for example "the mean per 15 minutes for the last 6 hours". It also deletes old data automatically.</p>
+<p>The key idea is the {{ k.term("series") }}: all points of one thing that you measure, in time order. A query reads a few series over a time range, and it seldom changes old points.</p>
+
+<h3>Signals in a workload that point to Timestream for InfluxDB</h3>
+<table class="data">
+  <thead><tr><th>Signal</th><th>What it looks like in a real project</th><th>The feature that answers it</th></tr></thead>
+  <tbody>
+    <tr><td>Every record has a timestamp and a number</td><td>Sensor readings, metrics, prices, counters.</td><td>Points in line protocol (section 03)</td></tr>
+    <tr><td>Writes arrive all the time, reads look at time ranges</td><td>Thousands of devices send a value every few seconds.</td><td>Series stored in time order (section 03)</td></tr>
+    <tr><td>Charts by time window</td><td>"Mean temperature per 15 minutes."</td><td>aggregateWindow in Flux (section 05)</td></tr>
+    <tr><td>Old data loses value</td><td>Keep raw points for 30 days only.</td><td>The retention period of a bucket (section 06)</td></tr>
+    <tr><td>Alerts on thresholds</td><td>"Warn when a cold room is above 8 °C for 10 minutes."</td><td>Tasks and checks in InfluxDB</td></tr>
+    <tr><td>Agents that collect metrics</td><td>Servers and devices with Telegraf.</td><td>Open-source APIs and Telegraf plugins</td></tr>
+  </tbody>
+</table>
+
+<h3>Use cases, with the reason and the feature</h3>
+<table class="data">
+  <thead><tr><th>Use case</th><th>Data</th><th>Why a time-series database</th><th>The feature that does the work</th></tr></thead>
+  <tbody>
+    <tr><td>Warehouse sensors (Lale Market)</td><td>Temperature and humidity of 4 warehouses, every 5 minutes.</td><td>Charts per window, by warehouse.</td><td>Tags warehouse and sensor, aggregateWindow</td></tr>
+    <tr><td>Orders per minute (Lale Market)</td><td>A counter per channel, every minute.</td><td>A live chart of the shop load.</td><td>aggregateWindow with fn: sum</td></tr>
+    <tr><td>Application and server monitoring</td><td>CPU, memory, latency, error rates.</td><td>Dashboards and alerts on recent data.</td><td>Telegraf, retention, checks</td></tr>
+    <tr><td>Industrial IoT</td><td>Machine vibration, pressure, power.</td><td>High write rate, downsampling for long-term trends.</td><td>Windows, tasks that write downsampled data</td></tr>
+    <tr><td>Energy and smart meters</td><td>Consumption per household every 15 minutes.</td><td>Sums per hour and per day.</td><td>aggregateWindow, retention per bucket</td></tr>
+    <tr><td>Financial market data</td><td>Prices and volumes of instruments.</td><td>Last value, moving averages over time.</td><td>Time-ordered series, window functions</td></tr>
+    <tr><td>Fleet and vehicle telemetry</td><td>Speed, fuel, location per vehicle.</td><td>Recent state and history per vehicle.</td><td>Tag per vehicle (bounded number)</td></tr>
+    <tr><td>Network monitoring</td><td>Traffic per interface, every 10 seconds.</td><td>Rates and peaks per window.</td><td>Windows with fn: max, derivative</td></tr>
+  </tbody>
+</table>
+{{ k.fig("influxdb-raw-series.png", "a time series of memory usage over four minutes, drawn as one line.") }}
+
+<h3>Signals that point away from Timestream for InfluxDB</h3>
+<table class="data">
+  <thead><tr><th>Signal in the workload</th><th>Why it is a weak fit</th><th>Better choice</th></tr></thead>
+  <tbody>
+    <tr><td>Records change under business rules</td><td>InfluxDB adds points at the end of a series. There are no transactions or foreign keys.</td><td><a href="/e2etutorial/aurora">Aurora</a></td></tr>
+    <tr><td>Lookup of an item by its key</td><td>The model puts time first, not one item.</td><td><a href="/e2etutorial/dynamodb">DynamoDB</a></td></tr>
+    <tr><td>Every event of every user, kept for months</td><td>A user id in a tag makes millions of series.</td><td><a href="/e2etutorial/keyspaces">Keyspaces</a></td></tr>
+    <tr><td>SQL joins over years of business data</td><td>Not a data warehouse.</td><td><a href="/e2etutorial/redshift">Redshift</a></td></tr>
+    <tr><td>Free-text search in log messages</td><td>No analyzers or relevance scores.</td><td><a href="/e2etutorial/opensearch">OpenSearch</a></td></tr>
+  </tbody>
+</table>
+
+<h3>The questions that an architect asks, in this order</h3>
+<ol>
+  <li><b>Is the time the main axis of every question?</b> If most queries start with "in the last hour", a time-series database helps.</li>
+  <li><b>What do you measure, and which labels describe it?</b> The labels become tags. Count their possible values first.</li>
+  <li><b>How long is raw data useful?</b> That is the retention period. Long-term trends can use downsampled data in a second bucket.</li>
+  <li><b>How many points per second?</b> It decides the instance size.</li>
+  <li><b>InfluxDB 2 or InfluxDB 3?</b> New workloads can use InfluxDB 3. Existing databases and Flux queries use InfluxDB 2.</li>
+  <li><b>Must it survive the loss of an Availability Zone?</b> Then use a Multi-AZ deployment.</li>
+</ol>
+
+<h3>Timestream for InfluxDB and its relatives on AWS</h3>
+<table class="data">
+  <thead><tr><th>Option</th><th>What it is</th><th>Choose it when</th></tr></thead>
+  <tbody>
+    <tr><td>Timestream for InfluxDB 2</td><td>A managed InfluxDB 2 instance, optionally with a standby in a second Availability Zone.</td><td>Existing InfluxDB 2 databases, Flux queries. Lale Market uses it.</td></tr>
+    <tr><td>Timestream for InfluxDB 3</td><td>Managed InfluxDB 3 Core (one node) or Enterprise (a multi-node cluster).</td><td>New workloads, SQL queries, high cardinality.</td></tr>
+    <tr><td>Amazon CloudWatch</td><td>The metrics and alarms of AWS resources.</td><td>Monitoring of AWS services with no own database.</td></tr>
+    <tr><td>Time-series tables in Aurora</td><td>A table with a timestamp column and indexes.</td><td>Few points, and the data must join with business tables.</td></tr>
+  </tbody>
+</table>
+
+<h3>Where Timestream for InfluxDB sits in Lale Market</h3>
+<p>The bucket <code>metrics</code> has two measurements. <code>warehouse_env</code> holds a temperature and a humidity point for each of 4 warehouses every 5 minutes. <code>orders</code> holds the number of web orders every minute.
+   The admin page "Operations" draws them with Flux queries. When a visitor completes a checkout, the InfluxDB Engine App writes one more point with the tag <code>channel=workshop</code>.</p>
+
+<h3>Simulation: let the requirements choose</h3>
+{{ k.sim("decide_metrics", "Workload 1: warehouse sensors") }}
+{{ k.sim("decide_orders", "Workload 2: the order records") }}
+
+{{ k.quiz("ix-a1", "A factory has 2,000 machines. Each one sends its temperature every 10 seconds. The team wants 1-minute means for the last day and deletes raw data after 14 days. What fits best?",
+   ["Timestream for InfluxDB, with a tag per machine and a 14-day retention", "Aurora, with one row per machine updated in place", "Neptune, with a vertex per reading", "OpenSearch, with free-text search on the readings"],
+   0, "Time-stamped numbers, windows over time and automatic expiry are the core features of a time-series database. 2,000 machines is a bounded number of tag values.") }}
+{{ k.quiz("ix-a2", "A developer wants to put the order id of each order in a tag. What is the problem?",
+   ["Tags cannot hold text", "Each order id makes a new series, so the cardinality grows without limit", "Tags are not written to disk", "InfluxDB deletes points with tags"],
+   1, "A tag value is part of the series key. An id with millions of values creates millions of series and a large index.") }}
+
+<div class="part"><b>Part 1</b><h2 id="part1" data-short="PART 1: InfluxDB">InfluxDB: points, series and Flux</h2>
+<p>Line protocol, series and cardinality, time windows and retention.</p></div>
+
+<h2 id="why" data-short="Why time series?"><span class="sec">02</span>Why a time-series database? The electricity meter</h2>
+<p>A business database keeps the current state: the stock of a product, the status of an order. When the state changes, it updates the row.
+   A time-series database keeps every measurement and never updates it. The question is not "what is the value?" but "how did the value change?".</p>
+{% call k.callout("analogy", "Analogy") %}
+<p>The electricity meter of a house shows one number. The bill of the electricity company shows a table: the consumption of each 15 minutes for the whole month.
+   The meter is a business database. The table on the bill is a time series. Nobody changes a line of the bill later. New lines come at the end, and after some years the old bills go away.</p>
+{% endcall %}
+
+<h2 id="points" data-short="Points and series"><span class="sec">03</span>Points, tags, fields and series</h2>
+<p>InfluxDB writes data in {{ k.term("line protocol") }}: one line of text for each {{ k.term("point") }}. This is the format (from the
+   <a href="https://docs.influxdata.com/influxdb/v2/reference/syntax/line-protocol/">InfluxDB line protocol reference</a>):</p>
+{% call k.sql("W1", "One point of a warehouse sensor") %}
+<pre><code>warehouse_env,warehouse=IST-1,sensor=temperature value=21.2 1793433600</code></pre>
+<table class="clause">
+  <tr><td>warehouse_env</td><td>The measurement: the name of the kind of data, like the name of a table.</td></tr>
+  <tr><td>,warehouse=IST-1,sensor=temperature</td><td>The tag set: key-value pairs that describe the point. InfluxDB indexes tags, so filters on tags are fast. Tag values are always text.</td></tr>
+  <tr><td>value=21.2</td><td>The field set: the measured values. Fields are not indexed. A point must have at least one field. An integer field ends with <code>i</code>, for example <code>count=14i</code>.</td></tr>
+  <tr><td>1793433600</td><td>The timestamp, here in seconds since 1 January 1970 (UTC). The write request says the precision. Lale Market writes with precision <code>s</code>.</td></tr>
+</table>
+{% endcall %}
+<p>A {{ k.term("series") }} is the group of points with the same measurement, the same tag set and the same field key. InfluxDB stores the points of one series together, sorted by time.
+   The number of different series is the {{ k.term("cardinality") }}. These six lines are the input of the simulation:</p>
+{{ k.sample("ix_lines", "six points in line protocol") }}
+{% call k.predict("How many different series do the six lines make?") %}
+<p>Four: IST-1 temperature (two points), IST-1 humidity, ANK-1 temperature and orders with channel=web (two points).</p>
+{% endcall %}
+{{ k.sim("series", "From lines to series") }}
+<p>Identifiers: a point has no id of its own. The series key and the timestamp identify it. If you write a second point with the same series key and the same timestamp, InfluxDB does not add a point. The new field value replaces the old one.
+   The warehouse codes IST-1 and ANK-1 belong to the warehouse list of Lale Market. The tags borrow these codes, so a chart can show the name of the warehouse.</p>
+{{ k.quiz("ix-q1", "Which part of a point is not indexed?",
+   ["The measurement", "The tags", "The fields", "The tag keys"],
+   2, "Fields hold the measured values and are not indexed. A filter on a field value must read the points.") }}
+
+<h2 id="flux" data-short="Flux queries"><span class="sec">04</span>Flux: a query is a pipeline</h2>
+<p>InfluxDB 2 uses the query language {{ k.term("Flux") }}. A Flux query is a chain of functions. The operator <code>|&gt;</code> sends the output of one function into the next one, like a pipe in a shell.
+   This is the real query of the Lale Market operations page (from <code>engines/influxdb.py</code>):</p>
+{% call k.sql("Q1", "Mean temperature per 15 minutes, last 6 hours") %}
+<pre><code>from(bucket: "metrics")
+  |&gt; range(start: -6h)
+  |&gt; filter(fn: (r) =&gt; r._measurement == "warehouse_env" and r.sensor == "temperature")
+  |&gt; aggregateWindow(every: 15m, fn: mean, createEmpty: false)</code></pre>
+<table class="clause">
+  <tr><td>from(bucket: "metrics")</td><td>Read from the bucket <code>metrics</code>. A bucket is a named store with its own retention period.</td></tr>
+  <tr><td>|&gt; range(start: -6h)</td><td>Keep only the points of the last 6 hours. Every Flux query on a bucket needs a range, because InfluxDB finds data by time first.</td></tr>
+  <tr><td>|&gt; filter(fn: (r) =&gt; ...)</td><td>Keep only the rows <code>r</code> of the measurement warehouse_env with the tag sensor = temperature. The result has one series for each warehouse.</td></tr>
+  <tr><td>|&gt; aggregateWindow(every: 15m, fn: mean, ...)</td><td>Cut each series into windows of 15 minutes and calculate the mean of each window.</td></tr>
+  <tr><td>createEmpty: false</td><td>Do not return a row for a window that has no points.</td></tr>
+</table>
+{% endcall %}
+<p>The column <code>_value</code> holds the field value, and the column <code>_time</code> holds the timestamp. The tags become columns too, for example <code>warehouse</code>.</p>
+
+<h2 id="windows" data-short="Time windows"><span class="sec">05</span>Time windows: from raw points to a chart</h2>
+<p>A chart of 6 hours does not need 72 points per line. It needs one point per window. aggregateWindow does this calculation in the database, so the application receives only the points that it draws.
+   These are nine raw points of IST-1 temperature, one every 5 minutes (example values):</p>
+{{ k.sample("ix_raw", "raw points: IST-1, temperature") }}
+{{ k.fig("influxdb-windows.png", "the same time series split into one-minute windows. Each window has its own color.") }}
+{{ k.sim("window", "aggregateWindow(every: 15m, fn: mean)") }}
+{{ k.quiz("ix-q2", "The orders page uses the measurement orders with one point per minute. Which function gives the number of orders per 15 minutes?",
+   ["aggregateWindow(every: 15m, fn: mean)", "aggregateWindow(every: 15m, fn: sum)", "aggregateWindow(every: 1m, fn: max)", "range(start: -15m)"],
+   1, "Each point is a count for one minute. The total for 15 minutes is the sum of 15 points. Lale Market uses fn: sum for orders.") }}
+
+<h2 id="retention" data-short="Retention"><span class="sec">06</span>Retention: old data goes away by itself</h2>
+<p>Each bucket has a {{ k.term("retention period") }}. InfluxDB stores the points of a time span together in a shard group. When all points of a shard group are older than the retention period, InfluxDB drops the complete shard group
+   (<a href="https://docs.influxdata.com/influxdb/v2/reference/internals/data-retention/">InfluxDB data retention</a>). It is cheap, because it deletes whole files and not single points.</p>
+{{ k.sim("retention", "A bucket with a retention period of 3 days") }}
+<p>For long-term trends, a common pattern uses two buckets. A task reads the raw bucket every hour, calculates hourly means with aggregateWindow and writes them into a second bucket with a long retention period.</p>
+{{ k.fig("influxdb-derived-series.png", "three charts of one yearly time series: the values, the yearly change, and the percent change per year.") }}
+
+<div class="part"><b>Part 2</b><h2 id="part2" data-short="PART 2: Timestream for InfluxDB">Amazon Timestream for InfluxDB: the AWS service</h2>
+<p>Managed InfluxDB instances and clusters, in your VPC.</p></div>
+
+<h2 id="service" data-short="The managed service"><span class="sec">07</span>What AWS runs for you</h2>
+<p>AWS describes the service as follows: Timestream for InfluxDB runs InfluxDB 3 Core and Enterprise for new workloads and InfluxDB 2 for existing databases. It does the provisioning, the patching, the backups and the failover
+   (<a href="https://aws.amazon.com/influxdb/">Amazon Timestream for InfluxDB</a>).
+   An InfluxDB 2 deployment can be Multi-AZ. Then it replicates the data synchronously to a standby in a second Availability Zone, and it fails over automatically
+   (<a href="https://aws.amazon.com/blogs/aws/run-and-manage-open-source-influxdb-databases-with-amazon-timestream/">AWS News Blog</a>).
+   Your applications keep the open-source APIs, the client libraries and the Telegraf plugins.</p>
+<table class="data">
+  <thead><tr><th>Task</th><th>Your own InfluxDB</th><th>Timestream for InfluxDB</th></tr></thead>
+  <tbody>
+    <tr><td>Servers</td><td>You install, patch and size them.</td><td>AWS provisions and patches. You select the instance class and the storage.</td></tr>
+    <tr><td>Availability</td><td>You build replication and failover.</td><td>Multi-AZ standby (InfluxDB 2) or a multi-node cluster (InfluxDB 3 Enterprise).</td></tr>
+    <tr><td>Backups</td><td>You schedule and test them.</td><td>Managed backups.</td></tr>
+    <tr><td>Network and secrets</td><td>You configure TLS and passwords.</td><td>Runs in your VPC. Credentials in AWS Secrets Manager. Encryption at rest and in transit.</td></tr>
+    <tr><td>APIs and tools</td><td>Open-source InfluxDB.</td><td>The same open-source APIs, clients and Telegraf.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="lalemarket" data-short="InfluxDB in Lale Market"><span class="sec">08</span>Timestream for InfluxDB in Lale Market</h2>
+<ul>
+  <li>One InfluxDB 2 instance in the data subnets. The InfluxDB Engine App connects on HTTPS port 8086 with a user name and a password from Secrets Manager.</li>
+  <li>The organization is <code>dbws</code> and the bucket is <code>metrics</code>.</li>
+  <li>The Seed deletes the measurements warehouse_env and orders, and writes the sensor points and the orders-per-minute points again.</li>
+  <li>The admin page "Operations" runs Q1 with a window of 1, 5 or 15 minutes or 1 hour, over 1, 6 or 24 hours.</li>
+  <li>A checkout writes <code>orders,channel=workshop count=1i</code>. The reset deletes only the points with channel=workshop.</li>
+</ul>
+
+<h2 id="recall" data-short="Recall test"><span class="sec">09</span>Recall test</h2>
+{{ k.quiz("ix-r1", "What identifies a series?",
+   ["The timestamp only", "The measurement, the tag set and the field key", "The field value", "The bucket only"],
+   1, "Points with the same measurement, tag set and field key belong to one series.") }}
+{{ k.quiz("ix-r2", "Why does every Flux query on a bucket start with range()?",
+   ["Flux has no other filter", "InfluxDB finds data by time first, and range limits the shard groups that it reads", "range() sorts the result", "range() creates the bucket"],
+   1, "InfluxDB stores data by time. The range tells InfluxDB which time spans it must open.") }}
+{{ k.quiz("ix-r3", "How does InfluxDB delete data that is older than the retention period?",
+   ["You must run a DELETE every night", "It drops whole shard groups whose points are all too old", "It changes old values to zero", "It moves them to Amazon S3"],
+   1, "The retention check drops complete shard groups. No delete job is necessary.") }}
+
+<section class="lesson-foot">
+  <h2>Go deeper</h2>
+  <p><b>Primary source:</b> <a href="https://docs.influxdata.com/influxdb/v2/reference/key-concepts/data-elements/">InfluxDB data elements</a>, then
+     <a href="https://docs.aws.amazon.com/timestream/latest/developerguide/timestream-for-influxdb.html">Amazon Timestream for InfluxDB developer guide</a>.</p>
+  <p><b>Use it in the shop:</b> the admin page <a href="/free-e-commerce-app/admin/ops">Operations</a> runs Q1. Change the window and compare the number of points.</p>
+  <p><b>Ask questions.</b> If a part is not clear, ask your instructor or your AI assistant. Bring a measurement from your project, and select its tags and fields together.</p>
+</section>
+{% endblock %}

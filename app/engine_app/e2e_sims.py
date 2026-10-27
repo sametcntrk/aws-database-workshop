@@ -1645,3 +1645,136 @@ def redshift(lang):
 COUNT_TR.update({"values read (row store)": "okunan değer (row store)", "values read (column store)": "okunan değer (column store)",
                  "blocks read (sorted)": "okunan blok (sıralı)", "blocks read (unsorted)": "okunan blok (sırasız)", "rows moved": "taşınan row"})
 SIMS["redshift"] = redshift
+
+
+# ================================================================ Timestream for InfluxDB (time series)
+IX_LINES = ["warehouse_env,warehouse=IST-1,sensor=temperature value=21.2 1793433600",
+            "warehouse_env,warehouse=IST-1,sensor=humidity value=44.8 1793433600",
+            "warehouse_env,warehouse=ANK-1,sensor=temperature value=19.6 1793433600",
+            "orders,channel=web count=14i 1793433600",
+            "warehouse_env,warehouse=IST-1,sensor=temperature value=21.4 1793433900",
+            "orders,channel=web count=11i 1793433660"]
+IX_RAW = [["10:00", 21.2], ["10:05", 21.4], ["10:10", 21.9], ["10:15", 22.3], ["10:20", 22.8], ["10:25", 23.1], ["10:30", 22.6], ["10:35", 22.0], ["10:40", 21.7]]
+EXTRA_TABLES["ix_lines"] = {"cols": ["line protocol"], "rows": [[x] for x in IX_LINES]}
+EXTRA_TABLES["ix_raw"] = {"cols": ["_time", "_value"], "rows": IX_RAW}
+
+
+def _parse_line(line):
+    head, fields, ts = line.split(" ")
+    parts = head.split(",")
+    meas, tags = parts[0], parts[1:]
+    fk = fields.split("=")[0]
+    return meas, ",".join(tags), fields, ts, f"{meas},{','.join(tags)} {fk}"
+
+
+def ix_series(lang):
+    rows = [[x] for x in IX_LINES]
+    steps = [{"say": T(lang, "Each line of line protocol is one point: measurement, tags, fields and a timestamp. The measurement, the tag set and the field key together form the series key. InfluxDB stores the points of one series together, in time order.",
+                       "Line protocol'ün her satırı bir point'tir: measurement, tag'ler, field'lar ve bir timestamp. Measurement, tag set ve field key birlikte series key'i oluşturur. InfluxDB bir series'in point'lerini zaman sırasıyla bir arada saklar."),
+              "marks": {}, "out": [], "count": {"points": 0, "series": 0}}]
+    series, out = [], []
+    for i, line in enumerate(IX_LINES):
+        meas, tags, fields, ts, key = _parse_line(line)
+        new = key not in series
+        if new:
+            series.append(key)
+            out.append([key, 1])
+        else:
+            out[series.index(key)][1] += 1
+        steps.append({"say": T(lang, f"Point {i + 1}: measurement {meas}, tags {tags}, field {fields}, time {ts}. " + ("This is a new series." if new else "This series exists already, so the point goes to the end of it."),
+                               f"Point {i + 1}: measurement {meas}, tag'ler {tags}, field {fields}, zaman {ts}. " + ("Bu yeni bir series'tir." if new else "Bu series zaten var, bu yüzden point onun sonuna eklenir.")),
+                      "marks": {"l": {k: ("match" if k == i else "read") for k in range(i + 1)}}, "out": deepcopy(out), "outmarks": {series.index(key): "new"},
+                      "count": {"points": i + 1, "series": len(series)}})
+    steps.append({"say": T(lang, f"{len(IX_LINES)} points, {len(series)} series. The number of series is the cardinality. Tags are indexed, so each new tag value can create new series. Put values with few possible values in tags (warehouse, sensor). Put measured numbers in fields. Never put a customer id or a request id in a tag.",
+                           f"{len(IX_LINES)} point, {len(series)} series. Series sayısı cardinality'dir. Tag'ler index'lenir, bu yüzden her yeni tag değeri yeni series'ler oluşturabilir. Az sayıda olası değeri olan değerleri tag'lere koy (warehouse, sensor). Ölçülen sayıları field'lara koy. Bir müşteri id'sini ya da bir request id'sini asla tag'e koyma."),
+                  "marks": {"l": {k: "read" for k in range(len(IX_LINES))}}, "out": out, "count": {"points": len(IX_LINES), "series": len(series)}})
+    return {"tables": [{"id": "l", "name": "line protocol", "cols": ["line"], "rows": rows, "key": [], "ref": []}],
+            "out": {"name": T(lang, "series", "series"), "cols": ["series key", "points"]}, "steps": steps}
+
+
+def ix_window(lang):
+    every = 15
+    wins = {}
+    for t, v in IX_RAW:
+        h, mi = map(int, t.split(":"))
+        start = f"{h:02d}:{(mi // every) * every:02d}"
+        wins.setdefault(start, []).append((t, v))
+    steps = [{"say": T(lang, "aggregateWindow(every: 15m, fn: mean): the raw points of IST-1 temperature arrive every 5 minutes. The function puts them into windows of 15 minutes and calculates one mean for each window.",
+                       "aggregateWindow(every: 15m, fn: mean): IST-1 sıcaklığının ham point'leri 5 dakikada bir gelir. Fonksiyon onları 15 dakikalık pencerelere koyar ve her pencere için bir ortalama hesaplar."),
+              "marks": {}, "out": [], "count": {"raw points read": 0, "points returned": 0}}]
+    out, done, m = [], 0, {}
+    for start, pts in wins.items():
+        idx = [i for i, r in enumerate(IX_RAW) if (r[0], r[1]) in pts]
+        done += len(pts)
+        mean = round(sum(v for _, v in pts) / len(pts), 2)
+        h, mi = map(int, start.split(":"))
+        stop = f"{h + (mi + every) // 60:02d}:{(mi + every) % 60:02d}"
+        out.append([stop, mean])
+        m = {**{k: "skip" for k in m}, **{i: "match" for i in idx}}
+        steps.append({"say": T(lang, f"Window {start} to {stop}: the points {', '.join(t for t, _ in pts)}. Mean: ({' + '.join(str(v) for _, v in pts)}) / {len(pts)} = {mean}. By default, aggregateWindow puts the end of the window ({stop}) in _time.",
+                               f"{start} - {stop} penceresi: {', '.join(t for t, _ in pts)} point'leri. Ortalama: ({' + '.join(str(v) for _, v in pts)}) / {len(pts)} = {mean}. aggregateWindow varsayılan olarak pencerenin sonunu ({stop}) _time'a koyar."),
+                      "marks": {"r": dict(m)}, "out": deepcopy(out), "outmarks": {len(out) - 1: "new"}, "count": {"raw points read": done, "points returned": len(out)}})
+    steps.append({"say": T(lang, f"{len(IX_RAW)} raw points became {len(out)} points. A chart of 6 hours with 5-minute points has 72 points per line. With 1-hour windows, it has 6. The same query with every: 1h returns fewer points for the same time range.",
+                           f"{len(IX_RAW)} ham point {len(out)} point'e dönüştü. 5 dakikalık point'lerle 6 saatlik bir grafikte çizgi başına 72 point vardır. 1 saatlik pencerelerle 6 point vardır. Aynı query every: 1h ile aynı zaman aralığı için daha az point döndürür."),
+                  "marks": {"r": {k: "skip" for k in range(len(IX_RAW))}}, "out": out, "count": {"raw points read": len(IX_RAW), "points returned": len(out)}})
+    return {"tables": [{"id": "r", "name": T(lang, "raw points: IST-1, temperature", "ham point'ler: IST-1, temperature"), "cols": ["_time", "_value"], "rows": IX_RAW, "key": [0], "ref": []}],
+            "out": {"name": T(lang, "result: one point per 15 minutes", "sonuç: 15 dakikada bir point"), "cols": ["_time", "mean"]}, "steps": steps}
+
+
+IX_SHARDS = [["SG1", "Oct 21", "Oct 22", 288], ["SG2", "Oct 22", "Oct 23", 288], ["SG3", "Oct 23", "Oct 24", 288], ["SG4", "Oct 24", "Oct 25", 288], ["SG5", "Oct 25", "Oct 26", 160]]
+
+
+def ix_retention(lang):
+    rows = deepcopy(IX_SHARDS)
+    steps = [{"say": T(lang, "The bucket has a retention period of 3 days (an example). InfluxDB groups the points by time into shard groups, here one per day. Now it is Oct 25, 13:20.",
+                       "Bucket'ın retention period'u 3 gündür (örnek). InfluxDB point'leri zamana göre shard group'lara gruplar, burada günde bir. Şimdi 25 Ekim, 13:20."),
+              "marks": {}, "rows": {"g": deepcopy(rows)}, "out": [], "count": {"shard groups read": 0, "shard groups deleted": 0}}]
+    steps.append({"say": T(lang, "Query: range(start: -1d). The shard groups SG4 and SG5 cover the last day. InfluxDB reads only these two. It does not open the older shard groups.",
+                           "Query: range(start: -1d). SG4 ve SG5 shard group'ları son günü kapsar. InfluxDB sadece bu ikisini okur. Daha eski shard group'ları açmaz."),
+                  "marks": {"g": {3: "read", 4: "read", 0: "skip", 1: "skip", 2: "skip"}}, "rows": {"g": deepcopy(rows)}, "out": [], "count": {"shard groups read": 2, "shard groups deleted": 0}})
+    steps.append({"say": T(lang, "The retention check runs. The end of SG1 (Oct 22) is more than 3 days before now (Oct 25, 13:20). All points of SG1 are too old, so InfluxDB drops the complete shard group. It does not delete point by point.",
+                           "Retention kontrolü çalışır. SG1'in sonu (22 Ekim) şimdiden (25 Ekim, 13:20) 3 günden daha önce. SG1'in bütün point'leri çok eski, bu yüzden InfluxDB bütün shard group'u düşürür. Point point silmez."),
+                  "marks": {"g": {0: "bad"}}, "rows": {"g": deepcopy(rows)}, "out": [], "count": {"shard groups read": 2, "shard groups deleted": 0}})
+    rows = rows[1:]
+    steps.append({"say": T(lang, "SG1 is gone. SG2 ends on Oct 23, which is less than 3 days ago, so it stays until a later check. The storage stays near the same size every day: new points come in, a full old day goes out. You write no delete job.",
+                           "SG1 gitti. SG2 23 Ekim'de biter, bu 3 günden kısa bir süre önce, bu yüzden sonraki bir kontrole kadar kalır. Storage her gün yaklaşık aynı boyutta kalır: yeni point'ler gelir, eski ve dolu bir gün gider. Hiç silme job'u yazmazsın."),
+                  "marks": {"g": {0: "read"}}, "rows": {"g": deepcopy(rows)}, "out": [], "count": {"shard groups read": 2, "shard groups deleted": 1}})
+    return {"tables": [{"id": "g", "name": T(lang, "shard groups of the bucket metrics", "metrics bucket'ının shard group'ları"), "cols": ["shard group", "start", "end", "points"], "rows": IX_SHARDS, "key": [0], "ref": []}],
+            "out": {"name": T(lang, "result", "sonuç"), "cols": ["-"]}, "steps": steps}
+
+
+IX_CANDS = ["Timestream for InfluxDB", "Aurora PostgreSQL", "DynamoDB", "Redshift", "OpenSearch"]
+
+
+def influxdb(lang):
+    w1 = verdicts(IX_CANDS, [
+        V((1, "line protocol, append in time order", "line protocol, zaman sırasıyla ekleme"), (1, "INSERT", "INSERT"), (1, "PutItem", "PutItem"),
+          (0, "built for large loads, not a point every few seconds", "büyük yüklemeler için yapıldı, birkaç saniyede bir point için değil"), (1, "bulk indexing", "bulk indexing")),
+        V((1, "aggregateWindow", "aggregateWindow"), (0, "GROUP BY over a large row table for each chart", "her grafik için büyük bir row table'ı üzerinde GROUP BY"), (0, "no aggregation", "aggregation yok"),
+          (0, "removed earlier", "daha önce elendi"), (1, "date_histogram", "date_histogram")),
+        V((1, "retention period of the bucket", "bucket'ın retention period'u"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"),
+          (0, "needs an index per day and a lifecycle policy that you design", "gün başına bir index ve senin tasarladığın bir lifecycle policy ister")),
+    ])
+    w2 = verdicts(IX_CANDS, [
+        V((0, "points are appended, not updated with rules", "point'ler eklenir, kurallarla güncellenmez"), (1, "UPDATE with constraints", "constraint'lerle UPDATE"), (1, "UpdateItem with conditions", "koşullu UpdateItem"),
+          (0, "not for single-row changes", "tek row değişiklikleri için değil"), (0, "a search copy", "bir arama kopyası")),
+        V((0, "removed earlier", "daha önce elendi"), (1, "ACID transactions", "ACID transaction'lar"), (1, "TransactWriteItems", "TransactWriteItems"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi")),
+        V((0, "removed earlier", "daha önce elendi"), (1, "foreign keys, CHECK", "foreign key'ler, CHECK"), (0, "no foreign keys", "foreign key yok"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi")),
+    ])
+    spec = {
+        "decide_metrics": decide_generic(lang, ("Temperature and humidity of 4 warehouses every 5 minutes, charts per 15 minutes, data older than 30 days goes away", "4 deponun sıcaklık ve nemi 5 dakikada bir, 15 dakikalık grafikler, 30 günden eski veri gider"),
+                                         [("A steady stream of small, time-stamped writes", "Küçük, zaman damgalı yazmaların sürekli akışı"),
+                                          ("Time windows and means in milliseconds for each chart", "Her grafik için milisaniyelerde zaman pencereleri ve ortalamalar"),
+                                          ("Old points expire automatically", "Eski point'ler otomatik olarak sona erer")], IX_CANDS, w1),
+        "decide_orders": decide_generic(lang, ("The order records of the shop", "Mağazanın sipariş kayıtları"),
+                                        [("Update one record under rules", "Bir kaydı kurallar altında güncelle"),
+                                         ("Several records change as one unit", "Birkaç kayıt tek bir birim olarak değişir"),
+                                         ("Rules between tables are enforced", "Table'lar arası kurallar uygulanır")], IX_CANDS, w2),
+        "series": ix_series(lang), "window": ix_window(lang), "retention": ix_retention(lang),
+    }
+    return {k: _localize(v, lang) for k, v in spec.items()}
+
+
+COUNT_TR.update({"points": "point", "series": "series", "raw points read": "okunan ham point", "points returned": "dönen point",
+                 "shard groups read": "okunan shard group", "shard groups deleted": "silinen shard group"})
+SIMS["influxdb"] = influxdb

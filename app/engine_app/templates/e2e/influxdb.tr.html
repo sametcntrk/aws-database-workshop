@@ -1,0 +1,223 @@
+{% extends "e2e/_base.html" %}
+{% import "e2e/_macros.html" as k with context %}
+{# Turkish version of influxdb.html. Terms stay in English; the explanations are Turkish. Keep both files in step. #}
+{% block body %}
+
+<h2 id="goal" data-short="Ne öğreneceksin"><span class="sec">00</span>Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
+<p>Bölüm 01 mimarın kararını verir: Amazon Timestream for InfluxDB nereye oturur, nereye oturmaz. Sonra tutorial iki bölümden oluşur.
+   Bölüm 1, açık kaynak time-series database'i InfluxDB'yi öğretir: point'ler, series'ler, tag'ler ve field'lar, query dili Flux, zaman pencereleri ve retention. Bölüm 2, AWS servisini ve Lale Market'in onu nasıl kullandığını gösterir.</p>
+<p>Örnekler Lale Market'in operasyon sayfasından gelir: depo sensörleri ve dakika başına siparişler. Bazen başka bir örnek bir fikri daha kolay gösterir. O zaman tutorial onu kullanır: bir hava istasyonu, bir kalp monitörü, bir evin elektrik sayacı.</p>
+<p>Bu tutorial'ın sonunda şunları yapabilirsin:</p>
+<ol>
+  <li>Bir time-series database'in hangi iş yükleri için doğru seçim olduğunu ve hangileri için olmadığını söylemek.</li>
+  <li>Line protocol'de bir point okuyup yazmak; onun measurement'ını, tag'lerini, field'larını ve timestamp'ini adlandırmak.</li>
+  <li>Bir series'i ve onun cardinality'sini açıklamak, hangi değerlerin tag'lere gideceğini seçmek.</li>
+  <li>range, filter ve aggregateWindow içeren bir Flux query'sini okumak.</li>
+  <li>Bir retention period'un, senin yazdığın bir silme job'u olmadan eski veriyi nasıl sildiğini açıklamak.</li>
+  <li>Timestream for InfluxDB'nin senin için neyi çalıştırdığını açıklamak.</li>
+</ol>
+<p>Dört tür kutu sana yardım eder. <b>Simülasyon</b>: Oynat'a ya da Sonraki adım'a bas. <b>Önce tahmin et</b>: cevabı açmadan önce kendi cevabını yaz.
+   <b>Checkpoint</b>: tek doğru cevabı olan bir soru. <b>Analoji</b>: günlük hayattan bir resim.</p>
+
+<h2 id="architect" data-short="Mimar gözüyle: ne zaman"><span class="sec">01</span>Mimar gözüyle: Timestream for InfluxDB nereye oturur</h2>
+<p><b>Önce bu bölümü oku.</b> Kararı bu bölüm verir. Sonraki bölümler bir time-series database'in nasıl çalıştığını öğretir.</p>
+<p><b>Kısaca:</b> Amazon Timestream for InfluxDB, açık kaynak InfluxDB'yi senin için çalıştırır. Bir time-series database ölçümleri bir timestamp ile saklar. Örnekler: 5 dakikada bir sıcaklık, dakikada bir sipariş sayısı, 10 saniyede bir CPU yükü.
+   Küçük point'lerden oluşan sürekli bir akışı yazar. Zaman pencereleri hakkındaki soruları cevaplar, örneğin "son 6 saat için 15 dakika başına ortalama". Eski veriyi de otomatik olarak siler.</p>
+<p>Anahtar fikir {{ k.term("series") }}'tir: ölçtüğün tek bir şeyin bütün point'leri, zaman sırasıyla. Bir query bir zaman aralığında birkaç series okur ve eski point'leri nadiren değiştirir.</p>
+
+<h3>Bir iş yükünde Timestream for InfluxDB'yi işaret eden sinyaller</h3>
+<table class="data">
+  <thead><tr><th>Sinyal</th><th>Gerçek bir projede nasıl görünür</th><th>Onu cevaplayan özellik</th></tr></thead>
+  <tbody>
+    <tr><td>Her kaydın bir timestamp'i ve bir sayısı var</td><td>Sensör okumaları, metrikler, fiyatlar, sayaçlar.</td><td>Line protocol'de point'ler (bölüm 03)</td></tr>
+    <tr><td>Yazmalar sürekli gelir, okumalar zaman aralıklarına bakar</td><td>Binlerce cihaz birkaç saniyede bir değer gönderir.</td><td>Zaman sırasıyla saklanan series'ler (bölüm 03)</td></tr>
+    <tr><td>Zaman penceresine göre grafikler</td><td>"15 dakika başına ortalama sıcaklık."</td><td>Flux'ta aggregateWindow (bölüm 05)</td></tr>
+    <tr><td>Eski veri değer kaybeder</td><td>Ham point'leri sadece 30 gün tut.</td><td>Bir bucket'ın retention period'u (bölüm 06)</td></tr>
+    <tr><td>Eşik değerlerde alarmlar</td><td>"Bir soğuk oda 10 dakika boyunca 8 °C'nin üstündeyse uyar."</td><td>InfluxDB'de task'lar ve check'ler</td></tr>
+    <tr><td>Metrik toplayan agent'lar</td><td>Telegraf'lı sunucular ve cihazlar.</td><td>Açık kaynak API'lar ve Telegraf plugin'leri</td></tr>
+  </tbody>
+</table>
+
+<h3>Use case'ler, nedeni ve özelliğiyle</h3>
+<table class="data">
+  <thead><tr><th>Use case</th><th>Veri</th><th>Neden bir time-series database</th><th>İşi yapan özellik</th></tr></thead>
+  <tbody>
+    <tr><td>Depo sensörleri (Lale Market)</td><td>4 deponun sıcaklık ve nemi, 5 dakikada bir.</td><td>Depoya göre, pencere başına grafikler.</td><td>warehouse ve sensor tag'leri, aggregateWindow</td></tr>
+    <tr><td>Dakika başına siparişler (Lale Market)</td><td>Kanal başına bir sayaç, dakikada bir.</td><td>Mağaza yükünün canlı bir grafiği.</td><td>fn: sum ile aggregateWindow</td></tr>
+    <tr><td>Uygulama ve sunucu izleme</td><td>CPU, bellek, gecikme, hata oranları.</td><td>Yeni veri üzerinde dashboard'lar ve alarmlar.</td><td>Telegraf, retention, check'ler</td></tr>
+    <tr><td>Endüstriyel IoT</td><td>Makine titreşimi, basınç, güç.</td><td>Yüksek yazma hızı, uzun dönem trendler için downsampling.</td><td>Pencereler, downsample edilmiş veriyi yazan task'lar</td></tr>
+    <tr><td>Enerji ve akıllı sayaçlar</td><td>Hane başına 15 dakikada bir tüketim.</td><td>Saat ve gün başına toplamlar.</td><td>aggregateWindow, bucket başına retention</td></tr>
+    <tr><td>Finansal piyasa verisi</td><td>Enstrümanların fiyatları ve hacimleri.</td><td>Son değer, zaman içinde hareketli ortalamalar.</td><td>Zaman sıralı series'ler, window function'lar</td></tr>
+    <tr><td>Filo ve araç telemetrisi</td><td>Araç başına hız, yakıt, konum.</td><td>Araç başına güncel durum ve geçmiş.</td><td>Araç başına tag (sınırlı sayıda)</td></tr>
+    <tr><td>Ağ izleme</td><td>Arayüz başına trafik, 10 saniyede bir.</td><td>Pencere başına oranlar ve tepeler.</td><td>fn: max ile pencereler, derivative</td></tr>
+  </tbody>
+</table>
+{{ k.fig("influxdb-raw-series.png", "dört dakika boyunca bellek kullanımının bir time series'i, tek bir çizgi olarak.") }}
+
+<h3>Timestream for InfluxDB'den uzaklaştıran sinyaller</h3>
+<table class="data">
+  <thead><tr><th>İş yükündeki sinyal</th><th>Neden zayıf bir seçim</th><th>Daha iyi seçim</th></tr></thead>
+  <tbody>
+    <tr><td>Kayıtlar iş kurallarıyla değişir</td><td>InfluxDB point'leri bir series'in sonuna ekler. Transaction ya da foreign key yok.</td><td><a href="/e2etutorial/aurora">Aurora</a></td></tr>
+    <tr><td>Bir kaydı key ile okuma</td><td>Model zamanı öne koyar, tek bir kaydı değil.</td><td><a href="/e2etutorial/dynamodb">DynamoDB</a></td></tr>
+    <tr><td>Her kullanıcının her event'i, aylarca saklanır</td><td>Bir tag'deki kullanıcı id'si milyonlarca series oluşturur.</td><td><a href="/e2etutorial/keyspaces">Keyspaces</a></td></tr>
+    <tr><td>Yıllarca iş verisi üzerinde SQL join'leri</td><td>Bir data warehouse değil.</td><td><a href="/e2etutorial/redshift">Redshift</a></td></tr>
+    <tr><td>Log mesajlarında serbest metin arama</td><td>Analyzer ya da relevance score yok.</td><td><a href="/e2etutorial/opensearch">OpenSearch</a></td></tr>
+  </tbody>
+</table>
+
+<h3>Bir mimarın sorduğu sorular, bu sırayla</h3>
+<ol>
+  <li><b>Zaman her sorunun ana ekseni mi?</b> Çoğu query "son bir saatte" diye başlıyorsa bir time-series database yardım eder.</li>
+  <li><b>Neyi ölçüyorsun ve onu hangi etiketler tanımlıyor?</b> Etiketler tag olur. Önce olası değerlerini say.</li>
+  <li><b>Ham veri ne kadar süre işe yarar?</b> Bu retention period'dur. Uzun dönem trendler ikinci bir bucket'ta downsample edilmiş veri kullanabilir.</li>
+  <li><b>Saniyede kaç point?</b> Instance boyutuna bu karar verir.</li>
+  <li><b>InfluxDB 2 mi, InfluxDB 3 mü?</b> Yeni iş yükleri InfluxDB 3 kullanabilir. Var olan database'ler ve Flux query'leri InfluxDB 2 kullanır.</li>
+  <li><b>Bir Availability Zone'un kaybına dayanmalı mı?</b> O zaman Multi-AZ bir deployment kullan.</li>
+</ol>
+
+<h3>AWS'te Timestream for InfluxDB ve akrabaları</h3>
+<table class="data">
+  <thead><tr><th>Seçenek</th><th>Nedir</th><th>Ne zaman seç</th></tr></thead>
+  <tbody>
+    <tr><td>Timestream for InfluxDB 2</td><td>Yönetilen bir InfluxDB 2 instance'ı, istersen ikinci bir Availability Zone'da bir standby ile.</td><td>Var olan InfluxDB 2 database'leri, Flux query'leri. Lale Market bunu kullanır.</td></tr>
+    <tr><td>Timestream for InfluxDB 3</td><td>Yönetilen InfluxDB 3 Core (tek node) ya da Enterprise (çok node'lu bir cluster).</td><td>Yeni iş yükleri, SQL query'leri, yüksek cardinality.</td></tr>
+    <tr><td>Amazon CloudWatch</td><td>AWS kaynaklarının metrikleri ve alarmları.</td><td>Kendi database'in olmadan AWS servislerinin izlenmesi.</td></tr>
+    <tr><td>Aurora'da time-series table'ları</td><td>Timestamp kolonlu ve index'li bir table.</td><td>Az sayıda point ve veri iş table'larıyla join'lenmeli.</td></tr>
+  </tbody>
+</table>
+
+<h3>Lale Market'te Timestream for InfluxDB'nin yeri</h3>
+<p><code>metrics</code> bucket'ında iki measurement vardır. <code>warehouse_env</code>, 4 deponun her biri için 5 dakikada bir bir sıcaklık ve bir nem point'i tutar. <code>orders</code>, dakika başına web siparişi sayısını tutar.
+   Admin sayfası "Operations" onları Flux query'leriyle çizer. Bir ziyaretçi bir checkout'u tamamladığında InfluxDB Engine App <code>channel=workshop</code> tag'li bir point daha yazar.</p>
+
+<h3>Simülasyon: gereksinimler seçsin</h3>
+{{ k.sim("decide_metrics", "İş yükü 1: depo sensörleri") }}
+{{ k.sim("decide_orders", "İş yükü 2: sipariş kayıtları") }}
+
+{{ k.quiz("ix-a1", "Bir fabrikanın 2.000 makinesi var. Her biri 10 saniyede bir sıcaklığını gönderiyor. Ekip son gün için 1 dakikalık ortalamalar istiyor ve ham veriyi 14 gün sonra siliyor. En iyi ne oturur?",
+   ["Makine başına bir tag ve 14 günlük retention ile Timestream for InfluxDB", "Makine başına yerinde güncellenen bir row ile Aurora", "Okuma başına bir vertex ile Neptune", "Okumalar üzerinde serbest metin aramalı OpenSearch"],
+   0, "Zaman damgalı sayılar, zaman üzerinde pencereler ve otomatik sona erme bir time-series database'in temel özellikleridir. 2.000 makine sınırlı sayıda tag değeridir.") }}
+{{ k.quiz("ix-a2", "Bir geliştirici her siparişin order id'sini bir tag'e koymak istiyor. Sorun nedir?",
+   ["Tag'ler metin tutamaz", "Her order id yeni bir series oluşturur, bu yüzden cardinality sınırsız büyür", "Tag'ler diske yazılmaz", "InfluxDB tag'li point'leri siler"],
+   1, "Bir tag değeri series key'in parçasıdır. Milyonlarca değeri olan bir id milyonlarca series ve büyük bir index oluşturur.") }}
+
+<div class="part"><b>Bölüm 1</b><h2 id="part1" data-short="BÖLÜM 1: InfluxDB">InfluxDB: point'ler, series'ler ve Flux</h2>
+<p>Line protocol, series'ler ve cardinality, zaman pencereleri ve retention.</p></div>
+
+<h2 id="why" data-short="Neden time series?"><span class="sec">02</span>Neden bir time-series database? Elektrik sayacı</h2>
+<p>Bir iş database'i güncel durumu tutar: bir ürünün stoğu, bir siparişin durumu. Durum değiştiğinde row'u günceller.
+   Bir time-series database ise her ölçümü tutar ve onu hiç güncellemez. Soru "değer ne?" değil, "değer nasıl değişti?"dir.</p>
+{% call k.callout("analogy", "Analoji") %}
+<p>Bir evin elektrik sayacı tek bir sayı gösterir. Elektrik şirketinin faturası ise bir tablo gösterir: bütün ay boyunca her 15 dakikanın tüketimi.
+   Sayaç bir iş database'idir. Faturadaki tablo bir time series'tir. Kimse faturanın bir satırını sonradan değiştirmez. Yeni satırlar sona eklenir ve birkaç yıl sonra eski faturalar gider.</p>
+{% endcall %}
+
+<h2 id="points" data-short="Point'ler ve series'ler"><span class="sec">03</span>Point'ler, tag'ler, field'lar ve series'ler</h2>
+<p>InfluxDB veriyi {{ k.term("line protocol") }} ile yazar: her {{ k.term("point") }} için bir satır metin. Format budur
+   (<a href="https://docs.influxdata.com/influxdb/v2/reference/syntax/line-protocol/">InfluxDB line protocol reference</a>):</p>
+{% call k.sql("W1", "Bir depo sensörünün bir point'i") %}
+<pre><code>warehouse_env,warehouse=IST-1,sensor=temperature value=21.2 1793433600</code></pre>
+<table class="clause">
+  <tr><td>warehouse_env</td><td>Measurement: verinin türünün adı, bir table adı gibi.</td></tr>
+  <tr><td>,warehouse=IST-1,sensor=temperature</td><td>Tag set: point'i tanımlayan key-value çiftleri. InfluxDB tag'leri index'ler, bu yüzden tag'ler üzerindeki filtreler hızlıdır. Tag değerleri her zaman metindir.</td></tr>
+  <tr><td>value=21.2</td><td>Field set: ölçülen değerler. Field'lar index'lenmez. Bir point'in en az bir field'ı olmalıdır. Bir integer field <code>i</code> ile biter, örneğin <code>count=14i</code>.</td></tr>
+  <tr><td>1793433600</td><td>Timestamp, burada 1 Ocak 1970'ten (UTC) beri saniye cinsinden. Precision'ı yazma isteği söyler. Lale Market <code>s</code> precision'ı ile yazar.</td></tr>
+</table>
+{% endcall %}
+<p>Bir {{ k.term("series") }}, aynı measurement'a, aynı tag set'e ve aynı field key'e sahip point'lerin grubudur. InfluxDB bir series'in point'lerini zamana göre sıralı olarak bir arada saklar.
+   Farklı series'lerin sayısı {{ k.term("cardinality") }}'dir. Bu altı satır simülasyonun girdisidir:</p>
+{{ k.sample("ix_lines", "line protocol'de altı point") }}
+{% call k.predict("Altı satır kaç farklı series oluşturur?") %}
+<p>Dört: IST-1 temperature (iki point), IST-1 humidity, ANK-1 temperature ve channel=web'li orders (iki point).</p>
+{% endcall %}
+{{ k.sim("series", "Satırlardan series'lere") }}
+<p>Identifier'lar: bir point'in kendine ait bir id'si yoktur. Onu series key ve timestamp tanımlar. Aynı series key ve aynı timestamp ile ikinci bir point yazarsan InfluxDB yeni bir point eklemez. Yeni field değeri eskisinin yerine geçer.
+   IST-1 ve ANK-1 depo kodları Lale Market'in depo listesine aittir. Tag'ler bu kodları ödünç alır, böylece bir grafik deponun adını gösterebilir.</p>
+{{ k.quiz("ix-q1", "Bir point'in hangi kısmı index'lenmez?",
+   ["Measurement", "Tag'ler", "Field'lar", "Tag key'leri"],
+   2, "Field'lar ölçülen değerleri tutar ve index'lenmez. Bir field değeri üzerindeki filtre point'leri okumak zorundadır.") }}
+
+<h2 id="flux" data-short="Flux query'leri"><span class="sec">04</span>Flux: bir query bir pipeline'dır</h2>
+<p>InfluxDB 2, {{ k.term("Flux") }} query dilini kullanır. Bir Flux query'si bir fonksiyon zinciridir. <code>|&gt;</code> operatörü bir fonksiyonun çıktısını bir sonrakine gönderir, bir shell'deki pipe gibi.
+   Lale Market operasyon sayfasının gerçek query'si budur (<code>engines/influxdb.py</code> içinden):</p>
+{% call k.sql("Q1", "Son 6 saat için 15 dakika başına ortalama sıcaklık") %}
+<pre><code>from(bucket: "metrics")
+  |&gt; range(start: -6h)
+  |&gt; filter(fn: (r) =&gt; r._measurement == "warehouse_env" and r.sensor == "temperature")
+  |&gt; aggregateWindow(every: 15m, fn: mean, createEmpty: false)</code></pre>
+<table class="clause">
+  <tr><td>from(bucket: "metrics")</td><td><code>metrics</code> bucket'ından oku. Bir bucket, kendi retention period'u olan adlandırılmış bir depodur.</td></tr>
+  <tr><td>|&gt; range(start: -6h)</td><td>Sadece son 6 saatin point'lerini tut. Bir bucket üzerindeki her Flux query'si bir range ister, çünkü InfluxDB veriyi önce zamana göre bulur.</td></tr>
+  <tr><td>|&gt; filter(fn: (r) =&gt; ...)</td><td>Sadece warehouse_env measurement'ının sensor = temperature tag'li <code>r</code> row'larını tut. Sonuçta her depo için bir series vardır.</td></tr>
+  <tr><td>|&gt; aggregateWindow(every: 15m, fn: mean, ...)</td><td>Her series'i 15 dakikalık pencerelere kes ve her pencerenin ortalamasını hesapla.</td></tr>
+  <tr><td>createEmpty: false</td><td>Point'i olmayan bir pencere için row döndürme.</td></tr>
+</table>
+{% endcall %}
+<p><code>_value</code> kolonu field değerini, <code>_time</code> kolonu timestamp'i tutar. Tag'ler de kolon olur, örneğin <code>warehouse</code>.</p>
+
+<h2 id="windows" data-short="Zaman pencereleri"><span class="sec">05</span>Zaman pencereleri: ham point'lerden bir grafiğe</h2>
+<p>6 saatlik bir grafiğin çizgi başına 72 point'e ihtiyacı yoktur. Pencere başına bir point'e ihtiyacı vardır. aggregateWindow bu hesabı database'de yapar, böylece uygulama sadece çizdiği point'leri alır.
+   Bunlar IST-1 sıcaklığının 5 dakikada bir gelen dokuz ham point'idir (örnek değerler):</p>
+{{ k.sample("ix_raw", "ham point'ler: IST-1, temperature") }}
+{{ k.fig("influxdb-windows.png", "aynı time series bir dakikalık pencerelere bölünmüş. Her pencerenin kendi rengi var.") }}
+{{ k.sim("window", "aggregateWindow(every: 15m, fn: mean)") }}
+{{ k.quiz("ix-q2", "Siparişler sayfası dakikada bir point'li orders measurement'ını kullanıyor. Hangi fonksiyon 15 dakika başına sipariş sayısını verir?",
+   ["aggregateWindow(every: 15m, fn: mean)", "aggregateWindow(every: 15m, fn: sum)", "aggregateWindow(every: 1m, fn: max)", "range(start: -15m)"],
+   1, "Her point bir dakikanın sayısıdır. 15 dakikanın toplamı 15 point'in toplamıdır. Lale Market siparişler için fn: sum kullanır.") }}
+
+<h2 id="retention" data-short="Retention"><span class="sec">06</span>Retention: eski veri kendiliğinden gider</h2>
+<p>Her bucket'ın bir {{ k.term("retention period") }}'u vardır. InfluxDB bir zaman aralığının point'lerini bir shard group'ta bir arada saklar. Bir shard group'un bütün point'leri retention period'dan eskiyse InfluxDB bütün shard group'u düşürür
+   (<a href="https://docs.influxdata.com/influxdb/v2/reference/internals/data-retention/">InfluxDB data retention</a>). Bu ucuzdur, çünkü tek tek point'leri değil, bütün dosyaları siler.</p>
+{{ k.sim("retention", "Retention period'u 3 gün olan bir bucket") }}
+<p>Uzun dönem trendler için yaygın bir pattern iki bucket kullanır. Bir task her saat ham bucket'ı okur, aggregateWindow ile saatlik ortalamaları hesaplar ve onları uzun retention period'lu ikinci bir bucket'a yazar.</p>
+{{ k.fig("influxdb-derived-series.png", "yıllık bir time series'in üç grafiği: değerler, yıllık değişim ve yıllık yüzde değişim.") }}
+
+<div class="part"><b>Bölüm 2</b><h2 id="part2" data-short="BÖLÜM 2: Timestream for InfluxDB">Amazon Timestream for InfluxDB: AWS servisi</h2>
+<p>VPC'nde yönetilen InfluxDB instance'ları ve cluster'ları.</p></div>
+
+<h2 id="service" data-short="Yönetilen servis"><span class="sec">07</span>AWS'in senin için çalıştırdıkları</h2>
+<p>AWS servisi şöyle tanımlar: Timestream for InfluxDB, yeni iş yükleri için InfluxDB 3 Core ve Enterprise'ı, var olan database'ler için InfluxDB 2'yi çalıştırır. Provisioning'i, patch'lemeyi, yedekleri ve failover'ı yapar
+   (<a href="https://aws.amazon.com/influxdb/">Amazon Timestream for InfluxDB</a>).
+   Bir InfluxDB 2 deployment'ı Multi-AZ olabilir. O zaman veriyi ikinci bir Availability Zone'daki bir standby'a senkron olarak replike eder ve otomatik olarak failover yapar
+   (<a href="https://aws.amazon.com/blogs/aws/run-and-manage-open-source-influxdb-databases-with-amazon-timestream/">AWS News Blog</a>).
+   Uygulamaların açık kaynak API'ları, client kütüphanelerini ve Telegraf plugin'lerini kullanmaya devam eder.</p>
+<table class="data">
+  <thead><tr><th>Görev</th><th>Kendi InfluxDB'n</th><th>Timestream for InfluxDB</th></tr></thead>
+  <tbody>
+    <tr><td>Sunucular</td><td>Sen kurar, patch'ler ve boyutlandırırsın.</td><td>AWS provision eder ve patch'ler. Instance class'ı ve storage'ı sen seçersin.</td></tr>
+    <tr><td>Erişilebilirlik</td><td>Replikasyonu ve failover'ı sen kurarsın.</td><td>Multi-AZ standby (InfluxDB 2) ya da çok node'lu bir cluster (InfluxDB 3 Enterprise).</td></tr>
+    <tr><td>Yedekler</td><td>Sen zamanlar ve test edersin.</td><td>Yönetilen yedekler.</td></tr>
+    <tr><td>Ağ ve secret'lar</td><td>TLS'i ve şifreleri sen ayarlarsın.</td><td>VPC'nde çalışır. Kimlik bilgileri AWS Secrets Manager'da. Hem diskte hem aktarımda şifreleme.</td></tr>
+    <tr><td>API'lar ve araçlar</td><td>Açık kaynak InfluxDB.</td><td>Aynı açık kaynak API'lar, client'lar ve Telegraf.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="lalemarket" data-short="Lale Market'te InfluxDB"><span class="sec">08</span>Lale Market'te Timestream for InfluxDB</h2>
+<ul>
+  <li>Data subnet'lerinde bir InfluxDB 2 instance'ı. InfluxDB Engine App, Secrets Manager'dan alınan bir kullanıcı adı ve şifreyle HTTPS port 8086 üzerinden bağlanır.</li>
+  <li>Organization <code>dbws</code>, bucket <code>metrics</code>'tir.</li>
+  <li>Seed warehouse_env ve orders measurement'larını siler, sensör point'lerini ve dakika başına sipariş point'lerini yeniden yazar.</li>
+  <li>Admin sayfası "Operations" Q1'i 1, 6 ya da 24 saat üzerinde 1, 5 ya da 15 dakikalık ya da 1 saatlik bir pencereyle çalıştırır.</li>
+  <li>Bir checkout <code>orders,channel=workshop count=1i</code> yazar. Reset sadece channel=workshop'lu point'leri siler.</li>
+</ul>
+
+<h2 id="recall" data-short="Hatırlama testi"><span class="sec">09</span>Hatırlama testi</h2>
+{{ k.quiz("ix-r1", "Bir series'i ne tanımlar?",
+   ["Sadece timestamp", "Measurement, tag set ve field key", "Field değeri", "Sadece bucket"],
+   1, "Aynı measurement, tag set ve field key'e sahip point'ler bir series'e aittir.") }}
+{{ k.quiz("ix-r2", "Bir bucket üzerindeki her Flux query'si neden range() ile başlar?",
+   ["Flux'ta başka filtre yok", "InfluxDB veriyi önce zamana göre bulur ve range okuduğu shard group'ları sınırlar", "range() sonucu sıralar", "range() bucket'ı oluşturur"],
+   1, "InfluxDB veriyi zamana göre saklar. Range, InfluxDB'ye hangi zaman aralıklarını açması gerektiğini söyler.") }}
+{{ k.quiz("ix-r3", "InfluxDB retention period'dan eski veriyi nasıl siler?",
+   ["Her gece bir DELETE çalıştırman gerekir", "Bütün point'leri çok eski olan shard group'ları bütün olarak düşürür", "Eski değerleri sıfıra çevirir", "Onları Amazon S3'e taşır"],
+   1, "Retention kontrolü tam shard group'ları düşürür. Silme job'u gerekmez.") }}
+
+<section class="lesson-foot">
+  <h2>Daha derine in</h2>
+  <p><b>Ana kaynak:</b> <a href="https://docs.influxdata.com/influxdb/v2/reference/key-concepts/data-elements/">InfluxDB data elements</a>, sonra
+     <a href="https://docs.aws.amazon.com/timestream/latest/developerguide/timestream-for-influxdb.html">Amazon Timestream for InfluxDB developer guide</a>.</p>
+  <p><b>Mağazada kullan:</b> admin sayfası <a href="/free-e-commerce-app/admin/ops">Operations</a> Q1'i çalıştırır. Pencereyi değiştir ve point sayısını karşılaştır.</p>
+  <p><b>Soru sor.</b> Bir kısım net değilse eğitmenine ya da AI asistanına sor. Projenden bir ölçüm getir ve onun tag'lerini ve field'larını birlikte seçin.</p>
+</section>
+{% endblock %}
