@@ -183,7 +183,7 @@
     w = step.wait || {};
     actionDone = !step.wait; quizOk = !step.quiz; phase = "do"; calls = []; seen = 0; from = 0;
     bar();
-    if (!w.fresh) lm.calls.forEach(onCall);   // calls of this page so far (a "look" step waits for a call that the page made at load)
+    if (step.action === "look" && !w.fresh) lm.calls.forEach(onCall);   // a "look" step waits for a call that the page made at load; other steps wait for the user's own action
     if (actionDone && step.focus) phase = "look-result";
     render();
     setTimeout(scrollToLit, 350);
