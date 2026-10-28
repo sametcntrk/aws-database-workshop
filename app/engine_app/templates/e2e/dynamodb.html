@@ -16,7 +16,7 @@
   <li>Explain how a key-value database finds data, and why the key decides the place of the data.</li>
   <li>Say for which workloads a key-value database is the right choice, and for which it is not.</li>
   <li>Select between the key-value options on AWS, and defend the choice in a close race.</li>
-  <li>Design a primary key from a list of access patterns, and predict the cost of GetItem, Query and Scan.</li>
+  <li>Design a primary key from the questions of an application, and predict the cost of GetItem, Query and Scan.</li>
   <li>Use a condition and an atomic ADD to keep a business rule without a lock.</li>
 </ol>
 <p>Four kinds of boxes help you. <b>Simulation</b>: press Play or Next step. <b>Predict first</b>: write your answer before you open it.
@@ -31,35 +31,70 @@
    Without a ticket ("a blue coat with a red scarf"), the attendant must look at every hook. That takes a long time, and the queue grows.</p>
 {% call k.callout("analogy", "Analogy") %}
 <p>The ticket number is the key. The hook is the place where the data lives. A key-value database is a cloakroom: it is very fast when you bring the ticket,
-   and slow when you only describe the coat. A large theatre adds more attendants and splits the hooks into rooms. That is a partition.</p>
+   and slow when you only describe the coat. A large theatre adds more attendants and splits the hooks into rooms. Section A4 gives these rooms their technical name.</p>
 {% endcall %}
 <p>A relational database (see the <a href="/e2etutorial/aurora">Aurora tutorial</a>) can answer any question with SQL. The price is that one server runs all writes,
    and the planner must decide how to answer each new question. A key-value database makes a different trade. It answers only questions by key.
    In return, it can split the data over many machines, and each machine answers its share alone. So the speed of one request does not depend on the size of the table.</p>
 
-<h2 id="model" data-short="Keys and values"><span class="sec">A2</span>Keys and values: the model</h2>
-<p>A key-value database stores pairs. The <b>key</b> is a unique name, and the <b>value</b> is the data that belongs to that name. The database does not need to understand the value. It only needs the key to find it.</p>
-<p>Many key-value databases let the key have two parts:</p>
-<ul>
-  <li>The <b>partition part</b> of the key decides <i>where</i> the data lives. All values with the same partition part are stored together.</li>
-  <li>The <b>sort part</b> of the key is optional. It decides the <i>order</i> of the values inside one partition, so the database can read a range: "the first three", "everything after this date".</li>
-</ul>
-<p>Two parts together are a <b>composite key</b>. All values with the same partition part form one group, which the database can read in one request.</p>
-<p>Different products use different names for the same ideas. The names matter only when you write code. The ideas are the same:</p>
+<h2 id="model" data-short="Keys and values"><span class="sec">A2</span>Keys and values: the pair</h2>
+{{ k.concept("Key and value",
+   "A key-value database stores <b>pairs</b>. The <b>key</b> is a unique name. The <b>value</b> is the data that belongs to that name. To read a value, you give its key.",
+   "The key <code>session:7f3a</code> names the session of the visitor <code>7f3a</code>. Its value is <code>{user: C00001, last_page: /cart}</code>.",
+   "A cloakroom ticket (the key) and the coat that hangs on the hook (the value). Or a phone book: the name is the key, the number is the value.") }}
+<p>The simplest key-value store has one-part keys. Each key names exactly one value, and the database does not look inside the value. This is enough for a session, a counter or a cached page:</p>
 <table class="data">
-  <thead><tr><th>General idea</th><th>Redis / Valkey</th><th>Apache Cassandra</th><th>Amazon DynamoDB</th></tr></thead>
+  <thead><tr><th class="c-pk">key</th><th>value</th></tr></thead>
   <tbody>
-    <tr><td>Key</td><td>key</td><td>primary key</td><td>primary key</td></tr>
-    <tr><td>Partition part of the key</td><td>the key (a hash slot is calculated from it)</td><td>partition key</td><td>partition key</td></tr>
-    <tr><td>Sort part of the key</td><td>a member score inside one sorted set</td><td>clustering column</td><td>sort key</td></tr>
-    <tr><td>Value</td><td>string, hash, list, set</td><td>row with columns</td><td>item with attributes</td></tr>
-    <tr><td>Group with the same partition part</td><td>one key with a data structure</td><td>partition</td><td>item collection</td></tr>
+    <tr><td class="c-pk mono">session:7f3a</td><td><code>{"user": "C00001", "last_page": "/cart"}</code></td></tr>
+    <tr><td class="c-pk mono">session:3c8d</td><td><code>{"user": "C00017", "last_page": "/p/P0044"}</code></td></tr>
+    <tr><td class="c-pk mono">views:P0001</td><td><code>1842</code></td></tr>
   </tbody>
 </table>
+{% call k.ask("What happens if I write a second value with a key that already exists?") %}
+<p>The new value replaces the old one. A key names exactly one value, so the database cannot keep two values under one key. If you need the old value too, the key must be different.</p>
+{% endcall %}
+{% call k.ask("Can I find a value without its key, for example \"all sessions of user C00001\"?") %}
+<p>Not cheaply. The database knows where each key lives, but it does not know what is inside the values. To answer this question, it must read every value. Part B shows how a second index solves this (B4).</p>
+{% endcall %}
+
+<h2 id="keyparts" data-short="Partition part, sort part"><span class="sec">A3</span>The two-part key: partition part and sort part</h2>
+<p>A cart is not one value. It is a group of lines: one line for each product. The visitor wants to read the whole group with one request, and change one line without the others. A one-part key cannot do both. So many key-value databases let the key have two parts.</p>
+{{ k.concept("Partition part",
+   "The first part of the key. It decides <b>where</b> the value is stored. All values with the same partition part are stored together, as one group.",
+   "<code>CART#7f3a</code>. Every line of the cart of visitor 7f3a has this partition part, so the database keeps all of them in one place.",
+   "The building number of an address. All flats of building 12 are in the same building.") }}
+{{ k.concept("Sort part",
+   "The second part of the key. It names one value <b>inside</b> the group and decides the <b>order</b> of the values in the group.",
+   "<code>ITEM#P0001</code>: the line for product P0001 inside the cart <code>CART#7f3a</code>. The lines of one cart are sorted by this part.",
+   "The flat number. \"Building 12, flat 3\" names one flat. \"Building 12\" alone names the whole building.") }}
+<p>Together, the two parts are the <b>full key</b> (a composite key). The full key names exactly one value. The partition part alone names a group. This diagram shows the carts of the teaching data. The colors stay the same on the whole page: <b>yellow</b> for the partition part, <b>blue</b> for the sort part, <b>grey</b> for the value.</p>
+{{ k.anatomy([
+   {"pk": "CART#7f3a", "sk": "ITEM#P0001", "attrs": [["name", "Alpen Kablosuz Kulaklık 1"], ["qty", "2"], ["unit_price", "3,373.84"]]},
+   {"pk": "CART#7f3a", "sk": "ITEM#P0044", "attrs": [["name", "Kapadokya Bulut Mimarisi 44"], ["qty", "1"], ["unit_price", "2,651.39"]]},
+   {"pk": "CART#7f3a", "sk": "COUPON#LALE10", "attrs": [["percent", "10"]]},
+   {"pk": "CART#3c8d", "sk": "ITEM#P0179", "attrs": [["name", "Toros Python ile Veri 179"], ["qty", "10"], ["unit_price", "767.49"], ["gift_note", "İyi okumalar"]]}],
+   "The carts as key-value pairs. Each row is one value with its full key. The coupon and the gift note are extra examples: they show that values in one table can have different fields.",
+   labels={"primary": "Full key", "pk": "Partition part", "sk": "Sort part", "attrs": "Value", "note": "the fields can differ from value to value", "items": "Values"}) }}
+<p>Read the diagram row by row:</p>
+<ul>
+  <li>Rows 1, 2 and 3 have the same partition part, <code>CART#7f3a</code>. They are one group: the cart of visitor 7f3a. One request can read the whole group.</li>
+  <li>Row 1 has the sort part <code>ITEM#P0001</code>. The pair <code>CART#7f3a</code> + <code>ITEM#P0001</code> names exactly this one line, so a request can change it without the other lines.</li>
+  <li>Row 3 is a coupon, not a product. It has a different sort part prefix (<code>COUPON#</code>) and different fields (only <code>percent</code>). The database accepts this, because it does not need to understand the value.</li>
+  <li>Row 4 has a different partition part, <code>CART#3c8d</code>. It is a different group, so it can be stored in a different place.</li>
+</ul>
+{% call k.ask("Why does the key start with CART# and ITEM#? Is this a rule of the database?") %}
+<p>No, it is a convention of the designer. The prefix tells a person what kind of thing the key names. One table can then hold several kinds of values (cart lines, coupons) without confusion. The database sees only a text, for example <code>CART#7f3a</code>.</p>
+{% endcall %}
+{% call k.ask("Can two values have the same partition part?") %}
+<p>Yes. That is the purpose of a group: the three values of cart 7f3a share <code>CART#7f3a</code>. They must have different sort parts. Two values with the same partition part <i>and</i> the same sort part are impossible, because the full key names one value.</p>
+{% endcall %}
+{% call k.ask("What if the key has no sort part?") %}
+<p>Then each partition part names exactly one value, as in the session table of A2. You cannot group several values under one partition part, and you cannot read a range. Use a sort part when one thing (a cart, a customer, a device) has many related values.</p>
+{% endcall %}
 <h3>The teaching data and its identifiers</h3>
-<p>This is a small cart table with four carts. The product names and prices come from the real Lale Market catalog. The cart ids are short examples.
-   The column <code>pk</code> is the partition part of the key, and <code>sk</code> is the sort part.</p>
-{{ k.sample("cart", "carts: the teaching copy (8 values in 4 carts)", key=["pk", "sk"]) }}
+<p>The simulations of this page use this small table with four carts. The column <code>pk</code> holds the partition part of the key, and <code>sk</code> holds the sort part. The product names and prices come from the real Lale Market catalog. The cart ids are short examples.</p>
+{{ k.sample("cart", "carts: the teaching copy (8 values in 4 carts)", key=["pk", "sk"], pk="pk", sk="sk") }}
 <p>Read the ownership of each identifier as a sentence:</p>
 <table class="data">
   <thead><tr><th>Identifier</th><th>Who owns it</th><th>Who borrows it</th></tr></thead>
@@ -69,25 +104,51 @@
     <tr><td>The product id (for example <code>P0001</code>)</td><td>The catalog owns it. It lives in DocumentDB and in Aurora.</td><td>The cart table borrows it inside the sort part: <code>ITEM#P0001</code>. A key-value database does not check that the product exists. The application must do it.</td></tr>
   </tbody>
 </table>
-<p>The prefixes <code>CART#</code> and <code>ITEM#</code> are a convention. One table can hold several kinds of values, and the prefix shows the kind.</p>
 {{ k.quiz("ddb-q0", "Look at the teaching table. Which request returns exactly one value?",
    ["Read with pk = CART#7f3a and sk = ITEM#P0044", "Read all values with pk = CART#7f3a", "Read every value and keep those with qty >= 2", "Read all values with pk = CART#3c8d"],
    0, "The full key (both parts) names exactly one value. The group CART#7f3a has three values, and the group CART#3c8d has two.") }}
 
-<h2 id="partitions" data-short="Partitions and hashing"><span class="sec">A3</span>Partitions and hashing: why a lookup by key stays fast</h2>
-<p>A key-value database spreads its data over many {{ k.term("partition") }}s. A partition is a unit of storage with its own share of the data and its own share of the work.
-   To place a value, the database gives the partition part of the key to a hash function. A {{ k.term("hash function") }} turns any value into a number, and the same value always gives the same number.
-   The number selects the partition. Redis Cluster calculates a hash slot from the key. Cassandra calculates a token. DynamoDB uses its own internal hash. The idea is the same.</p>
+<h2 id="partitions" data-short="Partitions and hashing"><span class="sec">A4</span>Partitions and hashing: why a lookup by key stays fast</h2>
+{{ k.concept("Partition",
+   "A part of the storage, on its own machine or disk, with its own share of the data and its own share of the work. A large table is split over many partitions.",
+   "The teaching table has three partitions: 0, 1 and 2. The cart <code>CART#7f3a</code> lives in partition 2, with all three of its lines.",
+   "The rooms of a large cloakroom. Each room has its own attendant and its own hooks. A ticket number says which room to go to.") }}
+{{ k.concept("Hash function",
+   "A function that turns any value into a number. The same value always gives the same number. Different values spread over the possible numbers.",
+   "The teaching hash adds the character codes of <code>CART#7f3a</code> and takes the rest of a division by 3. The result is the number of the partition.",
+   "The first letter of a surname in a school archive: \"Kaya\" always goes to drawer K. You know the drawer before you walk there.") }}
+<p>To place a value, the database gives <b>only the partition part</b> of the key to the hash function. The sort part does not take part in this step. So all values of one group get the same number and land in the same partition:</p>
+<div class="flow">
+  <div class="box pk"><code>CART#7f3a</code><small>partition part</small></div><span class="arrow">→</span>
+  <div class="box">hash( )<small>the same input gives the same number</small></div><span class="arrow">→</span>
+  <div class="box">638 % 3 = 2<small>teaching hash: sum of the character codes, rest of a division by 3</small></div><span class="arrow">→</span>
+  <div class="box hit">partition 2<small>stores all lines of CART#7f3a</small></div>
+</div>
+<p class="flow-cap">Writing and reading use the same path. To read the cart, the database calculates the same number and goes straight to partition 2.</p>
+<div class="parts">
+  <div><h4>partition 0</h4><span class="chip">CART#3c8d · ITEM#P0179</span><span class="chip">CART#3c8d · ITEM#P0001</span></div>
+  <div><h4>partition 1</h4><span class="chip">CART#a1f2 · ITEM#P0095</span><span class="chip">CART#a1f2 · ITEM#P0044</span><span class="chip">CART#d405 · ITEM#P0142</span></div>
+  <div class="on"><h4>partition 2</h4><span class="chip">CART#7f3a · ITEM#P0001</span><span class="chip">CART#7f3a · ITEM#P0044</span><span class="chip">CART#7f3a · ITEM#P0142</span></div>
+</div>
+<p class="flow-cap">Where the teaching hash puts the eight values. The simulation below calculates the same placement step by step.</p>
+<p>Redis Cluster calculates a hash slot from the key. Cassandra calculates a token. DynamoDB uses its own internal hash. The idea is the same in all of them.</p>
 {{ k.fig("dynamodb-hash-table.png", "a hash function turns a name (John Smith) into a slot number (873). To find John Smith again, the program calculates the same number and goes straight to that slot. A key-value database uses the same idea to go from a key to a partition.") }}
 {% call k.predict("Look at the teaching table. Three partitions, and four carts. Is it possible that two carts land in the same partition? Does that break anything?") %}
 <p>Yes, two carts can land in the same partition. Nothing breaks. A partition holds many groups. Inside the partition, each group stays together and sorted by sk.
    The hash only decides which partition does the work for a key.</p>
 {% endcall %}
 {{ k.sim("hash", "Eight values, three partitions, one hash") }}
-<p>The simulation uses a small teaching hash (the sum of the character codes, modulo 3). Real databases use better hash functions, and the number of partitions grows as the data grows.
-   The idea is the same: the key alone decides the partition, so the database does not need to look anywhere else.</p>
-<p>Each partition can do only a limited amount of work per second. So a good partition key has many different values, and the requests spread evenly over them.
-   If one value gets most of the traffic, its partition reaches its limit while the others are idle. This is a {{ k.term("hot partition") }}.</p>
+{% call k.ask("Where is a partition physically? Can I see it or select it?") %}
+<p>A partition is storage on servers that the database runs, usually with copies on several machines. You cannot select a partition. You select the key, and the hash of the partition part selects the partition for you.</p>
+{% endcall %}
+{% call k.ask("Who decides how many partitions there are?") %}
+<p>In a self-managed system, the operators do, when they add machines. In a managed service like DynamoDB, the service adds partitions by itself when the data or the traffic grows. Your keys stay the same.</p>
+{% endcall %}
+{{ k.concept("Hot partition",
+   "A partition that gets much more traffic than the others, because many requests use the same partition part. It reaches its limit while the other partitions are idle.",
+   "If the partition part were the city, <code>İstanbul</code> would get most of the carts, and one partition would do most of the work.",
+   "One cash desk with a long queue while ten other desks wait. More desks do not help if everybody goes to the same one.") }}
+<p>So a good partition part has many different values, and the requests spread evenly over them. The visitor id is a good choice: every visitor has a different one.</p>
 {{ k.quiz("ddb-q1", "Which partition key spreads the cart traffic of Lale Market best?",
    ["The city of the visitor", "The browser id of the visitor", "The date of the cart", "The category of the product"],
    1, "Each visitor has a different browser id, so the traffic spreads over very many key values. The city, the date and the category have few values, and some values are very busy.") }}
@@ -104,12 +165,12 @@
 <table class="data">
   <thead><tr><th>Signal</th><th>What it looks like in a real project</th><th>The key-value property that answers it</th></tr></thead>
   <tbody>
-    <tr><td>The application always knows the key</td><td>Get the cart of this visitor. Get the profile of this user. Get the state of this device.</td><td>A read by key goes straight to one partition (A3)</td></tr>
-    <tr><td>Traffic is very large or very spiky</td><td>A sale multiplies the traffic by 50 for one hour. A new game brings a million players on its first day.</td><td>Many partitions share the load (A3)</td></tr>
+    <tr><td>The application always knows the key</td><td>Get the cart of this visitor. Get the profile of this user. Get the state of this device.</td><td>A read by key goes straight to one partition (A4)</td></tr>
+    <tr><td>Traffic is very large or very spiky</td><td>A sale multiplies the traffic by 50 for one hour. A new game brings a million players on its first day.</td><td>Many partitions share the load (A4)</td></tr>
     <tr><td>The values are independent of each other</td><td>One cart does not need another cart. One session does not need another session.</td><td>No joins: each request touches one key or one group</td></tr>
     <tr><td>Simple rules on one value</td><td>At most 5 pieces of one product. Take a seat only if it is free.</td><td>A conditional write on one key (B3)</td></tr>
     <tr><td>Data that should delete itself</td><td>Abandoned carts after a day, sessions after an hour, temporary holds after ten minutes.</td><td>Expiry per key (TTL) (B5)</td></tr>
-    <tr><td>The shape of the values changes often</td><td>A cart line, a coupon and a gift note in the same table.</td><td>The database does not need to understand the value (A2)</td></tr>
+    <tr><td>The shape of the values changes often</td><td>A cart line, a coupon and a gift note in the same table.</td><td>The database does not need to understand the value (A2, A3)</td></tr>
   </tbody>
 </table>
 
@@ -164,7 +225,7 @@
     <tr><td><a href="/e2etutorial/elasticache">Amazon ElastiCache (Valkey)</a></td><td>An in-memory key-value store with rich data structures. Microseconds.</td><td>Speed matters most and the data is a cache or can be rebuilt: sessions, leaderboards, counters.</td></tr>
     <tr><td>Amazon MemoryDB</td><td>A Valkey-compatible in-memory database with a durable multi-AZ log.</td><td>You need the speed of memory and the durability of a database together.</td></tr>
     <tr><td><a href="/e2etutorial/keyspaces">Amazon Keyspaces</a></td><td>A serverless, Cassandra-compatible wide-column database.</td><td>The team already uses Apache Cassandra and CQL.</td></tr>
-    <tr><td>DynamoDB Accelerator (DAX)</td><td>An in-memory cache in front of DynamoDB with the same API.</td><td>Hot DynamoDB items are read very often and need microsecond reads.</td></tr>
+    <tr><td>DynamoDB Accelerator (DAX)</td><td>An in-memory cache in front of DynamoDB with the same API.</td><td>Hot DynamoDB records are read very often and need microsecond reads.</td></tr>
   </tbody>
 </table>
 <p>Within DynamoDB, a few options change a design:</p>
@@ -181,7 +242,7 @@
 </table>
 
 <h2 id="lalemarket-arch" data-short="Place in Lale Market"><span class="sec">M6</span>Where DynamoDB sits in Lale Market</h2>
-<p>Lale Market keeps every shopping cart in the table <code>dbws-cart</code>. The product page adds items. The cart page reads them. Checkout reads the cart strongly consistent,
+<p>Lale Market keeps every shopping cart in the table <code>dbws-cart</code>. The product page adds lines to the cart. The cart page reads them. Checkout reads the cart strongly consistent,
    and Aurora writes the order. After the commit, the browser empties the cart in DynamoDB.
    The cart is a good fit. Every request knows the visitor id, and the carts are independent of each other. A lost cart after 24 hours costs nothing.
    The order is not a good fit for a key-value database in this shop, because it needs rules over stock, orders and lines together. That is the job of Aurora.</p>
@@ -212,11 +273,100 @@
 <p>The DynamoDB names for the ideas of Part A, the read and write operations, key design and the extra features.</p></div>
 
 <h2 id="items" data-short="Items and the table"><span class="sec">B1</span>Items, attributes and the primary key in DynamoDB</h2>
-<p>A DynamoDB table holds {{ k.term("item", "item") }}s. An item is a set of attributes: a name and a value each, like one JSON object.
-   Two items in one table can have different attributes. Only the {{ k.term("primary key") }} must be in each item.</p>
-{{ k.fig("dynamodb-table.png", "item 101 has Phone, item 102 has Address, and item 103 has FavoriteColor and Address. Only the primary key PersonID is in each item. The table has no schema for the other attributes.") }}
-<p>The two parts of the key from A2 have these names in DynamoDB: the {{ k.term("partition key") }} and the {{ k.term("sort key") }}. All items with the same partition key form an {{ k.term("item collection") }}.
-   This is the real definition of the Lale Market table (from <code>cloudformation/workshop.yaml</code>):</p>
+<p>DynamoDB uses its own names for the ideas of Part A. This section puts the names on a real record from the live Lale Market table. So each name points to something that you can see.</p>
+<p>Different products use different names for the ideas of Part A. The names matter only when you write code. The last column shows the names that this part uses:</p>
+<table class="data">
+  <thead><tr><th>General idea</th><th>Redis / Valkey</th><th>Apache Cassandra</th><th>Amazon DynamoDB</th></tr></thead>
+  <tbody>
+    <tr><td>Full key</td><td>key</td><td>primary key</td><td>primary key</td></tr>
+    <tr><td class="c-pk">Partition part of the key</td><td>the key (a hash slot is calculated from it)</td><td>partition key</td><td>partition key</td></tr>
+    <tr><td class="c-sk">Sort part of the key</td><td>a member score inside one sorted set</td><td>clustering column</td><td>sort key</td></tr>
+    <tr><td>Value</td><td>string, hash, list, set</td><td>row with columns</td><td>item with attributes</td></tr>
+    <tr><td>Group with the same partition part</td><td>one key with a data structure</td><td>partition</td><td>item collection</td></tr>
+  </tbody>
+</table>
+{{ k.concept("Item",
+   "One value of Part A in DynamoDB: one record of a table. It is a set of attributes, similar to one JSON object.",
+   "One line of a cart: the product P0001 in the cart of one visitor.",
+   "One card in a card index. Each card can have different fields written on it.") }}
+{{ k.concept("Attribute",
+   "One name and one value inside an item, for example <code>qty</code> = 2. Each attribute has a data type.",
+   "<code>name</code>, <code>qty</code>, <code>unit_price</code> and <code>expires_at</code> are the attributes of a cart line.",
+   "One field on the card: \"Name\", \"Phone\", \"Birthday\".") }}
+{{ k.concept("Primary key = partition key + sort key",
+   "The attribute or attributes that identify one item. The <b>partition key</b> is the partition part of A3, and the <b>sort key</b> is the sort part. Every item must have them. The other attributes are free.",
+   "The partition key is the attribute <code>pk</code> with the value <code>CART#7f3a91c2-…</code>. The sort key is the attribute <code>sk</code> with the value <code>ITEM#P0001</code>.",
+   "Building number and flat number together: one address, one flat.") }}
+<p>This is a real item. The workshop added two products to a cart in the live shop, and then read the table with the AWS CLI. DynamoDB returns each attribute with its data type:</p>
+{% call k.live("an item of the table dbws-cart, as DynamoDB returns it (aws dynamodb query)") %}
+<pre><code>{
+  "pk":         { "S": "CART#7f3a91c2-5b0e-4d7a-9c41-2e8f6d1a0b37" },
+  "sk":         { "S": "ITEM#P0001" },
+  "name":       { "S": "Alpen Kablosuz Kulaklık 1" },
+  "qty":        { "N": "2" },
+  "unit_price": { "N": "3373.84" },
+  "expires_at": { "N": "1793285643" }
+}</code></pre>
+{% endcall %}
+<p>The same item and its neighbour, drawn with the names of DynamoDB and the colors of this page:</p>
+{{ k.anatomy([
+   {"pk": "CART#7f3a91c2-…", "sk": "ITEM#P0001", "attrs": [["name", "Alpen Kablosuz Kulaklık 1"], ["qty", "2"], ["unit_price", "3373.84"], ["expires_at", "1793285643"]]},
+   {"pk": "CART#7f3a91c2-…", "sk": "ITEM#P0044", "attrs": [["name", "Kapadokya Bulut Mimarisi 44"], ["qty", "1"], ["unit_price", "2651.39"], ["expires_at", "1793285643"]]}],
+   "The two items of the live cart. The primary key is pk + sk. The other attributes are free: DynamoDB has no schema for them.") }}
+<p>Read every name on one item:</p>
+<ul>
+  <li>The <b>item</b> is the whole record: six attributes that describe one line of the cart.</li>
+  <li>The <b>partition key</b> is <code>pk</code>. Its value <code>CART#7f3a91c2-…</code> says: this item belongs to the cart of visitor <code>7f3a91c2-…</code>. DynamoDB hashes this value to select the partition.</li>
+  <li>The <b>sort key</b> is <code>sk</code>. Its value <code>ITEM#P0001</code> says: this item is the line of product P0001 inside that cart.</li>
+  <li>The <b>primary key</b> is the pair <code>pk</code> + <code>sk</code>. No other item of the table can have the same pair.</li>
+  <li>The <b>attributes</b> <code>name</code>, <code>qty</code>, <code>unit_price</code> and <code>expires_at</code> are not part of the key. Another item could have other attributes.</li>
+  <li>The two items share the partition key, so they belong to one group: the whole cart, which one Query reads. DynamoDB has a name for this group.</li>
+</ul>
+{{ k.concept("Item collection",
+   "All items with the same partition key. DynamoDB stores them together, sorted by the sort key.",
+   "The two items with <code>pk = CART#7f3a91c2-…</code>: the full cart of one visitor.",
+   "All flats of one building, in the order of their flat numbers.") }}
+<h3>Data types: what S, N and the others mean</h3>
+<p>In the raw item, each value is wrapped in a small object whose name is the data type. These are the types of DynamoDB
+   (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.NamingRulesDataTypes.html">Supported data types</a>):</p>
+<table class="data">
+  <thead><tr><th>Code</th><th>Type</th><th>Example</th></tr></thead>
+  <tbody>
+    <tr><td><code>S</code></td><td>String (text)</td><td><code>"name": {"S": "Alpen Kablosuz Kulaklık 1"}</code></td></tr>
+    <tr><td><code>N</code></td><td>Number</td><td><code>"qty": {"N": "2"}</code></td></tr>
+    <tr><td><code>BOOL</code></td><td>Boolean (true or false)</td><td><code>"express_delivery": {"BOOL": true}</code></td></tr>
+    <tr><td><code>L</code></td><td>List: an ordered list of values of any type</td><td><code>"products": {"L": [{"S": "Kablosuz Kulaklık"}, {"S": "Telefon Kılıfı"}]}</code></td></tr>
+    <tr><td><code>M</code></td><td>Map: a nested object</td><td><code>"address": {"M": {"city": {"S": "İstanbul"}}}</code></td></tr>
+    <tr><td><code>NULL</code></td><td>An empty value</td><td><code>"note": {"NULL": true}</code></td></tr>
+    <tr><td><code>B</code>, <code>SS</code>, <code>NS</code>, <code>BS</code></td><td>Binary, and sets of strings, numbers or binaries</td><td><code>"tags": {"SS": ["yeni", "çok satan"]}</code></td></tr>
+  </tbody>
+</table>
+<p>Here is an example of an order item that uses more types. It is an example, not an item of Lale Market. The partition key is the customer and the sort key is the order time:</p>
+<pre><code>{
+  "CustomerId":      { "S": "M10294" },                  ← partition key
+  "OrderDate":       { "S": "2026-10-28T14:30:00Z" },    ← sort key
+  "TotalAmount":     { "N": "1450.50" },
+  "Status":          { "S": "Kargoya Verildi" },
+  "ExpressDelivery": { "BOOL": true },
+  "Products":        { "L": [ { "S": "Kablosuz Kulaklık" }, { "S": "Telefon Kılıfı" } ] }
+}</code></pre>
+{{ k.anatomy([
+   {"pk": "M10294", "sk": "2026-10-28T14:30:00Z", "attrs": [["TotalAmount", "1450.50"], ["Status", "Kargoya Verildi"], ["ExpressDelivery", "true"], ["Products", "[Kablosuz Kulaklık, Telefon Kılıfı]"]]},
+   {"pk": "M10294", "sk": "2026-11-02T09:12:00Z", "attrs": [["TotalAmount", "299.90"], ["Status", "Hazırlanıyor"]]},
+   {"pk": "M20311", "sk": "2026-10-30T18:05:00Z", "attrs": [["TotalAmount", "89.00"], ["Status", "Teslim Edildi"], ["GiftNote", "Mutlu yıllar"]]}],
+   "An orders table. Customer M10294 has two orders, so the two items form one item collection, sorted by the order date. The second order has fewer attributes, and the third order has a gift note.",
+   pk_name="CustomerId", sk_name="OrderDate") }}
+<p>With this key, the question "the orders of customer M10294, newest first" is one Query. The partition key selects the customer, and the sort key gives the order.</p>
+{% call k.ask("Why is the number in quotes, as in \"N\": \"2\"?") %}
+<p>DynamoDB sends numbers over the network as text, so that no programming language loses digits. It stores and compares them as numbers. The SDK turns the text into a number for you.</p>
+{% endcall %}
+{% call k.ask("Why does the live item have no BOOL or L attribute?") %}
+<p>The cart line of Lale Market needs only text and numbers. The types are free per attribute, so another table, or even another item of the same table, can use BOOL, L or M.</p>
+{% endcall %}
+{% call k.ask("Can an attribute of the key change later?") %}
+<p>No. To change a key attribute, delete the item, then write a new item with the new key. The other attributes can change with UpdateItem.</p>
+{% endcall %}
+<p>This is the real definition of the Lale Market table (from <code>cloudformation/workshop.yaml</code>):</p>
 {% call k.sql("T1", "The cart table") %}
 <pre><code>CartTable:
   Type: AWS::DynamoDB::Table
@@ -249,7 +399,8 @@
 </table>
 {% endcall %}
 <p>Each DynamoDB partition "is designed to deliver a maximum capacity of 3,000 read units per second and 1,000 write units per second"
-   (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html">Partition key design</a>). This is the limit behind the hot partition of A3.</p>
+   (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html">Partition key design</a>). This is the limit behind the hot partition of A4.</p>
+{{ k.fig("dynamodb-table.png", "the official AWS example: item 101 has Phone, item 102 has Address, and item 103 has FavoriteColor and Address. Only the primary key PersonID is in each item.") }}
 {{ k.fig("dynamodb-partition-key.png", "the item with AnimalType Dog goes into the third partition, because the hash of \"Dog\" points there. To read it, DynamoDB calculates the same hash and reads only that partition.") }}
 
 <h2 id="reads" data-short="GetItem, Query, Scan"><span class="sec">B2</span>Reads: GetItem, Query and Scan, and what they cost</h2>
@@ -273,6 +424,23 @@
   <tr><td>ConsistentRead=True</td><td>A strongly consistent read: the answer contains every write that succeeded before the read. The default is an eventually consistent read.</td></tr>
   <tr><td>ReturnConsumedCapacity='TOTAL'</td><td>Ask DynamoDB to report the read units that this request used. The Behind-the-scenes panel of the shop shows this number.</td></tr>
 </table>
+{% endcall %}
+{% call k.live("the same Query on the live table, for the cart with the two items above (aws dynamodb query --return-consumed-capacity TOTAL)") %}
+<pre><code>{
+  "Items": [
+    { "qty": { "N": "2" }, "sk": { "S": "ITEM#P0001" } },
+    { "qty": { "N": "1" }, "sk": { "S": "ITEM#P0044" } }
+  ],
+  "Count": 2,
+  "ScannedCount": 2,
+  "ConsumedCapacity": { "TableName": "dbws-cart", "CapacityUnits": 1.0 }
+}</code></pre>
+{% endcall %}
+<p>Read the answer line by line. <code>Items</code> are the two lines of the cart, in the order of the sort key. The CLI call asked only for <code>sk</code> and <code>qty</code> (a projection), so the other attributes are not in the answer.
+   <code>Count</code> is the number of items returned, and <code>ScannedCount</code> is the number of items that DynamoDB read: both are 2, because the Query read only this cart.
+   <code>CapacityUnits</code> is 1.0: one strongly consistent read of less than 4 KB.</p>
+{% call k.ask("Why must a Query always name the partition key?") %}
+<p>Because the partition key is the only way for DynamoDB to know which partition to read (A4). Without it, DynamoDB would have to read every partition. That operation exists, but it is called Scan, and it reads the whole table.</p>
 {% endcall %}
 {% call k.sql("Q2", "Every cart line with two or more pieces (a Scan)") %}
 <pre><code>table.scan(FilterExpression=Attr('qty').gte(2))</code></pre>
@@ -344,6 +512,9 @@
    and each write to the table also writes to the index. The index owns its own key. It borrows the attribute values from the items of the base table.</p>
 {{ k.fig("dynamodb-gsi.png", "the index GameTitleIndex has the partition key GameTitle and the sort key TopScore. \"Top scores of Galaxy Invaders\" is now one Query. On the base table, keyed by UserId, the same question needs a Scan.") }}
 {{ k.sim("gsi", "Which carts contain P0044? Scan of the base table, then Query of a GSI") }}
+{% call k.ask("Does a GSI copy the whole item?") %}
+<p>You decide. The projection of the index can be only the keys (KEYS_ONLY), the keys and a list of attributes (INCLUDE), or all attributes (ALL). A smaller projection costs less storage and fewer write units, but a Query of the index can return only the projected attributes.</p>
+{% endcall %}
 <p>The Lale Market cart table has no GSI, because the shop never asks this question. Add an index only for a real access pattern: each index adds write cost to every write.</p>
 
 <h2 id="ttl" data-short="TTL and Streams"><span class="sec">B5</span>Time to live and Streams</h2>
@@ -351,9 +522,25 @@
    DynamoDB "automatically deletes expired items within a few days of their expiration time, without consuming write throughput"
    (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html">Time to live</a>).
    Until the delete, an expired item can still appear in a read. A program that must not show it uses a filter on <code>expires_at</code>. This is why the session race in M7 gave DynamoDB only "partly" for exact expiry.</p>
+<p>An example, at the time 1793285700 (in seconds since 1 January 1970):</p>
+<table class="data">
+  <thead><tr><th class="c-pk">pk</th><th class="c-sk">sk</th><th>expires_at</th><th>state at 1793285700</th></tr></thead>
+  <tbody>
+    <tr><td class="c-pk mono">CART#7f3a</td><td class="c-sk mono">ITEM#P0001</td><td>1793285643</td><td>expired: 57 seconds in the past. DynamoDB will delete it, typically within a few days.</td></tr>
+    <tr><td class="c-pk mono">CART#3c8d</td><td class="c-sk mono">ITEM#P0179</td><td>1793372043</td><td>valid: one day in the future.</td></tr>
+  </tbody>
+</table>
+<p>Until the background process deletes the first item, a Query can still return it. A filter <code>expires_at &gt; :now</code> hides it.</p>
 <p>{{ k.term("DynamoDB Streams") }} records each change of an item: insert, update and delete. For each item, the changes keep their order.
    A consumer, for example an AWS Lambda function, reads the stream and reacts. It sends an e-mail, updates a search index, or writes a copy for analytics. This is how a DynamoDB table becomes the start of an event-driven design.
-   Lale Market does not use Streams. A production shop could use them to empty the cart after an order event, instead of a call from the browser.</p>
+</p>
+<div class="flow">
+  <div class="box pk">UpdateItem<small>qty of ITEM#P0001: 2 → 3</small></div><span class="arrow">→</span>
+  <div class="box">stream record<small>old image qty 2, new image qty 3</small></div><span class="arrow">→</span>
+  <div class="box">AWS Lambda<small>reads the record</small></div><span class="arrow">→</span>
+  <div class="box hit">reaction<small>e-mail, search index, analytics copy</small></div>
+</div>
+<p>Lale Market does not use Streams. A production shop could use them to empty the cart after an order event, instead of a call from the browser.</p>
 
 <div class="part"><b>Part C</b><h2 id="partC" data-short="Part C: The AWS service">The AWS service: what DynamoDB runs for you</h2>
 <p>What you must do when you run a key-value store yourself, and what AWS does instead.</p></div>

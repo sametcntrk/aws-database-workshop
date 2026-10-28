@@ -118,8 +118,9 @@
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const fmt = (v) => (typeof v === "number" && !Number.isInteger(v) ? v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : v);
   function table(t, rows, marks) {
-    const head = t.cols.map((c, i) => `<th class="${t.key.includes(i) ? "k" : t.ref.includes(i) ? "r" : ""}">${esc(c)}</th>`).join("");
-    const body = rows.length ? rows.map((r, i) => `<tr class="${marks && marks[i] ? `m-${marks[i]}` : ""}">${r.map((v) => `<td>${esc(fmt(v))}</td>`).join("")}</tr>`).join("")
+    const kv = (i) => ((t.pk || []).includes(i) ? " c-pk" : (t.sk || []).includes(i) ? " c-sk" : "");
+    const head = t.cols.map((c, i) => `<th class="${t.key.includes(i) ? "k" : t.ref.includes(i) ? "r" : ""}${kv(i)}">${esc(c)}</th>`).join("");
+    const body = rows.length ? rows.map((r, i) => `<tr class="${marks && marks[i] ? `m-${marks[i]}` : ""}">${r.map((v, j) => `<td class="${kv(j).trim()}">${esc(fmt(v))}</td>`).join("")}</tr>`).join("")
       : `<tr><td colspan="${t.cols.length}" class="empty">${esc(T.no_rows)}</td></tr>`;
     return `<figure class="simt"><figcaption>${esc(t.name)}</figcaption><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></figure>`;
   }

@@ -17,7 +17,7 @@
   <li>Bir key-value database'in veriyi nasıl bulduğunu ve verinin yerine neden key'in karar verdiğini açıklamak.</li>
   <li>Bir key-value database'in hangi iş yükleri için doğru seçim olduğunu ve hangileri için olmadığını söylemek.</li>
   <li>AWS'teki key-value seçenekleri arasında seçim yapmak ve seçimi yakın bir yarışta savunmak.</li>
-  <li>Bir access pattern listesinden primary key tasarlamak ve GetItem, Query ve Scan'in maliyetini tahmin etmek.</li>
+  <li>Bir uygulamanın sorularından primary key tasarlamak ve GetItem, Query ve Scan'in maliyetini tahmin etmek.</li>
   <li>Bir iş kuralını kilit olmadan korumak için bir koşul ve atomik bir ADD kullanmak.</li>
 </ol>
 <p>Dört tür kutu sana yardım eder. <b>Simülasyon</b>: Oynat'a ya da Sonraki adım'a bas. <b>Önce tahmin et</b>: cevabı açmadan önce kendi cevabını yaz.
@@ -32,35 +32,70 @@
    Fiş olmadan ("kırmızı atkılı mavi bir palto") görevli her askıya bakmak zorundadır. Bu uzun sürer ve kuyruk büyür.</p>
 {% call k.callout("analogy", "Analoji") %}
 <p>Fiş numarası key'dir. Askı verinin yaşadığı yerdir. Bir key-value database bir vestiyerdir: fişi getirdiğinde çok hızlı,
-   sadece paltoyu tarif ettiğinde yavaştır. Büyük bir tiyatro daha fazla görevli ekler ve askıları odalara böler. Bu bir partition'dır.</p>
+   sadece paltoyu tarif ettiğinde yavaştır. Büyük bir tiyatro daha fazla görevli ekler ve askıları odalara böler. A4 bölümü bu odalara teknik adlarını verir.</p>
 {% endcall %}
 <p>İlişkisel bir database (bkz. <a href="/e2etutorial/aurora?lang=tr">Aurora tutorial'ı</a>) her soruyu SQL ile cevaplayabilir. Bedeli şudur: bütün yazmaları tek bir sunucu çalıştırır
    ve planner her yeni soruyu nasıl cevaplayacağına karar vermek zorundadır. Bir key-value database farklı bir takas yapar. Sadece key ile sorulan soruları cevaplar.
    Karşılığında veriyi birçok makineye bölebilir ve her makine kendi payını tek başına cevaplar. Böylece tek bir isteğin hızı table'ın boyutuna bağlı değildir.</p>
 
-<h2 id="model" data-short="Key'ler ve değerler"><span class="sec">A2</span>Key'ler ve değerler: model</h2>
-<p>Bir key-value database çiftler saklar. <b>Key</b> benzersiz bir isimdir, <b>değer</b> (value) ise o isme ait veridir. Database'in değeri anlamasına gerek yoktur. Onu bulmak için sadece key'e ihtiyaç duyar.</p>
-<p>Birçok key-value database key'in iki parçalı olmasına izin verir:</p>
-<ul>
-  <li>Key'in <b>partition parçası</b> verinin <i>nerede</i> yaşayacağına karar verir. Aynı partition parçasına sahip bütün değerler bir arada saklanır.</li>
-  <li>Key'in <b>sıralama parçası</b> isteğe bağlıdır. Bir partition'ın içindeki değerlerin <i>sırasına</i> karar verir; böylece database bir aralık okuyabilir: "ilk üç", "bu tarihten sonraki her şey".</li>
-</ul>
-<p>İki parça birlikte bir <b>composite key</b>'dir. Aynı partition parçasına sahip bütün değerler, database'in tek bir istekte okuyabildiği bir grup oluşturur.</p>
-<p>Farklı ürünler aynı fikirler için farklı isimler kullanır. İsimler sadece kod yazarken önemlidir. Fikirler aynıdır:</p>
+<h2 id="model" data-short="Key'ler ve değerler"><span class="sec">A2</span>Key'ler ve değerler: çift</h2>
+{{ k.concept("Key ve değer",
+   "Bir key-value database <b>çiftler</b> saklar. <b>Key</b> benzersiz bir isimdir. <b>Değer</b> (value) o isme ait veridir. Bir değeri okumak için onun key'ini verirsin.",
+   "<code>session:7f3a</code> key'i <code>7f3a</code> ziyaretçisinin oturumunu adlandırır. Değeri <code>{user: C00001, last_page: /cart}</code>'tır.",
+   "Bir vestiyer fişi (key) ve askıda duran palto (değer). Ya da bir telefon rehberi: isim key, numara değerdir.") }}
+<p>En basit key-value store tek parçalı key'lere sahiptir. Her key tam olarak tek bir değeri adlandırır ve database değerin içine bakmaz. Bu bir oturum, bir sayaç ya da cache'lenmiş bir sayfa için yeterlidir:</p>
 <table class="data">
-  <thead><tr><th>Genel fikir</th><th>Redis / Valkey</th><th>Apache Cassandra</th><th>Amazon DynamoDB</th></tr></thead>
+  <thead><tr><th class="c-pk">key</th><th>değer</th></tr></thead>
   <tbody>
-    <tr><td>Key</td><td>key</td><td>primary key</td><td>primary key</td></tr>
-    <tr><td>Key'in partition parçası</td><td>key'in kendisi (ondan bir hash slot hesaplanır)</td><td>partition key</td><td>partition key</td></tr>
-    <tr><td>Key'in sıralama parçası</td><td>bir sorted set içindeki üyenin score'u</td><td>clustering column</td><td>sort key</td></tr>
-    <tr><td>Değer</td><td>string, hash, list, set</td><td>column'lu row</td><td>attribute'lu item</td></tr>
-    <tr><td>Aynı partition parçasına sahip grup</td><td>bir veri yapısı taşıyan tek key</td><td>partition</td><td>item collection</td></tr>
+    <tr><td class="c-pk mono">session:7f3a</td><td><code>{"user": "C00001", "last_page": "/cart"}</code></td></tr>
+    <tr><td class="c-pk mono">session:3c8d</td><td><code>{"user": "C00017", "last_page": "/p/P0044"}</code></td></tr>
+    <tr><td class="c-pk mono">views:P0001</td><td><code>1842</code></td></tr>
   </tbody>
 </table>
+{% call k.ask("Zaten var olan bir key ile ikinci bir değer yazarsam ne olur?") %}
+<p>Yeni değer eskisinin yerine geçer. Bir key tam olarak tek bir değeri adlandırır, bu yüzden database bir key altında iki değer tutamaz. Eski değere de ihtiyacın varsa key farklı olmalıdır.</p>
+{% endcall %}
+{% call k.ask("Bir değeri key'i olmadan bulabilir miyim, örneğin \"C00001 kullanıcısının bütün oturumları\"?") %}
+<p>Ucuz bir şekilde bulamazsın. Database her key'in nerede yaşadığını bilir ama değerlerin içinde ne olduğunu bilmez. Bu soruyu cevaplamak için her değeri okumak zorundadır. Bölüm B, ikinci bir index'in bunu nasıl çözdüğünü gösterir (B4).</p>
+{% endcall %}
+
+<h2 id="keyparts" data-short="Partition parçası, sıralama parçası"><span class="sec">A3</span>İki parçalı key: partition parçası ve sıralama parçası</h2>
+<p>Bir sepet tek bir değer değildir. Satırlardan oluşan bir gruptur: her ürün için bir satır. Ziyaretçi bütün grubu tek bir istekle okumak ve bir satırı diğerlerine dokunmadan değiştirmek ister. Tek parçalı bir key ikisini birden yapamaz. Bu yüzden birçok key-value database key'in iki parçalı olmasına izin verir.</p>
+{{ k.concept("Partition parçası",
+   "Key'in ilk parçası. Değerin <b>nerede</b> saklanacağına karar verir. Aynı partition parçasına sahip bütün değerler tek bir grup olarak bir arada saklanır.",
+   "<code>CART#7f3a</code>. 7f3a ziyaretçisinin sepetinin her satırı bu partition parçasına sahiptir, bu yüzden database hepsini tek bir yerde tutar.",
+   "Bir adresteki bina numarası. 12 numaralı binanın bütün daireleri aynı binadadır.") }}
+{{ k.concept("Sıralama parçası",
+   "Key'in ikinci parçası. Grubun <b>içindeki</b> tek bir değeri adlandırır ve gruptaki değerlerin <b>sırasına</b> karar verir.",
+   "<code>ITEM#P0001</code>: <code>CART#7f3a</code> sepetinin içindeki P0001 ürününün satırı. Bir sepetin satırları bu parçaya göre sıralanır.",
+   "Daire numarası. \"12 numaralı bina, 3 numaralı daire\" tek bir daireyi adlandırır. Sadece \"12 numaralı bina\" bütün binayı adlandırır.") }}
+<p>İki parça birlikte <b>tam key</b>'dir (composite key). Tam key tam olarak tek bir değeri adlandırır. Partition parçası tek başına bir grubu adlandırır. Bu şema öğretici verinin sepetlerini gösterir. Renkler bütün sayfada aynı kalır: partition parçası için <b>sarı</b>, sıralama parçası için <b>mavi</b>, değer için <b>gri</b>.</p>
+{{ k.anatomy([
+   {"pk": "CART#7f3a", "sk": "ITEM#P0001", "attrs": [["name", "Alpen Kablosuz Kulaklık 1"], ["qty", "2"], ["unit_price", "3.373,84"]]},
+   {"pk": "CART#7f3a", "sk": "ITEM#P0044", "attrs": [["name", "Kapadokya Bulut Mimarisi 44"], ["qty", "1"], ["unit_price", "2.651,39"]]},
+   {"pk": "CART#7f3a", "sk": "COUPON#LALE10", "attrs": [["percent", "10"]]},
+   {"pk": "CART#3c8d", "sk": "ITEM#P0179", "attrs": [["name", "Toros Python ile Veri 179"], ["qty", "10"], ["unit_price", "767,49"], ["gift_note", "İyi okumalar"]]}],
+   "Key-value çiftleri olarak sepetler. Her satır tam key'iyle birlikte bir değerdir. Kupon ve hediye notu ek örneklerdir: bir table'daki değerlerin farklı alanlara sahip olabileceğini gösterirler.",
+   labels={"primary": "Tam key", "pk": "Partition parçası", "sk": "Sıralama parçası", "attrs": "Değer", "note": "alanlar değerden değere farklı olabilir", "items": "Değerler"}) }}
+<p>Şemayı satır satır oku:</p>
+<ul>
+  <li>1., 2. ve 3. satırların partition parçası aynıdır: <code>CART#7f3a</code>. Bunlar bir gruptur: 7f3a ziyaretçisinin sepeti. Tek bir istek bütün grubu okuyabilir.</li>
+  <li>1. satırın sıralama parçası <code>ITEM#P0001</code>'dir. <code>CART#7f3a</code> + <code>ITEM#P0001</code> çifti tam olarak bu tek satırı adlandırır; böylece bir istek onu diğer satırlara dokunmadan değiştirebilir.</li>
+  <li>3. satır bir ürün değil, bir kupondur. Sıralama parçasının öneki farklıdır (<code>COUPON#</code>) ve alanları farklıdır (sadece <code>percent</code>). Database bunu kabul eder, çünkü değeri anlamasına gerek yoktur.</li>
+  <li>4. satırın partition parçası farklıdır: <code>CART#3c8d</code>. Bu farklı bir gruptur, bu yüzden farklı bir yerde saklanabilir.</li>
+</ul>
+{% call k.ask("Key neden CART# ve ITEM# ile başlıyor? Bu database'in bir kuralı mı?") %}
+<p>Hayır, tasarımcının bir geleneğidir. Önek, key'in ne tür bir şeyi adlandırdığını bir insana söyler. Böylece bir table birkaç tür değeri (sepet satırları, kuponlar) karışıklık olmadan tutabilir. Database sadece bir metin görür, örneğin <code>CART#7f3a</code>.</p>
+{% endcall %}
+{% call k.ask("İki değer aynı partition parçasına sahip olabilir mi?") %}
+<p>Evet. Bir grubun amacı budur: 7f3a sepetinin üç değeri <code>CART#7f3a</code>'yı paylaşır. Sıralama parçaları farklı olmalıdır. Aynı partition parçasına <i>ve</i> aynı sıralama parçasına sahip iki değer imkânsızdır, çünkü tam key tek bir değeri adlandırır.</p>
+{% endcall %}
+{% call k.ask("Key'in sıralama parçası yoksa ne olur?") %}
+<p>O zaman her partition parçası, A2'deki oturum table'ında olduğu gibi tam olarak tek bir değeri adlandırır. Bir partition parçası altında birkaç değeri gruplayamaz ve bir aralık okuyamazsın. Bir şeyin (bir sepet, bir müşteri, bir cihaz) birbiriyle ilgili birçok değeri varsa sıralama parçası kullan.</p>
+{% endcall %}
 <h3>Öğretici veri ve identifier'ları</h3>
-<p>Bu, dört sepetli küçük bir sepet table'ıdır. Ürün isimleri ve fiyatları gerçek Lale Market kataloğundan gelir. Sepet id'leri kısa örneklerdir.
-   <code>pk</code> kolonu key'in partition parçası, <code>sk</code> ise sıralama parçasıdır.</p>
-{{ k.sample("cart", "sepetler: öğretici kopya (4 sepette 8 değer)", key=["pk", "sk"]) }}
+<p>Bu sayfanın simülasyonları dört sepetli bu küçük table'ı kullanır. <code>pk</code> kolonu key'in partition parçasını, <code>sk</code> ise sıralama parçasını tutar. Ürün isimleri ve fiyatları gerçek Lale Market kataloğundan gelir. Sepet id'leri kısa örneklerdir.</p>
+{{ k.sample("cart", "sepetler: öğretici kopya (4 sepette 8 değer)", key=["pk", "sk"], pk="pk", sk="sk") }}
 <p>Her identifier'ın sahipliğini bir cümle olarak oku:</p>
 <table class="data">
   <thead><tr><th>Identifier</th><th>Sahibi kim</th><th>Kim ödünç alır</th></tr></thead>
@@ -70,25 +105,51 @@
     <tr><td>Ürün id'si (örneğin <code>P0001</code>)</td><td>Sahibi katalogdur. DocumentDB'de ve Aurora'da yaşar.</td><td>Sepet table'ı onu sıralama parçasının içinde ödünç alır: <code>ITEM#P0001</code>. Bir key-value database ürünün var olduğunu kontrol etmez. Bunu uygulama yapmalıdır.</td></tr>
   </tbody>
 </table>
-<p><code>CART#</code> ve <code>ITEM#</code> önekleri bir gelenektir. Bir table birkaç tür değer tutabilir ve önek türü gösterir.</p>
 {{ k.quiz("ddb-q0", "Öğretici table'a bak. Hangi istek tam olarak tek bir değer döndürür?",
    ["pk = CART#7f3a ve sk = ITEM#P0044 ile okuma", "pk = CART#7f3a olan bütün değerleri okuma", "Her değeri okuyup qty >= 2 olanları tutma", "pk = CART#3c8d olan bütün değerleri okuma"],
    0, "Tam key (iki parça birlikte) tam olarak tek bir değeri adlandırır. CART#7f3a grubunda üç, CART#3c8d grubunda iki değer var.") }}
 
-<h2 id="partitions" data-short="Partition ve hash"><span class="sec">A3</span>Partition'lar ve hash: key ile okuma neden hızlı kalır</h2>
-<p>Bir key-value database verisini birçok {{ k.term("partition") }}'a yayar. Bir partition, verinin kendi payını ve işin kendi payını taşıyan bir storage birimidir.
-   Bir değeri yerleştirmek için database key'in partition parçasını bir hash fonksiyonuna verir. Bir {{ k.term("hash function") }} her değeri bir sayıya çevirir ve aynı değer her zaman aynı sayıyı verir.
-   Sayı partition'ı seçer. Redis Cluster key'den bir hash slot hesaplar. Cassandra bir token hesaplar. DynamoDB kendi iç hash'ini kullanır. Fikir aynıdır.</p>
+<h2 id="partitions" data-short="Partition ve hash"><span class="sec">A4</span>Partition'lar ve hash: key ile okuma neden hızlı kalır</h2>
+{{ k.concept("Partition",
+   "Kendi makinesinde ya da diskinde, verinin kendi payını ve işin kendi payını taşıyan bir storage parçası. Büyük bir table birçok partition'a bölünür.",
+   "Öğretici table'ın üç partition'ı var: 0, 1 ve 2. <code>CART#7f3a</code> sepeti üç satırıyla birlikte partition 2'de yaşar.",
+   "Büyük bir vestiyerin odaları. Her odanın kendi görevlisi ve kendi askıları vardır. Fiş numarası hangi odaya gidileceğini söyler.") }}
+{{ k.concept("Hash fonksiyonu",
+   "Her değeri bir sayıya çeviren bir fonksiyon. Aynı değer her zaman aynı sayıyı verir. Farklı değerler olası sayılara dağılır.",
+   "Öğretici hash <code>CART#7f3a</code>'nın karakter kodlarını toplar ve 3'e bölümünden kalanı alır. Sonuç partition'ın numarasıdır.",
+   "Bir okul arşivinde soyadının ilk harfi: \"Kaya\" her zaman K çekmecesine gider. Yürümeden önce çekmeceyi bilirsin.") }}
+<p>Bir değeri yerleştirmek için database hash fonksiyonuna key'in <b>sadece partition parçasını</b> verir. Sıralama parçası bu adıma katılmaz. Böylece bir grubun bütün değerleri aynı sayıyı alır ve aynı partition'a düşer:</p>
+<div class="flow">
+  <div class="box pk"><code>CART#7f3a</code><small>partition parçası</small></div><span class="arrow">→</span>
+  <div class="box">hash( )<small>aynı girdi aynı sayıyı verir</small></div><span class="arrow">→</span>
+  <div class="box">638 % 3 = 2<small>öğretici hash: karakter kodlarının toplamı, 3'e bölümünden kalan</small></div><span class="arrow">→</span>
+  <div class="box hit">partition 2<small>CART#7f3a'nın bütün satırlarını saklar</small></div>
+</div>
+<p class="flow-cap">Yazma ve okuma aynı yolu kullanır. Sepeti okumak için database aynı sayıyı hesaplar ve doğrudan partition 2'ye gider.</p>
+<div class="parts">
+  <div><h4>partition 0</h4><span class="chip">CART#3c8d · ITEM#P0179</span><span class="chip">CART#3c8d · ITEM#P0001</span></div>
+  <div><h4>partition 1</h4><span class="chip">CART#a1f2 · ITEM#P0095</span><span class="chip">CART#a1f2 · ITEM#P0044</span><span class="chip">CART#d405 · ITEM#P0142</span></div>
+  <div class="on"><h4>partition 2</h4><span class="chip">CART#7f3a · ITEM#P0001</span><span class="chip">CART#7f3a · ITEM#P0044</span><span class="chip">CART#7f3a · ITEM#P0142</span></div>
+</div>
+<p class="flow-cap">Öğretici hash'in sekiz değeri yerleştirdiği yerler. Aşağıdaki simülasyon aynı yerleşimi adım adım hesaplar.</p>
+<p>Redis Cluster key'den bir hash slot hesaplar. Cassandra bir token hesaplar. DynamoDB kendi iç hash'ini kullanır. Fikir hepsinde aynıdır.</p>
 {{ k.fig("dynamodb-hash-table.png", "bir hash fonksiyonu bir ismi (John Smith) bir slot numarasına (873) çevirir. John Smith'i tekrar bulmak için program aynı sayıyı hesaplar ve doğrudan o slot'a gider. Bir key-value database bir key'den bir partition'a gitmek için aynı fikri kullanır.") }}
 {% call k.predict("Öğretici table'a bak. Üç partition ve dört sepet var. İki sepetin aynı partition'a düşmesi mümkün mü? Bu bir şeyi bozar mı?") %}
 <p>Evet, iki sepet aynı partition'a düşebilir. Hiçbir şey bozulmaz. Bir partition birçok grup tutar. Partition'ın içinde her grup bir arada ve sk'ya göre sıralı kalır.
    Hash sadece bir key için işi hangi partition'ın yapacağına karar verir.</p>
 {% endcall %}
 {{ k.sim("hash", "Sekiz değer, üç partition, bir hash") }}
-<p>Simülasyon küçük bir öğretici hash kullanır (karakter kodlarının toplamının 3'e göre modu). Gerçek database'ler daha iyi hash fonksiyonları kullanır ve veri büyüdükçe partition sayısı artar.
-   Fikir aynıdır: partition'a key tek başına karar verir, bu yüzden database başka hiçbir yere bakmak zorunda kalmaz.</p>
-<p>Her partition saniyede sınırlı miktarda iş yapabilir. Bu yüzden iyi bir partition key'in birçok farklı değeri olur ve istekler bu değerlere eşit dağılır.
-   Trafiğin çoğunu tek bir değer alırsa onun partition'ı sınırına ulaşır, diğerleri ise boş bekler. Buna {{ k.term("hot partition") }} denir.</p>
+{% call k.ask("Bir partition fiziksel olarak nerede? Onu görebilir ya da seçebilir miyim?") %}
+<p>Bir partition, database'in çalıştırdığı sunuculardaki storage'dır; genellikle birkaç makinede kopyaları vardır. Bir partition'ı seçemezsin. Key'i sen seçersin, partition'ı partition parçasının hash'i senin için seçer.</p>
+{% endcall %}
+{% call k.ask("Kaç partition olacağına kim karar verir?") %}
+<p>Kendi işlettiğin bir sistemde makine eklerken operatörler karar verir. DynamoDB gibi yönetilen bir serviste, veri ya da trafik büyüdüğünde servis partition'ları kendisi ekler. Key'lerin aynı kalır.</p>
+{% endcall %}
+{{ k.concept("Hot partition",
+   "Birçok istek aynı partition parçasını kullandığı için diğerlerinden çok daha fazla trafik alan partition. Diğer partition'lar boş beklerken sınırına ulaşır.",
+   "Partition parçası şehir olsaydı sepetlerin çoğunu <code>İstanbul</code> alırdı ve işin çoğunu tek bir partition yapardı.",
+   "Uzun kuyruklu tek bir kasa, diğer on kasa ise bekliyor. Herkes aynı kasaya giderse daha fazla kasa yardım etmez.") }}
+<p>Bu yüzden iyi bir partition parçasının birçok farklı değeri olur ve istekler bu değerlere eşit dağılır. Ziyaretçi id'si iyi bir seçimdir: her ziyaretçinin farklı bir id'si vardır.</p>
 {{ k.quiz("ddb-q1", "Lale Market'in sepet trafiğini en iyi hangi partition key dağıtır?",
    ["Ziyaretçinin şehri", "Ziyaretçinin tarayıcı id'si", "Sepetin tarihi", "Ürünün kategorisi"],
    1, "Her ziyaretçinin farklı bir tarayıcı id'si vardır, bu yüzden trafik çok sayıda key değerine dağılır. Şehrin, tarihin ve kategorinin az değeri vardır ve bazı değerler çok yoğundur.") }}
@@ -105,12 +166,12 @@
 <table class="data">
   <thead><tr><th>Sinyal</th><th>Gerçek bir projede nasıl görünür</th><th>Onu cevaplayan key-value özelliği</th></tr></thead>
   <tbody>
-    <tr><td>Uygulama key'i her zaman bilir</td><td>Bu ziyaretçinin sepetini getir. Bu kullanıcının profilini getir. Bu cihazın durumunu getir.</td><td>Key ile okuma doğrudan tek bir partition'a gider (A3)</td></tr>
-    <tr><td>Trafik çok büyük ya da çok dalgalı</td><td>Bir indirim trafiği bir saatliğine 50 ile çarpar. Yeni bir oyun ilk gününde bir milyon oyuncu getirir.</td><td>Yükü birçok partition paylaşır (A3)</td></tr>
+    <tr><td>Uygulama key'i her zaman bilir</td><td>Bu ziyaretçinin sepetini getir. Bu kullanıcının profilini getir. Bu cihazın durumunu getir.</td><td>Key ile okuma doğrudan tek bir partition'a gider (A4)</td></tr>
+    <tr><td>Trafik çok büyük ya da çok dalgalı</td><td>Bir indirim trafiği bir saatliğine 50 ile çarpar. Yeni bir oyun ilk gününde bir milyon oyuncu getirir.</td><td>Yükü birçok partition paylaşır (A4)</td></tr>
     <tr><td>Değerler birbirinden bağımsız</td><td>Bir sepetin başka bir sepete ihtiyacı yok. Bir oturumun başka bir oturuma ihtiyacı yok.</td><td>Join yok: her istek tek bir key'e ya da tek bir gruba dokunur</td></tr>
     <tr><td>Tek bir değer üzerinde basit kurallar</td><td>Bir üründen en fazla 5 adet. Koltuk sadece boşsa tutulur.</td><td>Tek bir key üzerinde koşullu yazma (B3)</td></tr>
     <tr><td>Kendini silmesi gereken veri</td><td>Bir gün sonra terk edilen sepetler, bir saat sonra oturumlar, on dakika sonra geçici tutmalar.</td><td>Key başına süre sonu (TTL) (B5)</td></tr>
-    <tr><td>Değerlerin şekli sık değişir</td><td>Aynı table'da bir sepet satırı, bir kupon ve bir hediye notu.</td><td>Database'in değeri anlamasına gerek yok (A2)</td></tr>
+    <tr><td>Değerlerin şekli sık değişir</td><td>Aynı table'da bir sepet satırı, bir kupon ve bir hediye notu.</td><td>Database'in değeri anlamasına gerek yok (A2, A3)</td></tr>
   </tbody>
 </table>
 
@@ -165,7 +226,7 @@
     <tr><td><a href="/e2etutorial/elasticache?lang=tr">Amazon ElastiCache (Valkey)</a></td><td>Zengin veri yapılarına sahip bellek içi bir key-value store. Mikrosaniyeler.</td><td>En önemli şey hız ve veri bir cache ya da yeniden kurulabilir: oturumlar, sıralamalar, sayaçlar.</td></tr>
     <tr><td>Amazon MemoryDB</td><td>Kalıcı, çoklu AZ'li bir log'a sahip, Valkey uyumlu bellek içi bir database.</td><td>Belleğin hızına ve bir database'in dayanıklılığına birlikte ihtiyacın var.</td></tr>
     <tr><td><a href="/e2etutorial/keyspaces?lang=tr">Amazon Keyspaces</a></td><td>Serverless, Cassandra uyumlu bir wide-column database.</td><td>Ekip zaten Apache Cassandra ve CQL kullanıyor.</td></tr>
-    <tr><td>DynamoDB Accelerator (DAX)</td><td>DynamoDB'nin önünde aynı API'ı kullanan bellek içi bir cache.</td><td>Sıcak DynamoDB item'ları çok sık okunuyor ve mikrosaniye okumalar gerekiyor.</td></tr>
+    <tr><td>DynamoDB Accelerator (DAX)</td><td>DynamoDB'nin önünde aynı API'ı kullanan bellek içi bir cache.</td><td>Sıcak DynamoDB kayıtları çok sık okunuyor ve mikrosaniye okumalar gerekiyor.</td></tr>
   </tbody>
 </table>
 <p>DynamoDB'nin içinde birkaç seçenek bir tasarımı değiştirir:</p>
@@ -182,7 +243,7 @@
 </table>
 
 <h2 id="lalemarket-arch" data-short="Lale Market'teki yeri"><span class="sec">M6</span>Lale Market'te DynamoDB'nin yeri</h2>
-<p>Lale Market her alışveriş sepetini <code>dbws-cart</code> table'ında tutar. Ürün sayfası item ekler. Sepet sayfası onları okur. Checkout sepeti strongly consistent okur
+<p>Lale Market her alışveriş sepetini <code>dbws-cart</code> table'ında tutar. Ürün sayfası sepete satır ekler. Sepet sayfası onları okur. Checkout sepeti strongly consistent okur
    ve siparişi Aurora yazar. Commit'ten sonra tarayıcı DynamoDB'deki sepeti boşaltır.
    Sepet iyi bir uyumdur. Her istek ziyaretçi id'sini bilir ve sepetler birbirinden bağımsızdır. 24 saat sonra kaybolan bir sepetin maliyeti yoktur.
    Sipariş bu mağazada bir key-value database için iyi bir uyum değildir, çünkü stok, sipariş ve satırlar üzerinde birlikte kurallar ister. Bu Aurora'nın işidir.</p>
@@ -213,11 +274,100 @@
 <p>Bölüm A'daki fikirlerin DynamoDB'deki isimleri, okuma ve yazma işlemleri, key tasarımı ve ek özellikler.</p></div>
 
 <h2 id="items" data-short="Item'lar ve table"><span class="sec">B1</span>DynamoDB'de item'lar, attribute'lar ve primary key</h2>
-<p>Bir DynamoDB table'ı {{ k.term("item", "item") }}'lar tutar. Bir item bir attribute kümesidir: her biri bir isim ve bir değer, tek bir JSON nesnesi gibi.
-   Bir table'daki iki item farklı attribute'lara sahip olabilir. Her item'da sadece {{ k.term("primary key") }} bulunmak zorundadır.</p>
-{{ k.fig("dynamodb-table.png", "item 101'de Phone, item 102'de Address, item 103'te FavoriteColor ve Address var. Her item'da sadece PersonID primary key'i var. Table'ın diğer attribute'lar için bir schema'sı yok.") }}
-<p>A2'deki key'in iki parçası DynamoDB'de şu isimleri taşır: {{ k.term("partition key") }} ve {{ k.term("sort key") }}. Aynı partition key'e sahip bütün item'lar bir {{ k.term("item collection") }} oluşturur.
-   Lale Market table'ının gerçek tanımı budur (<code>cloudformation/workshop.yaml</code> içinden):</p>
+<p>DynamoDB, Bölüm A'daki fikirler için kendi isimlerini kullanır. Bu bölüm bu isimleri canlı Lale Market table'ından gerçek bir kaydın üzerine koyar. Böylece her isim görebileceğin bir şeyi gösterir.</p>
+<p>Farklı ürünler Bölüm A'nın fikirleri için farklı isimler kullanır. İsimler sadece kod yazarken önemlidir. Son kolon bu bölümün kullandığı isimleri gösterir:</p>
+<table class="data">
+  <thead><tr><th>Genel fikir</th><th>Redis / Valkey</th><th>Apache Cassandra</th><th>Amazon DynamoDB</th></tr></thead>
+  <tbody>
+    <tr><td>Tam key</td><td>key</td><td>primary key</td><td>primary key</td></tr>
+    <tr><td class="c-pk">Key'in partition parçası</td><td>key'in kendisi (ondan bir hash slot hesaplanır)</td><td>partition key</td><td>partition key</td></tr>
+    <tr><td class="c-sk">Key'in sıralama parçası</td><td>bir sorted set içindeki üyenin score'u</td><td>clustering column</td><td>sort key</td></tr>
+    <tr><td>Değer</td><td>string, hash, list, set</td><td>column'lu row</td><td>attribute'lu item</td></tr>
+    <tr><td>Aynı partition parçasına sahip grup</td><td>bir veri yapısı taşıyan tek key</td><td>partition</td><td>item collection</td></tr>
+  </tbody>
+</table>
+{{ k.concept("Item",
+   "Bölüm A'daki bir değerin DynamoDB'deki karşılığı: bir table'ın tek bir kaydı. Bir attribute kümesidir, tek bir JSON nesnesine benzer.",
+   "Bir sepetin bir satırı: bir ziyaretçinin sepetindeki P0001 ürünü.",
+   "Bir kartotekteki tek bir kart. Her kartın üzerinde farklı alanlar yazabilir.") }}
+{{ k.concept("Attribute",
+   "Bir item'ın içindeki tek bir isim ve tek bir değer, örneğin <code>qty</code> = 2. Her attribute'un bir veri tipi vardır.",
+   "<code>name</code>, <code>qty</code>, <code>unit_price</code> ve <code>expires_at</code> bir sepet satırının attribute'larıdır.",
+   "Karttaki tek bir alan: \"İsim\", \"Telefon\", \"Doğum günü\".") }}
+{{ k.concept("Primary key = partition key + sort key",
+   "Tek bir item'ı tanımlayan attribute ya da attribute'lar. <b>Partition key</b> A3'teki partition parçası, <b>sort key</b> ise sıralama parçasıdır. Her item onlara sahip olmalıdır. Diğer attribute'lar serbesttir.",
+   "Partition key, değeri <code>CART#7f3a91c2-…</code> olan <code>pk</code> attribute'udur. Sort key, değeri <code>ITEM#P0001</code> olan <code>sk</code> attribute'udur.",
+   "Bina numarası ve daire numarası birlikte: bir adres, bir daire.") }}
+<p>Bu gerçek bir item'dır. Workshop canlı mağazada bir sepete iki ürün ekledi ve sonra table'ı AWS CLI ile okudu. DynamoDB her attribute'u veri tipiyle birlikte döndürür:</p>
+{% call k.live("dbws-cart table'ının bir item'ı, DynamoDB'nin döndürdüğü hâliyle (aws dynamodb query)") %}
+<pre><code>{
+  "pk":         { "S": "CART#7f3a91c2-5b0e-4d7a-9c41-2e8f6d1a0b37" },
+  "sk":         { "S": "ITEM#P0001" },
+  "name":       { "S": "Alpen Kablosuz Kulaklık 1" },
+  "qty":        { "N": "2" },
+  "unit_price": { "N": "3373.84" },
+  "expires_at": { "N": "1793285643" }
+}</code></pre>
+{% endcall %}
+<p>Aynı item ve komşusu, DynamoDB'nin isimleri ve bu sayfanın renkleriyle çizildiğinde:</p>
+{{ k.anatomy([
+   {"pk": "CART#7f3a91c2-…", "sk": "ITEM#P0001", "attrs": [["name", "Alpen Kablosuz Kulaklık 1"], ["qty", "2"], ["unit_price", "3373.84"], ["expires_at", "1793285643"]]},
+   {"pk": "CART#7f3a91c2-…", "sk": "ITEM#P0044", "attrs": [["name", "Kapadokya Bulut Mimarisi 44"], ["qty", "1"], ["unit_price", "2651.39"], ["expires_at", "1793285643"]]}],
+   "Canlı sepetin iki item'ı. Primary key pk + sk'dir. Diğer attribute'lar serbesttir: DynamoDB'nin onlar için schema'sı yoktur.") }}
+<p>Bir item'ın üzerindeki her ismi oku:</p>
+<ul>
+  <li><b>Item</b> kaydın tamamıdır: sepetin tek bir satırını tanımlayan altı attribute.</li>
+  <li><b>Partition key</b> <code>pk</code>'dir. Değeri <code>CART#7f3a91c2-…</code> şunu söyler: bu item <code>7f3a91c2-…</code> ziyaretçisinin sepetine aittir. DynamoDB partition'ı seçmek için bu değerin hash'ini alır.</li>
+  <li><b>Sort key</b> <code>sk</code>'dir. Değeri <code>ITEM#P0001</code> şunu söyler: bu item o sepetin içindeki P0001 ürününün satırıdır.</li>
+  <li><b>Primary key</b> <code>pk</code> + <code>sk</code> çiftidir. Table'ın başka hiçbir item'ı aynı çifte sahip olamaz.</li>
+  <li><code>name</code>, <code>qty</code>, <code>unit_price</code> ve <code>expires_at</code> <b>attribute</b>'ları key'in parçası değildir. Başka bir item başka attribute'lara sahip olabilir.</li>
+  <li>İki item partition key'i paylaşır, bu yüzden tek bir gruba aittirler: tek bir Query'nin okuduğu sepetin tamamı. DynamoDB'nin bu grup için bir adı var.</li>
+</ul>
+{{ k.concept("Item collection",
+   "Aynı partition key'e sahip bütün item'lar. DynamoDB onları sort key'e göre sıralı olarak bir arada saklar.",
+   "<code>pk = CART#7f3a91c2-…</code> olan iki item: bir ziyaretçinin sepetinin tamamı.",
+   "Bir binanın bütün daireleri, daire numaralarının sırasıyla.") }}
+<h3>Veri tipleri: S, N ve diğerleri ne demek</h3>
+<p>Ham item'da her değer, adı veri tipi olan küçük bir nesnenin içine sarılmıştır. DynamoDB'nin tipleri şunlardır
+   (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.NamingRulesDataTypes.html">Supported data types</a>):</p>
+<table class="data">
+  <thead><tr><th>Kod</th><th>Tip</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td><code>S</code></td><td>String (metin)</td><td><code>"name": {"S": "Alpen Kablosuz Kulaklık 1"}</code></td></tr>
+    <tr><td><code>N</code></td><td>Number (sayı)</td><td><code>"qty": {"N": "2"}</code></td></tr>
+    <tr><td><code>BOOL</code></td><td>Boolean (true ya da false)</td><td><code>"express_delivery": {"BOOL": true}</code></td></tr>
+    <tr><td><code>L</code></td><td>List: her tipten değerlerin sıralı listesi</td><td><code>"products": {"L": [{"S": "Kablosuz Kulaklık"}, {"S": "Telefon Kılıfı"}]}</code></td></tr>
+    <tr><td><code>M</code></td><td>Map: iç içe bir nesne</td><td><code>"address": {"M": {"city": {"S": "İstanbul"}}}</code></td></tr>
+    <tr><td><code>NULL</code></td><td>Boş bir değer</td><td><code>"note": {"NULL": true}</code></td></tr>
+    <tr><td><code>B</code>, <code>SS</code>, <code>NS</code>, <code>BS</code></td><td>Binary ve string, sayı ya da binary kümeleri</td><td><code>"tags": {"SS": ["yeni", "çok satan"]}</code></td></tr>
+  </tbody>
+</table>
+<p>Daha fazla tip kullanan bir sipariş item'ı örneği. Bu bir örnektir, Lale Market'in bir item'ı değildir. Partition key müşteri, sort key ise sipariş zamanıdır:</p>
+<pre><code>{
+  "CustomerId":      { "S": "M10294" },                  ← partition key
+  "OrderDate":       { "S": "2026-10-28T14:30:00Z" },    ← sort key
+  "TotalAmount":     { "N": "1450.50" },
+  "Status":          { "S": "Kargoya Verildi" },
+  "ExpressDelivery": { "BOOL": true },
+  "Products":        { "L": [ { "S": "Kablosuz Kulaklık" }, { "S": "Telefon Kılıfı" } ] }
+}</code></pre>
+{{ k.anatomy([
+   {"pk": "M10294", "sk": "2026-10-28T14:30:00Z", "attrs": [["TotalAmount", "1450.50"], ["Status", "Kargoya Verildi"], ["ExpressDelivery", "true"], ["Products", "[Kablosuz Kulaklık, Telefon Kılıfı]"]]},
+   {"pk": "M10294", "sk": "2026-11-02T09:12:00Z", "attrs": [["TotalAmount", "299.90"], ["Status", "Hazırlanıyor"]]},
+   {"pk": "M20311", "sk": "2026-10-30T18:05:00Z", "attrs": [["TotalAmount", "89.00"], ["Status", "Teslim Edildi"], ["GiftNote", "Mutlu yıllar"]]}],
+   "Bir siparişler table'ı. M10294 müşterisinin iki siparişi var, bu yüzden iki item sipariş tarihine göre sıralı tek bir item collection oluşturur. İkinci siparişin daha az attribute'u, üçüncü siparişin ise bir hediye notu var.",
+   pk_name="CustomerId", sk_name="OrderDate") }}
+<p>Bu key ile "M10294 müşterisinin siparişleri, en yeni önce" sorusu tek bir Query'dir. Partition key müşteriyi seçer, sort key sırayı verir.</p>
+{% call k.ask("\"N\": \"2\"de olduğu gibi sayı neden tırnak içinde?") %}
+<p>DynamoDB sayıları ağ üzerinden metin olarak gönderir, böylece hiçbir programlama dili basamak kaybetmez. Onları sayı olarak saklar ve karşılaştırır. SDK metni senin için sayıya çevirir.</p>
+{% endcall %}
+{% call k.ask("Canlı item'da neden BOOL ya da L attribute'u yok?") %}
+<p>Lale Market'in sepet satırının sadece metne ve sayılara ihtiyacı var. Tipler attribute başına serbesttir; bu yüzden başka bir table, hatta aynı table'ın başka bir item'ı BOOL, L ya da M kullanabilir.</p>
+{% endcall %}
+{% call k.ask("Key'in bir attribute'u sonradan değişebilir mi?") %}
+<p>Hayır. Bir key attribute'unu değiştirmek için item'ı sil, sonra yeni key'li yeni bir item yaz. Diğer attribute'lar UpdateItem ile değişebilir.</p>
+{% endcall %}
+<p>Lale Market table'ının gerçek tanımı budur (<code>cloudformation/workshop.yaml</code> içinden):</p>
 {% call k.sql("T1", "Sepet table'ı") %}
 <pre><code>CartTable:
   Type: AWS::DynamoDB::Table
@@ -250,7 +400,8 @@
 </table>
 {% endcall %}
 <p>Her DynamoDB partition'ı "is designed to deliver a maximum capacity of 3,000 read units per second and 1,000 write units per second", yani saniyede en fazla 3.000 okuma ve 1.000 yazma birimi için tasarlanmıştır
-   (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html">Partition key design</a>). A3'teki hot partition'ın arkasındaki sınır budur.</p>
+   (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html">Partition key design</a>). A4'teki hot partition'ın arkasındaki sınır budur.</p>
+{{ k.fig("dynamodb-table.png", "resmî AWS örneği: item 101'de Phone, item 102'de Address, item 103'te FavoriteColor ve Address var. Her item'da sadece PersonID primary key'i var.") }}
 {{ k.fig("dynamodb-partition-key.png", "AnimalType'ı Dog olan item üçüncü partition'a gider, çünkü \"Dog\"un hash'i oraya işaret eder. Onu okumak için DynamoDB aynı hash'i hesaplar ve sadece o partition'ı okur.") }}
 
 <h2 id="reads" data-short="GetItem, Query, Scan"><span class="sec">B2</span>Okumalar: GetItem, Query ve Scan, ve maliyetleri</h2>
@@ -274,6 +425,23 @@
   <tr><td>ConsistentRead=True</td><td>Strongly consistent bir okuma: cevap, okumadan önce başarılı olan her yazmayı içerir. Varsayılan, eventually consistent bir okumadır.</td></tr>
   <tr><td>ReturnConsumedCapacity='TOTAL'</td><td>DynamoDB'den bu isteğin kullandığı okuma birimlerini bildirmesini iste. Mağazanın Behind-the-scenes paneli bu sayıyı gösterir.</td></tr>
 </table>
+{% endcall %}
+{% call k.live("canlı table'da aynı Query, yukarıdaki iki item'lı sepet için (aws dynamodb query --return-consumed-capacity TOTAL)") %}
+<pre><code>{
+  "Items": [
+    { "qty": { "N": "2" }, "sk": { "S": "ITEM#P0001" } },
+    { "qty": { "N": "1" }, "sk": { "S": "ITEM#P0044" } }
+  ],
+  "Count": 2,
+  "ScannedCount": 2,
+  "ConsumedCapacity": { "TableName": "dbws-cart", "CapacityUnits": 1.0 }
+}</code></pre>
+{% endcall %}
+<p>Cevabı satır satır oku. <code>Items</code>, sepetin sort key sırasıyla iki satırıdır. CLI çağrısı sadece <code>sk</code> ve <code>qty</code> istedi (bir projection), bu yüzden diğer attribute'lar cevapta yok.
+   <code>Count</code> döndürülen item sayısı, <code>ScannedCount</code> ise DynamoDB'nin okuduğu item sayısıdır: ikisi de 2'dir, çünkü Query sadece bu sepeti okudu.
+   <code>CapacityUnits</code> 1.0'dır: 4 KB'tan küçük, strongly consistent tek bir okuma.</p>
+{% call k.ask("Bir Query neden her zaman partition key'i belirtmek zorunda?") %}
+<p>Çünkü DynamoDB'nin hangi partition'ı okuyacağını bilmesinin tek yolu partition key'dir (A4). O olmadan DynamoDB her partition'ı okumak zorunda kalırdı. Bu işlem vardır, ama adı Scan'dir ve bütün table'ı okur.</p>
 {% endcall %}
 {% call k.sql("Q2", "İki ya da daha fazla adetli her sepet satırı (bir Scan)") %}
 <pre><code>table.scan(FilterExpression=Attr('qty').gte(2))</code></pre>
@@ -345,6 +513,9 @@
    ve table'a her yazma index'e de yazar. Index kendi key'inin sahibidir. Attribute değerlerini ana table'ın item'larından ödünç alır.</p>
 {{ k.fig("dynamodb-gsi.png", "GameTitleIndex index'inin partition key'i GameTitle, sort key'i TopScore. \"Galaxy Invaders'ın en yüksek skorları\" artık tek bir Query. UserId ile key'lenmiş ana table'da aynı soru bir Scan ister.") }}
 {{ k.sim("gsi", "P0044 hangi sepetlerde? Ana table'ın Scan'i, sonra bir GSI'ın Query'si") }}
+{% call k.ask("Bir GSI item'ın tamamını kopyalar mı?") %}
+<p>Sen karar verirsin. Index'in projection'ı sadece key'ler (KEYS_ONLY), key'ler ve bir attribute listesi (INCLUDE) ya da bütün attribute'lar (ALL) olabilir. Daha küçük bir projection daha az storage ve daha az yazma birimi tutar, ama index'in Query'si sadece projection'daki attribute'ları döndürebilir.</p>
+{% endcall %}
 <p>Lale Market sepet table'ının GSI'ı yok, çünkü mağaza bu soruyu hiç sormaz. Sadece gerçek bir access pattern için index ekle: her index her yazmaya yazma maliyeti ekler.</p>
 
 <h2 id="ttl" data-short="TTL ve Streams"><span class="sec">B5</span>Time to live ve Streams</h2>
@@ -352,9 +523,25 @@
    DynamoDB "automatically deletes expired items within a few days of their expiration time, without consuming write throughput", yani süresi dolan item'ları yazma kapasitesi harcamadan birkaç gün içinde siler
    (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html">Time to live</a>).
    Silinene kadar süresi dolmuş bir item bir okumada yine görünebilir. Onu göstermemesi gereken bir program <code>expires_at</code> üzerinde bir filtre kullanır. M7'deki oturum yarışının DynamoDB'ye tam süre sonu için sadece "kısmen" vermesinin nedeni budur.</p>
+<p>1793285700 zamanında (1 Ocak 1970'ten beri saniye cinsinden) bir örnek:</p>
+<table class="data">
+  <thead><tr><th class="c-pk">pk</th><th class="c-sk">sk</th><th>expires_at</th><th>1793285700'deki durum</th></tr></thead>
+  <tbody>
+    <tr><td class="c-pk mono">CART#7f3a</td><td class="c-sk mono">ITEM#P0001</td><td>1793285643</td><td>süresi dolmuş: 57 saniye geçmişte. DynamoDB onu genellikle birkaç gün içinde siler.</td></tr>
+    <tr><td class="c-pk mono">CART#3c8d</td><td class="c-sk mono">ITEM#P0179</td><td>1793372043</td><td>geçerli: bir gün sonrası.</td></tr>
+  </tbody>
+</table>
+<p>Arka plan süreci ilk item'ı silene kadar bir Query onu hâlâ döndürebilir. <code>expires_at &gt; :now</code> filtresi onu gizler.</p>
 <p>{{ k.term("DynamoDB Streams") }} bir item'ın her değişikliğini kaydeder: insert, update ve delete. Her item için değişiklikler sıralarını korur.
    Örneğin bir AWS Lambda fonksiyonu gibi bir tüketici stream'i okur ve tepki verir. Bir e-posta gönderir, bir arama index'ini günceller ya da analitik için bir kopya yazar. Bir DynamoDB table'ı event-driven bir tasarımın başlangıcı böyle olur.
-   Lale Market Streams kullanmaz. Gerçek bir mağaza, tarayıcıdan gelen bir çağrı yerine bir sipariş event'inden sonra sepeti boşaltmak için onları kullanabilir.</p>
+</p>
+<div class="flow">
+  <div class="box pk">UpdateItem<small>ITEM#P0001'in qty'si: 2 → 3</small></div><span class="arrow">→</span>
+  <div class="box">stream kaydı<small>eski görüntü qty 2, yeni görüntü qty 3</small></div><span class="arrow">→</span>
+  <div class="box">AWS Lambda<small>kaydı okur</small></div><span class="arrow">→</span>
+  <div class="box hit">tepki<small>e-posta, arama index'i, analitik kopya</small></div>
+</div>
+<p>Lale Market Streams kullanmaz. Gerçek bir mağaza, tarayıcıdan gelen bir çağrı yerine bir sipariş event'inden sonra sepeti boşaltmak için onları kullanabilir.</p>
 
 <div class="part"><b>Bölüm C</b><h2 id="partC" data-short="Bölüm C: AWS servisi">AWS servisi: DynamoDB'nin senin için çalıştırdıkları</h2>
 <p>Bir key-value store'u kendin çalıştırdığında ne yapman gerekir ve bunun yerine AWS ne yapar.</p></div>

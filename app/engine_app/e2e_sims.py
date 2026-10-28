@@ -1074,10 +1074,19 @@ DDB_DECISIONS = {
 DDB_NAMES["ix"] = "Timestream for InfluxDB"
 
 
+SVC = {"ddb": "DynamoDB", "aur": "Aurora PostgreSQL", "ec": "ElastiCache (Valkey)", "doc": "DocumentDB", "ks": "Keyspaces",
+       "rs": "Redshift", "os": "OpenSearch", "ix": "Timestream for InfluxDB", "np": "Neptune", "s3": "S3", "rds": "RDS for PostgreSQL",
+       "mdb": "MemoryDB", "ath": "Athena", "efs": "EFS", "dsql": "Aurora DSQL"}
+
+
+def scorecard(lang, d):
+    """A decision from a spec with service short names (see SVC)."""
+    return decide_score(lang, {"workload": d["workload"], "cands": [SVC[c] for c in d["cands"]],
+                               "reqs": [_cells(r, SVC) for r in d["reqs"]], "gap": d["gap"], "pivot": d.get("pivot")})
+
+
 def ddb_decision(lang, key):
-    d = DDB_DECISIONS[key]
-    return decide_score(lang, {"workload": d["workload"], "cands": [DDB_NAMES[c] for c in d["cands"]],
-                               "reqs": [_cells(r, DDB_NAMES) for r in d["reqs"]], "gap": d["gap"], "pivot": d["pivot"]})
+    return scorecard(lang, DDB_DECISIONS[key])
 
 
 def dynamodb(lang):
@@ -1110,6 +1119,10 @@ def dynamodb(lang):
         **{k: ddb_decision(lang, k) for k in DDB_DECISIONS},
         "hash": ddb_hash(lang), "queryscan": ddb_query_scan(lang), "condition": ddb_condition(lang), "gsi": ddb_gsi(lang),
     }
+    for v in spec.values():          # key color language: pk yellow, sk blue
+        for t in v.get("tables", []):
+            if t["cols"][:2] in (["pk", "sk"], ["gsi pk", "gsi sk"]):
+                t["pk"], t["sk"] = [0], [1]
     return {k: _localize(v, lang) for k, v in spec.items()}
 
 

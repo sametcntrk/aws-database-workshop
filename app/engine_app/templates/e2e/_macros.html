@@ -70,12 +70,12 @@
 {%- endmacro %}
 
 {# One table of the teaching sample (e2e_sims.tables()). key/ref: column names to mark as identifier owned / borrowed. #}
-{% macro sample(name, caption, key=[], ref=[]) -%}
+{% macro sample(name, caption, key=[], ref=[], pk=None, sk=None) -%}
 {%- set t = sample_data[name] -%}
 <table class="data">
   <caption>{{ caption }}</caption>
-  <thead><tr>{% for c in t.cols %}<th class="{{ 'key' if c in key else ('refc' if c in ref else '') }}{{ ' num' if c in ['price', 'stock', 'qty', 'unit_price', 'total'] }}">{{ c }}</th>{% endfor %}</tr></thead>
-  <tbody>{% for r in t.rows %}<tr>{% for v in r %}{% set c = t.cols[loop.index0] %}<td class="{{ 'key mono' if c in key else ('refc mono' if c in ref else '') }}{{ ' num' if c in ['price', 'stock', 'qty', 'unit_price', 'total'] }}">{{ "{:,.2f}".format(v) if v is float else v }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+  <thead><tr>{% for c in t.cols %}<th class="{{ 'c-pk ' if c == pk else ('c-sk ' if c == sk else '') }}{{ 'key' if c in key else ('refc' if c in ref else '') }}{{ ' num' if c in ['price', 'stock', 'qty', 'unit_price', 'total'] }}">{{ c }}</th>{% endfor %}</tr></thead>
+  <tbody>{% for r in t.rows %}<tr>{% for v in r %}{% set c = t.cols[loop.index0] %}<td class="{{ 'c-pk ' if c == pk else ('c-sk ' if c == sk else '') }}{{ 'key mono' if c in key else ('refc mono' if c in ref else '') }}{{ ' num' if c in ['price', 'stock', 'qty', 'unit_price', 'total'] }}">{{ "{:,.2f}".format(v) if v is float else v }}</td>{% endfor %}</tr>{% endfor %}</tbody>
 </table>
 {%- endmacro %}
 
@@ -84,5 +84,41 @@
 <div class="qcard">
   <header><b>{{ qid }}</b><span>{{ title }}</span></header>
   <div class="body">{{ caller() }}</div>
+</div>
+{%- endmacro %}
+
+{# Anatomy of a keyed item, in the colors of the page: partition key yellow, sort key blue, attributes grey.
+   rows: list of {"pk": .., "sk": .., "attrs": [[name, value], ...]}. pk_name / sk_name: the attribute names of the key. #}
+{% macro anatomy(rows, caption, pk_name="pk", sk_name="sk", labels={}) -%}
+{%- set L = {"primary": ui.an_primary, "pk": ui.an_pk, "sk": ui.an_sk, "attrs": ui.an_attrs, "note": ui.an_attrs_note, "items": ui.an_items} -%}
+{%- set _ = L.update(labels) -%}
+<figure class="anat">
+  <table>
+    <tr class="a-brace"><td></td><td colspan="2"><span>{{ L.primary }}</span></td><td><span class="g">{{ L.attrs }}</span></td></tr>
+    <tr class="a-lab"><td></td><td class="l-pk">{{ L.pk }} ↓</td><td class="l-sk">{{ L.sk }} ↓</td><td class="l-at">{{ L.note }}</td></tr>
+    <tr class="a-head"><td></td><td class="h-pk"><code>{{ pk_name }}</code></td><td class="h-sk"><code>{{ sk_name }}</code></td><td></td></tr>
+    {% for r in rows %}<tr class="a-row">{% if loop.first %}<td class="a-side" rowspan="{{ rows | length }}"><span>{{ L["items"] }}</span></td>{% endif %}
+      <td class="c-pk">{{ r.pk }}</td><td class="c-sk">{{ r.sk }}</td>
+      <td class="c-at">{% for a in r.attrs %}<span class="chip"><b>{{ a[0] }}</b> {{ a[1] }}</span>{% endfor %}</td></tr>{% endfor %}
+  </table>
+  <figcaption>{{ caption }}</figcaption>
+</figure>
+{%- endmacro %}
+
+{# A real artifact from the live system (an item, an API answer, a plan). caller(): the artifact in a <pre>. #}
+{% macro live(caption) -%}
+<figure class="live"><figcaption><span class="badge">{{ ui.live }}</span> {{ caption }}</figcaption>{{ caller() }}</figure>
+{%- endmacro %}
+
+{# A question that a reader with no background may ask, with its answer (caller). #}
+{% macro ask(question) -%}
+<div class="ask"><p class="q"><b>{{ ui.ask }}</b> {{ question }}</p><div class="a">{{ caller() }}</div></div>
+{%- endmacro %}
+
+{# Concept card: what it is, the value in our data, a picture from daily life. The picture and a check follow the card. #}
+{% macro concept(term, what, ours, life) -%}
+<div class="concept">
+  <p class="c-head"><span>{{ ui.concept }}</span> {{ term }}</p>
+  <dl><dt>{{ ui.c_def }}</dt><dd>{{ what | safe }}</dd><dt>{{ ui.c_ours }}</dt><dd>{{ ours | safe }}</dd><dt>{{ ui.c_life }}</dt><dd>{{ life | safe }}</dd></dl>
 </div>
 {%- endmacro %}
