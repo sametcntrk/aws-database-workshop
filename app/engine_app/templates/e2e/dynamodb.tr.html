@@ -6,8 +6,8 @@
 <h2 id="goal" data-short="Ne öğreneceksin" data-group="Başlarken">Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
 <p>Bu sayfa genel fikirden AWS servisine dört adımda gider:</p>
 <ol>
-  <li><b>Bölüm A, Temel.</b> Key-value database nedir, key'ler ve değerler nasıl görünür, key ile okuma neden her boyutta hızlı kalır. Burada AWS adı yok: fikirler Redis'te, Cassandra'da ve DynamoDB'de aynıdır.</li>
-  <li><b>Mimar gözüyle.</b> Key-value database ne zaman doğru seçimdir, ne zaman değildir. Sonra AWS'teki key-value seçenekleri ve hangi durumda DynamoDB'nin seçileceği. Üçü yakın yarış olan beş karar simülasyonu.</li>
+  <li><b>Bölüm A, Temel.</b> Key-value database nedir; key'in tek parçalı ve iki parçalı biçimleri, verinin parçalara bölünmesi, okuma ve yazma yolları, süre sonu, ikinci index ve değişiklik akışı. Her kavram bütün durumlarıyla bir tabloda verilir ve bölüm sekiz özelliğin (Ö1–Ö8) listesi ve Redis / Cassandra / DynamoDB matrisiyle biter. Fikirler her key-value store'da aynıdır.</li>
+  <li><b>Mimar gözüyle.</b> Key-value database ne zaman doğru seçimdir, ne zaman değildir: on use case, her birinde seçimin nedeni, iki alternatifin aynı gereksinimlere cevabı ve yine de key-value seçersek artı ve eksilerimiz. Sonra AWS'teki key-value seçenekleri ve hangi durumda DynamoDB'nin seçileceği. Üçü yakın yarış olan beş karar simülasyonu.</li>
   <li><b>Bölüm B, İleri.</b> Pratikte DynamoDB: GetItem, Query ve Scan, koşullu yazmalar, key tasarımı, index'ler, TTL ve Streams.</li>
   <li><b>Bölüm C, AWS servisi.</b> Bir key-value store'u kendin çalıştırdığında ne yapman gerekir ve DynamoDB senin için neyi yapar.</li>
 </ol>
@@ -17,110 +17,174 @@
   <li>Bir key-value database'in veriyi nasıl bulduğunu ve verinin yerine neden key'in karar verdiğini açıklamak.</li>
   <li>Bir key-value database'in hangi iş yükleri için doğru seçim olduğunu ve hangileri için olmadığını söylemek.</li>
   <li>AWS'teki key-value seçenekleri arasında seçim yapmak ve seçimi yakın bir yarışta savunmak.</li>
-  <li>Bir uygulamanın sorularından primary key tasarlamak ve GetItem, Query ve Scan'in maliyetini tahmin etmek.</li>
+  <li>Bir uygulamanın sorularından key tasarlamak ve GetItem, Query ve Scan'in maliyetini tahmin etmek.</li>
   <li>Bir iş kuralını kilit olmadan korumak için bir koşul ve atomik bir ADD kullanmak.</li>
 </ol>
 <p>Dört tür kutu sana yardım eder. <b>Simülasyon</b>: Oynat'a ya da Sonraki adım'a bas. <b>Önce tahmin et</b>: cevabı açmadan önce kendi cevabını yaz.
    <b>Checkpoint</b>: tek doğru cevabı olan bir soru. <b>Analoji</b>: günlük hayattan bir resim.</p>
 
-<div class="part"><b>Bölüm A</b><h2 id="partA" data-short="Bölüm A: Temel">Temel: key-value fikri</h2>
-<p>Veriyi sadece key ile bulan bir database'in her boyutta nasıl hızlı kalabildiği. Bu fikirler her key-value database'te aynıdır.</p></div>
+<div class="part"><b>Bölüm A</b><h2 id="partA" data-short="Bölüm A: Temel">Temel: key-value fikri, bütün durumlarıyla</h2>
+<p>Veriyi sadece key ile bulan bir database'in her boyutta nasıl hızlı kaldığı ve bunun karşılığında nelerden vazgeçtiği. Bu bölüm her kavramı önce tanımlar, sonra o kavramın <b>bütün durumlarını</b> bir tabloda gösterir. Böylece bir soru işareti kalmaz: "ya şöyle olursa?" sorusunun cevabı tabloda vardır. Fikirler her key-value database'te aynıdır; isimler standarttır ve sayfanın sonuna kadar değişmez.</p></div>
 
 <h2 id="why" data-short="Neden key-value?"><span class="sec">A1</span>Neden key-value database? Vestiyer</h2>
 <p>Bir tiyatronun 5.000 askılı bir vestiyeri var. Paltonu bıraktığında numaralı bir fiş alırsın. Oyunun sonunda 5.000 kişi aynı anda geri gelir.
    Fişle görevli doğrudan tek bir askıya yürür. Süre 12 numaralı askı için de 4.812 numaralı askı için de aynıdır.
    Fiş olmadan ("kırmızı atkılı mavi bir palto") görevli her askıya bakmak zorundadır. Bu uzun sürer ve kuyruk büyür.</p>
 {% call k.callout("analogy", "Analoji") %}
-<p>Fiş numarası key'dir. Askı verinin yaşadığı yerdir. Bir key-value database bir vestiyerdir: fişi getirdiğinde çok hızlı,
-   sadece paltoyu tarif ettiğinde yavaştır. Büyük bir tiyatro daha fazla görevli ekler ve askıları odalara böler. A4 bölümü bu odalara teknik adlarını verir.</p>
+<p>Fiş numarası key'dir. Askıdaki palto value'dur. Bir key-value database bir vestiyerdir: fişi getirdiğinde çok hızlı,
+   sadece paltoyu tarif ettiğinde yavaştır. Büyük bir tiyatro daha fazla görevli ekler ve askıları odalara böler. A4 bölümü bu odalara teknik adını verir.</p>
 {% endcall %}
 <p>İlişkisel bir database (bkz. <a href="/e2etutorial/aurora?lang=tr">Aurora tutorial'ı</a>) her soruyu SQL ile cevaplayabilir. Bedeli şudur: bütün yazmaları tek bir sunucu çalıştırır
    ve planner her yeni soruyu nasıl cevaplayacağına karar vermek zorundadır. Bir key-value database farklı bir takas yapar. Sadece key ile sorulan soruları cevaplar.
    Karşılığında veriyi birçok makineye bölebilir ve her makine kendi payını tek başına cevaplar. Böylece tek bir isteğin hızı table'ın boyutuna bağlı değildir.</p>
-
-<h2 id="model" data-short="Key'ler ve değerler"><span class="sec">A2</span>Key'ler ve değerler: çift</h2>
-{{ k.concept("Key ve değer",
-   "Bir key-value database <b>çiftler</b> saklar. <b>Key</b> benzersiz bir isimdir. <b>Değer</b> (value) o isme ait veridir. Bir değeri okumak için onun key'ini verirsin.",
-   "<code>session:7f3a</code> key'i <code>7f3a</code> ziyaretçisinin oturumunu adlandırır. Değeri <code>{user: C00001, last_page: /cart}</code>'tır.",
-   "Bir vestiyer fişi (key) ve askıda duran palto (değer). Ya da bir telefon rehberi: isim key, numara değerdir.") }}
-<p>En basit key-value store tek parçalı key'lere sahiptir. Her key tam olarak tek bir değeri adlandırır ve database değerin içine bakmaz. Bu bir oturum, bir sayaç ya da cache'lenmiş bir sayfa için yeterlidir:</p>
 <table class="data">
-  <thead><tr><th class="c-pk">key</th><th>değer</th></tr></thead>
+  <caption>takas: key-value database neyi verir, neyi alır</caption>
+  <thead><tr><th>Key-value database'in verdiği</th><th>Karşılığında aldığı</th><th>Bu sayfada nerede</th></tr></thead>
+  <tbody>
+    <tr><td>Key ile her istek aynı sürede, table'ın boyutundan bağımsız</td><td>Key olmadan soru sormak pahalıdır: bütün veri okunur</td><td>A5</td></tr>
+    <tr><td>Veri birçok makineye bölünür, trafik de bölünür</td><td>JOIN yok, table'lar arası kural yok</td><td>A4, M3</td></tr>
+    <tr><td>Value'nun şekli serbesttir</td><td>Database value'nun içini bilmez; value'ya göre arama için ikinci bir index gerekir</td><td>A2, A8</td></tr>
+    <tr><td>Tek bir key üzerinde atomik ve koşullu yazma</td><td>Birçok key üzerinde kural için ek bir mekanizma gerekir (transaction) ya da uygulama üstlenir</td><td>A6, B3</td></tr>
+  </tbody>
+</table>
+
+<h2 id="model" data-short="Key, value, primary key"><span class="sec">A2</span>Key ve value. Primary key: simple ya da composite</h2>
+{{ k.concept("Key ve value",
+   "Bir key-value database <b>çiftler</b> saklar. <b>Key</b> benzersiz bir isimdir. <b>Value</b> (değer) o isme ait veridir. Bir value'yu okumak için onun key'ini verirsin. Database value'nun içine bakmaz.",
+   "<code>session:7f3a</code> key'i <code>7f3a</code> ziyaretçisinin oturumunu adlandırır. Value'su <code>{user: C00001, last_page: /cart}</code>'tır.",
+   "Bir vestiyer fişi (key) ve askıda duran palto (value). Ya da bir telefon rehberi: isim key, numara value'dur.") }}
+{{ k.concept("Primary key",
+   "Bir value'yu table'da <b>benzersiz</b> olarak tanımlayan key. İki value aynı primary key'e sahip olamaz. Primary key <b>tek parçalı</b> ya da <b>iki parçalı</b> olabilir: tek parçalıysa <b>simple primary key</b>, iki parçalıysa <b>composite primary key</b> denir. İki parçanın adları: <dfn>partition key</dfn>, value'nun nerede saklanacağına karar veren ilk parça; <dfn>sort key</dfn>, grubun içindeki sırayı veren ikinci parça. A3 ikisini ayrıntılı tanımlar.",
+   "Oturum table'ında primary key simple'dır: sadece <code>session:7f3a</code>. Sepet table'ında composite'tir: <code>CART#7f3a</code> + <code>ITEM#P0001</code>.",
+   "Bir otelde oda numarası simple bir key'dir: \"304\". Bir apartmanda adres composite'tir: \"12 numaralı bina, 3 numaralı daire\". İkisi de tam olarak tek bir kapıyı gösterir.") }}
+<p>Bu sayfada "key" dediğimizde primary key'i kastederiz. Primary key'in iki biçimi vardır ve ikisini de görmeden fark anlaşılmaz:</p>
+<table class="data">
+  <caption>bütün durumlar: primary key'in biçimleri</caption>
+  <thead><tr><th>Biçim</th><th>Kaç parçadan oluşur</th><th>Neyi adlandırır</th><th>Örnek</th><th>Hangi store'da var</th></tr></thead>
+  <tbody>
+    <tr><td><b>Simple primary key</b></td><td>Tek parça: sadece <span class="c-pk">partition key</span></td><td>Tek bir value. Gruplama ve sıralama yoktur.</td><td class="mono">session:7f3a → {user: C00001, …}</td><td>Redis / Valkey (tek biçim), Cassandra, DynamoDB</td></tr>
+    <tr><td><b>Composite primary key</b></td><td>İki parça: <span class="c-pk">partition key</span> + <span class="c-sk">sort key</span></td><td>Tek bir value; ama partition key tek başına bir <b>grubu</b> adlandırır ve sort key grubun içindeki sırayı verir.</td><td class="mono">CART#7f3a + ITEM#P0001 → {qty: 2, …}</td><td>Cassandra, DynamoDB. Redis / Valkey'de yoktur: Redis'te sadece tek parçalı key vardır.</td></tr>
+  </tbody>
+</table>
+<p>Son kolon önemli bir farkı gösterir. Redis'te bir key her zaman tek parçadır; bir grubu bir arada tutmak için key'in değeri bir veri yapısı (hash, list, sorted set) olur. Cassandra'da ve DynamoDB'de grup primary key'in kendisinden gelir. Bu fark M bölümünde "ne zaman hangisi" sorusunun bir parçasıdır.</p>
+<p>En basit key-value table simple primary key'li olandır. Her key tam olarak tek bir value'yu adlandırır ve database value'nun içine bakmaz. Bu bir oturum, bir sayaç ya da cache'lenmiş bir sayfa için yeterlidir:</p>
+<table class="data">
+  <caption>simple primary key'li bir table: oturumlar</caption>
+  <thead><tr><th class="c-pk">primary key (sadece partition key)</th><th>value</th></tr></thead>
   <tbody>
     <tr><td class="c-pk mono">session:7f3a</td><td><code>{"user": "C00001", "last_page": "/cart"}</code></td></tr>
     <tr><td class="c-pk mono">session:3c8d</td><td><code>{"user": "C00017", "last_page": "/p/P0044"}</code></td></tr>
     <tr><td class="c-pk mono">views:P0001</td><td><code>1842</code></td></tr>
   </tbody>
 </table>
-{% call k.ask("Zaten var olan bir key ile ikinci bir değer yazarsam ne olur?") %}
-<p>Yeni değer eskisinin yerine geçer. Bir key tam olarak tek bir değeri adlandırır, bu yüzden database bir key altında iki değer tutamaz. Eski değere de ihtiyacın varsa key farklı olmalıdır.</p>
+<p>Üçüncü satıra dikkat et: value bir sayıdır, ilk iki satırda ise bir nesnedir. Database buna itiraz etmez, çünkü value'nun şeklini bilmez ve bilmek istemez. Buna <b>şemasız value</b> denir; bütün durumları şöyledir:</p>
+<table class="data">
+  <caption>bütün durumlar: value'nun şekli</caption>
+  <thead><tr><th>Durum</th><th>Database ne yapar</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Bütün value'lar aynı alanlara sahip</td><td>Kabul eder. Alanların listesini bir yerde tutmaz; her value kendi alanlarını taşır.</td><td>Bütün oturumlarda <code>user</code> ve <code>last_page</code></td></tr>
+    <tr><td>Value'lar farklı alanlara sahip</td><td>Kabul eder. Bir value'ya alan eklemek diğer value'ları değiştirmez.</td><td>Bir sepet satırında <code>gift_note</code> var, diğerlerinde yok</td></tr>
+    <tr><td>Value bir nesne değil, tek bir sayı ya da metin</td><td>Kabul eder.</td><td><code>views:P0001 → 1842</code></td></tr>
+    <tr><td>Value'nun içindeki bir alana göre arama</td><td><b>Yapamaz</b>; bütün value'ları okumak zorundadır. Çözüm A8'deki ikinci index'tir.</td><td>"<code>last_page</code>'i /cart olan oturumlar"</td></tr>
+    <tr><td>Value'nun boyutu</td><td>Her store'un bir üst sınırı vardır. DynamoDB'de bir value en fazla 400 KB'tır. Büyük dosya value olmaz; dosya object storage'a gider, key-value'da sadece metadata'sı durur.</td><td>Bir ürün görseli S3'te, görselin adı ve boyutu key-value'da</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Zaten var olan bir key ile ikinci bir value yazarsam ne olur?") %}
+<p>Yeni value eskisinin yerine geçer. Bir primary key tam olarak tek bir value'yu adlandırır, bu yüzden database bir key altında iki value tutamaz. Eski value'ya da ihtiyacın varsa key farklı olmalıdır; örneğin key'e bir versiyon numarası eklenir. A6'daki yazma tablosu bu durumu da listeler.</p>
 {% endcall %}
-{% call k.ask("Bir değeri key'i olmadan bulabilir miyim, örneğin \"C00001 kullanıcısının bütün oturumları\"?") %}
-<p>Ucuz bir şekilde bulamazsın. Database her key'in nerede yaşadığını bilir ama değerlerin içinde ne olduğunu bilmez. Bu soruyu cevaplamak için her değeri okumak zorundadır. Bölüm B, ikinci bir index'in bunu nasıl çözdüğünü gösterir (B4).</p>
+{% call k.ask("Bir value'yu key'i olmadan bulabilir miyim, örneğin \"C00001 kullanıcısının bütün oturumları\"?") %}
+<p>Ucuz bir şekilde bulamazsın. Database her key'in nerede yaşadığını bilir ama value'ların içinde ne olduğunu bilmez. Bu soruyu cevaplamak için her value'yu okumak zorundadır. A8, ikinci bir index'in bunu nasıl çözdüğünü gösterir.</p>
 {% endcall %}
+{% call k.ask("\"Key\" ve \"primary key\" aynı şey mi?") %}
+<p>Evet. "Key" günlük addır, "primary key" resmî addır. İkisi de bir value'yu benzersiz olarak tanımlayan şeyi anlatır. "Primary" kelimesi şunu hatırlatır: A8'de göreceğin ikinci index'in de bir key'i vardır, ama o key benzersiz olmak zorunda değildir ve value'nun esas adresi değildir.</p>
+{% endcall %}
+{{ k.fig("dynamodb-table.png", "resmî örnek: simple primary key'li bir table. Her value'nun partition key'i PersonID'dir ve sort key yoktur. 101'de Phone, 102'de Address var: value'lar farklı alanlara sahip, database itiraz etmiyor.") }}
 
-<h2 id="keyparts" data-short="Partition parçası, sıralama parçası"><span class="sec">A3</span>İki parçalı key: partition parçası ve sıralama parçası</h2>
-<p>Bir sepet tek bir değer değildir. Satırlardan oluşan bir gruptur: her ürün için bir satır. Ziyaretçi bütün grubu tek bir istekle okumak ve bir satırı diğerlerine dokunmadan değiştirmek ister. Tek parçalı bir key ikisini birden yapamaz. Bu yüzden birçok key-value database key'in iki parçalı olmasına izin verir.</p>
-{{ k.concept("Partition parçası",
-   "Key'in ilk parçası. Değerin <b>nerede</b> saklanacağına karar verir. Aynı partition parçasına sahip bütün değerler tek bir grup olarak bir arada saklanır.",
-   "<code>CART#7f3a</code>. 7f3a ziyaretçisinin sepetinin her satırı bu partition parçasına sahiptir, bu yüzden database hepsini tek bir yerde tutar.",
+<h2 id="keyparts" data-short="Partition key, sort key"><span class="sec">A3</span>Composite primary key: partition key ve sort key, bütün kombinasyonlarıyla</h2>
+<p>Bir sepet tek bir value değildir. Satırlardan oluşan bir gruptur: her ürün için bir satır. Ziyaretçi bütün grubu tek bir istekle okumak ve bir satırı diğerlerine dokunmadan değiştirmek ister. Simple bir primary key ikisini birden yapamaz: ya bütün sepet tek bir value olur ve bir satır için bütün sepet yeniden yazılır, ya da her satır ayrı bir key olur ve bütün sepeti okumak için bütün key'leri bilmek gerekir. Composite primary key bunu çözer.</p>
+{{ k.concept("Partition key",
+   "Primary key'in ilk parçası. Value'nun <b>nerede</b> saklanacağına karar verir (A4). Aynı partition key'e sahip bütün value'lar tek bir grup olarak bir arada saklanır.",
+   "<code>CART#7f3a</code>. 7f3a ziyaretçisinin sepetinin her satırı bu partition key'e sahiptir, bu yüzden database hepsini tek bir yerde tutar.",
    "Bir adresteki bina numarası. 12 numaralı binanın bütün daireleri aynı binadadır.") }}
-{{ k.concept("Sıralama parçası",
-   "Key'in ikinci parçası. Grubun <b>içindeki</b> tek bir değeri adlandırır ve gruptaki değerlerin <b>sırasına</b> karar verir.",
+{{ k.concept("Sort key",
+   "Primary key'in ikinci parçası. Grubun <b>içindeki</b> tek bir value'yu adlandırır ve gruptaki value'ların <b>sırasına</b> karar verir. Sadece composite primary key'de vardır.",
    "<code>ITEM#P0001</code>: <code>CART#7f3a</code> sepetinin içindeki P0001 ürününün satırı. Bir sepetin satırları bu parçaya göre sıralanır.",
    "Daire numarası. \"12 numaralı bina, 3 numaralı daire\" tek bir daireyi adlandırır. Sadece \"12 numaralı bina\" bütün binayı adlandırır.") }}
-<p>İki parça birlikte <b>tam key</b>'dir (composite key). Tam key tam olarak tek bir değeri adlandırır. Partition parçası tek başına bir grubu adlandırır. Bu şema öğretici verinin sepetlerini gösterir. Renkler bütün sayfada aynı kalır: partition parçası için <b>sarı</b>, sıralama parçası için <b>mavi</b>, değer için <b>gri</b>.</p>
+<p>İki parça birlikte primary key'dir ve tam olarak tek bir value'yu adlandırır. Partition key tek başına bir grubu adlandırır. Bu şema öğretici verinin sepetlerini gösterir. Renkler bütün sayfada aynı kalır: partition key için <b>sarı</b>, sort key için <b>mavi</b>, value için <b>gri</b>.</p>
 {{ k.anatomy([
    {"pk": "CART#7f3a", "sk": "ITEM#P0001", "attrs": [["name", "Alpen Kablosuz Kulaklık 1"], ["qty", "2"], ["unit_price", "3.373,84"]]},
    {"pk": "CART#7f3a", "sk": "ITEM#P0044", "attrs": [["name", "Kapadokya Bulut Mimarisi 44"], ["qty", "1"], ["unit_price", "2.651,39"]]},
    {"pk": "CART#7f3a", "sk": "COUPON#LALE10", "attrs": [["percent", "10"]]},
    {"pk": "CART#3c8d", "sk": "ITEM#P0179", "attrs": [["name", "Toros Python ile Veri 179"], ["qty", "10"], ["unit_price", "767,49"], ["gift_note", "İyi okumalar"]]}],
-   "Key-value çiftleri olarak sepetler. Her satır tam key'iyle birlikte bir değerdir. Kupon ve hediye notu ek örneklerdir: bir table'daki değerlerin farklı alanlara sahip olabileceğini gösterirler.",
-   labels={"primary": "Tam key", "pk": "Partition parçası", "sk": "Sıralama parçası", "attrs": "Değer", "note": "alanlar değerden değere farklı olabilir", "items": "Değerler"}) }}
+   "Composite primary key'li key-value çiftleri olarak sepetler. Her satır primary key'iyle birlikte bir value'dur. Kupon ve hediye notu ek örneklerdir: bir table'daki value'ların farklı alanlara sahip olabileceğini gösterirler.",
+   labels={"primary": "Primary key (composite)", "pk": "Partition key", "sk": "Sort key", "attrs": "Value", "note": "alanlar value'dan value'ya farklı olabilir", "items": "Value'lar"}) }}
 <p>Şemayı satır satır oku:</p>
 <ul>
-  <li>1., 2. ve 3. satırların partition parçası aynıdır: <code>CART#7f3a</code>. Bunlar bir gruptur: 7f3a ziyaretçisinin sepeti. Tek bir istek bütün grubu okuyabilir.</li>
-  <li>1. satırın sıralama parçası <code>ITEM#P0001</code>'dir. <code>CART#7f3a</code> + <code>ITEM#P0001</code> çifti tam olarak bu tek satırı adlandırır; böylece bir istek onu diğer satırlara dokunmadan değiştirebilir.</li>
-  <li>3. satır bir ürün değil, bir kupondur. Sıralama parçasının öneki farklıdır (<code>COUPON#</code>) ve alanları farklıdır (sadece <code>percent</code>). Database bunu kabul eder, çünkü değeri anlamasına gerek yoktur.</li>
-  <li>4. satırın partition parçası farklıdır: <code>CART#3c8d</code>. Bu farklı bir gruptur, bu yüzden farklı bir yerde saklanabilir.</li>
+  <li>1., 2. ve 3. satırların partition key'i aynıdır: <code>CART#7f3a</code>. Bunlar bir gruptur: 7f3a ziyaretçisinin sepeti. Tek bir istek bütün grubu okuyabilir.</li>
+  <li>1. satırın sort key'i <code>ITEM#P0001</code>'dir. <code>CART#7f3a</code> + <code>ITEM#P0001</code> çifti tam olarak bu tek satırı adlandırır; böylece bir istek onu diğer satırlara dokunmadan değiştirebilir.</li>
+  <li>3. satır bir ürün değil, bir kupondur. Sort key'in öneki farklıdır (<code>COUPON#</code>) ve alanları farklıdır (sadece <code>percent</code>). Database bunu kabul eder, çünkü value'yu anlamasına gerek yoktur.</li>
+  <li>4. satırın partition key'i farklıdır: <code>CART#3c8d</code>. Bu farklı bir gruptur, bu yüzden farklı bir yerde saklanabilir.</li>
 </ul>
+<p>İki value'nun partition key'i aynı ya da farklı, sort key'i aynı ya da farklı olabilir. Dört kombinasyon vardır ve her birinin anlamı farklıdır:</p>
+<table class="data">
+  <caption>bütün durumlar: iki value'nun key'leri nasıl ilişkili olabilir</caption>
+  <thead><tr><th>Partition key</th><th>Sort key</th><th>Mümkün mü</th><th>Anlamı</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Aynı</td><td>Aynı</td><td><b>Hayır</b></td><td>Primary key aynı olur; bu tek bir value'dur. İkinci yazma birincisinin yerine geçer.</td><td><code>CART#7f3a</code> + <code>ITEM#P0001</code> iki kez yazılırsa tek satır kalır ve qty son yazılan olur</td></tr>
+    <tr><td>Aynı</td><td>Farklı</td><td>Evet</td><td>Aynı grupta iki ayrı value. Aynı yerde, sort key sırasıyla dururlar. Tek bir istek ikisini birden okur.</td><td><code>CART#7f3a</code> sepetindeki <code>ITEM#P0001</code> ve <code>ITEM#P0044</code></td></tr>
+    <tr><td>Farklı</td><td>Aynı</td><td>Evet</td><td>İki ayrı grupta iki ayrı value. Sort key'in aynı olması bir ilişki kurmaz; farklı yerlerde durabilirler.</td><td><code>CART#7f3a</code> ve <code>CART#3c8d</code> sepetlerinin ikisinde de <code>ITEM#P0001</code> var</td></tr>
+    <tr><td>Farklı</td><td>Farklı</td><td>Evet</td><td>Birbiriyle hiçbir ilgisi olmayan iki value.</td><td><code>CART#7f3a</code> + <code>ITEM#P0044</code> ve <code>CART#3c8d</code> + <code>ITEM#P0179</code></td></tr>
+  </tbody>
+</table>
+<p>Sort key'in kendisinin de durumları vardır. Bir tasarımcı sort key'i hangi soruyu soracağına göre seçer:</p>
+<table class="data">
+  <caption>bütün durumlar: sort key'in rolü</caption>
+  <thead><tr><th>Durum</th><th>Ne olur</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Sort key yok (simple primary key)</td><td>Her partition key tam olarak tek bir value'yu adlandırır. Grup yoktur, aralık okuması yoktur.</td><td>A2'deki oturum table'ı</td></tr>
+    <tr><td>Sort key bir isim ya da id</td><td>Grubun içinde alfabetik sıra. "Grubun tamamı" ve "sort key'i şununla başlayanlar" soruları ucuzdur.</td><td><code>ITEM#P0001</code>, <code>ITEM#P0044</code>; önek <code>ITEM#</code> ile sadece ürün satırları</td></tr>
+    <tr><td>Sort key bir zaman</td><td>Grubun içinde zaman sırası. "Son 50 olay" ya da "mart ayındakiler" soruları bir aralık okumasıdır.</td><td><code>2026-10-28T14:05:00</code>: bir ziyaretçinin aktivite geçmişi</td></tr>
+    <tr><td>Sort key birkaç parçanın birleşimi</td><td>Sıra ilk parçaya, sonra ikinciye göre olur. Tek bir metin olduğu için database onu yine tek bir sort key olarak görür.</td><td><code>2026-10#ORDER#A1</code>: önce ay, sonra sipariş türü</td></tr>
+  </tbody>
+</table>
 {% call k.ask("Key neden CART# ve ITEM# ile başlıyor? Bu database'in bir kuralı mı?") %}
-<p>Hayır, tasarımcının bir geleneğidir. Önek, key'in ne tür bir şeyi adlandırdığını bir insana söyler. Böylece bir table birkaç tür değeri (sepet satırları, kuponlar) karışıklık olmadan tutabilir. Database sadece bir metin görür, örneğin <code>CART#7f3a</code>.</p>
+<p>Hayır, tasarımcının bir geleneğidir. Önek, key'in ne tür bir şeyi adlandırdığını bir insana söyler. Böylece bir table birkaç tür value'yu (sepet satırları, kuponlar) karışıklık olmadan tutabilir. Database sadece bir metin görür, örneğin <code>CART#7f3a</code>. Öneki olmayan bir key de aynı şekilde çalışır.</p>
 {% endcall %}
-{% call k.ask("İki değer aynı partition parçasına sahip olabilir mi?") %}
-<p>Evet. Bir grubun amacı budur: 7f3a sepetinin üç değeri <code>CART#7f3a</code>'yı paylaşır. Sıralama parçaları farklı olmalıdır. Aynı partition parçasına <i>ve</i> aynı sıralama parçasına sahip iki değer imkânsızdır, çünkü tam key tek bir değeri adlandırır.</p>
+{% call k.ask("Sort key'e göre sıralamayı tersine çevirebilir miyim, örneğin en yeni olay önce?") %}
+<p>Evet. Sıra sort key'den gelir ve bir okuma isteği bu sırayı ileri ya da geri isteyebilir. Database value'ları yeniden sıralamaz; sadece grubun sonundan başa doğru okur. Bu yüzden "en yeni 50 olay" sorusu da ucuzdur.</p>
 {% endcall %}
-{% call k.ask("Key'in sıralama parçası yoksa ne olur?") %}
-<p>O zaman her partition parçası, A2'deki oturum table'ında olduğu gibi tam olarak tek bir değeri adlandırır. Bir partition parçası altında birkaç değeri gruplayamaz ve bir aralık okuyamazsın. Bir şeyin (bir sepet, bir müşteri, bir cihaz) birbiriyle ilgili birçok değeri varsa sıralama parçası kullan.</p>
+{% call k.ask("Üç parçalı bir key olabilir mi?") %}
+<p>Standart modelde hayır: partition key ve sort key olmak üzere en fazla iki parça vardır. Üçüncü bir seviye gerekiyorsa sort key'in içine konur, yukarıdaki tablonun son satırındaki gibi. Cassandra birden fazla clustering column'a izin verir; DynamoDB'de sort key tek bir alandır ve birkaç parça tek bir metinde birleştirilir.</p>
 {% endcall %}
+{{ k.fig("dynamodb-item-collections.png", "resmî örnek: her renkli çerçeve bir gruptur, yani bir hesabın bütün value'ları. Başlık bu bölümdeki isimleri gösteriyor: primary key, partition key PK artı sort key SK'dir ve alanlar value'dan value'ya farklıdır.") }}
 <h3>Öğretici veri ve identifier'ları</h3>
-<p>Bu sayfanın simülasyonları dört sepetli bu küçük table'ı kullanır. <code>pk</code> kolonu key'in partition parçasını, <code>sk</code> ise sıralama parçasını tutar. Ürün isimleri ve fiyatları gerçek Lale Market kataloğundan gelir. Sepet id'leri kısa örneklerdir.</p>
-{{ k.sample("cart", "sepetler: öğretici kopya (4 sepette 8 değer)", key=["pk", "sk"], pk="pk", sk="sk") }}
+<p>Bu sayfanın simülasyonları dört sepetli bu küçük table'ı kullanır. <code>pk</code> kolonu partition key'i, <code>sk</code> kolonu sort key'i tutar. Ürün isimleri ve fiyatları gerçek Lale Market kataloğundan gelir. Sepet id'leri kısa örneklerdir.</p>
+{{ k.sample("cart", "sepetler: öğretici kopya (4 sepette 8 value)", key=["pk", "sk"], pk="pk", sk="sk") }}
 <p>Her identifier'ın sahipliğini bir cümle olarak oku:</p>
 <table class="data">
   <thead><tr><th>Identifier</th><th>Sahibi kim</th><th>Kim ödünç alır</th></tr></thead>
   <tbody>
-    <tr><td>Ziyaretçi id'si (örneğin <code>7f3a</code>)</td><td>Sahibi mağazadır. Tarayıcı onu <code>lm_visitor</code> cookie'sinde tutar ve her Engine App onu oradan okur.</td><td>Sepet table'ı onu key'inin partition parçasının içinde ödünç alır: <code>CART#7f3a</code>.</td></tr>
-    <tr><td>Tam key (<code>pk</code> + <code>sk</code>)</td><td>Sahibi sepet table'ıdır. İki değer aynı çifte sahip olamaz. Var olan bir çiftle yapılan yazma eski değerin yerine geçer.</td><td>Kimse ödünç almaz. Diğer sistemler bir sepete ziyaretçi id'si ile başvurur.</td></tr>
-    <tr><td>Ürün id'si (örneğin <code>P0001</code>)</td><td>Sahibi katalogdur. DocumentDB'de ve Aurora'da yaşar.</td><td>Sepet table'ı onu sıralama parçasının içinde ödünç alır: <code>ITEM#P0001</code>. Bir key-value database ürünün var olduğunu kontrol etmez. Bunu uygulama yapmalıdır.</td></tr>
+    <tr><td>Ziyaretçi id'si (örneğin <code>7f3a</code>)</td><td>Sahibi mağazadır. Tarayıcı onu <code>lm_visitor</code> cookie'sinde tutar ve her Engine App onu oradan okur.</td><td>Sepet table'ı onu partition key'inin içinde ödünç alır: <code>CART#7f3a</code>.</td></tr>
+    <tr><td>Primary key (<code>pk</code> + <code>sk</code>)</td><td>Sahibi sepet table'ıdır. İki value aynı çifte sahip olamaz. Var olan bir çiftle yapılan yazma eski value'nun yerine geçer.</td><td>Kimse ödünç almaz. Diğer sistemler bir sepete ziyaretçi id'si ile başvurur.</td></tr>
+    <tr><td>Ürün id'si (örneğin <code>P0001</code>)</td><td>Sahibi katalogdur. DocumentDB'de ve Aurora'da yaşar.</td><td>Sepet table'ı onu sort key'inin içinde ödünç alır: <code>ITEM#P0001</code>. Bir key-value database ürünün var olduğunu kontrol etmez. Bunu uygulama yapmalıdır.</td></tr>
   </tbody>
 </table>
-{{ k.quiz("ddb-q0", "Öğretici table'a bak. Hangi istek tam olarak tek bir değer döndürür?",
-   ["pk = CART#7f3a ve sk = ITEM#P0044 ile okuma", "pk = CART#7f3a olan bütün değerleri okuma", "Her değeri okuyup qty >= 2 olanları tutma", "pk = CART#3c8d olan bütün değerleri okuma"],
-   0, "Tam key (iki parça birlikte) tam olarak tek bir değeri adlandırır. CART#7f3a grubunda üç, CART#3c8d grubunda iki değer var.") }}
+{{ k.quiz("ddb-q0", "Öğretici table'a bak. Hangi istek tam olarak tek bir value döndürür?",
+   ["pk = CART#7f3a ve sk = ITEM#P0044 ile okuma", "pk = CART#7f3a olan bütün value'ları okuma", "Her value'yu okuyup qty >= 2 olanları tutma", "pk = CART#3c8d olan bütün value'ları okuma"],
+   0, "Composite primary key (iki parça birlikte) tam olarak tek bir value'yu adlandırır. CART#7f3a grubunda üç, CART#3c8d grubunda iki value var.") }}
 
 <h2 id="partitions" data-short="Partition ve hash"><span class="sec">A4</span>Partition'lar ve hash: key ile okuma neden hızlı kalır</h2>
 {{ k.concept("Partition",
-   "Kendi makinesinde ya da diskinde, verinin kendi payını ve işin kendi payını taşıyan bir storage parçası. Büyük bir table birçok partition'a bölünür.",
+   "Kendi makinesinde ya da diskinde, verinin kendi payını ve işin kendi payını taşıyan bir storage parçası. Büyük bir table birçok partition'a bölünür. Partition'ları database yönetir; sen key'i seçersin.",
    "Öğretici table'ın üç partition'ı var: 0, 1 ve 2. <code>CART#7f3a</code> sepeti üç satırıyla birlikte partition 2'de yaşar.",
    "Büyük bir vestiyerin odaları. Her odanın kendi görevlisi ve kendi askıları vardır. Fiş numarası hangi odaya gidileceğini söyler.") }}
 {{ k.concept("Hash fonksiyonu",
-   "Her değeri bir sayıya çeviren bir fonksiyon. Aynı değer her zaman aynı sayıyı verir. Farklı değerler olası sayılara dağılır.",
+   "Her girdiyi bir sayıya çeviren bir fonksiyon. Aynı girdi her zaman aynı sayıyı verir. Farklı girdiler olası sayılara dağılır. Database bu sayıyla partition'ı seçer.",
    "Öğretici hash <code>CART#7f3a</code>'nın karakter kodlarını toplar ve 3'e bölümünden kalanı alır. Sonuç partition'ın numarasıdır.",
    "Bir okul arşivinde soyadının ilk harfi: \"Kaya\" her zaman K çekmecesine gider. Yürümeden önce çekmeceyi bilirsin.") }}
-<p>Bir değeri yerleştirmek için database hash fonksiyonuna key'in <b>sadece partition parçasını</b> verir. Sıralama parçası bu adıma katılmaz. Böylece bir grubun bütün değerleri aynı sayıyı alır ve aynı partition'a düşer:</p>
+<p>Bir value'yu yerleştirmek için database hash fonksiyonuna <b>sadece partition key'i</b> verir. Sort key bu adıma katılmaz. Böylece bir grubun bütün value'ları aynı sayıyı alır ve aynı partition'a düşer:</p>
 <div class="flow">
-  <div class="box pk"><code>CART#7f3a</code><small>partition parçası</small></div><span class="arrow">→</span>
+  <div class="box pk"><code>CART#7f3a</code><small>partition key</small></div><span class="arrow">→</span>
   <div class="box">hash( )<small>aynı girdi aynı sayıyı verir</small></div><span class="arrow">→</span>
   <div class="box">638 % 3 = 2<small>öğretici hash: karakter kodlarının toplamı, 3'e bölümünden kalan</small></div><span class="arrow">→</span>
   <div class="box hit">partition 2<small>CART#7f3a'nın bütün satırlarını saklar</small></div>
@@ -131,66 +195,399 @@
   <div><h4>partition 1</h4><span class="chip">CART#a1f2 · ITEM#P0095</span><span class="chip">CART#a1f2 · ITEM#P0044</span><span class="chip">CART#d405 · ITEM#P0142</span></div>
   <div class="on"><h4>partition 2</h4><span class="chip">CART#7f3a · ITEM#P0001</span><span class="chip">CART#7f3a · ITEM#P0044</span><span class="chip">CART#7f3a · ITEM#P0142</span></div>
 </div>
-<p class="flow-cap">Öğretici hash'in sekiz değeri yerleştirdiği yerler. Aşağıdaki simülasyon aynı yerleşimi adım adım hesaplar.</p>
+<p class="flow-cap">Öğretici hash'in sekiz value'yu yerleştirdiği yerler. Aşağıdaki simülasyon aynı yerleşimi adım adım hesaplar.</p>
+<table class="data">
+  <caption>bütün durumlar: hash'e ne girer, ne çıkar</caption>
+  <thead><tr><th>Durum</th><th>Hash'e giren</th><th>Sonuç</th></tr></thead>
+  <tbody>
+    <tr><td>Simple primary key</td><td>Key'in tamamı (zaten tek parça)</td><td>Her key kendi partition'ına düşer. Komşuluk yoktur: <code>session:7f3a</code> ve <code>session:7f3b</code> farklı partition'larda olabilir.</td></tr>
+    <tr><td>Composite primary key</td><td>Sadece partition key</td><td>Aynı partition key'li bütün value'lar aynı partition'a düşer ve orada sort key sırasıyla durur.</td></tr>
+    <tr><td>Partition key değişirse</td><td>Yeni değer</td><td>Value başka bir partition'a gider. Bu yüzden çoğu store primary key'i değiştirmene izin vermez; sil ve yeniden yaz.</td></tr>
+    <tr><td>Bir partition dolarsa ya da çok trafik alırsa</td><td>Değişmez</td><td>Database partition'ı ikiye böler ve key aralığını paylaştırır. Key'lerin aynı kalır; DynamoDB bunu kendisi yapar.</td></tr>
+    <tr><td>İki grup aynı partition'a düşerse</td><td>İki farklı girdi, aynı sonuç</td><td>Normaldir, hiçbir şey bozulmaz. Bir partition birçok grup tutar; her grup kendi içinde bir arada kalır.</td></tr>
+  </tbody>
+</table>
 <p>Redis Cluster key'den bir hash slot hesaplar. Cassandra bir token hesaplar. DynamoDB kendi iç hash'ini kullanır. Fikir hepsinde aynıdır.</p>
 {{ k.fig("dynamodb-hash-table.png", "bir hash fonksiyonu bir ismi (John Smith) bir slot numarasına (873) çevirir. John Smith'i tekrar bulmak için program aynı sayıyı hesaplar ve doğrudan o slot'a gider. Bir key-value database bir key'den bir partition'a gitmek için aynı fikri kullanır.") }}
+{{ k.fig("dynamodb-partition-key.png", "resmî örnek: AnimalType'ı Dog olan value üçüncü partition'a düşüyor. Hash fonksiyonu partition key'in değerini alır, sort key'i almaz.") }}
 {% call k.predict("Öğretici table'a bak. Üç partition ve dört sepet var. İki sepetin aynı partition'a düşmesi mümkün mü? Bu bir şeyi bozar mı?") %}
 <p>Evet, iki sepet aynı partition'a düşebilir. Hiçbir şey bozulmaz. Bir partition birçok grup tutar. Partition'ın içinde her grup bir arada ve sk'ya göre sıralı kalır.
    Hash sadece bir key için işi hangi partition'ın yapacağına karar verir.</p>
 {% endcall %}
-{{ k.sim("hash", "Sekiz değer, üç partition, bir hash") }}
+{{ k.sim("hash", "Sekiz value, üç partition, bir hash") }}
 {% call k.ask("Bir partition fiziksel olarak nerede? Onu görebilir ya da seçebilir miyim?") %}
-<p>Bir partition, database'in çalıştırdığı sunuculardaki storage'dır; genellikle birkaç makinede kopyaları vardır. Bir partition'ı seçemezsin. Key'i sen seçersin, partition'ı partition parçasının hash'i senin için seçer.</p>
+<p>Bir partition, database'in çalıştırdığı sunuculardaki storage'dır; genellikle birkaç makinede kopyaları vardır. Bir partition'ı seçemezsin. Key'i sen seçersin, partition'ı partition key'in hash'i senin için seçer.</p>
 {% endcall %}
 {% call k.ask("Kaç partition olacağına kim karar verir?") %}
 <p>Kendi işlettiğin bir sistemde makine eklerken operatörler karar verir. DynamoDB gibi yönetilen bir serviste, veri ya da trafik büyüdüğünde servis partition'ları kendisi ekler. Key'lerin aynı kalır.</p>
 {% endcall %}
 {{ k.concept("Hot partition",
-   "Birçok istek aynı partition parçasını kullandığı için diğerlerinden çok daha fazla trafik alan partition. Diğer partition'lar boş beklerken sınırına ulaşır.",
-   "Partition parçası şehir olsaydı sepetlerin çoğunu <code>İstanbul</code> alırdı ve işin çoğunu tek bir partition yapardı.",
+   "Birçok istek aynı partition key'i kullandığı için diğerlerinden çok daha fazla trafik alan partition. Diğer partition'lar boş beklerken sınırına ulaşır.",
+   "Partition key şehir olsaydı sepetlerin çoğunu <code>İstanbul</code> alırdı ve işin çoğunu tek bir partition yapardı.",
    "Uzun kuyruklu tek bir kasa, diğer on kasa ise bekliyor. Herkes aynı kasaya giderse daha fazla kasa yardım etmez.") }}
-<p>Bu yüzden iyi bir partition parçasının birçok farklı değeri olur ve istekler bu değerlere eşit dağılır. Ziyaretçi id'si iyi bir seçimdir: her ziyaretçinin farklı bir id'si vardır.</p>
+<p>Bu yüzden iyi bir partition key'in birçok farklı değeri olur ve istekler bu değerlere eşit dağılır. Ziyaretçi id'si iyi bir seçimdir: her ziyaretçinin farklı bir id'si vardır.</p>
+<table class="data">
+  <caption>bütün durumlar: partition key adayları</caption>
+  <thead><tr><th>Aday</th><th>Kaç farklı değer</th><th>Trafik nasıl dağılır</th><th>Sonuç</th></tr></thead>
+  <tbody>
+    <tr><td>Ziyaretçi id'si</td><td>Milyonlarca</td><td>Eşit: her ziyaretçi kendi sepetine dokunur</td><td>İyi</td></tr>
+    <tr><td>Ürün id'si</td><td>Binlerce</td><td>Eşit değil: kampanya ürünü günün trafiğinin yarısını alır</td><td>Riskli; kampanya günü hot partition</td></tr>
+    <tr><td>Şehir</td><td>Onlarca</td><td>Çok eşit değil: İstanbul tek başına üçte bir</td><td>Kötü</td></tr>
+    <tr><td>Tarih</td><td>Günde bir</td><td>Bütün trafik o günün tek değerine</td><td>En kötü: her gün tek bir partition çalışır</td></tr>
+  </tbody>
+</table>
 {{ k.quiz("ddb-q1", "Lale Market'in sepet trafiğini en iyi hangi partition key dağıtır?",
    ["Ziyaretçinin şehri", "Ziyaretçinin tarayıcı id'si", "Sepetin tarihi", "Ürünün kategorisi"],
    1, "Her ziyaretçinin farklı bir tarayıcı id'si vardır, bu yüzden trafik çok sayıda key değerine dağılır. Şehrin, tarihin ve kategorinin az değeri vardır ve bazı değerler çok yoğundur.") }}
 
+<h2 id="readpaths" data-short="Okuma yolları"><span class="sec">A5</span>Okuma yolları: key'in ne kadarını verirsen o kadar ucuz</h2>
+<p>Bir key-value database'te bir okumanın maliyetini tek bir soru belirler: istek primary key'in ne kadarını veriyor? Tamamını veriyorsa database tek bir value'ya doğrudan gider. Sadece partition key'i veriyorsa tek bir gruba gider. Hiçbirini vermiyorsa bütün table'ı okumak zorundadır. Bütün durumlar şöyledir:</p>
+<table class="data">
+  <caption>bütün durumlar: okuma yolları</caption>
+  <thead><tr><th>İstek ne verir</th><th>Database ne yapar</th><th>Ne döner</th><th>Maliyet</th><th>DynamoDB'deki adı (B2)</th></tr></thead>
+  <tbody>
+    <tr><td><span class="c-pk">partition key</span> + <span class="c-sk">sort key</span> (tam primary key)</td><td>Hash ile partition'a gider, grubun içinde sort key'i bulur</td><td>Tam olarak tek bir value ya da "yok"</td><td>En düşük: tek value okunur</td><td>GetItem</td></tr>
+    <tr><td>Sadece <span class="c-pk">partition key</span></td><td>Hash ile partition'a gider, grubun tamamını sort key sırasıyla okur</td><td>Grubun bütün value'ları, sıralı</td><td>Grubun boyutu kadar</td><td>Query</td></tr>
+    <tr><td><span class="c-pk">partition key</span> + <span class="c-sk">sort key</span> üzerinde bir koşul</td><td>Partition'a gider, grubun sadece koşula uyan dilimini okur</td><td>Grubun bir dilimi, sıralı</td><td>Dilimin boyutu kadar</td><td>Query + key condition</td></tr>
+    <tr><td>Sadece <span class="c-sk">sort key</span>, partition key yok</td><td><b>Yapamaz.</b> Hangi partition'a gideceğini bilemez.</td><td>Hata</td><td>—</td><td>— (bütün table okunmadan yapılamaz)</td></tr>
+    <tr><td>Value'nun içindeki bir alan (örneğin qty)</td><td>Bütün table'ı okur ve her value'yu filtreden geçirir</td><td>Filtreye uyanlar</td><td>En yüksek: okunan her value için ödersin, dönen için değil</td><td>Scan + filter</td></tr>
+    <tr><td>Hiçbir şey</td><td>Bütün table'ı okur</td><td>Her value</td><td>En yüksek</td><td>Scan</td></tr>
+  </tbody>
+</table>
+<p>Üçüncü satırdaki koşul sort key'in sıralı olmasından yararlanır. Grup zaten sıralı olduğu için database "şununla başlayanlar" ya da "şu ile şu arasındakiler" dilimini tek bir aralık olarak okur. Hangi koşullar mümkün, hangileri değil:</p>
+<table class="data">
+  <caption>bütün durumlar: sort key üzerinde koşullar</caption>
+  <thead><tr><th>Koşul</th><th>Mümkün mü</th><th>Neden</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Eşittir</td><td>Evet</td><td>Sıralı grupta tek bir nokta</td><td><code>sk = ITEM#P0044</code></td></tr>
+    <tr><td>Küçüktür, büyüktür, arasında (BETWEEN)</td><td>Evet</td><td>Sıralı grupta tek bir aralık</td><td><code>sk BETWEEN 2026-10-01 AND 2026-10-31</code>: ekim ayındaki olaylar</td></tr>
+    <tr><td>Şununla başlar (begins_with)</td><td>Evet</td><td>Aynı önekli value'lar sıralı grupta yan yanadır; bu da bir aralıktır</td><td><code>begins_with(sk, "ITEM#")</code>: sepetin sadece ürün satırları, kupon hariç</td></tr>
+    <tr><td>Şunu içerir, şununla biter</td><td><b>Hayır</b></td><td>Sıralı grupta yan yana değildir; database her value'ya bakmak zorunda kalırdı</td><td><code>contains(sk, "P00")</code> bir key condition olamaz</td></tr>
+    <tr><td>Sort key'e göre ters sıra</td><td>Evet</td><td>Grubun sonundan başa okur</td><td>"En yeni 50 olay"</td></tr>
+    <tr><td>İlk N value</td><td>Evet</td><td>Sıralı okumayı N'den sonra durdurur; sadece N için ödersin</td><td>Sepetin ilk 20 satırı</td></tr>
+  </tbody>
+</table>
+{{ k.fig("dynamodb-console-query-begins-with.png", "bir okuma isteği, DynamoDB konsolunda. Partition key documentId = 123 tek bir grubu seçer. Sort key koşulu begins_with(v_) grubun sadece üç versiyon value'sunu, v_0, v_1 ve v_2'yi, sort key sırasıyla döndürür.") }}
+{% call k.ask("Bir value'yu partition key olmadan, sadece sort key ile neden bulamıyorum?") %}
+<p>Çünkü database'in hangi partition'ı okuyacağını bilmesinin tek yolu partition key'dir (A4). Sort key hash'e girmez; bu yüzden <code>ITEM#P0044</code> sort key'li value'lar bütün partition'lara dağılmış olabilir. Bu soruyu sormak istiyorsan ya bütün table'ı okursun ya da ürün id'sini partition key yapan ikinci bir index kurarsın (A8).</p>
+{% endcall %}
+{% call k.ask("Filtre ile Scan aynı sonucu veriyor; neden daha pahalı?") %}
+<p>Çünkü maliyet okunan value sayısına göredir, dönen value sayısına göre değil. 8 value'lu table'da <code>qty >= 2</code> filtresi 5 value döndürür ama 8 value okur. Milyon value'lu bir table'da aynı soru milyon value okur. Key ile okuma ise table ne kadar büyürse büyüsün sadece grubu okur. B2'deki simülasyon ikisini yan yana oynatır.</p>
+{% endcall %}
+{{ k.quiz("ddb-q5", "Bir ziyaretçinin sepetindeki sadece kupon satırlarını istiyorsun. Sort key'ler ITEM#… ve COUPON#… ile başlıyor. En ucuz yol hangisi?",
+   ["Bütün table'ı oku, sk'sı COUPON# ile başlayanları tut", "Partition key = CART#7f3a ve begins_with(sk, COUPON#) ile grubun dilimini oku", "Partition key = CART#7f3a ile grubun tamamını oku, uygulamada filtrele", "Sort key = COUPON#LALE10 ile doğrudan oku"],
+   1, "Partition key grubu seçer, begins_with koşulu sıralı grubun sadece COUPON# dilimini okur. Üçüncü seçenek de çalışır ama ITEM# satırları için de ödersin. Dördüncü seçenek partition key olmadan mümkün değildir.") }}
+
+<h2 id="writepaths" data-short="Yazma yolları"><span class="sec">A6</span>Yazma yolları: her yazma tam primary key ister</h2>
+<p>Okumada key'in bir parçası yeterdi. Yazmada durum farklıdır: <b>her yazma ve her silme tam primary key ister.</b> Database "bu grubun hepsini sil" ya da "sort key'i şununla başlayanları değiştir" gibi bir istek kabul etmez. Birçok value'yu değiştirmek için önce grubu okursun, sonra her value'ya tek tek yazarsın. Bu kural ilişkisel bir database'ten gelen okuyucuyu en çok şaşırtan kuraldır; orada <code>DELETE FROM cart WHERE visitor = '7f3a'</code> tek bir cümledir.</p>
+<table class="data">
+  <caption>bütün durumlar: yazma yolları</caption>
+  <thead><tr><th>Durum</th><th>Ne verirsin</th><th>Database ne yapar</th><th>DynamoDB'deki adı (B3)</th></tr></thead>
+  <tbody>
+    <tr><td>Yeni bir key</td><td>Tam primary key + value</td><td>Value'yu yazar</td><td>PutItem</td></tr>
+    <tr><td>Var olan bir key, value'nun tamamı</td><td>Tam primary key + value</td><td>Eski value'yu atar, yenisini yazar. Eski value'daki alanlar yenisinde yoksa kaybolur.</td><td>PutItem</td></tr>
+    <tr><td>Var olan bir key, value'nun bir parçası</td><td>Tam primary key + değişecek alanlar</td><td>Sadece o alanları değiştirir, diğer alanlar kalır. Key yoksa value'yu oluşturur.</td><td>UpdateItem</td></tr>
+    <tr><td>Sayaç artırma</td><td>Tam primary key + alan + miktar</td><td>Alanı okumadan, tek adımda, atomik olarak artırır. İki istek aynı anda +1 derse sonuç +2 olur.</td><td>UpdateItem ADD</td></tr>
+    <tr><td>Koşullu yazma</td><td>Tam primary key + value + koşul</td><td>Koşulu mevcut value üzerinde test eder; doğruysa yazar, yanlışsa yazmaz ve hata döndürür. Test ve yazma tek adımdır; arada başka bir istek giremez.</td><td>ConditionExpression</td></tr>
+    <tr><td>Silme</td><td>Tam primary key</td><td>Tek value'yu siler</td><td>DeleteItem</td></tr>
+    <tr><td>Bir grubun tamamını silme ya da değiştirme</td><td>Sadece partition key</td><td><b>Yapamaz.</b> Önce grubu okursun (A5), sonra her value için tam primary key ile tek tek silersin ya da yazarsın.</td><td>Query + her value için DeleteItem (ya da 25'lik toplu istekler)</td></tr>
+    <tr><td>Birkaç value'ya ya hep ya hiç yazma</td><td>Her value'nun tam primary key'i + value'ları</td><td>Ya hepsini yazar ya hiçbirini. Her store'da yoktur; olan store'larda normal yazmadan pahalıdır.</td><td>Transaction isteği, en fazla 100 value (B3)</td></tr>
+  </tbody>
+</table>
+<p>Koşullu yazma, key-value database'in "kilit" yerine kullandığı araçtır. İlişkisel bir database'te bir kural için önce okur, kilitler, sonra yazarsın. Key-value database'te koşulu yazmanın içine koyarsın ve database onu yazma anında test eder:</p>
+<div class="flow">
+  <div class="box pk">istek<small>CART#7f3a + ITEM#P0001: qty'ye 2 ekle, koşul: qty ≤ 3</small></div><span class="arrow">→</span>
+  <div class="box">mevcut value<small>qty = 2</small></div><span class="arrow">→</span>
+  <div class="box">koşul testi<small>2 ≤ 3 doğru</small></div><span class="arrow">→</span>
+  <div class="box hit">yazıldı<small>qty = 4</small></div>
+</div>
+<div class="flow">
+  <div class="box pk">aynı istek, ikinci kez<small>qty'ye 2 ekle, koşul: qty ≤ 3</small></div><span class="arrow">→</span>
+  <div class="box">mevcut value<small>qty = 4</small></div><span class="arrow">→</span>
+  <div class="box">koşul testi<small>4 ≤ 3 yanlış</small></div><span class="arrow">→</span>
+  <div class="box miss">reddedildi<small>value değişmedi, uygulama hatayı alır</small></div>
+</div>
+<p class="flow-cap">Aynı isteğin iki sonucu: ilkinde koşul doğru ve yazma olur; ikincisinde koşul yanlış ve value değişmez. "En fazla 5 adet" kuralı böyle korunur. Koşul yanlış çıkan istek de kapasite harcar, çünkü database value'yu okudu.</p>
+<table class="data">
+  <caption>bütün durumlar: koşulun biçimleri</caption>
+  <thead><tr><th>Koşul</th><th>Ne sağlar</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Key yoksa yaz</td><td>Aynı key'i ikinci kez yazmayı engeller: idempotency, "ilk gelen alır"</td><td>Bir ödeme isteği aynı request id ile tekrar gelirse ikinci yazma reddedilir</td></tr>
+    <tr><td>Key varsa yaz</td><td>Var olmayan bir value'yu yanlışlıkla oluşturmayı engeller</td><td>Sadece var olan bir sepet satırının miktarı değişsin</td></tr>
+    <tr><td>Bir alan şu değerdeyse yaz</td><td>Durum makinesi: sadece belirli bir durumdan geçiş</td><td>Sipariş sadece "shipped" ise "delivered" olabilir</td></tr>
+    <tr><td>Bir alan şu sınırın altındaysa yaz</td><td>Üst sınır</td><td>qty + eklenen ≤ 5</td></tr>
+    <tr><td>Bir alan okuduğum değerle hâlâ aynıysa yaz</td><td>Optimistic locking: başkası arada değiştirdiyse yazma</td><td>version = 7 ise yaz ve version'ı 8 yap</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Sort key ile toplu silme neden yok? Database grubun yerini biliyor.") %}
+<p>Yerini biliyor, ama her value ayrı bir kayıttır ve her yazma tek bir value'nun atomik işlemidir. Bir grup 10 value da olabilir, 10 milyon da. "Hepsini sil" tek bir atomik işlem olsaydı o partition dakikalarca kilitlenebilirdi. Bu yüzden model her yazmayı tek value ile sınırlar. Uygulama grubu okur ve toplu isteklerle siler; bir süre sonu (A7) çoğu durumda bunu gereksiz kılar.</p>
+{% endcall %}
+{% call k.ask("Üzerine yazdığım bir value'yu geri alabilir miyim?") %}
+<p>Hayır. Bir key altında tek bir value vardır ve eski value gider. Geçmişi tutmak istiyorsan her versiyonu ayrı bir key altında yazarsın, örneğin sort key'e bir versiyon numarası ekleyerek: <code>v_0</code>, <code>v_1</code>, <code>v_2</code>. A5'teki görsel tam olarak bu tasarımı gösteriyordu.</p>
+{% endcall %}
+{% call k.ask("İki istek aynı anda aynı value'ya yazarsa ne olur?") %}
+<p>Database onları sıraya koyar; biri önce, diğeri sonra uygulanır. Koşulsuz iki tam yazmada sonuncusu kazanır ve ilkinin değişikliği kaybolur. Sayaç artırma ve koşullu yazma bu kaybı önler: artırmada ikisi de uygulanır, koşulda ikincisi değişen value'yu görür ve reddedilir. B3'teki simülasyon bunu qty = 2 olan bir satıra gelen iki istekle oynatır.</p>
+{% endcall %}
+{{ k.quiz("ddb-q6", "Terk edilen bir sepetin 40 satırını silmek istiyorsun. Key-value modelinde en kısa yol hangisi?",
+   ["Partition key ile tek bir silme isteği", "Grubu partition key ile oku, sonra her satırı tam primary key ile sil", "Sort key'i ITEM# ile başlayanları tek istekle sil", "Table'ı Scan et ve filtreyle sil"],
+   1, "Silme her zaman tam primary key ister. Grup partition key ile ucuzca okunur, sonra her value tek tek (ya da toplu isteklerle) silinir. A7'deki süre sonu bu işi otomatik yapar.") }}
+
+<h2 id="expiry" data-short="Süre sonu (TTL)"><span class="sec">A7</span>Süre sonu: kendini silen value'lar</h2>
+{{ k.concept("Time to live (TTL)",
+   "Bir value'ya verilen bir son kullanma zamanı. Zaman geçince database value'yu kendisi siler; uygulama silme isteği göndermez. Kısaltması TTL'dir.",
+   "Her sepet satırının <code>expires_at</code> alanı yazıldığı andan 24 saat sonrasını tutar. Terk edilen sepet bir gün sonra kendiliğinden kaybolur.",
+   "Bir otoparkın biletindeki saat. Süre dolunca yer başkasına verilir; görevli her arabayı tek tek kontrol etmez.") }}
+<p>Süre sonu, A6'daki "grubun tamamını silme yok" kuralının en yaygın çözümüdür. Oturumlar, geçici tutmalar, sepetler ve sayaçlar bir süre sonra değersizdir; TTL onları bir silme isteği yazmadan temizler. Ama her store süre sonunu aynı kesinlikle uygulamaz; bütün durumlar şöyledir:</p>
+<table class="data">
+  <caption>bütün durumlar: süre sonu</caption>
+  <thead><tr><th>Durum</th><th>Ne olur</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Value'nun süre sonu yok</td><td>Value biri silene kadar kalır.</td><td>Bir kullanıcı profili</td></tr>
+    <tr><td>Süre sonu var, zaman gelmedi</td><td>Value normal bir value'dur; okunur, yazılır.</td><td>Yarım saat önce açılan sepet</td></tr>
+    <tr><td>Süre sonu yenilenir</td><td>Yeni bir zaman yazılır; value yaşamaya devam eder. Yenileme bir yazmadır.</td><td>Her sayfa görüntülemede oturumun süresi 30 dakika ileri alınır</td></tr>
+    <tr><td>Zaman geldi, store süreyi <b>tam anında</b> uygular</td><td>Value o saniyede yok olur; bir okuma onu artık göremez.</td><td>Redis / Valkey: <code>EXPIRE</code> ile key tam süre sonunda gider</td></tr>
+    <tr><td>Zaman geldi, store süreyi <b>arka planda</b> uygular</td><td>Value bir süre daha okumada görünebilir. Göstermemesi gereken uygulama süre alanını her okumada kendisi karşılaştırır.</td><td>DynamoDB: süresi dolan value'lar genellikle birkaç gün içinde silinir. Cassandra: silinmiş işaretlenir, sonra temizlenir.</td></tr>
+    <tr><td>Süre dolmuş value'nun silinmesi</td><td>Arka plan silmesi yazma kapasitesi harcamaz; uygulama bir silme isteği göndermez.</td><td>DynamoDB TTL</td></tr>
+  </tbody>
+</table>
+<div class="flow">
+  <div class="box">yazma<small>expires_at = şimdi + 24 saat</small></div><span class="arrow">→</span>
+  <div class="box hit">24 saat boyunca normal value<small>okunur, yenilenebilir</small></div><span class="arrow">→</span>
+  <div class="box pk">süre doldu<small>tam anında: artık yok · arka planda: bir süre daha görünebilir</small></div><span class="arrow">→</span>
+  <div class="box miss">silindi<small>uygulama bir şey yapmadı</small></div>
+</div>
+<p class="flow-cap">Bir value'nun süre sonu yaşamı. Sarı kutudaki iki seçenek store'a göre değişir ve M7'deki oturum yarışını belirleyen fark tam olarak budur.</p>
+{% call k.ask("Süresi dolan ama henüz silinmeyen value'yu okursam ne olur?") %}
+<p>Arka planda silen bir store'da normal bir value gibi döner. Bu yüzden uygulama "süresi dolmuş mu" sorusunu kendisi sormalıdır: okuduktan sonra süre alanını şimdiki zamanla karşılaştırır ya da okuma isteğine bir filtre ekler. Tam anında silen bir store'da bu kontrol gerekmez. B5 bunu DynamoDB'de gösterir.</p>
+{% endcall %}
+{% call k.ask("Süre sonu bir gruba ya da bütün table'a verilebilir mi?") %}
+<p>Süre sonu value başınadır, çünkü her value ayrı bir kayıttır. Cassandra'da table'a bir varsayılan süre verilebilir, ama o da her row'a ayrı ayrı uygulanır. Bir sepetin bütün satırlarının aynı anda silinmesini istiyorsan her satıra aynı süre sonunu yazarsın.</p>
+{% endcall %}
+
+<h2 id="secondary" data-short="İkinci index"><span class="sec">A8</span>Key dışı erişim: ikinci bir index</h2>
+<p>Buraya kadar her ucuz soru primary key ile başladı. Ama gerçek bir uygulamanın başka soruları da vardır: "P0044 kitabı hangi sepetlerde var?" Sepet table'ının partition key'i sepettir; bu sorunun elinde ürün id'si var, sepet id'si yok. A5'e göre tek yol bütün table'ı okumaktır. İkinci bir index bunu değiştirir.</p>
+{{ k.concept("İkinci index (secondary index)",
+   "Aynı value'ların, <b>farklı bir key</b> ile saklanan ikinci bir kopyası. Database bu kopyayı her yazmada kendisi günceller. Index'in key'i benzersiz olmak zorunda değildir: aynı index key'i altında birçok value olabilir.",
+   "Ana table'ın key'i sepet + ürün. Index'in key'i ürün + sepet. \"P0044 hangi sepetlerde?\" artık index'te tek bir grup okumasıdır.",
+   "Bir kütüphanenin iki kartoteği: biri yazar adına, biri kitap adına göre. Aynı kitaplar, iki farklı sıra. Yeni bir kitap gelince iki kartoteğe de kart eklenir.") }}
+{{ k.anatomy([
+   {"pk": "P0001", "sk": "CART#7f3a", "attrs": [["qty", "2"]]},
+   {"pk": "P0001", "sk": "CART#3c8d", "attrs": [["qty", "1"]]},
+   {"pk": "P0044", "sk": "CART#7f3a", "attrs": [["qty", "1"]]},
+   {"pk": "P0044", "sk": "CART#a1f2", "attrs": [["qty", "3"]]}],
+   "Öğretici sepetlerin bir ikinci index'i. Ana table'da sort key'in içinde duran ürün id'si burada partition key oldu; ana table'ın partition key'i burada sort key. Sadece qty kopyalandı. \"P0044 hangi sepetlerde?\" sorusu artık index'te P0044 grubunun okumasıdır: iki value.",
+   pk_name="product", sk_name="cart",
+   labels={"primary": "Index'in key'i", "pk": "Partition key", "sk": "Sort key", "attrs": "Kopyalanan alanlar", "note": "sadece seçilen alanlar kopyalanır", "items": "Kopyalar"}) }}
+<table class="data">
+  <caption>bütün durumlar: bir soru ve ona giden yol</caption>
+  <thead><tr><th>Sorunun elinde ne var</th><th>Yol</th><th>Maliyet</th></tr></thead>
+  <tbody>
+    <tr><td>Primary key'in tamamı ya da partition key'i</td><td>Ana table, doğrudan (A5)</td><td>Düşük</td></tr>
+    <tr><td>Value'nun içindeki bir alan ve bu soru sık soruluyor</td><td>O alanı key yapan ikinci bir index kur; soru index'te doğrudan bir okuma olur</td><td>Okuma düşük. Bedeli: her yazma index'e de yazılır; index yer kaplar</td></tr>
+    <tr><td>Value'nun içindeki bir alan ve bu soru nadiren soruluyor</td><td>Bütün table'ı oku ve filtrele</td><td>Yüksek ama tek seferlik; index kurmaya değmez</td></tr>
+    <tr><td>Soru şimdilik bilinmiyor</td><td>Key-value modelinin zayıf noktası: önce uygulamanın soruları, sonra key. Sorular sürekli değişiyorsa ilişkisel database (M3)</td><td>—</td></tr>
+  </tbody>
+</table>
+<table class="data">
+  <caption>bütün durumlar: index'in kopyaladığı alanlar</caption>
+  <thead><tr><th>Kopya</th><th>Ne sağlar</th><th>Bedeli</th></tr></thead>
+  <tbody>
+    <tr><td>Sadece key'ler</td><td>"Hangi sepetlerde?" sorusunun cevabı: sepet id'leri</td><td>En küçük kopya; alanlar için ana table'a ikinci bir okuma gerekir</td></tr>
+    <tr><td>Key'ler + seçilen alanlar</td><td>Soru index'ten tamamen cevaplanır</td><td>Orta</td></tr>
+    <tr><td>Bütün value</td><td>Index ana table'ın tam ikizi</td><td>Storage iki katı, her yazma iki katı</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Index'i ben mi güncel tutuyorum?") %}
+<p>Hayır, database tutar. Ana table'a her yazma index'e de yansır. Ama bu yansıma store'a göre anında ya da kısa bir gecikmeyle olur. DynamoDB'de ikinci index eventually consistent'tır: yazmadan hemen sonra index'ten okuyan biri yeni value'yu henüz görmeyebilir. B4 bunu ve index türlerini anlatır.</p>
+{% endcall %}
+{% call k.ask("Her alan için bir index kursam ilişkisel database gibi olmaz mı?") %}
+<p>Her yazma her index'e de yazılır; on index on kat yazma maliyeti demektir. Ve index'ler yine key ile okunur: JOIN, GROUP BY ve serbest filtre yoktur. Sorular önceden bilinmiyorsa ve sürekli değişiyorsa doğru araç ilişkisel database'tir. Bu M3'ün ilk satırıdır.</p>
+{% endcall %}
+
+<h2 id="changes" data-short="Değişiklik akışı"><span class="sec">A9</span>Değişiklik akışı: her yazma bir olaydır</h2>
+{{ k.concept("Değişiklik akışı (change stream)",
+   "Table'daki her yazmanın (ekleme, değiştirme, silme) sırayla kaydedildiği ve dışarıdan okunabilen bir liste. Başka bir program bu listeyi okur ve her değişikliğe tepki verir. Database'e soru sormak yerine database'in haber vermesini sağlar.",
+   "Bir sepet satırının qty'si 2'den 3'e çıkınca akışa bir kayıt düşer: eski value qty 2, yeni value qty 3. Bir fonksiyon bu kaydı okur ve stok uyarısı gönderebilir.",
+   "Bir bankanın SMS bildirimi. Hesabına her para girişinde bir mesaj gelir; hesabı her dakika kendin kontrol etmezsin.") }}
+{{ k.fig("dynamodb-streams-lambda.png", "resmî örnek: Customers table'ına her yeni müşteri yazıldığında akışa bir kayıt düşer. Bir AWS Lambda fonksiyonu kaydı okur ve Amazon SES ile bir hoş geldin e-postası gönderir. Table'a yazan program e-posta göndermeyi bilmez; akış onu ayırır.") }}
+<table class="data">
+  <caption>bütün durumlar: akışa ne düşer</caption>
+  <thead><tr><th>Table'daki olay</th><th>Akıştaki kayıt</th><th>Kayıtta ne var</th></tr></thead>
+  <tbody>
+    <tr><td>Yeni bir key yazıldı</td><td>INSERT</td><td>Yeni value</td></tr>
+    <tr><td>Var olan bir value değişti</td><td>MODIFY</td><td>Eski value ve yeni value (ayar olarak seçilir: sadece key, yeni, eski, ikisi)</td></tr>
+    <tr><td>Bir value silindi (uygulama ya da süre sonu)</td><td>REMOVE</td><td>Silinen value</td></tr>
+    <tr><td>Bir okuma</td><td>Kayıt yok</td><td>Akış sadece yazmaları taşır</td></tr>
+    <tr><td>Aynı key'e art arda iki yazma</td><td>İki kayıt, aynı sırada</td><td>Bir key'in değişiklikleri sırasını korur; farklı key'ler arasında sıra garanti değildir</td></tr>
+    <tr><td>Kimse okumazsa</td><td>Kayıt bir süre bekler, sonra silinir</td><td>DynamoDB'de 24 saat</td></tr>
+  </tbody>
+</table>
+<p>Değişiklik akışı, key-value database'i daha büyük bir mimarinin başlangıç noktası yapar. Arama index'i, analitik kopya, e-posta ve dolandırıcılık kontrolü table'a yazan koddan ayrılır. M2'deki aktivite geçmişi kartı bunu bir gereksinim olarak kullanır.</p>
+{% call k.ask("Akış yerine table'ı her dakika okusam olmaz mı?") %}
+<p>Olur, ama iki bedeli vardır. Birincisi, "son bir dakikada değişenler" sorusunun key'i yoktur; bütün table'ı okursun (A5). İkincisi, bir dakikalık gecikme kabul edilmeyebilir. Akış her değişikliği saniyeler içinde ve sadece değişenleri verir.</p>
+{% endcall %}
+
+<h2 id="summary" data-short="Ö1–Ö8 özeti ve matris"><span class="sec">A10</span>Özet: key-value'nun sekiz özelliği ve hangi store'da olduğu</h2>
+<p>Bölüm A'nın her kavramı bir özelliğe karşılık gelir. Bu sekiz özellik sayfanın geri kalanının ortak dilidir: Mimar gözüyle bölümü her use case'i bu numaralarla anlatır ve M1 bu listeyi sinyaller ve sınırlarıyla genişletir.</p>
+<table class="data">
+  <caption>Ö1–Ö8: key-value database'in özellikleri</caption>
+  <thead><tr><th>No</th><th>Özellik</th><th>Tek cümleyle</th><th>Tanım</th></tr></thead>
+  <tbody>
+    <tr><td><b>Ö1</b></td><td>Key ile doğrudan okuma ve yazma</td><td>Tam primary key ile tek bir value'ya, table'ın boyutundan bağımsız sürede gidilir.</td><td>A2, A5</td></tr>
+    <tr><td><b>Ö2</b></td><td>Hash ile partition'lara bölünme</td><td>Veri ve trafik partition key'in hash'iyle birçok makineye dağılır; makine ekleyince kapasite artar.</td><td>A4</td></tr>
+    <tr><td><b>Ö3</b></td><td>Composite primary key: grup ve sıralı aralık</td><td>Partition key bir grubu seçer; sort key grubun içinde sıra, aralık ve önek okuması verir.</td><td>A3, A5</td></tr>
+    <tr><td><b>Ö4</b></td><td>Şemasız value</td><td>Her value kendi alanlarını taşır; database value'nun içine bakmaz.</td><td>A2</td></tr>
+    <tr><td><b>Ö5</b></td><td>Tek key üzerinde atomik ve koşullu yazma</td><td>Sayaç artırma ve "şu koşul doğruysa yaz" tek adımda, kilit olmadan yapılır.</td><td>A6</td></tr>
+    <tr><td><b>Ö6</b></td><td>Süre sonu (TTL)</td><td>Value kendi son kullanma zamanını taşır ve database onu kendisi siler.</td><td>A7</td></tr>
+    <tr><td><b>Ö7</b></td><td>İkinci index</td><td>Aynı value'lar farklı bir key ile ikinci kez saklanır; key dışı bir soru doğrudan okuma olur.</td><td>A8</td></tr>
+    <tr><td><b>Ö8</b></td><td>Değişiklik akışı</td><td>Her yazma sırayla dışarı verilir; başka programlar tepki verir.</td><td>A9</td></tr>
+  </tbody>
+</table>
+<p>Bu sekiz özellik her key-value store'da aynı biçimde yoktur. Matris A2'deki farkı genelleştirir: Redis'te composite primary key yoktur, Cassandra'da value'nun kolonları önceden tanımlanır, DynamoDB'de süre sonu tam anında değildir. Mimar bu matrisi "hangi key-value store" sorusunda kullanır (M5).</p>
+<table class="data fmatrix">
+  <caption>özellik × store matrisi: ✓ var · ½ kısmen ya da farklı biçimde · ✗ yok</caption>
+  <thead><tr><th>Özellik</th><th>Redis / Valkey</th><th>Apache Cassandra</th><th>DynamoDB</th></tr></thead>
+  <tbody>
+    <tr><td><b>Ö1</b> Key ile doğrudan okuma ve yazma</td><td class="y">✓ GET / SET, bellekten, mikrosaniye</td><td class="y">✓ SELECT / INSERT, primary key ile</td><td class="y">✓ GetItem / PutItem, tek haneli milisaniye</td></tr>
+    <tr><td><b>Ö2</b> Hash ile partition'lara bölünme</td><td class="y">✓ Cluster modunda 16.384 hash slot</td><td class="y">✓ Token ring'i, node ekleyince yeniden dağılır</td><td class="y">✓ Servis partition'ları kendisi ekler</td></tr>
+    <tr><td><b>Ö3</b> Composite primary key, sıralı aralık</td><td class="n">✗ Key tek parçadır. Grup için value bir veri yapısı olur (hash, sorted set); aralık sorted set'in score'uyla yapılır</td><td class="y">✓ Partition key + clustering column'lar</td><td class="y">✓ Partition key + sort key</td></tr>
+    <tr><td><b>Ö4</b> Şemasız value</td><td class="y">✓ Value bir string ya da veri yapısıdır, şeması yoktur</td><td class="p">½ Kolonlar table'da tanımlanır; yeni kolon eklenebilir ama her row aynı kolon listesini kullanır</td><td class="y">✓ Sadece key alanları tanımlanır, diğerleri serbest</td></tr>
+    <tr><td><b>Ö5</b> Atomik ve koşullu yazma</td><td class="y">✓ INCR, SET NX; daha karmaşık koşul için Lua script'i</td><td class="p">½ Lightweight transaction (IF): çalışır ama normal yazmadan yavaş ve pahalı</td><td class="y">✓ ADD, ConditionExpression; birkaç value için transaction isteği (B3)</td></tr>
+    <tr><td><b>Ö6</b> Süre sonu (TTL)</td><td class="y">✓ EXPIRE, tam anında</td><td class="p">½ Row ya da table TTL'i; silinmiş işaretlenir, sonra temizlenir</td><td class="p">½ TTL alanı; genellikle birkaç gün içinde silinir, okuma filtre ister</td></tr>
+    <tr><td><b>Ö7</b> İkinci index</td><td class="n">✗ Çekirdekte yok; uygulama ikinci key'leri kendisi tutar (ya da bir modül kullanılır)</td><td class="p">½ Secondary index var, ama bütün node'lara dağılır ve geniş sorgularda yavaştır</td><td class="y">✓ Global ve local secondary index, database günceller</td></tr>
+    <tr><td><b>Ö8</b> Değişiklik akışı</td><td class="p">½ Keyspace notification ve Redis Streams; yazma log'u değil, ayrı kurulur</td><td class="p">½ CDC (change data capture) log'u, kendin işletirsen ayrı araç gerekir</td><td class="y">✓ Streams özelliği (B5), 24 saat, Lambda ile doğrudan bağlanır</td></tr>
+  </tbody>
+</table>
+<p>Matris bir store'un "iyi" ya da "kötü" olduğunu söylemez. Redis'te Ö3 ve Ö7'nin olmaması Redis'in daha basit ve daha hızlı olmasının nedenidir. Soru her zaman şudur: iş yükü hangi özelliği istiyor? Mimar gözüyle bölümü bu soruyla başlar.</p>
+{{ k.quiz("ddb-q7", "Bir ekip ziyaretçi başına son 50 olayı zaman sırasıyla okumak istiyor. Matrise göre hangi özellik şart ve hangi store onu çekirdekte sunmuyor?",
+   ["Ö6; Cassandra", "Ö3; Redis / Valkey", "Ö7; DynamoDB", "Ö5; Cassandra"],
+   1, "Zaman sırasıyla bir grup okumak Ö3'tür: partition key ziyaretçi, sort key zaman. Redis'te composite primary key yoktur; aynı iş bir sorted set ile yapılabilir ama bu farklı bir modeldir.") }}
+
 <div class="part"><b>Mimar gözüyle</b><h2 id="architect" data-short="Mimar gözüyle">Mimar gözüyle: ne zaman key-value, ne zaman DynamoDB</h2>
-<p>Önce kategori: bir key-value database ne zaman doğru seçimdir. Sonra AWS'teki seçenekler ve DynamoDB'nin ne zaman seçileceği.</p></div>
+<p>Önce kategori: bir key-value database ne zaman doğru seçimdir, alternatifleri neyi daha iyi yapar ve yine de key-value seçersek ne kazanıp ne kaybederiz. Sonra AWS'teki seçenekler ve DynamoDB'nin ne zaman seçileceği.</p></div>
 
 <p><b>Kısaca:</b> bir key-value database her isteği key ile, çok hızlı, her boyutta ve her istek hızında cevaplar. Bu hızı sadece sorularını önceden biliyorsan ve key'i onlara göre tasarlarsan alırsın.</p>
 <p>Önemli kelime {{ k.term("access pattern") }}'dir. Bir access pattern, uygulamanın sorduğu bir sorudur; o anda bildiği değerlerle birlikte.
    "Id'si 7f3a olan tarayıcının sepetini göster" bir access pattern'dir. "İçinde kitap olan bütün sepetleri değerlerine göre sıralı göster" farklı bir access pattern'dir.
-   Bir key-value database birincisini tek ve ucuz bir istekle cevaplar. İkincisi için ya özel bir index'e ya da verinin tamamının okunmasına ihtiyaç duyar.</p>
-
-<h2 id="signals" data-short="Key-value sinyalleri"><span class="sec">M1</span>Bir iş yükünde key-value database'i işaret eden sinyaller</h2>
+   Bir key-value database birincisini tek ve ucuz bir istekle cevaplar (Ö1, Ö3). İkincisi için ya ikinci bir index'e (Ö7) ya da verinin tamamının okunmasına ihtiyaç duyar.</p>
+<p>Bu bölümdeki her karar aynı beş gereksinimle anlatılır. M2'deki kartlar ve M7'deki simülasyonlar aynı beş başlığı kullanır:</p>
 <table class="data">
-  <thead><tr><th>Sinyal</th><th>Gerçek bir projede nasıl görünür</th><th>Onu cevaplayan key-value özelliği</th></tr></thead>
+  <caption>R1–R5: her iş yükünün beş gereksinimi</caption>
+  <thead><tr><th>No</th><th>Gereksinim</th><th>Sorusu</th></tr></thead>
   <tbody>
-    <tr><td>Uygulama key'i her zaman bilir</td><td>Bu ziyaretçinin sepetini getir. Bu kullanıcının profilini getir. Bu cihazın durumunu getir.</td><td>Key ile okuma doğrudan tek bir partition'a gider (A4)</td></tr>
-    <tr><td>Trafik çok büyük ya da çok dalgalı</td><td>Bir indirim trafiği bir saatliğine 50 ile çarpar. Yeni bir oyun ilk gününde bir milyon oyuncu getirir.</td><td>Yükü birçok partition paylaşır (A4)</td></tr>
-    <tr><td>Değerler birbirinden bağımsız</td><td>Bir sepetin başka bir sepete ihtiyacı yok. Bir oturumun başka bir oturuma ihtiyacı yok.</td><td>Join yok: her istek tek bir key'e ya da tek bir gruba dokunur</td></tr>
-    <tr><td>Tek bir değer üzerinde basit kurallar</td><td>Bir üründen en fazla 5 adet. Koltuk sadece boşsa tutulur.</td><td>Tek bir key üzerinde koşullu yazma (B3)</td></tr>
-    <tr><td>Kendini silmesi gereken veri</td><td>Bir gün sonra terk edilen sepetler, bir saat sonra oturumlar, on dakika sonra geçici tutmalar.</td><td>Key başına süre sonu (TTL) (B5)</td></tr>
-    <tr><td>Değerlerin şekli sık değişir</td><td>Aynı table'da bir sepet satırı, bir kupon ve bir hediye notu.</td><td>Database'in değeri anlamasına gerek yok (A2, A3)</td></tr>
+    <tr><td><b>R1</b></td><td>Access pattern</td><td>Uygulama hangi soruları, elinde hangi değerlerle soruyor? Hangi kurallar yazma anında korunmalı?</td></tr>
+    <tr><td><b>R2</b></td><td>Ölçek ve trafik şekli</td><td>Saniyede kaç istek, ne kadar veri, trafik düz mü dalgalı mı, tepe anında ne kadar gecikme kabul edilir?</td></tr>
+    <tr><td><b>R3</b></td><td>Dayanıklılık</td><td>Bir arızada bu verinin kaybı ne demek: yeni bir login mi, çift çekilen bir kart mı?</td></tr>
+    <tr><td><b>R4</b></td><td>Operasyon ve ekip</td><td>Kim işletecek, ekip hangi API'ı biliyor, sunucu boyutlandırmak isteniyor mu?</td></tr>
+    <tr><td><b>R5</b></td><td>Maliyet modeli</td><td>İstek başına mı, saat başına mı, GB başına mı ödenir ve bu trafik şekline uyar mı?</td></tr>
   </tbody>
 </table>
 
-<h2 id="usecases" data-short="Use case'ler"><span class="sec">M2</span>Use case'ler, nedeniyle</h2>
+<h2 id="signals" data-short="Ö1–Ö8: sinyal ve sınır"><span class="sec">M1</span>Key-value'nun sekiz özelliği: hangi sinyal çağırır, sınırı nedir</h2>
+<p>Bu tablo M2'deki kartların referansıdır. Bir kart "Ö5 ile çözer" dediğinde buraya dönersin. Her satır A10'daki özelliği iş yükündeki sinyaliyle ve sınırıyla, yani yapamadığı şeyle birleştirir. Sınırlar, alternatiflerin neden bazen daha iyi olduğunu da açıklar.</p>
 <table class="data">
-  <thead><tr><th>Use case</th><th>Key ve değer</th><th>Neden key-value</th></tr></thead>
+  <thead><tr><th>Özellik</th><th>Ne sağlar</th><th>İş yükünde onu çağıran sinyal</th><th>Sınırı: ne yapamaz</th><th>Tanım</th></tr></thead>
   <tbody>
-    <tr><td>Alışveriş sepetleri (Lale Market)</td><td>Key: sepet, sonra ürün. Değer: miktar, fiyat.</td><td>Her istek ziyaretçi id'sini bilir. İndirim günleri ani tepeler getirir.</td></tr>
-    <tr><td>Kullanıcı profilleri ve tercihleri</td><td>Key: kullanıcı id'si. Değer: profil.</td><td>Milyonlarca kullanıcı, her zaman kullanıcı id'si ile okunur.</td></tr>
-    <tr><td>Oturumlar ve login token'ları</td><td>Key: session id. Değer: kullanıcı, son sayfa, süre sonu.</td><td>Her istekte okunan, çok sayıda kısa ömürlü değer.</td></tr>
-    <tr><td>Oyun durumu ve oyuncu envanteri</td><td>Key: oyuncu, sonra nesne. Değer: nesne.</td><td>Bir oyunun ilk gününde büyük patlamalar, her oyuncu için düşük gecikme.</td></tr>
-    <tr><td>Her cihazın son durumu (IoT)</td><td>Key: cihaz id'si. Değer: son okuma.</td><td>Milyonlarca cihaz paralel yazar, her biri kendi key'ine.</td></tr>
-    <tr><td>Ödemeler ve API'lar için idempotency key'leri</td><td>Key: request id. Değer: sonuç.</td><td>Bir tekrar deneme bir kartı iki kez çekmemeli: sadece key yeniyse yaz.</td></tr>
-    <tr><td>Bilet ve koltuk tutmaları</td><td>Key: etkinlik, sonra koltuk. Değer: tutan kişi.</td><td>İki kişi asla bir koltuğu tutmamalı ve eski tutmalar gitmeli.</td></tr>
-    <tr><td>Rate limit'ler ve sayaçlar</td><td>Key: kullanıcı ve dakika. Değer: bir sayaç.</td><td>İstek başına tek bir atomik artırma.</td></tr>
-    <tr><td>Dosyaların metadata'sı</td><td>Key: sahip, sonra dosya. Değer: tag'ler, durum, konum.</td><td>Bütün dosyaların listesi olmadan bir kullanıcının dosyalarını bulmak.</td></tr>
-    <tr><td>Reklam ve öneri sorguları</td><td>Key: kullanıcı ya da segment. Değer: önceden hesaplanmış sonuçlar.</td><td>Katı bir zaman sınırıyla çok yüksek okuma hızları.</td></tr>
+    <tr><td><b>Ö1</b> Key ile doğrudan okuma ve yazma</td><td>Table ne kadar büyürse büyüsün tek bir value'ya aynı sürede gidilir</td><td>Uygulama her istekte key'i zaten biliyor: bu ziyaretçinin sepeti, bu kullanıcının profili, bu cihazın durumu</td><td>Key'i bilmeyen soru pahalıdır. Value'nun içine göre arama yoktur.</td><td>A2, A5</td></tr>
+    <tr><td><b>Ö2</b> Hash ile partition'lara bölünme</td><td>Veri ve trafik birçok makineye dağılır; tepe trafik makine ekleyerek karşılanır</td><td>Trafik çok büyük ya da çok dalgalı: indirim gecesi 50 kat, yeni oyunun ilk günü bir milyon oyuncu</td><td>JOIN yok, table'lar arası kural yok: her istek tek partition'da kalmalı. Az sayıda yoğun key hot partition yapar.</td><td>A4</td></tr>
+    <tr><td><b>Ö3</b> Composite primary key: grup ve sıralı aralık</td><td>Bir şeyin birbiriyle ilgili birçok value'su tek istekte, sıralı, önek ya da aralıkla okunur</td><td>"Bu sepetin satırları", "bu ziyaretçinin son 50 olayı", "bu cihazın bu haftaki okumaları"</td><td>Sıra sadece sort key'e göredir. Başka bir alana göre sıralama için ikinci index gerekir. Grup tek partition'da durur; çok büyük tek bir grup o partition'ı yorar.</td><td>A3, A5</td></tr>
+    <tr><td><b>Ö4</b> Şemasız value</td><td>Aynı table'da farklı şekilli value'lar; alan eklemek için migration yok</td><td>Value'ların şekli sık değişiyor: sepet satırı, kupon ve hediye notu aynı table'da</td><td>Database value'nun içini doğrulamaz: zorunlu alan, tip ve foreign key kontrolü uygulamanındır.</td><td>A2</td></tr>
+    <tr><td><b>Ö5</b> Atomik ve koşullu yazma</td><td>Tek value üzerindeki kural kilit olmadan, tek adımda korunur: sayaç, üst sınır, "key yoksa yaz"</td><td>Tek value üzerinde basit kurallar: en fazla 5 adet, koltuk boşsa tut, aynı request id'yi iki kez işleme</td><td>Kural birkaç value'yu kapsıyorsa transaction gerekir; o da sınırlı (DynamoDB'de 100 value) ve pahalıdır. Table'lar arası kurallar için ilişkisel database.</td><td>A6</td></tr>
+    <tr><td><b>Ö6</b> Süre sonu (TTL)</td><td>Geçici veri uygulama silmeden temizlenir</td><td>Kendini silmesi gereken veri: bir gün sonra sepet, bir saat sonra oturum, on dakika sonra geçici tutma</td><td>Store'a göre tam anında değildir; uygulama süreyi okumada kontrol etmek zorunda kalabilir.</td><td>A7</td></tr>
+    <tr><td><b>Ö7</b> İkinci index</td><td>Bilinen ikinci bir soru da doğrudan okuma olur</td><td>Birkaç sabit soru, farklı key'lerle: sepete göre ve ürüne göre</td><td>Her index her yazmaya maliyet ekler. Sorular önceden bilinmeli; serbest sorgu, JOIN ve GROUP BY yoktur.</td><td>A8</td></tr>
+    <tr><td><b>Ö8</b> Değişiklik akışı</td><td>Her yazma bir olay olur; diğer sistemler tepki verir</td><td>Yazan koddan ayrı tepkiler: e-posta, arama index'i, analitik kopya, dolandırıcılık kontrolü</td><td>Kayıtlar sınırlı süre tutulur (DynamoDB'de 24 saat); farklı key'ler arasında sıra garanti değildir.</td><td>A9</td></tr>
   </tbody>
 </table>
+
+<p>Tablo özettir. Aşağıdaki sekiz blok her özelliği dört başlıkla açar: ne sağlar, hangi sinyal çağırır, sınırı nedir ve alternatif ne zaman daha iyidir. M2'deki bir kartta "Ö5 ile çözer" okuduğunda buraya dönebilirsin.</p>
+
+<table class="data feat"><caption>Ö1 · Key ile doğrudan okuma ve yazma</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Uygulama elindeki key'i verir, database hash ile partition'ı bulur ve tek bir value'yu okur ya da yazar. Bu yolun süresi table'daki value sayısına bağlı değildir: 8 value'lu öğretici table'da da 2 milyar value'lu dosya metadata table'ında da aynı birkaç milisaniyedir. Index taraması, plan seçimi, kilit bekleme yoktur.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Uygulama her istekte key'i zaten biliyor: "cookie'deki ziyaretçi id'siyle sepeti getir", "login'den gelen kullanıcı id'siyle profili getir", "mesajdaki cihaz id'siyle son durumu yaz". İstek key olmadan bir "arama" ile başlıyorsa bu sinyal yoktur.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Key'i bilmeyen her soru pahalıdır: "last_page'i /cart olan oturumlar" bütün table'ın okunmasını ister. Value'nun içine göre arama, sıralama ve toplam yoktur. Bir iş yükünde her iki sorudan biri key'siz ise bu model yanlış yerdedir.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Sorular önceden bilinmiyor ya da her ay değişiyorsa ilişkisel database (SQL her kolonda sorar). Metin içinde arama, yazım hatası toleransı ve relevance isteniyorsa search engine. Value'nun içine göre esnek sorgular ana işse document database.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö2 · Hash ile partition'lara bölünme</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Veri ve trafik partition key'in hash'iyle birçok makineye dağılır. Trafik iki katına çıkınca makine (ya da yönetilen serviste partition) eklenir ve her istek yine tek bir partition'da cevaplanır. Kampanya gecesinin 50 katlık sıçraması bir mimari sorun değil, bir kapasite sorunudur ve yönetilen serviste o da otomatiktir.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Trafik çok büyük ya da çok dalgalı: "indirim gecesi üç saat boyunca 60.000 okuma/saniye", "lansman günü bir milyon oyuncu, bir ay sonra 100.000", "iki milyon cihaz 30 saniyede bir yazıyor". Ya da büyüme planlanamıyor: "kullanıcı sayısı yılda iki katına çıkıyor".</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Her istek tek partition'da kalmalıdır; bu yüzden JOIN, table'lar arası foreign key ve "bütün partition'lar üzerinde GROUP BY" yoktur. Az sayıda yoğun key (şehir, tarih, kampanya ürünü) hot partition yapar: bir partition sınırına çarparken diğerleri boş bekler. Dağılım key tasarımıyla sağlanır, servis bunu senin yerine düzeltmez.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Trafik tek bir güçlü sunucunun erişimindeyse (saniyede birkaç bin yazma) ve ilişkiler, kurallar ya da raporlar isteniyorsa ilişkisel database daha az bedelle daha çok şey verir. Yıllık verinin tamamı üzerinde toplam ve gruplama için data warehouse.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö3 · Composite primary key: grup ve sıralı aralık</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Bir şeyin birbiriyle ilgili birçok value'su (bir sepetin satırları, bir ziyaretçinin olayları, bir oyuncunun nesneleri) aynı partition key altında, sort key sırasıyla bir arada durur. Tek bir istek grubun tamamını, bir önek dilimini ("sadece WEAPON#") ya da bir aralığını ("ekim ayı") sıralı olarak okur. "En yeni 50" sorusu ters sırayla ve limitle aynı derecede ucuzdur.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"Bu sepetin bütün satırları, ürün sırasıyla", "bu ziyaretçinin son 50 olayı", "bu kullanıcının klasör X'teki dosyaları, ada göre", "bu etkinliğin bütün koltukları". Tek bir sahibin altında birçok küçük kayıt ve bu kayıtların bir sırası varsa sinyal buradadır.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Sıra sadece sort key'e göredir; "fiyata göre sıralı sepet satırları" ikinci bir index ister. Grup tek partition'da durur: milyon satırlık tek bir grup o partition'ı yorar ve bölünemez. Grup üzerinde toplu silme ya da toplu güncelleme yoktur; her value tek tek yazılır.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Aynı veri birkaç farklı sıraya göre sık sorgulanıyorsa (tarihe, tutara, duruma) ilişkisel database'in index'leri daha ekonomiktir. Grup bir document'ın içindeki bir diziyse ve dizi içinde esnek güncellemeler isteniyorsa document database. Ekip zaten Cassandra kullanıyorsa wide-column aynı modeli CQL ile verir.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö4 · Şemasız value</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Her value kendi alanlarını taşır; aynı table'da bir sepet satırı, bir kupon ve bir hediye notu yan yana durur. Yeni bir alan sadece yeni value'lara yazılır; eski value'lar değişmez, migration penceresi yoktur. Pazarlama ekibinin çeyrekte bir eklediği alan bir database projesi değildir.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Value'ların şekli türe göre farklı (bir kılıçta hasar, bir iksirde süre; bir görselde çözünürlük, bir belgede sayfa sayısı) ya da sık değişiyor (her oyun güncellemesinde yeni nesne türü, her çeyrek yeni profil alanı).</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Database value'nun içini doğrulamaz: zorunlu alan, tip ve foreign key kontrolü uygulamanındır. İki farklı sürümün yazdığı value'lar aynı table'da karışır ve okuyan kod her iki şekli de bilmek zorundadır. Value'nun boyut sınırı vardır (DynamoDB'de 400 KB); büyüyen alanlar (geçmiş, log) ayrı table'a alınır.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Alanlar sabit ve kurallar sıkıysa (fatura, muhasebe) ilişkisel database'in şeması bir yük değil bir güvencedir. Value iç içe uzun bir belgeyse ve belgenin içine göre sorgu ve kısmi güncelleme ana işse document database.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö5 · Tek key üzerinde atomik ve koşullu yazma</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Bir kural, yazmanın içine koşul olarak yazılır ve database onu yazma anında test eder: "key yoksa yaz", "qty + 2 ≤ 5 ise yaz", "status = shipped ise delivered yap", "version = 7 ise yaz ve 8 yap". Sayaç artırma okumadan, tek adımda yapılır. İki istek yarışsa bile sonuç doğrudur: artırmada ikisi de sayılır, koşulda ikincisi reddedilir. Kilit, transaction ve "önce oku sonra yaz" yoktur.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Tek bir value üzerinde basit kurallar: "bir üründen en fazla 5 adet", "koltuğu sadece boşsa tut", "aynı request id'yi iki kez işleme", "dakikada 100 istek". Kural tek bir key'in içinde kalıyorsa sinyal buradadır.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Kural birkaç value'yu kapsıyorsa (koltuk + sipariş + ödeme) koşul yetmez; transaction gerekir, o da sınırlıdır (DynamoDB'de 100 value) ve normal yazmanın iki katı maliyetlidir. Table'lar arası kural (foreign key, toplam stok) yoktur. Reddedilen koşullu yazma da kapasite harcar.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Kural birkaç table'ı birden kapsıyorsa (sepet + stok + sipariş tek transaction'da) ilişkisel database'in row kilidi ve transaction'ı en basit ve en doğru çözümdür. Kural bellek içinde mikrosaniyede çalışmalı ve kayıp kabul ediliyorsa bellek içi store (SET NX, INCR).</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö6 · Süre sonu (TTL)</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Her value kendi son kullanma zamanını taşır ve database onu kendisi siler; uygulama silme isteği yazmaz, temizlik işi işletmez. Oturum, geçici tutma, idempotency işareti ve terk edilen sepet için "grubun tamamını silme yok" kuralının (A6) pratik çözümüdür.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Kendini silmesi gereken veri: "bir gün sonra sepet", "30 dakika sonra oturum", "10 dakika sonra koltuk tutması", "24 saat sonra request id", "dakika bitince sayaç". Verinin ömrü yazıldığı anda biliniyorsa sinyal buradadır.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Store'a göre tam anında değildir: DynamoDB süresi dolan value'yu genellikle birkaç gün içinde siler; uygulama süreyi okumada kendisi karşılaştırmak zorunda kalır. Yenileme bir yazmadır ve saniyede 40.000 yenileme 40.000 yazma birimidir. Süre sonu value başınadır, grup ya da table başına değildir.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Süre sonu saniyesinde kesin olmalı ve süresi dolmuş veri asla okunmamalıysa (oturum, kilit, rate limit) bellek içi store'un EXPIRE'ı. Silme bir iş kuralıysa ve denetim izi istiyorsa (fatura saklama süresi) ilişkisel database'te zamanlanmış bir iş.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö7 · İkinci index</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Aynı value'lar farklı bir key ile ikinci kez saklanır ve database kopyayı her yazmada günceller. Bilinen ikinci bir soru ("P0044 hangi sepetlerde?", "tag'i fatura olan dosyalarım") bütün table'ı okumak yerine index'te doğrudan bir okuma olur.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Birkaç sabit soru, farklı key'lerle: sepete göre ve ürüne göre; kullanıcıya göre ve tag'e göre; oyuncuya göre ve skora göre (liderlik). Sorular sayılıysa ve önceden biliniyorsa sinyal buradadır.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Her index her yazmaya maliyet ve storage ekler: on index on kat yazma. Index de key ile okunur; JOIN, GROUP BY ve serbest filtre yine yoktur. Kopya eventually consistent olabilir: yazmadan hemen sonra index'ten okuyan biri eski değeri görebilir. Sorular önceden bilinmiyorsa index kurulamaz.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Sorular çok sayıda ve değişkense ilişkisel database (her kolonda index, planner seçer). Metin araması ve relevance isteniyorsa search engine; DynamoDB bunun için OpenSearch'e zero-ETL kopyası sunar. Document database, belge içi alanlar üzerinde esnek index'lerde daha rahattır.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö8 · Değişiklik akışı</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Her yazma (ekleme, değiştirme, silme) sırayla bir olay olarak dışarı verilir; başka programlar bu akışı okur ve tepki verir: e-posta, arama index'i, analitik kopya, alarm. Table'a yazan kod bu tepkileri bilmez; tepkiler eklenir ve çıkarılır, yazma yolu değişmez.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Yazan koddan ayrı tepkiler: "sıcaklık 80'i geçen sayaç için alarm", "yeni müşteriye hoş geldin e-postası", "metadata değişince arama index'ini güncelle", "aktivite geçmişini dolandırıcılık kontrolüne besle".</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Kayıtlar sınırlı süre tutulur (DynamoDB'de 24 saat); tüketici bu sürede okumazsa kaybeder. Bir key'in değişiklikleri sıralıdır ama farklı key'ler arasında sıra garanti değildir. Akış bir sorgu değildir: "dünkü bütün değişiklikler" sorusu akıştan değil, saklanan bir kopyadan cevaplanır.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Olaylar günlerce saklanmalı, birçok tüketici tarafından baştan okunabilmeli ve milyonlarca olay/saniye ölçeklenmeliyse bir akış platformu (Kinesis, MSK). Tepki değil analiz isteniyorsa analitik kopya (Redshift'e zero-ETL).</td></tr>
+  </tbody>
+</table>
+
+<h2 id="usecases" data-short="Use case'ler, alternatifleriyle"><span class="sec">M2</span>Use case'ler: neden key-value, en yakın alternatif neyi karşılar, yine de seçersek ne olur</h2>
+<p>Her kart bir iş yükünü anlatır ve beş parçadan oluşur. (1) <b>Gerçek projede:</b> iş yükü kim için, hangi ekranda, hangi sayılarla. (2) <b>Gereksinimler R1–R5:</b> her biri için "ne istiyoruz" (sayılı) ve "neden önemli, karşılanmazsa ne olur". (3) <b>Puan tablosu:</b> seçilen servis (DynamoDB) ve en yakın iki alternatif, her gereksinimde 10 üzerinden. (4) <b>Her adayın gerekçesi:</b> gereksinim gereksinim nasıl karşıladığı (A10'daki Ö-numarasıyla), kaç puan aldığı ve puanın neden kırıldığı; her alternatif için uzun bir <b>kafa kafaya</b> paragrafı: nerede ayrışır, bu iş yükünde neden seçilmedi, hangi koşul değişseydi o seçilirdi. (5) <b>Karar:</b> toplamın okunuşu ve "yine de key-value seçersek" artı ve eksilerimiz. Simülasyonu olan beş kart M7'de aynı puanlarla adım adım oynar. Başlığa tıklayarak kartı aç.</p>
+<table class="data">
+  <caption>puan ölçeği: her kartta aynı</caption>
+  <thead><tr><th>Puan</th><th>Anlamı</th></tr></thead>
+  <tbody>
+    <tr><td class="y">10</td><td>Gereksinimi doğrudan, ek iş olmadan ve sayıları aşarak karşılar.</td></tr>
+    <tr><td class="y">8–9</td><td>Karşılar; küçük bir ek iş ya da küçük bir maliyet vardır.</td></tr>
+    <tr><td class="p">5–7</td><td>Karşılar, ama uygulama tarafında belirgin ek iş, boyutlandırma ya da bir sınırla.</td></tr>
+    <tr><td class="p">2–4</td><td>Kısmen: gereksinimin bir parçası karşılanmaz ya da ciddi bir bedelle karşılanır.</td></tr>
+    <tr><td class="n">0–1</td><td>Karşılamaz. Zorunlu bir gereksinimde 0 ya da 1 alan aday diskalifiye olur ama tabloda kalır.</td></tr>
+  </tbody>
+</table>
+{% for uc in usecases %}{{ k.usecase(uc) }}
+{% endfor %}
 
 <h2 id="away" data-short="Uzaklaştıran sinyaller"><span class="sec">M3</span>Key-value database'ten uzaklaştıran sinyaller</h2>
 <table class="data">
@@ -210,7 +607,7 @@
   <li><b>Bütün access pattern'leri şimdi listeleyebilir misin?</b> Evet ise bir key-value database her birini bir key ile karşılayabilir. Sorular açıksa ilişkisel bir database'i tercih et.</li>
   <li><b>Uygulama her istekte hangi değeri biliyor?</b> O değer partition key için bir adaydır.</li>
   <li><b>Partition key'in eşit kullanılan çok sayıda farklı değeri var mı?</b> Tek bir yoğun değer hot partition olabilir.</li>
-  <li><b>Sonuçlar hangi sırada olmalı?</b> Sıra key'in sıralama parçasından gelir.</li>
+  <li><b>Sonuçlar hangi sırada olmalı?</b> Sıra sort key'den gelir (Ö3).</li>
   <li><b>Hangi kurallar geçerli olmalı?</b> Tek değer: bir koşul. Birkaç değer: ürün destekliyorsa bir transaction. Table'lar arası kurallar: ilişkisel bir database.</li>
   <li><b>Veri bir arızadan sağ çıkmalı mı, yoksa bir kopya mı?</b> Kalıcı bir kayıt kalıcı bir depo ister. Bir kopya bellekte yaşayabilir.</li>
   <li><b>Ne kadar hızlı?</b> Mikrosaniyeler bellek içi bir depoyu işaret eder. Her ölçekte tek haneli milisaniye kalıcı bir key-value servisini işaret eder.</li>
@@ -248,17 +645,15 @@
    Sepet iyi bir uyumdur. Her istek ziyaretçi id'sini bilir ve sepetler birbirinden bağımsızdır. 24 saat sonra kaybolan bir sepetin maliyeti yoktur.
    Sipariş bu mağazada bir key-value database için iyi bir uyum değildir, çünkü stok, sipariş ve satırlar üzerinde birlikte kurallar ister. Bu Aurora'nın işidir.</p>
 
-<h2 id="decide" data-short="Karar simülasyonları"><span class="sec">M7</span>Karar simülasyonları: gereksinimler seçsin</h2>
-<p>Her simülasyon bir iş yükünü ve beş aday servisi anlatır. Sonra beş gereksinimi teker teker <b>her</b> aday için kontrol eder.
-   Evet 2 puan, kısmen 1, hayır 0 verir. İki gereksinim <b>zorunludur</b>. Zorunlu bir gereksinimde 0 alan aday diskalifiye olur, ama tam resmi görebilmen için table'da kalır.
-   Sonunda kazananı, ikinciyi ve aradaki farkın nedenini görürsün. Oynat'a basmadan önce kazananı tahmin et.</p>
-<p>İlk iki iş yükünün net bir cevabı var. Son üçü <b>yakın yarış</b>: iki güçlü aday ve karar veren tek bir gereksinim. Gerçek mimari kararların çoğu böyle görünür.</p>
-{{ k.sim("decide_win", "İş yükü 1: \"Siparişim nerede?\" ekranı (net bir kazanma)") }}
-{{ k.sim("decide_lose", "İş yükü 2: 24 ay üzerinde bir finans raporu (net bir kaybetme)") }}
-{{ k.sim("race_session", "Yakın yarış 1: login oturumları, DynamoDB mi ElastiCache mi?") }}
-{{ k.sim("race_activity", "Yakın yarış 2: aktivite geçmişi, DynamoDB mi Keyspaces mi?") }}
-{{ k.sim("race_cart", "Yakın yarış 3: alışveriş sepeti, DynamoDB mi Aurora mı?") }}
-<p>Her yakın yarışın son satırına bak: "Bir koşul değişseydi". İyi bir mimar bu satırı karar kaydına yazar. Koşul daha sonra değişirse ekip kararın yeniden kontrol edilmesi gerektiğini bilir.</p>
+<h2 id="decide" data-short="Karar simülasyonları"><span class="sec">M7</span>Karar simülasyonları: M2'nin beş kartı adım adım</h2>
+<p>Her simülasyon M2'deki bir kartın verisini kullanır: aynı iş yükü, aynı R1–R5, aynı üç aday, aynı 10'luk puanlar ve aynı gerekçeler. Fark şudur: simülasyon gereksinimleri teker teker açar ve puan tablosu adım adım dolar; sonunda kazananı, ikinciyi ve kartın karar paragrafını görürsün. Oynat'a basmadan önce kartı okuyup kazananı tahmin et.</p>
+<p>Beş simülasyonun biri net bir kazanma (IoT), biri net bir kaybetme (rate limit), üçü yakın yarıştır (sepet, profil, oturum). Gerçek mimari kararların çoğu yakın yarışlar gibi görünür: iki güçlü aday ve karar veren bir ya da iki gereksinim.</p>
+{{ k.sim("win_iot", "Kart 5: her cihazın son durumu (net bir kazanma)") }}
+{{ k.sim("lose_rate", "Kart 8: rate limit sayaçları (net bir kaybetme: ElastiCache kazanır)") }}
+{{ k.sim("race_cart", "Kart 1: alışveriş sepeti, DynamoDB mi Aurora mı? (yakın yarış)") }}
+{{ k.sim("race_profile", "Kart 2: kullanıcı profilleri, DynamoDB mi DocumentDB mi? (yakın yarış)") }}
+{{ k.sim("race_session", "Kart 3: oturumlar, DynamoDB mi ElastiCache mi? (yakın yarış)") }}
+<p>Her kararın son cümlesine bak: "Bir koşul değişseydi". İyi bir mimar bu cümleyi karar kaydına yazar. Koşul daha sonra değişirse ekip kararın yeniden kontrol edilmesi gerektiğini bilir.</p>
 
 {{ k.quiz("ddb-a1", "Bir ödeme API'ı, bir client isteği tekrar denediğinde bir kartı asla iki kez çekmemeli. Her isteğin benzersiz bir request id'si var. En iyi ne oturur?",
    ["Request id üzerinde attribute_not_exists ile bir DynamoDB PutItem", "Her request id için bir row'lu bir Redshift table'ı", "Bütün request id'lerin bir ElastiCache sorted set'i", "Her çekimden önce ödemeler table'ının tamamının okunması"],
@@ -275,15 +670,15 @@
 
 <h2 id="items" data-short="Item'lar ve table"><span class="sec">B1</span>DynamoDB'de item'lar, attribute'lar ve primary key</h2>
 <p>DynamoDB, Bölüm A'daki fikirler için kendi isimlerini kullanır. Bu bölüm bu isimleri canlı Lale Market table'ından gerçek bir kaydın üzerine koyar. Böylece her isim görebileceğin bir şeyi gösterir.</p>
-<p>Farklı ürünler Bölüm A'nın fikirleri için farklı isimler kullanır. İsimler sadece kod yazarken önemlidir. Son kolon bu bölümün kullandığı isimleri gösterir:</p>
+<p>Bölüm A'nın terimleri DynamoDB'de aynen geçerlidir. İki yeni ad vardır: value yerine <b>item</b>, value'nun bir alanı yerine <b>attribute</b>. Diğer store'lardaki karşılıklar:</p>
 <table class="data">
   <thead><tr><th>Genel fikir</th><th>Redis / Valkey</th><th>Apache Cassandra</th><th>Amazon DynamoDB</th></tr></thead>
   <tbody>
-    <tr><td>Tam key</td><td>key</td><td>primary key</td><td>primary key</td></tr>
-    <tr><td class="c-pk">Key'in partition parçası</td><td>key'in kendisi (ondan bir hash slot hesaplanır)</td><td>partition key</td><td>partition key</td></tr>
-    <tr><td class="c-sk">Key'in sıralama parçası</td><td>bir sorted set içindeki üyenin score'u</td><td>clustering column</td><td>sort key</td></tr>
-    <tr><td>Değer</td><td>string, hash, list, set</td><td>column'lu row</td><td>attribute'lu item</td></tr>
-    <tr><td>Aynı partition parçasına sahip grup</td><td>bir veri yapısı taşıyan tek key</td><td>partition</td><td>item collection</td></tr>
+    <tr><td>Primary key (A2)</td><td>key (her zaman simple)</td><td>primary key (simple ya da composite)</td><td>primary key (simple ya da composite)</td></tr>
+    <tr><td class="c-pk">Partition key (A3)</td><td>key'in kendisi (ondan bir hash slot hesaplanır)</td><td>partition key</td><td>partition key</td></tr>
+    <tr><td class="c-sk">Sort key (A3)</td><td>bir sorted set içindeki üyenin score'u</td><td>clustering column</td><td>sort key</td></tr>
+    <tr><td>Value (A2)</td><td>string, hash, list, set</td><td>column'lu row</td><td>attribute'lu item</td></tr>
+    <tr><td>Aynı partition key'e sahip grup (A3)</td><td>bir veri yapısı taşıyan tek key</td><td>partition</td><td>item collection</td></tr>
   </tbody>
 </table>
 {{ k.concept("Item",
@@ -294,8 +689,8 @@
    "Bir item'ın içindeki tek bir isim ve tek bir değer, örneğin <code>qty</code> = 2. Her attribute'un bir veri tipi vardır.",
    "<code>name</code>, <code>qty</code>, <code>unit_price</code> ve <code>expires_at</code> bir sepet satırının attribute'larıdır.",
    "Karttaki tek bir alan: \"İsim\", \"Telefon\", \"Doğum günü\".") }}
-{{ k.concept("Primary key = partition key + sort key",
-   "Tek bir item'ı tanımlayan attribute ya da attribute'lar. <b>Partition key</b> A3'teki partition parçası, <b>sort key</b> ise sıralama parçasıdır. Her item onlara sahip olmalıdır. Diğer attribute'lar serbesttir.",
+{{ k.concept("Primary key (simple ya da composite)",
+   "Tek bir item'ı tanımlayan attribute ya da attribute'lar (A2). <b>Simple primary key</b> sadece partition key'dir; <b>composite primary key</b> partition key + sort key'dir. Table oluşturulurken bu seçim yapılır ve sonradan değişmez. Her item key attribute'larına sahip olmalıdır; diğer attribute'lar serbesttir (Ö4).",
    "Partition key, değeri <code>CART#7f3a91c2-…</code> olan <code>pk</code> attribute'udur. Sort key, değeri <code>ITEM#P0001</code> olan <code>sk</code> attribute'udur.",
    "Bina numarası ve daire numarası birlikte: bir adres, bir daire.") }}
 <p>Bu gerçek bir item'dır. Workshop canlı mağazada bir sepete iki ürün ekledi ve sonra table'ı AWS CLI ile okudu. DynamoDB her attribute'u veri tipiyle birlikte döndürür:</p>
@@ -407,7 +802,7 @@
 {{ k.fig("dynamodb-partition-key.png", "AnimalType'ı Dog olan item üçüncü partition'a gider, çünkü \"Dog\"un hash'i oraya işaret eder. Onu okumak için DynamoDB aynı hash'i hesaplar ve sadece o partition'ı okur.") }}
 
 <h2 id="reads" data-short="GetItem, Query, Scan"><span class="sec">B2</span>Okumalar: GetItem, Query ve Scan, ve maliyetleri</h2>
-<p>DynamoDB'nin üç okuma yolu var. Tek bir konuda farklılaşırlar: istek key'in ne kadarını veriyor.</p>
+<p>A5'teki okuma yollarının DynamoDB'deki adları GetItem, Query ve Scan'dir. Tek bir konuda farklılaşırlar: istek primary key'in ne kadarını veriyor. Bu bölüm her birini gerçek kodla, canlı table'dan bir cevapla ve maliyetiyle gösterir.</p>
 <table class="data">
   <thead><tr><th>İşlem</th><th>İstek ne verir</th><th>DynamoDB ne okur</th></tr></thead>
   <tbody>
@@ -443,7 +838,7 @@
    <code>Count</code> döndürülen item sayısı, <code>ScannedCount</code> ise DynamoDB'nin okuduğu item sayısıdır: ikisi de 2'dir, çünkü Query sadece bu sepeti okudu.
    <code>CapacityUnits</code> 1.0'dır: 4 KB'tan küçük, strongly consistent tek bir okuma.</p>
 <p>Bir Query sort key üzerinde bir koşul da ekleyebilir, örneğin <code>=</code>, <code>&lt;</code>, <code>BETWEEN</code> ya da <code>begins_with</code>. Key'in sıralama parçası böyle aralıklara dönüşür. Aşağıdaki konsol örneği tek bir dokümanı ve sadece onun versiyon item'larını istiyor:</p>
-{{ k.fig("dynamodb-console-query-begins-with.png", "DynamoDB konsolunda bir Query. Partition key documentId = 123 tek bir item collection seçer. <code>begins_with(v_)</code> sort key koşulu sadece üç versiyon item'ını, v_0, v_1 ve v_2'yi, sort key sırasıyla tutar.") }}
+<p>A5'teki tablo ve görsel bu koşulların tamamını listeler.</p>
 {% call k.ask("Bir Query neden her zaman partition key'i belirtmek zorunda?") %}
 <p>Çünkü DynamoDB'nin hangi partition'ı okuyacağını bilmesinin tek yolu partition key'dir (A4). O olmadan DynamoDB her partition'ı okumak zorunda kalırdı. Bu işlem vardır, ama adı Scan'dir ve bütün table'ı okur.</p>
 {% endcall %}
@@ -473,7 +868,7 @@
    2, "GetItem tam olarak tek bir item okur, bu yüzden tam primary key'e ihtiyaç duyar. Query sadece partition key'e ihtiyaç duyar.") }}
 
 <h2 id="writes" data-short="Koşullar, transaction'lar"><span class="sec">B3</span>Yazmalar: kilitsiz kurallar</h2>
-<p>DynamoDB'de "SELECT, sonra bir row kilidi altında UPDATE" yoktur. Bunun yerine bir yazma bir {{ k.term("condition expression") }} taşıyabilir.
+<p>A6'daki koşullu yazmanın DynamoDB'deki adı {{ k.term("condition expression") }}'dır. DynamoDB'de "SELECT, sonra bir row kilidi altında UPDATE" yoktur. Bunun yerine bir yazma bir koşul taşır.
    DynamoDB koşulu mevcut item üzerinde test eder ve tek adımda yazar. Koşul yanlışsa yazmaz ve <code>ConditionalCheckFailedException</code> döndürür.</p>
 <p>Lale Market'in kuralı şudur: bir sepette bir üründen en fazla 5 adet. Ürün sayfasının gerçek isteği budur (<code>engines/dynamodb.py</code> içinden):</p>
 {% call k.sql("Q3", "5 sınırıyla bir sepet satırına adet ekle") %}
@@ -501,7 +896,7 @@
 
 <h2 id="design" data-short="Key tasarımı ve GSI"><span class="sec">B4</span>Key'i sorulardan tasarla</h2>
 <p>İlişkisel bir database'te önce table'ları tasarlar, herhangi bir query'yi sonra yazarsın. DynamoDB'de önce access pattern'leri listeler, sonra key'i her pattern
-   bir GetItem ya da bir Query olacak şekilde tasarlarsın. Bu, DynamoDB'nin ana becerisidir.</p>
+   bir GetItem ya da bir Query olacak şekilde tasarlarsın. Bu, DynamoDB'nin ana becerisidir. Key dışı sorular için A8'deki ikinci index'in DynamoDB'deki adı global secondary index'tir; bu bölüm onu gerçek bir soruyla kurar.</p>
 <table class="data">
   <thead><tr><th>Sepetin access pattern'i</th><th>Uygulama ne biliyor</th><th>İşlem</th></tr></thead>
   <tbody>
@@ -523,7 +918,7 @@
 <p>Lale Market sepet table'ının GSI'ı yok, çünkü mağaza bu soruyu hiç sormaz. Sadece gerçek bir access pattern için index ekle: her index her yazmaya yazma maliyeti ekler.</p>
 
 <h2 id="ttl" data-short="TTL ve Streams"><span class="sec">B5</span>Time to live ve Streams</h2>
-<p>Terk edilen bir sepet bir gün sonra işe yaramaz. Her sepet item'ının saniye cinsinden bir Unix zamanı olan <code>expires_at</code>'i vardır. Table'da bu attribute üzerinde {{ k.term("TTL") }} açıktır.
+<p>A7'deki süre sonu ve A9'daki değişiklik akışı DynamoDB'de TTL ve DynamoDB Streams adlarını taşır. Terk edilen bir sepet bir gün sonra işe yaramaz. Her sepet item'ının saniye cinsinden bir Unix zamanı olan <code>expires_at</code>'i vardır. Table'da bu attribute üzerinde {{ k.term("TTL") }} açıktır.
    DynamoDB "automatically deletes expired items within a few days of their expiration time, without consuming write throughput", yani süresi dolan item'ları yazma kapasitesi harcamadan birkaç gün içinde siler
    (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html">Time to live</a>).
    Silinene kadar süresi dolmuş bir item bir okumada yine görünebilir. Onu göstermemesi gereken bir program <code>expires_at</code> üzerinde bir filtre kullanır. M7'deki oturum yarışının DynamoDB'ye tam süre sonu için sadece "kısmen" vermesinin nedeni budur.</p>

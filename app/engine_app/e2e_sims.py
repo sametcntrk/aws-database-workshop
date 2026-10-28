@@ -60,7 +60,8 @@ def money(v):
 
 
 def T(lang, en, tr):
-    return tr if lang == "tr" else en
+    """en may be None while a page is in review: then the Turkish text is used in both languages."""
+    return tr if lang == "tr" or en is None else en
 
 
 def _table(tid, name, data, key=(), ref=(), caption=None, rows=None):
@@ -528,13 +529,18 @@ def decide_generic(lang, workload, requirements, candidates, verdicts):
             "out": None, "steps": steps}
 
 
-def decide_score(lang, d):
+def decide_score(lang, d, scale=2):
     """Architecture decision as a scorecard. Each requirement is scored for EVERY candidate: yes = 2, partly = 1, no = 0.
     A "must" requirement with 0 disqualifies the candidate, but the candidate stays in the table until the end.
     d = {"workload": (en, tr), "cands": [...], "reqs": [{"must": bool, "axis": (en, tr), "text": (en, tr), "why": (en, tr),
          "cells": {cand: (score, en, tr)}}], "gap": (en, tr), "pivot": (en, tr) or None}"""
     cands, reqs = d["cands"], d["reqs"]
-    sym = {2: "✓ 2", 1: "~ 1", 0: "✗ 0"}
+    if scale == 10:   # 0-10 points per requirement; 0 or 1 on a must requirement disqualifies
+        sym = {i: (("✓ " if i >= 8 else "✗ " if i <= 1 else "") + str(i)) for i in range(11)}
+        low = lambda x: x <= 1
+    else:
+        sym = {2: "✓ 2", 1: "~ 1", 0: "✗ 0"}
+        low = lambda x: x == 0
     kind = lambda r: T(lang, "must", "zorunlu") if r["must"] else T(lang, "preferred", "tercihli")
     cols = [T(lang, "candidate", "aday")] + [f"R{i + 1}" for i in range(len(reqs))] + [T(lang, "points", "puan"), T(lang, "status", "durum")]
     rows = [[c] + [""] * len(reqs) + [0, T(lang, "in the race", "yarışta")] for c in cands]
@@ -545,10 +551,16 @@ def decide_score(lang, d):
         best = max((total[c] for c in ok), default=-1)
         return {k: ("bad" if c in disq else ("match" if total[c] == best and best > 0 else "")) for k, c in enumerate(cands)}
 
-    rules = T(lang, "Rules: each requirement is checked for every candidate. Yes = 2 points, partly = 1, no = 0. "
-                    "A candidate with 0 on a must requirement is disqualified, but we keep checking it, so you can see the full picture.",
-              "Kurallar: her gereksinim her aday için kontrol edilir. Evet = 2 puan, kısmen = 1, hayır = 0. "
-              "Zorunlu bir gereksinimde 0 alan aday diskalifiye olur, ama tam resmi görebilmen için kontrol etmeye devam ederiz.")
+    if scale == 10:
+        rules = T(lang, "Rules: each requirement is scored for every candidate, from 0 to 10, with the reason for each point that is taken off. "
+                        "A candidate with 0 or 1 on a must requirement is disqualified, but we keep scoring it, so you can see the full picture.",
+                  "Kurallar: her gereksinim her aday için 0-10 arasında puanlanır ve kırılan her puanın nedeni yazılır. "
+                        "Zorunlu bir gereksinimde 0 ya da 1 alan aday diskalifiye olur, ama tam resmi görebilmen için puanlamaya devam ederiz.")
+    else:
+        rules = T(lang, "Rules: each requirement is checked for every candidate. Yes = 2 points, partly = 1, no = 0. "
+                        "A candidate with 0 on a must requirement is disqualified, but we keep checking it, so you can see the full picture.",
+                  "Kurallar: her gereksinim her aday için kontrol edilir. Evet = 2 puan, kısmen = 1, hayır = 0. "
+                  "Zorunlu bir gereksinimde 0 alan aday diskalifiye olur, ama tam resmi görebilmen için kontrol etmeye devam ederiz.")
     steps = [{"say": T(lang, "Workload. ", "İş yükü. ") + T(lang, *d["workload"]) + "\n" + rules,
               "marks": {}, "rows": {"board": deepcopy(rows)}, "out": [], "count": {T(lang, "requirements checked", "kontrol edilen gereksinim"): f"0 / {len(reqs)}"}}]
     for i, r in enumerate(reqs):
@@ -558,7 +570,7 @@ def decide_score(lang, d):
             total[c] += sc
             rows[k][i + 1] = sym[sc]
             rows[k][-2] = total[c]
-            if r["must"] and sc == 0 and c not in disq:
+            if r["must"] and low(sc) and c not in disq:
                 disq.add(c)
                 rows[k][-1] = T(lang, f"disqualified at R{i + 1}", f"R{i + 1}'de diskalifiye")
             detail.append([c, sym[sc], T(lang, en, tr)])
@@ -1089,6 +1101,37 @@ def ddb_decision(lang, key):
     return scorecard(lang, DDB_DECISIONS[key])
 
 
+from . import e2e_usecases as _uc
+
+
+def usecase_scorecard(lang, uc):
+    """The M7 simulation of a use case card: the same requirements, candidates, scores and reasons as the card."""
+    names = [SVC[c] for c in uc["cands"]]
+    reqs = []
+    for i, r in enumerate(uc["reqs"]):
+        cells = {SVC[c]: (uc["scores"][c][i][0],) + tuple(uc["scores"][c][i][1]) for c in uc["cands"]}
+        reqs.append({"must": r["must"], "axis": _uc.R_AXES[i], "text": r["want"], "why": r["why"], "cells": cells})
+    return decide_score(lang, {"workload": uc["story"], "cands": names, "reqs": reqs, "gap": uc["verdict"], "pivot": None}, scale=10)
+
+
+def usecases(eid, lang):
+    """The M2 cards of a page, localized: the same data as the simulations."""
+    out = []
+    for uc in _uc.USECASES.get(eid, []):
+        L = lambda t: T(lang, *t)  # noqa: E731
+        cands = []
+        for c in uc["cands"]:
+            cells = [{"pts": p, "why": L(w)} for p, w in uc["scores"][c]]
+            cands.append({"key": c, "name": SVC[c], "cat": L(_uc.CATEGORY[c]), "link": _uc.LINK[c], "cells": cells,
+                          "total": sum(x["pts"] for x in cells), "h2h": L(uc["h2h"][c]) if c in uc["h2h"] else None,
+                          "disq": any(r["must"] and x["pts"] <= 1 for r, x in zip(uc["reqs"], cells))})
+        out.append({"id": uc["id"], "no": uc["no"], "sim": uc["sim"], "kind": uc["kind"], "title": L(uc["title"]), "key": L(uc["key"]),
+                    "story": L(uc["story"]), "axes": [L(a) for a in _uc.R_AXES],
+                    "reqs": [{"must": r["must"], "axis": L(_uc.R_AXES[i]), "want": L(r["want"]), "why": L(r["why"])} for i, r in enumerate(uc["reqs"])],
+                    "cands": cands, "verdict": L(uc["verdict"])})
+    return out
+
+
 def dynamodb(lang):
     w1 = verdicts(DDB_CANDS, [
         V((1, "on-demand mode scales per request", "on-demand mod istek başına ölçeklenir"), (1, "Serverless v2 scales capacity", "Serverless v2 kapasiteyi ölçekler"),
@@ -1117,6 +1160,7 @@ def dynamodb(lang):
     ])
     spec = {
         **{k: ddb_decision(lang, k) for k in DDB_DECISIONS},
+        **{uc["sim"]: usecase_scorecard(lang, uc) for uc in _uc.DDB_USECASES if uc["sim"]},
         "hash": ddb_hash(lang), "queryscan": ddb_query_scan(lang), "condition": ddb_condition(lang), "gsi": ddb_gsi(lang),
     }
     for v in spec.values():          # key color language: pk yellow, sk blue

@@ -239,7 +239,7 @@ def create_app():
             return render_template(name, **ctx(eid=eid, entry=entry, meta=catalog.META.get(eid, {}),
                                                lang=lang, has_tr=has_tr, ui=e2e_ui()[lang],
                                                sims=e2e_sims.SIMS[eid](lang) if eid in e2e_sims.SIMS else {},
-                                               sample_data=e2e_sims.tables(),
+                                               sample_data=e2e_sims.tables(), usecases=e2e_sims.usecases(eid, lang),
                                                glossary=e2e_glossary() if eid == "glossary" else []))
 
         for mode in MODES.values():
