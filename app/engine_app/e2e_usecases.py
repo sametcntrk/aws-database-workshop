@@ -540,3 +540,25 @@ DDB_USECASES = [
 ]
 
 USECASES = {"dynamodb": DDB_USECASES}
+
+
+def apply_en(usecases, en):
+    """Merge the English text (e2e_usecases_en.EN) into the (en, tr) tuples of the use cases."""
+    for uc in usecases:
+        e = en.get(uc["id"])
+        if not e:
+            continue
+        for f in ("title", "key", "story", "verdict"):
+            uc[f] = (e[f], uc[f][1])
+        for r, (want, why) in zip(uc["reqs"], e["reqs"]):
+            r["want"] = (want, r["want"][1])
+            r["why"] = (why, r["why"][1])
+        for c in uc["cands"]:
+            uc["scores"][c] = [(p, (e["scores"][c][i], tr)) for i, (p, (_, tr)) in enumerate(uc["scores"][c])]
+        for c, text in e["h2h"].items():
+            uc["h2h"][c] = (text, uc["h2h"][c][1])
+    return usecases
+
+
+from .e2e_usecases_en import EN as _EN  # noqa: E402
+apply_en(DDB_USECASES, _EN)
