@@ -528,6 +528,82 @@ def decide_generic(lang, workload, requirements, candidates, verdicts):
             "out": None, "steps": steps}
 
 
+def decide_score(lang, d):
+    """Architecture decision as a scorecard. Each requirement is scored for EVERY candidate: yes = 2, partly = 1, no = 0.
+    A "must" requirement with 0 disqualifies the candidate, but the candidate stays in the table until the end.
+    d = {"workload": (en, tr), "cands": [...], "reqs": [{"must": bool, "axis": (en, tr), "text": (en, tr), "why": (en, tr),
+         "cells": {cand: (score, en, tr)}}], "gap": (en, tr), "pivot": (en, tr) or None}"""
+    cands, reqs = d["cands"], d["reqs"]
+    sym = {2: "✓ 2", 1: "~ 1", 0: "✗ 0"}
+    kind = lambda r: T(lang, "must", "zorunlu") if r["must"] else T(lang, "preferred", "tercihli")
+    cols = [T(lang, "candidate", "aday")] + [f"R{i + 1}" for i in range(len(reqs))] + [T(lang, "points", "puan"), T(lang, "status", "durum")]
+    rows = [[c] + [""] * len(reqs) + [0, T(lang, "in the race", "yarışta")] for c in cands]
+    total, disq = {c: 0 for c in cands}, set()
+
+    def marks():
+        ok = [c for c in cands if c not in disq]
+        best = max((total[c] for c in ok), default=-1)
+        return {k: ("bad" if c in disq else ("match" if total[c] == best and best > 0 else "")) for k, c in enumerate(cands)}
+
+    rules = T(lang, "Rules: each requirement is checked for every candidate. Yes = 2 points, partly = 1, no = 0. "
+                    "A candidate with 0 on a must requirement is disqualified, but we keep checking it, so you can see the full picture.",
+              "Kurallar: her gereksinim her aday için kontrol edilir. Evet = 2 puan, kısmen = 1, hayır = 0. "
+              "Zorunlu bir gereksinimde 0 alan aday diskalifiye olur, ama tam resmi görebilmen için kontrol etmeye devam ederiz.")
+    steps = [{"say": T(lang, "Workload. ", "İş yükü. ") + T(lang, *d["workload"]) + "\n" + rules,
+              "marks": {}, "rows": {"board": deepcopy(rows)}, "out": [], "count": {T(lang, "requirements checked", "kontrol edilen gereksinim"): f"0 / {len(reqs)}"}}]
+    for i, r in enumerate(reqs):
+        detail = []
+        for k, c in enumerate(cands):
+            sc, en, tr = r["cells"][c]
+            total[c] += sc
+            rows[k][i + 1] = sym[sc]
+            rows[k][-2] = total[c]
+            if r["must"] and sc == 0 and c not in disq:
+                disq.add(c)
+                rows[k][-1] = T(lang, f"disqualified at R{i + 1}", f"R{i + 1}'de diskalifiye")
+            detail.append([c, sym[sc], T(lang, en, tr)])
+        say = (f"R{i + 1} · {kind(r)} · {T(lang, *r['axis'])}\n{T(lang, *r['text'])}\n"
+               + T(lang, "Why it matters: ", "Neden önemli: ") + T(lang, *r["why"]))
+        steps.append({"say": say, "marks": {"board": marks(), "req": {i: "read"}}, "rows": {"board": deepcopy(rows)}, "out": detail,
+                      "outmarks": {k: ("bad" if x[1].startswith("✗") else "match" if x[1].startswith("✓") else "") for k, x in enumerate(detail)},
+                      "count": {T(lang, "requirements checked", "kontrol edilen gereksinim"): f"{i + 1} / {len(reqs)}",
+                                T(lang, "disqualified", "diskalifiye"): len(disq)}})
+    ok = sorted([c for c in cands if c not in disq], key=lambda c: -total[c])
+    win = ok[0]
+    second = [c for c in ok[1:] if total[c] == total[ok[1]]] if len(ok) > 1 else []
+    order = sorted(cands, key=lambda c: (c in disq, -total[c]))
+    place = {c: 1 + sum(1 for o in ok if total[o] > total[c]) for c in ok}
+
+    def status(c):
+        if c in disq:
+            return T(lang, "disqualified", "diskalifiye")
+        if c == win:
+            return T(lang, "winner", "kazanan")
+        if c in second:
+            return T(lang, "second", "ikinci")
+        return T(lang, f"place {place[c]}", f"{place[c]}. sıra")
+    for k, c in enumerate(cands):
+        rows[k][-1] = status(c)
+    ranking = [[c, total[c], status(c)] for c in order]
+    res = T(lang, f"Result. The winner is {win} with {total[win]} points.", f"Sonuç. Kazanan {total[win]} puanla {win}.")
+    if second:
+        res += T(lang, f" Second: {' and '.join(second)} with {total[second[0]]} points.", f" İkinci: {total[second[0]]} puanla {' ve '.join(second)}.")
+    res += "\n" + T(lang, *d["gap"])
+    if d.get("pivot"):
+        res += "\n" + T(lang, "If one condition changed: ", "Bir koşul değişseydi: ") + T(lang, *d["pivot"])
+    steps.append({"say": res, "marks": {"board": {k: ("bad" if c in disq else "new" if c == win else "match" if c in second else "") for k, c in enumerate(cands)}},
+                  "rows": {"board": deepcopy(rows)}, "out": ranking,
+                  "outmarks": {0: "new"}, "count": {T(lang, "requirements checked", "kontrol edilen gereksinim"): f"{len(reqs)} / {len(reqs)}",
+                                                     T(lang, "disqualified", "diskalifiye"): len(disq)}})
+    return {"kind": "score",
+            "tables": [{"id": "req", "name": T(lang, "requirements", "gereksinimler"), "cols": ["id", T(lang, "type", "tür"), T(lang, "what is checked", "ne kontrol edilir")],
+                        "rows": [[f"R{i + 1}", kind(r), T(lang, *r["axis"])] for i, r in enumerate(reqs)], "key": [0], "ref": []},
+                       {"id": "board", "name": T(lang, "scorecard", "puan tablosu"), "cols": cols, "rows": deepcopy([[c] + [""] * len(reqs) + [0, T(lang, "in the race", "yarışta")] for c in cands]), "key": [0], "ref": []}],
+            "out": {"name": T(lang, "this requirement for each candidate (at the end: the ranking)", "bu gereksinim her aday için (sonda: sıralama)"),
+                    "cols": [T(lang, "candidate", "aday"), T(lang, "points", "puan"), T(lang, "reason (at the end: place)", "gerekçe (sonda: sıra)")]},
+            "steps": steps}
+
+
 def V(*cells):
     """Verdict row helper: V((1, en, tr), (0, en, tr), ...) in the order of the candidates."""
     return cells
@@ -658,6 +734,352 @@ def ddb_gsi(lang):
 DDB_CANDS = ["DynamoDB", "Aurora PostgreSQL", "ElastiCache (Valkey)", "Redshift", "Keyspaces"]
 
 
+# ---------------------------------------------------------------- DynamoDB: architecture decisions as scorecards
+def R(must, axis, text, why, **cells):
+    """One requirement. axis/text/why: (en, tr). cells: candidate key -> (score, en, tr)."""
+    return {"must": must, "axis": axis, "text": text, "why": why, "cells": cells}
+
+
+def _cells(r, names):
+    r = dict(r)
+    r["cells"] = {names[k]: v for k, v in r["cells"].items()}
+    return r
+
+
+DDB_NAMES = {"ddb": "DynamoDB", "aur": "Aurora PostgreSQL", "ec": "ElastiCache (Valkey)", "doc": "DocumentDB", "ks": "Keyspaces",
+             "rs": "Redshift", "os": "OpenSearch"}
+
+DDB_DECISIONS = {
+    # 1. A clear win
+    "decide_win": {
+        "cands": ["ddb", "ks", "aur", "ec", "doc"],
+        "workload": ("A parcel company builds the \"Where is my order?\" screen of its mobile app. Each customer opens the app, sees the status of one order, and scrolls the list of their last 20 orders. "
+                     "On a normal day the screen gets 2,000 reads per second. On the night of a national sale, it gets 60,000 reads per second for three hours. The team has three developers and no database administrator.",
+                     "Bir kargo şirketi mobil uygulamasının \"Siparişim nerede?\" ekranını yapıyor. Her müşteri uygulamayı açar, bir siparişin durumunu görür ve son 20 siparişinin listesini kaydırır. "
+                     "Normal bir günde ekran saniyede 2.000 okuma alır. Ulusal bir indirim gecesinde üç saat boyunca saniyede 60.000 okuma alır. Ekipte üç geliştirici var, veritabanı yöneticisi yok."),
+        "reqs": [
+            R(True, ("Access pattern", "Erişim deseni"),
+              ("The app reads one order by its order id, and it lists the last 20 orders of one customer, newest first. When the courier scans the parcel, the status must change only if the current status is \"shipped\". So an old scan cannot overwrite a newer one.",
+               "Uygulama bir siparişi order id ile okur ve bir müşterinin son 20 siparişini en yeni önce listeler. Kurye paketi okuttuğunda durum, sadece mevcut durum \"shipped\" ise değişmeli; böylece eski bir okutma daha yenisinin üstüne yazamaz."),
+              ("Every database can store orders. The question is whether these two reads and this one conditional write are cheap, direct operations, or work that the application must build itself.",
+               "Her database sipariş saklayabilir. Soru, bu iki okumanın ve bu tek koşullu yazmanın ucuz ve doğrudan işlemler mi, yoksa uygulamanın kendisinin kurması gereken işler mi olduğudur."),
+              ddb=(2, "GetItem by order id. Query on the customer as partition key, sorted by date, newest first. UpdateItem with a ConditionExpression on the status.", "Order id ile GetItem. Müşteri partition key, tarihe göre sıralı, en yeni önce Query. Status üzerinde ConditionExpression ile UpdateItem."),
+              ks=(1, "Both reads are direct. The conditional status change needs a lightweight transaction (IF status = 'shipped'), which costs more and is slower than a normal write.", "İki okuma da doğrudan. Koşullu durum değişikliği bir lightweight transaction (IF status = 'shipped') ister; bu normal bir yazmadan daha pahalı ve yavaştır."),
+              aur=(2, "An index on order id and an index on (customer, date). UPDATE ... WHERE status = 'shipped' does the condition.", "Order id ve (müşteri, tarih) üzerinde index. UPDATE ... WHERE status = 'shipped' koşulu yapar."),
+              ec=(1, "One key per order is direct. The list of the last 20 needs a sorted set that the application keeps up to date, and the condition needs a Lua script.", "Sipariş başına bir key doğrudan. Son 20'nin listesi, uygulamanın güncel tuttuğu bir sorted set ister; koşul da bir Lua script'i ister."),
+              doc=(2, "find by _id, an index on (customer, date), and updateOne with a filter on the status.", "_id ile find, (müşteri, tarih) üzerinde index ve status filtreli updateOne.")),
+            R(True, ("Scale and traffic shape", "Ölçek ve trafik şekli"),
+              ("Traffic goes from 2,000 to 60,000 reads per second in about ten minutes when the sale starts, and back down after three hours. During the peak, each read must still answer in less than 20 milliseconds, and nobody may have to change the database by hand.",
+               "İndirim başladığında trafik yaklaşık on dakikada saniyede 2.000 okumadan 60.000 okumaya çıkar ve üç saat sonra geri iner. Tepe anında da her okuma 20 milisaniyeden kısa sürede cevap vermeli ve kimse database'i elle değiştirmek zorunda kalmamalı."),
+              ("A screen that is slow on the busiest night of the year costs the most money. The database must follow the traffic by itself, not after a person sees an alarm.",
+               "Yılın en yoğun gecesinde yavaşlayan bir ekran en çok parayı kaybettirir. Database trafiği kendisi takip etmeli, birisi bir alarm gördükten sonra değil."),
+              ddb=(2, "On-demand mode serves new peaks with no capacity setting. Reads by key take single-digit milliseconds at any size.", "On-demand mod yeni tepeleri kapasite ayarı olmadan karşılar. Key ile okumalar her boyutta tek haneli milisaniye sürer."),
+              ks=(2, "On-demand capacity mode follows the traffic. Reads by partition key take single-digit milliseconds.", "On-demand kapasite modu trafiği takip eder. Partition key ile okumalar tek haneli milisaniye sürer."),
+              aur=(1, "Up to 15 readers can share the reads, but you add them or size Serverless v2 in advance. Thirty times more connections is a planning task.", "15'e kadar reader okumaları paylaşabilir, ama onları önceden eklersin ya da Serverless v2'yi önceden boyutlandırırsın. Otuz kat daha fazla bağlantı bir planlama işidir."),
+              ec=(2, "ElastiCache Serverless scales by itself and answers in less than a millisecond.", "ElastiCache Serverless kendi kendine ölçeklenir ve bir milisaniyenin altında cevap verir."),
+              doc=(1, "Read replicas help, but they are instances that you add and size before the sale.", "Read replica'lar yardım eder, ama onlar indirimden önce eklediğin ve boyutlandırdığın instance'lardır.")),
+            R(False, ("Durability", "Dayanıklılık"),
+              ("The order status is official information. Customer service uses it to answer complaints. After the database confirms a status change, the change must not be lost, also if a whole data center (Availability Zone) fails.",
+               "Sipariş durumu resmi bir bilgidir. Müşteri hizmetleri şikâyetleri onunla cevaplar. Database bir durum değişikliğini onayladıktan sonra, bütün bir veri merkezi (Availability Zone) arızalansa bile değişiklik kaybolmamalı."),
+              ("A fast store that can forget confirmed writes is a cache, not the place for a record that people rely on.",
+               "Onaylanmış yazmaları unutabilen hızlı bir depo bir cache'tir; insanların güvendiği bir kaydın yeri değildir."),
+              ddb=(2, "Each write is stored in several Availability Zones before DynamoDB confirms it.", "DynamoDB onaylamadan önce her yazma birkaç Availability Zone'da saklanır."),
+              ks=(2, "Data is stored three times across Availability Zones.", "Veri Availability Zone'lara dağıtılarak üç kez saklanır."),
+              aur=(2, "Six copies in three Availability Zones. COMMIT waits for four of them.", "Üç Availability Zone'da altı kopya. COMMIT dördünü bekler."),
+              ec=(1, "Serverless keeps replicas in several Availability Zones, but it has no durable write log, so a failure can lose the newest writes.", "Serverless birkaç Availability Zone'da replica tutar, ama dayanıklı bir yazma log'u yoktur; bu yüzden bir arıza en yeni yazmaları kaybettirebilir."),
+              doc=(2, "Six copies in three Availability Zones, like Aurora.", "Aurora gibi üç Availability Zone'da altı kopya.")),
+            R(False, ("Operations and team skills", "Operasyon ve ekip becerisi"),
+              ("Three developers own the whole service. They write Python with the AWS SDK. They do not want to patch servers, plan version upgrades, size instances or learn a new query language before the sale.",
+               "Servisin tamamı üç geliştiricinin sorumluluğunda. AWS SDK ile Python yazıyorlar. İndirimden önce sunucu patch'lemek, versiyon yükseltmesi planlamak, instance boyutlandırmak ya da yeni bir query dili öğrenmek istemiyorlar."),
+              ("Every hour that the team spends on the database is an hour that it does not spend on the app. Small teams pay the most for operational work.",
+               "Ekibin database'e harcadığı her saat, uygulamaya harcamadığı bir saattir. Operasyon işinin bedelini en çok küçük ekipler öder."),
+              ddb=(2, "Serverless, no versions, the same AWS SDK that the team uses.", "Serverless, versiyon yok, ekibin kullandığı AWS SDK'nın aynısı."),
+              ks=(1, "Serverless, but the team must learn CQL, a Cassandra driver and table design per query.", "Serverless, ama ekip CQL'i, bir Cassandra driver'ını ve query başına table tasarımını öğrenmeli."),
+              aur=(1, "Managed, but there are instances, engine versions, connection pools and SQL schema changes.", "Yönetilen bir servis, ama instance'lar, engine versiyonları, bağlantı havuzları ve SQL schema değişiklikleri var."),
+              ec=(2, "Serverless, with no nodes to size.", "Serverless, boyutlandırılacak node yok."),
+              doc=(1, "Managed, but you select and size instances and plan engine upgrades.", "Yönetilen bir servis, ama instance seçer, boyutlandırır ve engine yükseltmelerini planlarsın.")),
+            R(False, ("Cost model", "Maliyet modeli"),
+              ("For about 20 hours of each day the screen is almost idle. The company wants to pay for the reads and writes that customers really make, not for servers that wait all night.",
+               "Her günün yaklaşık 20 saatinde ekran neredeyse boştur. Şirket, bütün gece bekleyen sunuculara değil, müşterilerin gerçekten yaptığı okuma ve yazmalara ödeme yapmak istiyor."),
+              ("A peak that is 30 times the normal load makes fixed capacity very expensive: you pay all year for one night.",
+               "Normal yükün 30 katı olan bir tepe, sabit kapasiteyi çok pahalı yapar: bir gece için bütün yıl ödersin."),
+              ddb=(2, "On-demand: you pay per request and per GB stored.", "On-demand: istek başına ve saklanan GB başına ödersin."),
+              ks=(2, "On-demand: you pay per read and write request.", "On-demand: okuma ve yazma isteği başına ödersin."),
+              aur=(1, "Serverless v2 follows the load, but you pay capacity per hour, and readers for the peak cost while they run.", "Serverless v2 yükü takip eder, ama kapasiteyi saat başına ödersin ve tepe için reader'lar çalıştıkları sürece ücretlidir."),
+              ec=(1, "You pay for the data that is stored and for the requests. The data is in memory, which costs more per GB.", "Saklanan veri ve istekler için ödersin. Veri bellektedir; GB başına daha pahalıdır."),
+              doc=(0, "Instances run and cost money every hour, also at night.", "Instance'lar her saat çalışır ve ücretlidir, gece de.")),
+        ],
+        "gap": ("DynamoDB meets every requirement fully. Keyspaces is close on scale and cost, but the conditional status change and a new query language cost it two points. The others lose on scale or on operations, not on the access pattern.",
+                "DynamoDB her gereksinimi tam karşılar. Keyspaces ölçekte ve maliyette yakındır, ama koşullu durum değişikliği ve yeni bir query dili ona iki puan kaybettirir. Diğerleri erişim deseninde değil, ölçekte ya da operasyonda kaybeder."),
+        "pivot": ("Suppose that the company already runs Cassandra, with CQL code and a team that knows it. Then Keyspaces would score ✓ on operations, and the two would be equal.",
+                  "Şirket zaten CQL koduyla ve onu bilen bir ekiple Cassandra çalıştırıyor olsaydı Keyspaces operasyonda ✓ alırdı ve ikisi eşit olurdu."),
+    },
+    # 2. A clear loss
+    "decide_lose": {
+        "cands": ["ddb", "rs", "aur", "os", "doc"],
+        "workload": ("The finance team of an online shop wants a report every morning. It shows the revenue for each product category and each customer city, month by month, for the last 24 months. "
+                     "The orders are in an Aurora database, about 300 million order lines in total. The analysts also want to change the question during the meeting and see the new answer in seconds.",
+                     "Bir online mağazanın finans ekibi her sabah bir rapor istiyor: son 24 ay için, ay ay, her ürün kategorisi ve her müşteri şehri için gelir. "
+                     "Siparişler bir Aurora database'inde, toplam yaklaşık 300 milyon sipariş satırı. Analistler ayrıca toplantı sırasında soruyu değiştirmek ve yeni cevabı saniyeler içinde görmek istiyor."),
+        "reqs": [
+            R(True, ("Kind of question", "Sorunun türü"),
+              ("The report joins order lines with products (for the category) and with customers (for the city). Then it groups them by month, category and city, and adds up the amounts. Next week the question will be different, for example \"only first orders\" or \"by payment method\".",
+               "Rapor sipariş satırlarını ürünlerle (kategori için) ve müşterilerle (şehir için) join'ler, ay, kategori ve şehre göre gruplar ve tutarları toplar. Gelecek hafta soru farklı olacak, örneğin \"sadece ilk siparişler\" ya da \"ödeme yöntemine göre\"."),
+              ("A report is not a lookup by key. It reads most of the data and combines several tables. Each new question must be a new query, not a new database design.",
+               "Bir rapor key ile okuma değildir. Verinin çoğunu okur ve birkaç table'ı birleştirir. Her yeni soru yeni bir database tasarımı değil, yeni bir query olmalıdır."),
+              ddb=(0, "No JOIN and no GROUP BY. The application must Scan every item and add up the numbers itself, and each new question needs a new key design.", "JOIN ve GROUP BY yok. Uygulama her item'ı Scan etmeli ve sayıları kendisi toplamalı; her yeni soru yeni bir key tasarımı ister."),
+              rs=(2, "SQL with JOIN, GROUP BY and window functions over any columns.", "Her column üzerinde JOIN, GROUP BY ve window function'lı SQL."),
+              aur=(2, "Full SQL. The same query language as the shop.", "Tam SQL. Mağazayla aynı query dili."),
+              os=(1, "Aggregations can group and add up, but there is no JOIN between indexes, so the data must be copied into one flat index first.", "Aggregation'lar gruplayıp toplayabilir, ama index'ler arasında JOIN yoktur; bu yüzden veri önce düz bir index'e kopyalanmalıdır."),
+              doc=(1, "The aggregation pipeline can group, and $lookup can join, but $lookup over hundreds of millions of documents is slow.", "Aggregation pipeline gruplayabilir ve $lookup join'leyebilir, ama yüz milyonlarca document üzerinde $lookup yavaştır.")),
+            R(True, ("Speed of a large scan", "Büyük taramanın hızı"),
+              ("Each run reads about 300 million order lines but only four of their twenty columns. The answer must come back in less than 10 seconds, so the analysts can change the question in the meeting.",
+               "Her çalıştırma yaklaşık 300 milyon sipariş satırı okur ama yirmi column'un sadece dördünü. Cevap 10 saniyeden kısa sürede gelmeli, böylece analistler soruyu toplantıda değiştirebilir."),
+              ("For a report, the cost is the number of bytes that the database must read. A design that reads complete rows reads five times more than this report needs.",
+               "Bir rapor için maliyet, database'in okuması gereken byte sayısıdır. Tam row'ları okuyan bir tasarım bu raporun ihtiyacından beş kat fazlasını okur."),
+              ddb=(0, "A Scan reads every item completely and is charged per 4 KB. It takes minutes to hours.", "Bir Scan her item'ı tamamen okur ve 4 KB başına ücretlendirilir. Dakikalar ile saatler sürer."),
+              rs=(2, "Column storage reads only the four columns, and many slices scan in parallel.", "Kolon bazlı saklama sadece dört kolonu okur ve birçok slice paralel tarar."),
+              aur=(0, "A row store reads complete rows. A scan of 300 million rows takes minutes, not seconds.", "Bir row store tam row'ları okur. 300 milyon row'un taranması saniyeler değil dakikalar sürer."),
+              os=(1, "Aggregations are fast on one flat index, if the data was copied and flattened before.", "Veri önceden kopyalanıp düzleştirildiyse, aggregation'lar tek bir düz index'te hızlıdır."),
+              doc=(0, "A collection scan with $lookup over this volume takes minutes.", "Bu hacimde $lookup'lı bir collection scan dakikalar sürer.")),
+            R(False, ("Effect on the shop", "Mağazaya etkisi"),
+              ("The checkout writes to Aurora all day. The report must not make the checkout slower, not even for one minute, also when an analyst runs a very large query by mistake.",
+               "Checkout bütün gün Aurora'ya yazar. Rapor checkout'u yavaşlatmamalı, bir dakika bile; bir analist yanlışlıkla çok büyük bir query çalıştırdığında bile."),
+              ("When the report and the shop share one database, every heavy report is a risk for revenue.",
+               "Rapor ve mağaza aynı database'i paylaştığında her ağır rapor gelir için bir risktir."),
+              ddb=(1, "A separate table, but the data must be copied there first, and a Scan uses capacity of that table.", "Ayrı bir table, ama veri önce oraya kopyalanmalı ve bir Scan o table'ın kapasitesini kullanır."),
+              rs=(2, "A separate warehouse. A zero-ETL integration copies the orders from Aurora.", "Ayrı bir warehouse. Bir zero-ETL entegrasyonu siparişleri Aurora'dan kopyalar."),
+              aur=(1, "Possible on a separate reader instance, but it is still the same cluster.", "Ayrı bir reader instance'ta mümkün, ama yine aynı cluster'dır."),
+              os=(2, "A separate copy of the data.", "Verinin ayrı bir kopyası."),
+              doc=(2, "A separate copy of the data.", "Verinin ayrı bir kopyası.")),
+            R(False, ("Tools of the analysts", "Analistlerin araçları"),
+              ("The analysts use a BI tool that connects with JDBC and sends SQL. They know SQL well and do not write code.",
+               "Analistler JDBC ile bağlanan ve SQL gönderen bir BI aracı kullanıyor. SQL'i iyi biliyorlar ve kod yazmıyorlar."),
+              ("A database that the analysts cannot query themselves makes every new question a ticket for the developers.",
+               "Analistlerin kendilerinin sorgulayamadığı bir database, her yeni soruyu geliştiriciler için bir iş talebine çevirir."),
+              ddb=(0, "PartiQL has no JOIN and no GROUP BY. BI tools cannot use it for this report.", "PartiQL'de JOIN ve GROUP BY yok. BI araçları bu rapor için onu kullanamaz."),
+              rs=(2, "SQL, JDBC and ODBC drivers.", "SQL, JDBC ve ODBC driver'ları."),
+              aur=(2, "SQL and JDBC.", "SQL ve JDBC."),
+              os=(1, "A SQL plugin exists, with limits.", "Sınırlı bir SQL plugin'i var."),
+              doc=(1, "A JDBC driver exists, but the queries are MongoDB queries.", "Bir JDBC driver'ı var, ama query'ler MongoDB query'leridir.")),
+            R(False, ("Freshness without pipeline code", "Pipeline kodu olmadan güncellik"),
+              ("The report must include the orders of the last few minutes. The team does not want to write or run an ETL job for it.",
+               "Rapor son birkaç dakikanın siparişlerini içermeli ve ekip bunun için bir ETL job'u yazmak ya da çalıştırmak istemiyor."),
+              ("Every pipeline that you write is code that can break at night. A managed copy does this work for you.",
+               "Yazdığın her pipeline gece bozulabilecek bir koddur. Yönetilen bir kopya bu işi ortadan kaldırır."),
+              ddb=(0, "The orders are in Aurora. A pipeline must copy them to DynamoDB.", "Siparişler Aurora'da. Bir pipeline onları DynamoDB'ye kopyalamalı."),
+              rs=(2, "Zero-ETL from Aurora: new orders arrive within seconds, with no code.", "Aurora'dan zero-ETL: yeni siparişler kod olmadan saniyeler içinde gelir."),
+              aur=(2, "It is the source itself.", "Kaynağın kendisidir."),
+              os=(1, "An ingestion pipeline must copy and flatten the orders.", "Bir ingestion pipeline'ı siparişleri kopyalayıp düzleştirmeli."),
+              doc=(0, "A pipeline must copy the orders.", "Bir pipeline siparişleri kopyalamalı.")),
+        ],
+        "gap": ("Redshift meets every requirement. OpenSearch is second only because it can aggregate a flattened copy. DynamoDB is out at the first requirement: a key-value store answers \"give me this item\", not \"add up everything\".",
+                "Redshift her gereksinimi karşılar. OpenSearch sadece düzleştirilmiş bir kopyayı aggregate edebildiği için ikincidir. DynamoDB ilk gereksinimde elenir: bir key-value store \"bana bu item'ı ver\" sorusunu cevaplar, \"her şeyi topla\" sorusunu değil."),
+        "pivot": None,
+    },
+    # 3. Close race: sessions
+    "race_session": {
+        "cands": ["ec", "ddb", "ks", "aur", "doc"],
+        "workload": ("An online shop keeps the login session of each visitor: the user id, the last page, the language and a few flags. Every API call of the web site reads the session, and every page view writes the time of the last activity. "
+                     "At peak there are 40,000 calls per second. A session ends 30 minutes after the last activity. The shopping cart is stored in a different database, so a lost session only means that the visitor must log in again.",
+                     "Bir online mağaza her ziyaretçinin login oturumunu tutuyor: kullanıcı id'si, son sayfa, dil ve birkaç bayrak. Web sitesinin her API çağrısı oturumu okur ve her sayfa görüntülemesi son aktivitenin zamanını yazar. "
+                     "Tepe anında saniyede 40.000 çağrı var. Bir oturum son aktiviteden 30 dakika sonra biter. Sepet başka bir database'te saklanıyor; bu yüzden kaybolan bir oturum sadece ziyaretçinin yeniden login olması demektir."),
+        "reqs": [
+            R(True, ("Access pattern", "Erişim deseni"),
+              ("The application reads and writes one session by its session id, which is in the browser cookie. It never searches sessions by any other field.",
+               "Uygulama bir oturumu, tarayıcı cookie'sindeki session id ile okur ve yazar. Oturumları hiçbir zaman başka bir alana göre aramaz."),
+              ("This is the purest key-value access: one key, one value. Every candidate can do it, so this requirement does not separate them. It only shows that they are all in the race.",
+               "Bu en saf key-value erişimidir: bir key, bir değer. Her aday bunu yapabilir; bu yüzden bu gereksinim onları ayırmaz. Sadece hepsinin yarışta olduğunu doğrular."),
+              ec=(2, "GET and SET, or a hash per session.", "GET ve SET ya da oturum başına bir hash."),
+              ddb=(2, "GetItem and PutItem by the session id.", "Session id ile GetItem ve PutItem."),
+              ks=(2, "SELECT and UPDATE by the partition key.", "Partition key ile SELECT ve UPDATE."),
+              aur=(2, "A primary key lookup.", "Bir primary key araması."),
+              doc=(2, "find by _id.", "_id ile find.")),
+            R(True, ("Scale and latency", "Ölçek ve gecikme"),
+              ("At peak, 40,000 calls per second each read the session, and about 10,000 per second also write it. The session read is in the path of every call, so it must add less than 10 milliseconds.",
+               "Tepe anında saniyede 40.000 çağrının her biri oturumu okur ve saniyede yaklaşık 10.000'i onu yazar da. Oturum okuması her çağrının yolundadır; bu yüzden 10 milisaniyeden az eklemelidir."),
+              ("A slow session store makes the whole site slow, because every page waits for it.",
+               "Yavaş bir oturum deposu bütün siteyi yavaşlatır, çünkü her sayfa onu bekler."),
+              ec=(2, "Less than one millisecond from memory, and Serverless scales by itself.", "Bellekten bir milisaniyenin altında; Serverless kendi kendine ölçeklenir."),
+              ddb=(2, "Single-digit milliseconds, and on-demand mode follows the traffic.", "Tek haneli milisaniye; on-demand mod trafiği takip eder."),
+              ks=(2, "Single-digit milliseconds, on-demand capacity.", "Tek haneli milisaniye, on-demand kapasite."),
+              aur=(1, "Reads are fast, but 10,000 writes per second on one writer instance, with connection pools, needs a large instance and care.", "Okumalar hızlı, ama tek bir writer instance'ta bağlantı havuzlarıyla saniyede 10.000 yazma büyük bir instance ve özen ister."),
+              doc=(1, "Possible with a large primary instance, sized in advance.", "Önceden boyutlandırılmış büyük bir primary instance ile mümkün.")),
+            R(False, ("Durability", "Dayanıklılık"),
+              ("If the session store fails, the visitor must log in again. The cart is safe in another database. The business says that this is acceptable on a rare failure, but not every day.",
+               "Oturum deposu arızalanırsa ziyaretçi yeniden login olmalıdır. Sepet başka bir database'te güvende. İşletme bunun nadir bir arızada kabul edilebilir olduğunu, ama her gün olamayacağını söylüyor."),
+              ("This is the requirement that decides this race. A session is not money, so a store with partial durability is allowed here.",
+               "Bu yarışı belirleyen gereksinim budur. Bir oturum para değildir; bu yüzden burada kısmi dayanıklılığı olan bir depoya izin vardır."),
+              ec=(1, "Serverless keeps replicas in several Availability Zones, but it has no durable write log: a failure can lose recent sessions.", "Serverless birkaç Availability Zone'da replica tutar, ama dayanıklı bir yazma log'u yoktur: bir arıza son oturumları kaybettirebilir."),
+              ddb=(2, "Each write is stored in several Availability Zones before DynamoDB confirms it.", "DynamoDB onaylamadan önce her yazma birkaç Availability Zone'da saklanır."),
+              ks=(2, "Three copies across Availability Zones.", "Availability Zone'lara dağıtılmış üç kopya."),
+              aur=(2, "Six copies in three Availability Zones.", "Üç Availability Zone'da altı kopya."),
+              doc=(2, "Six copies in three Availability Zones.", "Üç Availability Zone'da altı kopya.")),
+            R(False, ("Expiry", "Süre sonu"),
+              ("A session must end exactly 30 minutes after the last activity. Each page view moves the end time forward. An expired session must never be accepted, also not for one minute.",
+               "Bir oturum son aktiviteden tam 30 dakika sonra bitmeli. Her sayfa görüntülemesi bitiş zamanını ileri alır. Süresi dolmuş bir oturum, bir dakika bile, asla kabul edilmemeli."),
+              ("Some databases delete expired data late. Then the application must compare the time on every read, and this is easy to forget.",
+               "Süresi dolan veriyi geç silen bir database, uygulamayı her okumada zamanı kontrol etmeye zorlar; bunu unutmak kolaydır."),
+              ec=(2, "EXPIRE renews the time on each page, and the key is gone exactly at the end.", "EXPIRE her sayfada süreyi yeniler ve key tam sonunda yok olur."),
+              ddb=(1, "TTL deletes expired items typically within a few days, so the application must also compare the expiry time on each read.", "TTL süresi dolan item'ları genellikle birkaç gün içinde siler; bu yüzden uygulama her okumada süre sonunu da karşılaştırmalıdır."),
+              ks=(1, "TTL works per row, but each renewal must rewrite the row with a new TTL.", "TTL row başına çalışır, ama her yenileme row'u yeni bir TTL ile yeniden yazmalıdır."),
+              aur=(0, "No TTL: a scheduled DELETE job that you write and run.", "TTL yok: senin yazıp çalıştırdığın zamanlanmış bir DELETE job'u."),
+              doc=(1, "A TTL index deletes expired documents in a background task, not at the exact second.", "Bir TTL index süresi dolan document'ları tam saniyesinde değil, bir arka plan görevinde siler.")),
+            R(False, ("Added latency", "Eklenen gecikme"),
+              ("The team measures the time of every page. They want the session step to be as close to zero as possible, because it is in front of every other call.",
+               "Ekip her sayfanın süresini ölçüyor. Oturum adımının mümkün olduğunca sıfıra yakın olmasını istiyorlar, çünkü diğer her çağrının önünde duruyor."),
+              ("Single-digit milliseconds is good. Less than one millisecond is better when the step runs on every call.",
+               "Tek haneli milisaniye iyidir. Adım her çağrıda çalıştığında bir milisaniyenin altı daha iyidir."),
+              ec=(2, "Microseconds to less than a millisecond from memory.", "Bellekten mikrosaniyelerden bir milisaniyenin altına."),
+              ddb=(1, "Single-digit milliseconds.", "Tek haneli milisaniye."),
+              ks=(1, "Single-digit milliseconds.", "Tek haneli milisaniye."),
+              aur=(1, "Milliseconds, with a connection pool.", "Bağlantı havuzuyla milisaniyeler."),
+              doc=(1, "Milliseconds.", "Milisaniyeler.")),
+        ],
+        "gap": ("ElastiCache wins by one point. DynamoDB is better on durability, but ElastiCache is better on exact expiry and on latency. Because a lost session is acceptable here, durability counts less than speed.",
+                "ElastiCache bir puan farkla kazanır. DynamoDB dayanıklılıkta daha iyidir, ama ElastiCache tam süre sonunda ve gecikmede daha iyidir. Burada kaybolan bir oturum kabul edilebilir olduğu için dayanıklılık hızdan daha az sayılır."),
+        "pivot": ("Suppose that the session also held payment state that must never be lost. Then durability would be a must, ElastiCache Serverless would score ✗ on it, and DynamoDB would win.",
+                  "Oturum asla kaybolmaması gereken ödeme bilgisi de tutsaydı dayanıklılık zorunlu olurdu, ElastiCache Serverless onda ✗ alırdı ve DynamoDB kazanırdı."),
+    },
+    # 4. Close race: activity history
+    "race_activity": {
+        "cands": ["ddb", "ks", "aur", "doc", "ix"],
+        "workload": ("A shop records every view, search and add-to-cart of every visitor as an event. The events show \"recently viewed\" and feed a fraud test. There are 25,000 new events per second at peak, and the history grows by about 1 TB each month. "
+                     "Events older than 90 days have no value. A new team builds the service. It writes Python and JavaScript with the AWS SDK, and there is no existing Cassandra code.",
+                     "Bir mağaza, \"son baktıkların\"ı göstermek ve bir dolandırıcılık kontrolünü beslemek için her ziyaretçinin her görüntülemesini, aramasını ve sepete eklemesini bir event olarak kaydediyor. Tepe anında saniyede 25.000 yeni event var ve geçmiş her ay yaklaşık 1 TB büyüyor. "
+                     "90 günden eski event'lerin değeri yok. Servisi yeni bir ekip yapıyor. AWS SDK ile Python ve JavaScript yazıyorlar ve var olan bir Cassandra kodu yok."),
+        "reqs": [
+            R(True, ("Access pattern", "Erişim deseni"),
+              ("The service appends one event for each click. The \"recently viewed\" box reads the last 50 events of one visitor, newest first. Nobody reads events of all visitors together.",
+               "Servis her tıklama için bir event ekler. \"Son baktıkların\" kutusu bir ziyaretçinin son 50 event'ini en yeni önce okur. Kimse bütün ziyaretçilerin event'lerini birlikte okumaz."),
+              ("This is the classic shape of a wide-column or key-value design: one partition per visitor, sorted by time. A design where the visitor id becomes an index tag explodes.",
+               "Bu bir wide-column ya da key-value tasarımının klasik şeklidir: ziyaretçi başına bir partition, zamana göre sıralı. Ziyaretçi id'sinin bir index tag'ine dönüştüğü bir tasarım patlar."),
+              ddb=(2, "Partition key = visitor, sort key = time. Query with ScanIndexForward = false and Limit = 50.", "Partition key = ziyaretçi, sort key = zaman. ScanIndexForward = false ve Limit = 50 ile Query."),
+              ks=(2, "PRIMARY KEY ((visitor), time) with CLUSTERING ORDER BY time DESC, then LIMIT 50.", "CLUSTERING ORDER BY time DESC ile PRIMARY KEY ((visitor), time), sonra LIMIT 50."),
+              aur=(2, "An index on (visitor, time) and ORDER BY time DESC LIMIT 50.", "(ziyaretçi, zaman) üzerinde index ve ORDER BY time DESC LIMIT 50."),
+              doc=(2, "An index on (visitor, time) and sort with limit.", "(ziyaretçi, zaman) üzerinde index ve limit'li sort."),
+              ix=(0, "A visitor id as a tag makes millions of series. The cardinality becomes too high.", "Tag olarak bir ziyaretçi id'si milyonlarca series oluşturur. Cardinality çok yükselir.")),
+            R(True, ("Write scale and growth", "Yazma ölçeği ve büyüme"),
+              ("At peak, 25,000 small writes per second arrive, spread over millions of visitors. Each month adds 1 TB of data, and there must be no downtime to add storage or capacity.",
+               "Tepe anında milyonlarca ziyaretçiye dağılmış saniyede 25.000 küçük yazma ve her ay 1 TB daha fazla veri; storage ya da kapasite eklemek için kesinti olmadan."),
+              ("Append-heavy workloads break databases with one writer. The write load must spread over many partitions.",
+               "Ekleme ağırlıklı iş yükleri tek yazıcılı database'leri zorlar. Yazma yükü birçok partition'a dağılmalıdır."),
+              ddb=(2, "Writes spread over partitions by the visitor id. On-demand mode follows the load.", "Yazmalar ziyaretçi id'sine göre partition'lara dağılır. On-demand mod yükü takip eder."),
+              ks=(2, "Writes spread over partitions. Serverless capacity follows the load.", "Yazmalar partition'lara dağılır. Serverless kapasite yükü takip eder."),
+              aur=(1, "All writes go to one writer instance. 25,000 inserts per second needs a large instance and table partitioning.", "Bütün yazmalar tek bir writer instance'a gider. Saniyede 25.000 insert büyük bir instance ve table partitioning ister."),
+              doc=(1, "All writes go to one primary instance, unless you use elastic clusters.", "Elastic cluster kullanmazsan bütün yazmalar tek bir primary instance'a gider."),
+              ix=(1, "Fast writes, but the series problem stays.", "Hızlı yazmalar, ama series sorunu kalır.")),
+            R(False, ("Expiry of old data", "Eski verinin süresi"),
+              ("Events must disappear 90 days after they were written, with no job to write, run or watch, and without paying for the deletes.",
+               "Event'ler yazıldıktan 90 gün sonra kaybolmalı; yazılacak, çalıştırılacak ya da izlenecek bir job olmadan ve silmeler için ödeme yapmadan."),
+              ("At 1 TB per month, a forgotten cleanup job means a database that grows forever.",
+               "Ayda 1 TB ile unutulmuş bir temizlik job'u, sonsuza kadar büyüyen bir database demektir."),
+              ddb=(2, "TTL deletes expired items without consuming write capacity.", "TTL süresi dolan item'ları yazma kapasitesi harcamadan siler."),
+              ks=(2, "A default TTL on the table expires each row automatically.", "Table üzerindeki varsayılan bir TTL her row'u otomatik olarak sona erdirir."),
+              aur=(1, "Possible with monthly table partitions that a job drops.", "Bir job'un düşürdüğü aylık table partition'larıyla mümkün."),
+              doc=(1, "A TTL index deletes documents, but the deletes use I/O of the cluster.", "Bir TTL index document'ları siler, ama silmeler cluster'ın I/O'sunu kullanır."),
+              ix=(2, "The retention period of the bucket.", "Bucket'ın retention period'u.")),
+            R(False, ("Team skills", "Ekip becerisi"),
+              ("The new team knows the AWS SDK for Python and JavaScript. It has no Cassandra experience and no CQL code to reuse, and it must deliver in six weeks.",
+               "Yeni ekip Python ve JavaScript için AWS SDK'yı biliyor. Cassandra deneyimi ve yeniden kullanılacak CQL kodu yok; altı haftada teslim etmeli."),
+              ("This is the requirement that decides this race. Two technically equal options are not equal for a team that knows only one of them.",
+               "Bu yarışı belirleyen gereksinim budur. Teknik olarak eşit iki seçenek, sadece birini bilen bir ekip için eşit değildir."),
+              ddb=(2, "The AWS SDK that the team already uses.", "Ekibin zaten kullandığı AWS SDK."),
+              ks=(1, "The team must learn CQL, a Cassandra driver and query-first table design.", "Ekip CQL'i, bir Cassandra driver'ını ve query öncelikli table tasarımını öğrenmeli."),
+              aur=(2, "SQL is common knowledge.", "SQL yaygın bir bilgidir."),
+              doc=(1, "The MongoDB API is new for this team.", "MongoDB API'si bu ekip için yeni."),
+              ix=(1, "Line protocol and Flux are new for this team.", "Line protocol ve Flux bu ekip için yeni.")),
+            R(False, ("Feed the fraud test", "Dolandırıcılık kontrolünü besleme"),
+              ("Each new event must reach a fraud-test function within seconds, without a second write from the application.",
+               "Her yeni event, uygulamadan ikinci bir yazma olmadan saniyeler içinde bir dolandırıcılık kontrol fonksiyonuna ulaşmalı."),
+              ("With a change stream from the database, the application cannot write the event and then forget to send it.",
+               "Database'den gelen bir değişiklik akışı, uygulamanın event'i yazıp göndermeyi unutması riskini ortadan kaldırır."),
+              ddb=(2, "DynamoDB Streams starts a Lambda function for each change.", "DynamoDB Streams her değişiklik için bir Lambda fonksiyonu başlatır."),
+              ks=(2, "Keyspaces CDC streams record each row change in time order.", "Keyspaces CDC stream'leri her row değişikliğini zaman sırasıyla kaydeder."),
+              aur=(1, "Possible with logical replication or a CDC tool that you run.", "Mantıksal replikasyonla ya da senin çalıştırdığın bir CDC aracıyla mümkün."),
+              doc=(2, "Change streams.", "Change stream'ler."),
+              ix=(0, "No change stream.", "Değişiklik akışı yok.")),
+        ],
+        "gap": ("DynamoDB wins by one point. On data model, scale, expiry and change streams, DynamoDB and Keyspaces are equal. The only difference is that this team already knows the AWS SDK and has no Cassandra code.",
+                "DynamoDB bir puan farkla kazanır. Veri modeli, ölçek, süre sonu ve değişiklik akışında DynamoDB ve Keyspaces eşittir. Tek fark, bu ekibin AWS SDK'yı zaten bilmesi ve Cassandra kodunun olmamasıdır."),
+        "pivot": ("Suppose that the company moved an existing Cassandra application, with years of CQL code and a team that knows it. Then Keyspaces would score ✓ on team skills and DynamoDB ~ (a rewrite), and Keyspaces would win.",
+                  "Şirket yıllarca CQL kodu olan var olan bir Cassandra uygulamasını, onu bilen bir ekiple taşısaydı Keyspaces ekip becerisinde ✓, DynamoDB ~ (yeniden yazma) alırdı ve Keyspaces kazanırdı."),
+    },
+    # 5. Close race: shopping cart
+    "race_cart": {
+        "cands": ["ddb", "aur", "doc", "ec", "ks"],
+        "workload": ("An online shop stores the shopping cart of each visitor. Visitors add and change products many times before they buy, and many carts are never bought. "
+                     "Normal traffic is 500 cart writes per second, and on campaign evenings it is 5,000 per second for two hours. The orders and the stock are already in Aurora PostgreSQL.",
+                     "Bir online mağaza her ziyaretçinin sepetini saklıyor. Ziyaretçiler satın almadan önce ürünleri birçok kez ekler ve değiştirir; birçok sepet hiç satın alınmaz. "
+                     "Normal trafik saniyede 500 sepet yazması, kampanya akşamlarında ise iki saat boyunca saniyede 5.000. Siparişler ve stok zaten Aurora PostgreSQL'de."),
+        "reqs": [
+            R(True, ("Access pattern and rules", "Erişim deseni ve kurallar"),
+              ("The cart page reads all lines of one visitor's cart. Each \"add\" increases the quantity of one line by one. The database must refuse a quantity above 5 for one product, also when two browser tabs add at the same time.",
+               "Sepet sayfası bir ziyaretçinin sepetinin bütün satırlarını okur. Her \"ekle\" bir satırın miktarını bir artırır ve database bir ürün için 5'in üstündeki miktarı, iki tarayıcı sekmesi aynı anda eklediğinde bile, reddetmelidir."),
+              ("The rule must live in the database write itself. A test in the application, followed by a write, loses the race when two tabs click together.",
+               "Kural database yazmasının içinde yaşamalı. Uygulamada yapılan bir kontrol ve ardından gelen bir yazma, iki sekme birlikte tıkladığında yarışı kaybeder."),
+              ddb=(2, "Query by the cart key. UpdateItem with ADD qty and the condition qty < 5.", "Sepet key'i ile Query. ADD qty ve qty < 5 koşulu ile UpdateItem."),
+              aur=(2, "SELECT by an index. UPDATE ... SET qty = qty + 1 WHERE qty < 5.", "Index ile SELECT. UPDATE ... SET qty = qty + 1 WHERE qty < 5."),
+              doc=(2, "updateOne with $inc and a filter qty < 5.", "$inc ve qty < 5 filtresiyle updateOne."),
+              ec=(1, "HINCRBY increases atomically, but the limit of 5 needs a Lua script.", "HINCRBY atomik artırır, ama 5 sınırı bir Lua script'i ister."),
+              ks=(1, "The condition needs a lightweight transaction (IF), which is slower and costs more.", "Koşul bir lightweight transaction (IF) ister; bu daha yavaş ve daha pahalıdır.")),
+            R(True, ("Scale on campaign evenings", "Kampanya akşamlarında ölçek"),
+              ("When the campaign email goes out, the load goes from 500 to 5,000 cart writes per second within minutes, and back down after two hours. Each write must get an answer in less than 20 milliseconds.",
+               "Kampanya e-postası gittiğinde dakikalar içinde saniyede 500'den 5.000 sepet yazmasına, iki saat sonra geri; her yazma 20 milisaniyeden kısa sürede cevaplanmalı."),
+              ("5,000 small writes per second is within reach of one large relational writer. So this requirement does not separate the leaders. It shows that the gap is elsewhere.",
+               "Saniyede 5.000 küçük yazma tek bir büyük ilişkisel yazıcının ulaşabileceği bir yüktür. Bu yüzden bu gereksinim liderleri ayırmaz. Farkın başka yerde olduğunu gösterir."),
+              ddb=(2, "On-demand mode follows the jump.", "On-demand mod sıçramayı takip eder."),
+              aur=(2, "One writer handles 5,000 small writes per second, and Serverless v2 adds capacity within its range.", "Tek bir writer saniyede 5.000 küçük yazmayı karşılar ve Serverless v2 kendi aralığı içinde kapasite ekler."),
+              doc=(1, "One primary instance that you size before the campaign.", "Kampanyadan önce boyutlandırdığın tek bir primary instance."),
+              ec=(2, "Serverless follows the load.", "Serverless yükü takip eder."),
+              ks=(2, "On-demand capacity follows the load.", "On-demand kapasite yükü takip eder.")),
+            R(False, ("Abandoned carts", "Terk edilen sepetler"),
+              ("About 70 percent of carts are never bought. A cart must disappear 24 hours after the last change, with no cleanup job.",
+               "Sepetlerin yaklaşık yüzde 70'i hiç satın alınmaz. Bir sepet son değişiklikten 24 saat sonra, temizlik job'u olmadan kaybolmalı."),
+              ("A cleanup job is small code, but it is code that someone must run and watch every day.",
+               "Bir temizlik job'u küçük bir koddur, ama birinin her gün çalıştırması ve izlemesi gereken bir koddur."),
+              ddb=(2, "TTL attribute, deletes without write capacity.", "TTL attribute'u, yazma kapasitesi olmadan siler."),
+              aur=(1, "A scheduled DELETE job that you write, run and watch.", "Senin yazdığın, çalıştırdığın ve izlediğin zamanlanmış bir DELETE job'u."),
+              doc=(2, "A TTL index.", "Bir TTL index."),
+              ec=(2, "EXPIRE.", "EXPIRE."),
+              ks=(2, "TTL on the table.", "Table üzerinde TTL.")),
+            R(False, ("Checkout consistency", "Checkout tutarlılığı"),
+              ("At checkout, the order and the stock change in one transaction in Aurora. The cart is read before and deleted after. If the cart lived in Aurora too, the cart, the stock and the order could change in one transaction.",
+               "Checkout'ta sipariş ve stok Aurora'da tek bir transaction'da değişir. Sepet önce okunur ve sonra silinir. Sepet de Aurora'da olsaydı sepet, stok ve sipariş tek bir transaction'da değişebilirdi."),
+              ("A cart in a second database means two steps at checkout. A failure between them leaves an old cart behind, which is harmless, but it is one more case to think about.",
+               "İkinci bir database'teki sepet, checkout'ta iki adım demektir. Aralarındaki bir arıza geride eski bir sepet bırakır; bu zararsızdır, ama düşünülmesi gereken bir durum daha.")
+              ,
+              ddb=(1, "Read the cart, commit in Aurora, then delete the cart. An old cart can stay after a failure.", "Sepeti oku, Aurora'da commit et, sonra sepeti sil. Bir arızadan sonra eski bir sepet kalabilir."),
+              aur=(2, "Cart, stock and order in one ACID transaction.", "Sepet, stok ve sipariş tek bir ACID transaction'da."),
+              doc=(1, "Two steps, like DynamoDB.", "DynamoDB gibi iki adım."),
+              ec=(0, "Two steps, and the cart can disappear before checkout.", "İki adım ve sepet checkout'tan önce kaybolabilir."),
+              ks=(1, "Two steps, like DynamoDB.", "DynamoDB gibi iki adım.")),
+            R(False, ("Operations", "Operasyon"),
+              ("The team that owns the cart also owns the search page. It does not want to size instances, run upgrades or tune connection pools for the cart.",
+               "Sepetin sahibi olan ekip arama sayfasının da sahibi. Sepet için instance boyutlandırmak, yükseltme yapmak ya da bağlantı havuzlarını ayarlamak istemiyor."),
+              ("This is the requirement that decides this race. Aurora is already there, but more load on it is more work for the team that runs it.",
+               "Bu yarışı belirleyen gereksinim budur. Aurora zaten orada, ama onun üstüne daha fazla yük, onu çalıştıran ekip için daha fazla iş demektir."),
+              ddb=(2, "Serverless, nothing to size.", "Serverless, boyutlandırılacak bir şey yok."),
+              aur=(1, "The cart adds load and connections to the order database, which someone must size for the campaign.", "Sepet, sipariş database'ine yük ve bağlantı ekler; birinin onu kampanya için boyutlandırması gerekir."),
+              doc=(1, "Instances to size and upgrade.", "Boyutlandırılacak ve yükseltilecek instance'lar."),
+              ec=(2, "Serverless.", "Serverless."),
+              ks=(2, "Serverless.", "Serverless.")),
+        ],
+        "gap": ("DynamoDB wins by one point over Aurora. Aurora is better at checkout, because one transaction covers the cart, the stock and the order. DynamoDB is better at abandoned carts and operations, and these count more for a cart that changes often and is often not bought. Keyspaces also has 8 points, but each \"add\" needs a lightweight transaction.",
+                "DynamoDB, Aurora'yı bir puan farkla geçer. Aurora checkout'ta daha iyidir, çünkü tek bir transaction sepeti, stoğu ve siparişi kapsar. DynamoDB terk edilen sepetlerde ve operasyonda daha iyidir; sık değişen ve çoğu zaman satın alınmayan bir sepet için bunlar daha çok sayılır. Keyspaces da 8 puan alır, ama her \"ekle\" bir lightweight transaction ister."),
+        "pivot": ("Suppose that the team that owns the cart also runs Aurora for the orders, and wants one database less to operate. Then operations would give Aurora ✓ and DynamoDB ~, and Aurora would win.",
+                  "Sepetin sahibi olan ekip siparişler için Aurora'yı da çalıştırsaydı ve işletilecek bir database eksik isteseydi operasyon Aurora'ya ✓, DynamoDB'ye ~ verirdi ve Aurora kazanırdı."),
+    },
+}
+DDB_NAMES["ix"] = "Timestream for InfluxDB"
+
+
+def ddb_decision(lang, key):
+    d = DDB_DECISIONS[key]
+    return decide_score(lang, {"workload": d["workload"], "cands": [DDB_NAMES[c] for c in d["cands"]],
+                               "reqs": [_cells(r, DDB_NAMES) for r in d["reqs"]], "gap": d["gap"], "pivot": d["pivot"]})
+
+
 def dynamodb(lang):
     w1 = verdicts(DDB_CANDS, [
         V((1, "on-demand mode scales per request", "on-demand mod istek başına ölçeklenir"), (1, "Serverless v2 scales capacity", "Serverless v2 kapasiteyi ölçekler"),
@@ -685,22 +1107,7 @@ def dynamodb(lang):
           (0, "removed earlier", "daha önce elendi"), (0, "each column must be in the schema", "her column schema'da olmalı")),
     ])
     spec = {
-        "decide_cart": decide_generic(lang, ("Shopping carts of all visitors, with a 50 times traffic jump on a sale day", "Bütün ziyaretçilerin sepetleri, indirim gününde 50 kat trafik artışıyla"),
-                                      [("Traffic can jump 50 times in minutes, with no capacity plan", "Trafik, kapasite planı olmadan dakikalar içinde 50 kat artabilir"),
-                                       ("Every confirmed write must survive the loss of a data center", "Onaylanan her yazma bir veri merkezinin kaybından sağ çıkmalı"),
-                                       ("No servers to size, and the bill follows the requests", "Boyutlandırılacak sunucu yok, fatura istekleri takip eder"),
-                                       ("Items of different shapes: a cart line, a coupon, a gift note", "Farklı şekillerde item'lar: bir sepet satırı, bir kupon, bir hediye notu")],
-                                      DDB_CANDS, w1),
-        "decide_report": decide_generic(lang, ("A finance report that joins carts, orders and products in new ways each month", "Her ay yeni şekillerde sepetleri, siparişleri ve ürünleri join eden bir finans raporu"),
-                                        [("New questions with JOIN on any column, without a redesign", "Yeniden tasarım yapmadan, her column'da JOIN ile yeni sorular"),
-                                         ("The same system also takes many small writes each second", "Aynı sistem saniyede çok sayıda küçük yazma da alır")],
-                                        DDB_CANDS, w2),
-        "decide_holds": decide_generic(lang, ("Seat holds for a concert: a hold expires after 10 minutes, and two people must never hold the same seat", "Bir konser için koltuk tutma: tutma 10 dakika sonra düşer ve iki kişi asla aynı koltuğu tutmamalı"),
-                                       [("Each hold deletes itself after a time", "Her tutma bir süre sonra kendini siler"),
-                                        ("A confirmed hold must survive a crash", "Onaylanan bir tutma çökmeden sağ çıkmalı"),
-                                        ("A second hold of the same seat must fail", "Aynı koltuğun ikinci tutması başarısız olmalı"),
-                                        ("The hold carries free extra fields (price class, promo code)", "Tutma serbest ek alanlar taşır (fiyat sınıfı, promosyon kodu)")],
-                                       DDB_CANDS, w3),
+        **{k: ddb_decision(lang, k) for k in DDB_DECISIONS},
         "hash": ddb_hash(lang), "queryscan": ddb_query_scan(lang), "condition": ddb_condition(lang), "gsi": ddb_gsi(lang),
     }
     return {k: _localize(v, lang) for k, v in spec.items()}

@@ -3,153 +3,221 @@
 {# Turkish version of dynamodb.html. Terms stay in English; the explanations are Turkish. Keep both files in step. #}
 {% block body %}
 
-<h2 id="goal" data-short="Ne öğreneceksin"><span class="sec">00</span>Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
-<p>Bölüm 01 mimarın kararını verir: Amazon DynamoDB nereye oturur, nereye oturmaz. Sonra tutorial iki bölümden oluşur.
-   Bölüm 1, DynamoDB'nin arkasındaki fikri öğretir: key'in hash'ine göre partition'lara dağıtılmış key-value storage. Bölüm 2 AWS servisini gösterir: AWS senin için neyi çalıştırır ve Lale Market onu nasıl kullanır.</p>
+<h2 id="goal" data-short="Ne öğreneceksin" data-group="Başlarken">Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
+<p>Bu sayfa genel fikirden AWS servisine dört adımda gider:</p>
+<ol>
+  <li><b>Bölüm A, Temel.</b> Key-value database nedir, key'ler ve değerler nasıl görünür, key ile okuma neden her boyutta hızlı kalır. Burada AWS adı yok: fikirler Redis'te, Cassandra'da ve DynamoDB'de aynıdır.</li>
+  <li><b>Mimar gözüyle.</b> Key-value database ne zaman doğru seçimdir, ne zaman değildir. Sonra AWS'teki key-value seçenekleri ve hangi durumda DynamoDB'nin seçileceği. Üçü yakın yarış olan beş karar simülasyonu.</li>
+  <li><b>Bölüm B, İleri.</b> Pratikte DynamoDB: GetItem, Query ve Scan, koşullu yazmalar, key tasarımı, index'ler, TTL ve Streams.</li>
+  <li><b>Bölüm C, AWS servisi.</b> Bir key-value store'u kendin çalıştırdığında ne yapman gerekir ve DynamoDB senin için neyi yapar.</li>
+</ol>
 <p>Örnekler Lale Market'in alışveriş sepetinden gelir. Başka bir örnek bir fikri daha kolay gösteriyorsa tutorial onu kullanır: bir vestiyer, bir postane, bir konser bilet gişesi.</p>
 <p>Bu tutorial'ın sonunda şunları yapabilirsin:</p>
 <ol>
-  <li>DynamoDB'nin hangi iş yükleri için doğru seçim olduğunu ve hangileri için olmadığını söylemek.</li>
-  <li>Partition key'in DynamoDB'nin bir item'ı nerede sakladığına nasıl karar verdiğini açıklamak.</li>
-  <li>Bir access pattern listesinden bir primary key tasarlamak.</li>
-  <li>GetItem, Query ve Scan'in read request unit cinsinden maliyetini tahmin etmek.</li>
-  <li>Bir iş kuralını lock olmadan korumak için bir condition ve atomik bir ADD kullanmak.</li>
-  <li>DynamoDB'nin senin için neyi çalıştırdığını ve hangi seçeneklerin (DAX, global tables, Streams) bir tasarımı değiştirdiğini açıklamak.</li>
+  <li>Bir key-value database'in veriyi nasıl bulduğunu ve verinin yerine neden key'in karar verdiğini açıklamak.</li>
+  <li>Bir key-value database'in hangi iş yükleri için doğru seçim olduğunu ve hangileri için olmadığını söylemek.</li>
+  <li>AWS'teki key-value seçenekleri arasında seçim yapmak ve seçimi yakın bir yarışta savunmak.</li>
+  <li>Bir access pattern listesinden primary key tasarlamak ve GetItem, Query ve Scan'in maliyetini tahmin etmek.</li>
+  <li>Bir iş kuralını kilit olmadan korumak için bir koşul ve atomik bir ADD kullanmak.</li>
 </ol>
 <p>Dört tür kutu sana yardım eder. <b>Simülasyon</b>: Oynat'a ya da Sonraki adım'a bas. <b>Önce tahmin et</b>: cevabı açmadan önce kendi cevabını yaz.
    <b>Checkpoint</b>: tek doğru cevabı olan bir soru. <b>Analoji</b>: günlük hayattan bir resim.</p>
 
-<h2 id="architect" data-short="Mimar gözüyle: ne zaman"><span class="sec">01</span>Mimar gözüyle: DynamoDB nereye oturur</h2>
-<p><b>Önce bu bölümü oku.</b> Kararı bu bölüm verir. Sonraki bölümler, daha derine inmek isteyenler için DynamoDB'nin nasıl çalıştığını öğretir.</p>
-<p><b>Kısaca:</b> DynamoDB serverless bir key-value ve document database'idir. Her isteği key ile, table boyutu ve istek hızı ne olursa olsun, tek haneli milisaniyelerde cevaplar.
-   Bu hızı ancak sorularını önceden biliyorsan ve key'i onlara göre tasarlarsan elde edersin.</p>
-<p>Önemli kelime {{ k.term("access pattern") }}'dir. Access pattern, uygulamanın sorduğu bir sorudur; o anda bildiği değerlerle birlikte.
-   "id'si 7f3a olan tarayıcının sepetini göster" bir access pattern'dir. "İçinde kitap olan bütün sepetleri değerine göre sıralı göster" başka bir access pattern'dir.
-   DynamoDB ilkini tek ve ucuz bir istekle cevaplar. İkincisi için ya özel bir index'e ya da table'ın tamamını okumaya ihtiyaç duyar.</p>
+<div class="part"><b>Bölüm A</b><h2 id="partA" data-short="Bölüm A: Temel">Temel: key-value fikri</h2>
+<p>Veriyi sadece key ile bulan bir database'in her boyutta nasıl hızlı kalabildiği. Bu fikirler her key-value database'te aynıdır.</p></div>
 
-<h3>Bir iş yükünde DynamoDB'yi işaret eden sinyaller</h3>
+<h2 id="why" data-short="Neden key-value?"><span class="sec">A1</span>Neden key-value database? Vestiyer</h2>
+<p>Bir tiyatronun 5.000 askılı bir vestiyeri var. Paltonu bıraktığında numaralı bir fiş alırsın. Oyunun sonunda 5.000 kişi aynı anda geri gelir.
+   Fişle görevli doğrudan tek bir askıya yürür. Süre 12 numaralı askı için de 4.812 numaralı askı için de aynıdır.
+   Fiş olmadan ("kırmızı atkılı mavi bir palto") görevli her askıya bakmak zorundadır. Bu uzun sürer ve kuyruk büyür.</p>
+{% call k.callout("analogy", "Analoji") %}
+<p>Fiş numarası key'dir. Askı verinin yaşadığı yerdir. Bir key-value database bir vestiyerdir: fişi getirdiğinde çok hızlı,
+   sadece paltoyu tarif ettiğinde yavaştır. Büyük bir tiyatro daha fazla görevli ekler ve askıları odalara böler. Bu bir partition'dır.</p>
+{% endcall %}
+<p>İlişkisel bir database (bkz. <a href="/e2etutorial/aurora?lang=tr">Aurora tutorial'ı</a>) her soruyu SQL ile cevaplayabilir. Bedeli şudur: bütün yazmaları tek bir sunucu çalıştırır
+   ve planner her yeni soruyu nasıl cevaplayacağına karar vermek zorundadır. Bir key-value database farklı bir takas yapar. Sadece key ile sorulan soruları cevaplar.
+   Karşılığında veriyi birçok makineye bölebilir ve her makine kendi payını tek başına cevaplar. Böylece tek bir isteğin hızı table'ın boyutuna bağlı değildir.</p>
+
+<h2 id="model" data-short="Key'ler ve değerler"><span class="sec">A2</span>Key'ler ve değerler: model</h2>
+<p>Bir key-value database çiftler saklar. <b>Key</b> benzersiz bir isimdir, <b>değer</b> (value) ise o isme ait veridir. Database'in değeri anlamasına gerek yoktur. Onu bulmak için sadece key'e ihtiyaç duyar.</p>
+<p>Birçok key-value database key'in iki parçalı olmasına izin verir:</p>
+<ul>
+  <li>Key'in <b>partition parçası</b> verinin <i>nerede</i> yaşayacağına karar verir. Aynı partition parçasına sahip bütün değerler bir arada saklanır.</li>
+  <li>Key'in <b>sıralama parçası</b> isteğe bağlıdır. Bir partition'ın içindeki değerlerin <i>sırasına</i> karar verir; böylece database bir aralık okuyabilir: "ilk üç", "bu tarihten sonraki her şey".</li>
+</ul>
+<p>İki parça birlikte bir <b>composite key</b>'dir. Aynı partition parçasına sahip bütün değerler, database'in tek bir istekte okuyabildiği bir grup oluşturur.</p>
+<p>Farklı ürünler aynı fikirler için farklı isimler kullanır. İsimler sadece kod yazarken önemlidir. Fikirler aynıdır:</p>
 <table class="data">
-  <thead><tr><th>Sinyal</th><th>Gerçek bir projede neye benzer</th><th>Ona cevap veren DynamoDB özelliği</th></tr></thead>
+  <thead><tr><th>Genel fikir</th><th>Redis / Valkey</th><th>Apache Cassandra</th><th>Amazon DynamoDB</th></tr></thead>
   <tbody>
-    <tr><td>Uygulama key'i her zaman bilir</td><td>Bu ziyaretçinin sepetini al. Bu kullanıcının profilini al. Bu cihazın durumunu al.</td><td>Primary key ile GetItem ve Query (bölüm 05)</td></tr>
-    <tr><td>Trafik çok büyük ya da çok dalgalı</td><td>Bir indirim trafiği bir saatliğine 50 ile çarpar. Yeni bir oyun ilk gününde bir milyon oyuncu getirir.</td><td>Yükü dağıtan partition'lar, on-demand kapasite (bölüm 04 ve 10)</td></tr>
-    <tr><td>Ekip sunucu istemiyor</td><td>Boyutlandırılacak, yamalanacak ya da failover yapılacak instance yok. Fatura istekleri takip eder.</td><td>Serverless servis, on-demand mod (bölüm 10)</td></tr>
-    <tr><td>Bir item ya da birkaç item üzerinde basit kurallar</td><td>Bir üründen en fazla 5 adet. Bir koltuğu sadece boşsa al.</td><td>ConditionExpression ve TransactWriteItems (bölüm 06)</td></tr>
-    <tr><td>Kendini silmesi gereken veri</td><td>Bir gün sonra terk edilmiş sepetler, bir saat sonra session'lar, on dakika sonra geçici tutmalar.</td><td>Time to live (TTL) (bölüm 08)</td></tr>
-    <tr><td>Diğer sistemler her değişikliğe tepki vermeli</td><td>Bir sipariş durumu değişince bir e-posta gönder ve bir arama index'ini güncelle.</td><td>DynamoDB Streams (bölüm 08)</td></tr>
-    <tr><td>Birkaç Region'daki kullanıcılar aynı anda yazar</td><td>Üç kıtada oyuncusu olan küresel bir oyun ya da uygulama.</td><td>Global tables (bölüm 10)</td></tr>
+    <tr><td>Key</td><td>key</td><td>primary key</td><td>primary key</td></tr>
+    <tr><td>Key'in partition parçası</td><td>key'in kendisi (ondan bir hash slot hesaplanır)</td><td>partition key</td><td>partition key</td></tr>
+    <tr><td>Key'in sıralama parçası</td><td>bir sorted set içindeki üyenin score'u</td><td>clustering column</td><td>sort key</td></tr>
+    <tr><td>Değer</td><td>string, hash, list, set</td><td>column'lu row</td><td>attribute'lu item</td></tr>
+    <tr><td>Aynı partition parçasına sahip grup</td><td>bir veri yapısı taşıyan tek key</td><td>partition</td><td>item collection</td></tr>
+  </tbody>
+</table>
+<h3>Öğretici veri ve identifier'ları</h3>
+<p>Bu, dört sepetli küçük bir sepet table'ıdır. Ürün isimleri ve fiyatları gerçek Lale Market kataloğundan gelir. Sepet id'leri kısa örneklerdir.
+   <code>pk</code> kolonu key'in partition parçası, <code>sk</code> ise sıralama parçasıdır.</p>
+{{ k.sample("cart", "sepetler: öğretici kopya (4 sepette 8 değer)", key=["pk", "sk"]) }}
+<p>Her identifier'ın sahipliğini bir cümle olarak oku:</p>
+<table class="data">
+  <thead><tr><th>Identifier</th><th>Sahibi kim</th><th>Kim ödünç alır</th></tr></thead>
+  <tbody>
+    <tr><td>Ziyaretçi id'si (örneğin <code>7f3a</code>)</td><td>Sahibi mağazadır. Tarayıcı onu <code>lm_visitor</code> cookie'sinde tutar ve her Engine App onu oradan okur.</td><td>Sepet table'ı onu key'inin partition parçasının içinde ödünç alır: <code>CART#7f3a</code>.</td></tr>
+    <tr><td>Tam key (<code>pk</code> + <code>sk</code>)</td><td>Sahibi sepet table'ıdır. İki değer aynı çifte sahip olamaz. Var olan bir çiftle yapılan yazma eski değerin yerine geçer.</td><td>Kimse ödünç almaz. Diğer sistemler bir sepete ziyaretçi id'si ile başvurur.</td></tr>
+    <tr><td>Ürün id'si (örneğin <code>P0001</code>)</td><td>Sahibi katalogdur. DocumentDB'de ve Aurora'da yaşar.</td><td>Sepet table'ı onu sıralama parçasının içinde ödünç alır: <code>ITEM#P0001</code>. Bir key-value database ürünün var olduğunu kontrol etmez. Bunu uygulama yapmalıdır.</td></tr>
+  </tbody>
+</table>
+<p><code>CART#</code> ve <code>ITEM#</code> önekleri bir gelenektir. Bir table birkaç tür değer tutabilir ve önek türü gösterir.</p>
+{{ k.quiz("ddb-q0", "Öğretici table'a bak. Hangi istek tam olarak tek bir değer döndürür?",
+   ["pk = CART#7f3a ve sk = ITEM#P0044 ile okuma", "pk = CART#7f3a olan bütün değerleri okuma", "Her değeri okuyup qty >= 2 olanları tutma", "pk = CART#3c8d olan bütün değerleri okuma"],
+   0, "Tam key (iki parça birlikte) tam olarak tek bir değeri adlandırır. CART#7f3a grubunda üç, CART#3c8d grubunda iki değer var.") }}
+
+<h2 id="partitions" data-short="Partition ve hash"><span class="sec">A3</span>Partition'lar ve hash: key ile okuma neden hızlı kalır</h2>
+<p>Bir key-value database verisini birçok {{ k.term("partition") }}'a yayar. Bir partition, verinin kendi payını ve işin kendi payını taşıyan bir storage birimidir.
+   Bir değeri yerleştirmek için database key'in partition parçasını bir hash fonksiyonuna verir. Bir {{ k.term("hash function") }} her değeri bir sayıya çevirir ve aynı değer her zaman aynı sayıyı verir.
+   Sayı partition'ı seçer. Redis Cluster key'den bir hash slot hesaplar. Cassandra bir token hesaplar. DynamoDB kendi iç hash'ini kullanır. Fikir aynıdır.</p>
+{{ k.fig("dynamodb-hash-table.png", "bir hash fonksiyonu bir ismi (John Smith) bir slot numarasına (873) çevirir. John Smith'i tekrar bulmak için program aynı sayıyı hesaplar ve doğrudan o slot'a gider. Bir key-value database bir key'den bir partition'a gitmek için aynı fikri kullanır.") }}
+{% call k.predict("Öğretici table'a bak. Üç partition ve dört sepet var. İki sepetin aynı partition'a düşmesi mümkün mü? Bu bir şeyi bozar mı?") %}
+<p>Evet, iki sepet aynı partition'a düşebilir. Hiçbir şey bozulmaz. Bir partition birçok grup tutar. Partition'ın içinde her grup bir arada ve sk'ya göre sıralı kalır.
+   Hash sadece bir key için işi hangi partition'ın yapacağına karar verir.</p>
+{% endcall %}
+{{ k.sim("hash", "Sekiz değer, üç partition, bir hash") }}
+<p>Simülasyon küçük bir öğretici hash kullanır (karakter kodlarının toplamının 3'e göre modu). Gerçek database'ler daha iyi hash fonksiyonları kullanır ve veri büyüdükçe partition sayısı artar.
+   Fikir aynıdır: partition'a key tek başına karar verir, bu yüzden database başka hiçbir yere bakmak zorunda kalmaz.</p>
+<p>Her partition saniyede sınırlı miktarda iş yapabilir. Bu yüzden iyi bir partition key'in birçok farklı değeri olur ve istekler bu değerlere eşit dağılır.
+   Trafiğin çoğunu tek bir değer alırsa onun partition'ı sınırına ulaşır, diğerleri ise boş bekler. Buna {{ k.term("hot partition") }} denir.</p>
+{{ k.quiz("ddb-q1", "Lale Market'in sepet trafiğini en iyi hangi partition key dağıtır?",
+   ["Ziyaretçinin şehri", "Ziyaretçinin tarayıcı id'si", "Sepetin tarihi", "Ürünün kategorisi"],
+   1, "Her ziyaretçinin farklı bir tarayıcı id'si vardır, bu yüzden trafik çok sayıda key değerine dağılır. Şehrin, tarihin ve kategorinin az değeri vardır ve bazı değerler çok yoğundur.") }}
+
+<div class="part"><b>Mimar gözüyle</b><h2 id="architect" data-short="Mimar gözüyle">Mimar gözüyle: ne zaman key-value, ne zaman DynamoDB</h2>
+<p>Önce kategori: bir key-value database ne zaman doğru seçimdir. Sonra AWS'teki seçenekler ve DynamoDB'nin ne zaman seçileceği.</p></div>
+
+<p><b>Kısaca:</b> bir key-value database her isteği key ile, çok hızlı, her boyutta ve her istek hızında cevaplar. Bu hızı sadece sorularını önceden biliyorsan ve key'i onlara göre tasarlarsan alırsın.</p>
+<p>Önemli kelime {{ k.term("access pattern") }}'dir. Bir access pattern, uygulamanın sorduğu bir sorudur; o anda bildiği değerlerle birlikte.
+   "Id'si 7f3a olan tarayıcının sepetini göster" bir access pattern'dir. "İçinde kitap olan bütün sepetleri değerlerine göre sıralı göster" farklı bir access pattern'dir.
+   Bir key-value database birincisini tek ve ucuz bir istekle cevaplar. İkincisi için ya özel bir index'e ya da verinin tamamının okunmasına ihtiyaç duyar.</p>
+
+<h2 id="signals" data-short="Key-value sinyalleri"><span class="sec">M1</span>Bir iş yükünde key-value database'i işaret eden sinyaller</h2>
+<table class="data">
+  <thead><tr><th>Sinyal</th><th>Gerçek bir projede nasıl görünür</th><th>Onu cevaplayan key-value özelliği</th></tr></thead>
+  <tbody>
+    <tr><td>Uygulama key'i her zaman bilir</td><td>Bu ziyaretçinin sepetini getir. Bu kullanıcının profilini getir. Bu cihazın durumunu getir.</td><td>Key ile okuma doğrudan tek bir partition'a gider (A3)</td></tr>
+    <tr><td>Trafik çok büyük ya da çok dalgalı</td><td>Bir indirim trafiği bir saatliğine 50 ile çarpar. Yeni bir oyun ilk gününde bir milyon oyuncu getirir.</td><td>Yükü birçok partition paylaşır (A3)</td></tr>
+    <tr><td>Değerler birbirinden bağımsız</td><td>Bir sepetin başka bir sepete ihtiyacı yok. Bir oturumun başka bir oturuma ihtiyacı yok.</td><td>Join yok: her istek tek bir key'e ya da tek bir gruba dokunur</td></tr>
+    <tr><td>Tek bir değer üzerinde basit kurallar</td><td>Bir üründen en fazla 5 adet. Koltuk sadece boşsa tutulur.</td><td>Tek bir key üzerinde koşullu yazma (B3)</td></tr>
+    <tr><td>Kendini silmesi gereken veri</td><td>Bir gün sonra terk edilen sepetler, bir saat sonra oturumlar, on dakika sonra geçici tutmalar.</td><td>Key başına süre sonu (TTL) (B5)</td></tr>
+    <tr><td>Değerlerin şekli sık değişir</td><td>Aynı table'da bir sepet satırı, bir kupon ve bir hediye notu.</td><td>Database'in değeri anlamasına gerek yok (A2)</td></tr>
   </tbody>
 </table>
 
-<h3>Kullanım alanları: sebebi ve özelliğiyle</h3>
+<h2 id="usecases" data-short="Use case'ler"><span class="sec">M2</span>Use case'ler, nedeniyle</h2>
 <table class="data">
-  <thead><tr><th>Kullanım alanı</th><th>Veri ve access pattern'ler</th><th>Neden DynamoDB</th><th>İşi yapan özellik</th></tr></thead>
+  <thead><tr><th>Use case</th><th>Key ve değer</th><th>Neden key-value</th></tr></thead>
   <tbody>
-    <tr><td>Alışveriş sepetleri (Lale Market)</td><td>Ziyaretçi başına bir sepet. Sepeti oku, bir satır ekle ya da değiştir, sepeti boşalt.</td><td>Her istek ziyaretçi id'sini bilir. İndirim günleri ani zirveler getirir.</td><td>Sepet başına partition key, ürün başına sort key, koşullu UpdateItem, TTL</td></tr>
-    <tr><td>Kullanıcı profilleri ve tercihleri</td><td>Kullanıcı başına bir item, her sayfada okunur.</td><td>Milyonlarca kullanıcı, her zaman kullanıcı id'siyle okunur.</td><td>Key ile GetItem, serbest attribute'lu item'lar</td></tr>
-    <tr><td>Session'lar ve giriş token'ları</td><td>Session başına bir item, bir son kullanma zamanıyla.</td><td>Bir sunucu yeniden başlatmasından sağ çıkması gereken çok sayıda kısa ömürlü item.</td><td>TTL, gerektiğinde strongly consistent okumalar</td></tr>
-    <tr><td>Oyun durumu ve oyuncu envanteri</td><td>Oyuncu başına bir partition, her nesne için item'lar.</td><td>İlk günde büyük patlamalar, her oyuncu için düşük gecikme.</td><td>Tek partition'da Query, sayaçlar için atomik ADD, global tables</td></tr>
-    <tr><td>Nesnelerin İnterneti: her cihazın son durumu</td><td>Cihaz başına bir item, saniyede çok sayıda yazma.</td><td>Milyonlarca cihaz paralel yazar, her biri kendi key'ine.</td><td>Partition key'lerin dağılımı, on-demand kapasite</td></tr>
-    <tr><td>Ödemeler ve API'ler için idempotency key'leri</td><td>İstek id'si başına bir item, sadece yeniyse yazılır.</td><td>Bir yeniden deneme bir kartı iki kez çekmemeli.</td><td>PutItem üzerinde <code>attribute_not_exists</code> condition'ı, TTL</td></tr>
-    <tr><td>Bilet ve koltuk tutmaları</td><td>Koltuk ve etkinlik başına bir item, on dakika tutulur.</td><td>İki kişi asla bir koltuğu tutmamalı ve eski tutmalar gitmeli.</td><td>Koşullu PutItem, TTL</td></tr>
-    <tr><td>Serverless, event-driven back end'ler</td><td>Siparişler, durumlar, bildirimler.</td><td>Sunucu yok ve her değişiklik bir sonraki adımı başlatır.</td><td>AWS Lambda ile DynamoDB Streams</td></tr>
-    <tr><td>S3'teki dosyaların metadata'sı</td><td>Nesne başına bir item: sahip, etiketler, durum.</td><td>Bucket'ı listelemeden bir kullanıcının dosyasını bul.</td><td>Sahibe göre Query, duruma göre GSI</td></tr>
-    <tr><td>Reklam ve öneri sorguları</td><td>Kullanıcı ya da segment başına bir item, bir sayfa isteği sırasında birkaç milisaniyede okunur.</td><td>Katı bir süre sınırıyla çok yüksek okuma hızları.</td><td>GetItem, mikrosaniye okumalar için DAX</td></tr>
+    <tr><td>Alışveriş sepetleri (Lale Market)</td><td>Key: sepet, sonra ürün. Değer: miktar, fiyat.</td><td>Her istek ziyaretçi id'sini bilir. İndirim günleri ani tepeler getirir.</td></tr>
+    <tr><td>Kullanıcı profilleri ve tercihleri</td><td>Key: kullanıcı id'si. Değer: profil.</td><td>Milyonlarca kullanıcı, her zaman kullanıcı id'si ile okunur.</td></tr>
+    <tr><td>Oturumlar ve login token'ları</td><td>Key: session id. Değer: kullanıcı, son sayfa, süre sonu.</td><td>Her istekte okunan, çok sayıda kısa ömürlü değer.</td></tr>
+    <tr><td>Oyun durumu ve oyuncu envanteri</td><td>Key: oyuncu, sonra nesne. Değer: nesne.</td><td>Bir oyunun ilk gününde büyük patlamalar, her oyuncu için düşük gecikme.</td></tr>
+    <tr><td>Her cihazın son durumu (IoT)</td><td>Key: cihaz id'si. Değer: son okuma.</td><td>Milyonlarca cihaz paralel yazar, her biri kendi key'ine.</td></tr>
+    <tr><td>Ödemeler ve API'lar için idempotency key'leri</td><td>Key: request id. Değer: sonuç.</td><td>Bir tekrar deneme bir kartı iki kez çekmemeli: sadece key yeniyse yaz.</td></tr>
+    <tr><td>Bilet ve koltuk tutmaları</td><td>Key: etkinlik, sonra koltuk. Değer: tutan kişi.</td><td>İki kişi asla bir koltuğu tutmamalı ve eski tutmalar gitmeli.</td></tr>
+    <tr><td>Rate limit'ler ve sayaçlar</td><td>Key: kullanıcı ve dakika. Değer: bir sayaç.</td><td>İstek başına tek bir atomik artırma.</td></tr>
+    <tr><td>Dosyaların metadata'sı</td><td>Key: sahip, sonra dosya. Değer: tag'ler, durum, konum.</td><td>Bütün dosyaların listesi olmadan bir kullanıcının dosyalarını bulmak.</td></tr>
+    <tr><td>Reklam ve öneri sorguları</td><td>Key: kullanıcı ya da segment. Değer: önceden hesaplanmış sonuçlar.</td><td>Katı bir zaman sınırıyla çok yüksek okuma hızları.</td></tr>
   </tbody>
 </table>
 
-<h3>DynamoDB'den uzağı işaret eden sinyaller</h3>
+<h2 id="away" data-short="Uzaklaştıran sinyaller"><span class="sec">M3</span>Key-value database'ten uzaklaştıran sinyaller</h2>
 <table class="data">
-  <thead><tr><th>İş yükündeki sinyal</th><th>DynamoDB neden zayıf kalır</th><th>Daha iyi seçim</th></tr></thead>
+  <thead><tr><th>İş yükündeki sinyal</th><th>Key-value neden zayıf bir seçim</th><th>Daha iyi seçim</th></tr></thead>
   <tbody>
-    <tr><td>Her ay yeni sorular, her column üzerinde JOIN ile</td><td>Her yeni soru yeni bir key tasarımı ya da yeni bir index ister. JOIN yoktur.</td><td><a href="/e2etutorial/aurora">Aurora PostgreSQL</a></td></tr>
-    <tr><td>Birçok table arasında kurallar (foreign key, CHECK)</td><td>DynamoDB koşulları tek bir istekteki item'lar üzerinde kontrol eder. Foreign key'i yoktur.</td><td><a href="/e2etutorial/aurora">Aurora PostgreSQL</a></td></tr>
-    <tr><td>Yılların verisini tarayan ve gruplayan raporlar</td><td>Bir Scan her item'ı okur ve faturalar. GROUP BY yoktur.</td><td><a href="/e2etutorial/redshift">Redshift</a> (DynamoDB'nin Redshift ile bir zero-ETL integration'ı var)</td></tr>
-    <tr><td>Kelimeler, yazım hataları ve relevance ile arama</td><td>DynamoDB değerleri bütün olarak karşılaştırır. Metni sıralamaz.</td><td><a href="/e2etutorial/opensearch">OpenSearch</a> (DynamoDB'nin OpenSearch Service ile bir zero-ETL integration'ı var)</td></tr>
-    <tr><td>Bir milisaniyenin altında cevaplar</td><td>DynamoDB tek haneli milisaniyelerde cevap verir.</td><td>DynamoDB'nin önünde DAX ya da <a href="/e2etutorial/elasticache">ElastiCache</a></td></tr>
-    <tr><td>400 KB'tan büyük item'lar (görseller, dokümanlar)</td><td>En büyük item boyutu 400 KB'tır
-        (<a href="https://aws.amazon.com/dynamodb/faqs/">DynamoDB FAQ</a>).</td><td>Dosya için <a href="/e2etutorial/s3">S3</a>. DynamoDB S3 key'ini ve metadata'yı tutar.</td></tr>
-    <tr><td>İlişkiler üzerinde yollar ("arkadaşların arkadaşları")</td><td>Her adım bir istek daha demektir ve sonuçları uygulama birleştirmek zorundadır.</td><td><a href="/e2etutorial/neptune">Neptune</a></td></tr>
+    <tr><td>Her ay her kolonda JOIN'li yeni sorular</td><td>Her yeni soru yeni bir key tasarımı ya da yeni bir index ister. JOIN yok.</td><td><a href="/e2etutorial/aurora?lang=tr">İlişkisel database (Aurora)</a></td></tr>
+    <tr><td>Birçok table arasında kurallar (foreign key, CHECK)</td><td>Koşullar tek bir isteğin değerleri üzerinde çalışır. Foreign key yok.</td><td><a href="/e2etutorial/aurora?lang=tr">İlişkisel database (Aurora)</a></td></tr>
+    <tr><td>Yılların verisini tarayıp gruplayan raporlar</td><td>Tam okuma her değere dokunur. GROUP BY yok.</td><td><a href="/e2etutorial/redshift?lang=tr">Data warehouse (Redshift)</a></td></tr>
+    <tr><td>Kelimelerle, yazım hatalarıyla ve relevance ile arama</td><td>Bir key-value database bütün key'leri karşılaştırır. Metni sıralamaz.</td><td><a href="/e2etutorial/opensearch?lang=tr">Search engine (OpenSearch)</a></td></tr>
+    <tr><td>Büyük dosyalar (görseller, dokümanlar)</td><td>Değerlerin boyut sınırı var (DynamoDB'de 400 KB).</td><td>Dosya için <a href="/e2etutorial/s3?lang=tr">object storage (S3)</a>, metadata için key-value store</td></tr>
+    <tr><td>İlişkiler üzerinden yollar ("arkadaşların arkadaşları")</td><td>Her hop bir istek daha demektir ve sonuçları uygulama birleştirmelidir.</td><td><a href="/e2etutorial/neptune?lang=tr">Graph database (Neptune)</a></td></tr>
   </tbody>
 </table>
 
-<h3>Bir mimarın sorduğu sorular, bu sırayla</h3>
+<h2 id="questions" data-short="Mimarın soruları"><span class="sec">M4</span>Bir mimarın sorduğu sorular, bu sırayla</h2>
 <ol>
-  <li><b>Her access pattern'i şimdi listeleyebiliyor musun?</b> Evetse DynamoDB her birine bir key ile hizmet edebilir. Sorular açıksa relational bir database'i tercih et.</li>
-  <li><b>Uygulama her istekte hangi değeri biliyor?</b> O değer partition key adayıdır.</li>
-  <li><b>Partition key'in çok sayıda farklı değeri var mı ve eşit kullanılıyor mu?</b> Çok yoğun tek bir değer hot partition'a dönüşebilir.</li>
-  <li><b>Sonuçlar hangi sırada olmalı?</b> Bir Query'nin sırası sort key'den gelir.</li>
-  <li><b>Hangi kurallar geçerli olmalı?</b> Tek item: bir condition. En fazla 100 item: bir transaction. Table'lar arası kurallar: relational bir database.</li>
-  <li><b>Ne kadar hızlı ve ne sıklıkla?</b> Her hızda tek haneli milisaniyeler normal durumdur. Mikrosaniyeler DAX ya da bir cache ister.</li>
-  <li><b>Kaç Region yazıyor?</b> Tek Region normaldir. Yazan birkaç Region global tables ister.</li>
-  <li><b>Veriye başka kim ihtiyaç duyuyor?</b> Analitik, arama ve diğer servisler veriyi Scan'lerle değil, Streams ya da zero-ETL ile alır.</li>
+  <li><b>Bütün access pattern'leri şimdi listeleyebilir misin?</b> Evet ise bir key-value database her birini bir key ile karşılayabilir. Sorular açıksa ilişkisel bir database'i tercih et.</li>
+  <li><b>Uygulama her istekte hangi değeri biliyor?</b> O değer partition key için bir adaydır.</li>
+  <li><b>Partition key'in eşit kullanılan çok sayıda farklı değeri var mı?</b> Tek bir yoğun değer hot partition olabilir.</li>
+  <li><b>Sonuçlar hangi sırada olmalı?</b> Sıra key'in sıralama parçasından gelir.</li>
+  <li><b>Hangi kurallar geçerli olmalı?</b> Tek değer: bir koşul. Birkaç değer: ürün destekliyorsa bir transaction. Table'lar arası kurallar: ilişkisel bir database.</li>
+  <li><b>Veri bir arızadan sağ çıkmalı mı, yoksa bir kopya mı?</b> Kalıcı bir kayıt kalıcı bir depo ister. Bir kopya bellekte yaşayabilir.</li>
+  <li><b>Ne kadar hızlı?</b> Mikrosaniyeler bellek içi bir depoyu işaret eder. Her ölçekte tek haneli milisaniye kalıcı bir key-value servisini işaret eder.</li>
+  <li><b>Onu kim işletecek, ekip ne biliyor?</b> Serverless mı node'lar mı, yeni bir API mı bilinen bir API mı.</li>
 </ol>
 
-<h3>AWS'de DynamoDB ve akrabaları</h3>
+<h2 id="aws" data-short="AWS'te key-value"><span class="sec">M5</span>AWS'te key-value ve ne zaman DynamoDB</h2>
+<p>AWS'te veriyi key ile saklayan birkaç servis var. Verinin nerede yaşadığında (bellek ya da disk), dayanıklılıkta ve API'da farklılaşırlar:</p>
 <table class="data">
-  <thead><tr><th>Seçenek</th><th>Nedir</th><th>Ne zaman seçilir</th></tr></thead>
+  <thead><tr><th>Servis</th><th>Nedir</th><th>Ne zaman seç</th></tr></thead>
   <tbody>
-    <tr><td>DynamoDB, on-demand mod</td><td>Her okuma ve yazma isteği için ödersin. Kapasite planı yoktur.</td><td>Trafik yeni, dalgalı ya da tahmin etmesi zor olduğunda.</td></tr>
-    <tr><td>DynamoDB, provisioned mod</td><td>Saniye başına okuma ve yazma kapasitesini sen belirlersin, istersen auto scaling ile.</td><td>Trafik sabit ve öngörülebilir olduğunda ve en önemli şey maliyet olduğunda.</td></tr>
-    <tr><td>DynamoDB Accelerator (DAX)</td><td>DynamoDB'nin önünde, aynı API'yi kullanan bellek içi bir cache.</td><td>Sıcak item'lar çok sık okunuyor ve mikrosaniye okumalar gerekiyorsa.</td></tr>
-    <tr><td>Global tables</td><td>"Tam yönetilen, multi-Region ve multi-active bir database özelliği". Her replica okuma ve yazmalara cevap verebilir
-        (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GlobalTables.html">Global tables</a>).</td><td>Birkaç Region'da kullanıcılar varsa ya da Region'lar arası iş sürekliliği gerekiyorsa.</td></tr>
-    <tr><td>Zero-ETL integration'ları</td><td>Bir table'ın Redshift'e ve OpenSearch Service'e yönetilen kopyaları. Redshift kopyası "her 15-30 dakikada" güncellenir
-        (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/RedshiftforDynamoDB-zero-etl.html">DynamoDB zero-ETL with Redshift</a>).</td><td>Analistlerin ya da bir arama özelliğinin veriye ihtiyacı varsa ve table Scan görmemeliyse.</td></tr>
-    <tr><td><a href="/e2etutorial/keyspaces">Amazon Keyspaces</a></td><td>Serverless, Cassandra uyumlu, wide-column bir database.</td><td>Ekip zaten Apache Cassandra ve CQL kullanıyorsa.</td></tr>
+    <tr><td><b>Amazon DynamoDB</b></td><td>Serverless bir key-value ve document database. Kalıcı, her ölçekte tek haneli milisaniye, istek başına ödeme.</td><td>Veri resmi kayıt, trafik büyük ya da dalgalı ve ekip sunucu istemiyor.</td></tr>
+    <tr><td><a href="/e2etutorial/elasticache?lang=tr">Amazon ElastiCache (Valkey)</a></td><td>Zengin veri yapılarına sahip bellek içi bir key-value store. Mikrosaniyeler.</td><td>En önemli şey hız ve veri bir cache ya da yeniden kurulabilir: oturumlar, sıralamalar, sayaçlar.</td></tr>
+    <tr><td>Amazon MemoryDB</td><td>Kalıcı, çoklu AZ'li bir log'a sahip, Valkey uyumlu bellek içi bir database.</td><td>Belleğin hızına ve bir database'in dayanıklılığına birlikte ihtiyacın var.</td></tr>
+    <tr><td><a href="/e2etutorial/keyspaces?lang=tr">Amazon Keyspaces</a></td><td>Serverless, Cassandra uyumlu bir wide-column database.</td><td>Ekip zaten Apache Cassandra ve CQL kullanıyor.</td></tr>
+    <tr><td>DynamoDB Accelerator (DAX)</td><td>DynamoDB'nin önünde aynı API'ı kullanan bellek içi bir cache.</td><td>Sıcak DynamoDB item'ları çok sık okunuyor ve mikrosaniye okumalar gerekiyor.</td></tr>
+  </tbody>
+</table>
+<p>DynamoDB'nin içinde birkaç seçenek bir tasarımı değiştirir:</p>
+<table class="data">
+  <thead><tr><th>Seçenek</th><th>Ne yapar</th><th>Ne zaman seç</th></tr></thead>
+  <tbody>
+    <tr><td>On-demand mod</td><td>Her okuma ve yazma isteği için ödersin. Kapasite planı yok.</td><td>Trafik yeni, dalgalı ya da tahmini zor.</td></tr>
+    <tr><td>Provisioned mod</td><td>Saniye başına okuma ve yazma kapasitesini, istersen auto scaling ile, sen belirlersin.</td><td>Trafik sabit ve tahmin edilebilir, en önemli şey maliyet.</td></tr>
+    <tr><td>Global tables</td><td>"A fully managed, multi-Region, and multi-active database feature", yani tam yönetilen, çok bölgeli ve çok aktif bir özellik. Her replica okuma ve yazma alabilir
+        (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GlobalTables.html">Global tables</a>).</td><td>Birkaç bölgede kullanıcılar ya da bölgeler arası iş sürekliliği.</td></tr>
+    <tr><td>Zero-ETL entegrasyonları</td><td>Bir table'ın Redshift'e ve OpenSearch Service'e yönetilen kopyaları. Redshift kopyası "every 15-30 minutes", yani 15-30 dakikada bir güncellenir
+        (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/RedshiftforDynamoDB-zero-etl.html">DynamoDB zero-ETL with Redshift</a>).</td><td>Analistlerin ya da bir arama özelliğinin veriye ihtiyacı var ve table tam okumalar görmemeli.</td></tr>
   </tbody>
 </table>
 
-<h3>Lale Market'te DynamoDB'nin yeri</h3>
+<h2 id="lalemarket-arch" data-short="Lale Market'teki yeri"><span class="sec">M6</span>Lale Market'te DynamoDB'nin yeri</h2>
 <p>Lale Market her alışveriş sepetini <code>dbws-cart</code> table'ında tutar. Ürün sayfası item ekler. Sepet sayfası onları okur. Checkout sepeti strongly consistent okur
    ve siparişi Aurora yazar. Commit'ten sonra tarayıcı DynamoDB'deki sepeti boşaltır.
-   Sepet iyi bir uyumdur. Her istek ziyaretçi id'sini bilir ve sepetler birbirinden bağımsızdır. 24 saat sonra kaybolan bir sepetin bir maliyeti yoktur.
-   Bu mağazada sipariş DynamoDB'ye iyi uymaz, çünkü stok, siparişler ve satırlar üzerinde birlikte kurallar ister. Bu Aurora'nın işidir.</p>
+   Sepet iyi bir uyumdur. Her istek ziyaretçi id'sini bilir ve sepetler birbirinden bağımsızdır. 24 saat sonra kaybolan bir sepetin maliyeti yoktur.
+   Sipariş bu mağazada bir key-value database için iyi bir uyum değildir, çünkü stok, sipariş ve satırlar üzerinde birlikte kurallar ister. Bu Aurora'nın işidir.</p>
 
-<h3>Simülasyon: bırak gereksinimler seçsin</h3>
-<p>Her iş yükünde beş aday başlar. Her gereksinim, onu karşılayamayan adayları eler. Oynat'a basmadan önce kazananı tahmin et.</p>
-{{ k.sim("decide_cart", "İş yükü 1: indirim gününde alışveriş sepetleri") }}
-{{ k.sim("decide_report", "İş yükü 2: her ay yeni soruları olan bir finans raporu") }}
-{{ k.sim("decide_holds", "İş yükü 3: bir konser için koltuk tutmaları") }}
-<p>İki not. İş yükü 1'de Aurora Serverless v2 de ölçeklenir, ama kapasiteyi istek başına değil saat başına ödersin. İş yükü 3'te Aurora da eski tutmalar için bir temizlik işiyle bu işi yapabilirdi.
-   Simülasyon bir adayı karşılayamadığı ilk gereksinimde eler. Gerçek bir kararda her "neredeyse"nin ne kadar iş getireceğini de yaz.</p>
+<h2 id="decide" data-short="Karar simülasyonları"><span class="sec">M7</span>Karar simülasyonları: gereksinimler seçsin</h2>
+<p>Her simülasyon bir iş yükünü ve beş aday servisi anlatır. Sonra beş gereksinimi teker teker <b>her</b> aday için kontrol eder.
+   Evet 2 puan, kısmen 1, hayır 0 verir. İki gereksinim <b>zorunludur</b>. Zorunlu bir gereksinimde 0 alan aday diskalifiye olur, ama tam resmi görebilmen için table'da kalır.
+   Sonunda kazananı, ikinciyi ve aradaki farkın nedenini görürsün. Oynat'a basmadan önce kazananı tahmin et.</p>
+<p>İlk iki iş yükünün net bir cevabı var. Son üçü <b>yakın yarış</b>: iki güçlü aday ve karar veren tek bir gereksinim. Gerçek mimari kararların çoğu böyle görünür.</p>
+{{ k.sim("decide_win", "İş yükü 1: \"Siparişim nerede?\" ekranı (net bir kazanma)") }}
+{{ k.sim("decide_lose", "İş yükü 2: 24 ay üzerinde bir finans raporu (net bir kaybetme)") }}
+{{ k.sim("race_session", "Yakın yarış 1: login oturumları, DynamoDB mi ElastiCache mi?") }}
+{{ k.sim("race_activity", "Yakın yarış 2: aktivite geçmişi, DynamoDB mi Keyspaces mi?") }}
+{{ k.sim("race_cart", "Yakın yarış 3: alışveriş sepeti, DynamoDB mi Aurora mı?") }}
+<p>Her yakın yarışın son satırına bak: "Bir koşul değişseydi". İyi bir mimar bu satırı karar kaydına yazar. Koşul daha sonra değişirse ekip kararın yeniden kontrol edilmesi gerektiğini bilir.</p>
 
-{{ k.quiz("ddb-a1", "Bir ödeme API'si, bir istemci bir isteği yeniden denediğinde bir kartı asla iki kez çekmemeli. Her isteğin benzersiz bir istek id'si var. En iyi ne uyar?",
-   ["İstek id'si üzerinde attribute_not_exists ile bir DynamoDB PutItem", "Her istek id'si için bir row'lu bir Redshift table'ı", "Bütün istek id'lerinin bir ElastiCache sorted set'i", "Her çekimden önce payments table'ının bir Scan'i"],
-   0, "Koşullu PutItem istek id'sini tek adımda, sadece yeniyse yazar. Aynı id'li bir yeniden deneme condition'da başarısız olur, böylece program zaten çektiğini bilir.") }}
-{{ k.quiz("ddb-a2", "Bir ürün yöneticisi her hafta yeni bir rapor istiyor: bölgeye, kampanyaya ve cihaz türüne göre satışlar. DynamoDB bu sorular için iyi bir yer mi?",
-   ["Evet, filtreli bir Scan her raporu cevaplar", "Hayır, gruplamalı açık sorular SQL'e daha iyi uyar", "Evet, her rapor yeni bir partition key alırsa", "Hayır, çünkü DynamoDB sayı saklayamaz"],
-   1, "Sorular her hafta değişiyor ve gruplama istiyor. Onları Redshift'e (örneğin DynamoDB'den zero-ETL ile) ya da relational bir database'e koy.") }}
-{{ k.quiz("ddb-a3", "Bir oyunun 2 milyon oyuncusu var. Her istek bir oyuncunun durumunu player_id ile okuyor ya da yazıyor. DynamoDB'yi burada iyi bir uyum yapan nedir?",
-   ["player_id'nin çok değeri var, yük partition'lara dağılır", "DynamoDB oyuncu table'ını eşya table'ıyla hızla join eder", "DynamoDB bütün table'ı tek bir sunucunun belleğinde tutar", "On-demand modda bütün oyuncuların bir Scan'i bedavadır"],
-   0, "Her istek tek bir key bilir ve key'ler çok sayıda ve eşit kullanılıyor. DynamoDB onları partition'lara dağıtır, böylece her istek hızlı kalır.") }}
+{{ k.quiz("ddb-a1", "Bir ödeme API'ı, bir client isteği tekrar denediğinde bir kartı asla iki kez çekmemeli. Her isteğin benzersiz bir request id'si var. En iyi ne oturur?",
+   ["Request id üzerinde attribute_not_exists ile bir DynamoDB PutItem", "Her request id için bir row'lu bir Redshift table'ı", "Bütün request id'lerin bir ElastiCache sorted set'i", "Her çekimden önce ödemeler table'ının tamamının okunması"],
+   0, "Koşullu PutItem request id'yi sadece yeniyse, tek adımda yazar. Aynı id ile tekrar deneme koşulu geçemez; böylece program zaten çektiğini bilir.") }}
+{{ k.quiz("ddb-a2", "Bir ürün yöneticisi her hafta yeni bir rapor istiyor: bölgeye, kampanyaya ve cihaz tipine göre satışlar. Bu sorular için bir key-value database iyi bir yer mi?",
+   ["Evet, filtreli tam bir okuma her raporu cevaplar", "Hayır, gruplamalı açık sorular SQL'e daha iyi uyar", "Evet, her rapor yeni bir partition key alırsa", "Hayır, çünkü key-value database'ler sayı saklayamaz"],
+   1, "Sorular her hafta değişir ve gruplama ister. Onları Redshift'e (örneğin DynamoDB'den zero-ETL ile) ya da ilişkisel bir database'e koy.") }}
+{{ k.quiz("ddb-a3", "Bir web mağazasının oturumları bir milisaniyenin altında okunmalı ve kaybolan bir oturum sadece yeni bir login demek. Hangi AWS servisi kazanır ve hangi koşul cevabı değiştirir?",
+   ["ElastiCache. Kaybolan bir oturum kabul edilemez olsaydı DynamoDB kazanırdı.", "DynamoDB. Trafik iki katına çıksaydı ElastiCache kazanırdı.", "Redshift. Oturumlar daha büyük olsaydı S3 kazanırdı.", "Neptune. Kullanıcıların arkadaşları olsaydı Aurora kazanırdı."],
+   0, "Hız ve tam süre sonu bellek içi depoyu öne çıkarır. Kararı DynamoDB'ye taşıyacak koşul dayanıklılıktır.") }}
 
-<div class="part"><b>Bölüm 1</b><h2 id="part1" data-short="BÖLÜM 1: Key-value tasarımı">Key-value storage ve partition'lar: fikir</h2>
-<p>Veriyi sadece key ile bulan bir database her boyutta nasıl hızlı kalabilir.</p></div>
+<div class="part"><b>Bölüm B</b><h2 id="partB" data-short="Bölüm B: İleri">İleri: pratikte DynamoDB</h2>
+<p>Bölüm A'daki fikirlerin DynamoDB'deki isimleri, okuma ve yazma işlemleri, key tasarımı ve ek özellikler.</p></div>
 
-<h2 id="why" data-short="Neden key-value?"><span class="sec">02</span>Neden bir key-value database? Vestiyer</h2>
-<p>Bir tiyatronun 5.000 askılı bir vestiyeri var. Paltonu bıraktığında numaralı bir bilet alırsın. Oyunun sonunda 5.000 kişi aynı anda geri gelir.
-   Bilet varsa görevli doğrudan bir askıya yürür. Süre 12 numaralı askı için de 4.812 numaralı askı için de aynıdır.
-   Bilet yoksa ("kırmızı atkılı mavi bir palto") görevli her askıya bakmak zorundadır. Bu uzun sürer ve kuyruk büyür.</p>
-{% call k.callout("analogy", "Analoji") %}
-<p>Bilet numarası key'dir. Askı, verinin yaşadığı yerdir. Key-value bir database bir vestiyerdir: bileti getirdiğinde çok hızlıdır,
-   sadece paltoyu tarif ettiğinde yavaştır. Büyük bir tiyatro daha fazla görevli ekler ve askıları odalara böler. İşte bu bir partition'dır.</p>
-{% endcall %}
-<p>Relational bir database (bkz. <a href="/e2etutorial/aurora">Aurora tutorial</a>) SQL ile her soruyu cevaplayabilir. Bedeli şudur: bütün yazmaları tek bir sunucu yapar
-   ve planner her yeni sorunun nasıl cevaplanacağına karar vermek zorundadır. Key-value bir database farklı bir takas yapar. Sadece key ile sorulan soruları cevaplar.
-   Karşılığında veriyi birçok makineye bölebilir ve her makine kendi payını tek başına cevaplar. Bu yüzden tek bir isteğin hızı table'ın boyutuna bağlı değildir.</p>
-
-<h2 id="model" data-short="Item ve key'ler"><span class="sec">03</span>Model: item'lar, attribute'lar ve primary key</h2>
-<p>Bir DynamoDB table'ı {{ k.term("item", "item") }}'lar tutar. Bir item bir attribute kümesidir: her biri bir ad ve bir değer, tek bir JSON nesnesi gibi.
-   Bir table'daki iki item'ın farklı attribute'ları olabilir. Her item'da sadece {{ k.term("primary key") }} olmak zorundadır.</p>
-{{ k.fig("dynamodb-table.png", "item 101'de Phone, item 102'de Address, item 103'te FavoriteColor ve Address var. Her item'da sadece primary key PersonID bulunuyor. Table'ın diğer attribute'lar için bir schema'sı yok.") }}
-<p>Primary key'in bir ya da iki parçası vardır:</p>
-<ul>
-  <li>{{ k.term("partition key") }} (pk) zorunludur. DynamoDB onun değerini, item'ın storage partition'ını seçmek için kullanır (bölüm 04).</li>
-  <li>{{ k.term("sort key") }} (sk) isteğe bağlıdır. DynamoDB aynı partition key'e sahip item'ları sort key sırasıyla birlikte tutar.
-      Aynı partition key'e sahip bütün item'lar bir {{ k.term("item collection") }} oluşturur.</li>
-</ul>
-<p>Bu, Lale Market table'ının gerçek tanımıdır (<code>cloudformation/workshop.yaml</code> dosyasından):</p>
+<h2 id="items" data-short="Item'lar ve table"><span class="sec">B1</span>DynamoDB'de item'lar, attribute'lar ve primary key</h2>
+<p>Bir DynamoDB table'ı {{ k.term("item", "item") }}'lar tutar. Bir item bir attribute kümesidir: her biri bir isim ve bir değer, tek bir JSON nesnesi gibi.
+   Bir table'daki iki item farklı attribute'lara sahip olabilir. Her item'da sadece {{ k.term("primary key") }} bulunmak zorundadır.</p>
+{{ k.fig("dynamodb-table.png", "item 101'de Phone, item 102'de Address, item 103'te FavoriteColor ve Address var. Her item'da sadece PersonID primary key'i var. Table'ın diğer attribute'lar için bir schema'sı yok.") }}
+<p>A2'deki key'in iki parçası DynamoDB'de şu isimleri taşır: {{ k.term("partition key") }} ve {{ k.term("sort key") }}. Aynı partition key'e sahip bütün item'lar bir {{ k.term("item collection") }} oluşturur.
+   Lale Market table'ının gerçek tanımı budur (<code>cloudformation/workshop.yaml</code> içinden):</p>
 {% call k.sql("T1", "Sepet table'ı") %}
 <pre><code>CartTable:
   Type: AWS::DynamoDB::Table
@@ -173,65 +241,26 @@
       Enabled: true</code></pre>
 <table class="clause">
   <tr><td>TableName: dbws-cart</td><td>Table'ın adı. İstekler bu adı kullanır.</td></tr>
-  <tr><td>BillingMode: PAY_PER_REQUEST</td><td>On-demand mod. Her okuma ve yazma için ödersin. Önceden bir kapasite belirlemezsin.</td></tr>
-  <tr><td>AttributeDefinitions: pk S, sk S</td><td>Sadece key attribute'larının type'ları. <code>S</code> string demektir. Diğer attribute'ların tanıma ihtiyacı yoktur, çünkü DynamoDB'nin onlar için bir schema'sı yoktur.</td></tr>
+  <tr><td>BillingMode: PAY_PER_REQUEST</td><td>On-demand mod. Her okuma ve yazma için ödersin. Önceden kapasite belirlemezsin.</td></tr>
+  <tr><td>AttributeDefinitions: pk S, sk S</td><td>Sadece key attribute'larının tipleri. <code>S</code> string demektir. Diğer attribute'ların tanıma ihtiyacı yok, çünkü DynamoDB'nin onlar için schema'sı yok.</td></tr>
   <tr><td>KeySchema: pk HASH</td><td><code>pk</code> partition key'dir. HASH kelimesi, DynamoDB'nin item'ı yerleştirmek için bu değerin bir hash'ini kullandığını söyler.</td></tr>
   <tr><td>KeySchema: sk RANGE</td><td><code>sk</code> sort key'dir. RANGE kelimesi, DynamoDB'nin bir partition key'in item'larını bu değerin sırasıyla tuttuğunu söyler. Böylece bir istek bir aralık okuyabilir.</td></tr>
-  <tr><td>PointInTimeRecoveryEnabled: true</td><td>DynamoDB sürekli backup tutar, böylece table'ı bir zaman noktasına geri yükleyebilirsin.</td></tr>
-  <tr><td>TimeToLiveSpecification: expires_at</td><td><code>expires_at</code> değeri (saniye cinsinden bir Unix zamanı) geçmişte kalan bir item'ın süresi dolar. DynamoDB onu daha sonra arka planda siler (bölüm 08).</td></tr>
+  <tr><td>PointInTimeRecoveryEnabled: true</td><td>DynamoDB sürekli yedek tutar, böylece table'ı bir zaman noktasına geri getirebilirsin.</td></tr>
+  <tr><td>TimeToLiveSpecification: expires_at</td><td><code>expires_at</code>'i (saniye cinsinden bir Unix zamanı) geçmişte kalan bir item'ın süresi dolar. DynamoDB onu daha sonra arka planda siler (B5).</td></tr>
 </table>
 {% endcall %}
+<p>Her DynamoDB partition'ı "is designed to deliver a maximum capacity of 3,000 read units per second and 1,000 write units per second", yani saniyede en fazla 3.000 okuma ve 1.000 yazma birimi için tasarlanmıştır
+   (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html">Partition key design</a>). A3'teki hot partition'ın arkasındaki sınır budur.</p>
+{{ k.fig("dynamodb-partition-key.png", "AnimalType'ı Dog olan item üçüncü partition'a gider, çünkü \"Dog\"un hash'i oraya işaret eder. Onu okumak için DynamoDB aynı hash'i hesaplar ve sadece o partition'ı okur.") }}
 
-<h3>Öğretim verisi ve identifier'ları</h3>
-<p>Bu, dört sepetli küçük bir sepet table'ı kopyasıdır. Ürün adları ve fiyatlar gerçek Lale Market kataloğundan gelir. Sepet id'leri kısa örneklerdir:
-   gerçek partition key <code>CART#</code> ve tam tarayıcı id'sidir.</p>
-{{ k.sample("cart", "dbws-cart: öğretim kopyası (4 sepette 8 item)", key=["pk", "sk"]) }}
-<p>Her identifier'ın sahipliğini bir cümle olarak oku:</p>
-<table class="data">
-  <thead><tr><th>Identifier</th><th>Sahibi kim</th><th>Kim ödünç alıyor</th></tr></thead>
-  <tbody>
-    <tr><td>Ziyaretçi id'si (örneğin <code>7f3a</code>)</td><td>Mağaza onun sahibidir. Tarayıcı onu <code>lm_visitor</code> cookie'sinde tutar ve her Engine App onu oradan okur.</td><td>Sepet table'ı onu partition key'inin içinde ödünç alır: <code>CART#7f3a</code>.</td></tr>
-    <tr><td>Primary key (<code>pk</code> + <code>sk</code>)</td><td>Sepet table'ı onun sahibidir. İki item aynı çifte sahip olamaz. Var olan bir çiftle yapılan bir yazma eski item'ın yerine geçer.</td><td>Kimse onu ödünç almaz. Diğer sistemler bir sepete ziyaretçi id'siyle atıfta bulunur.</td></tr>
-    <tr><td>Ürün id'si (örneğin <code>P0001</code>)</td><td>Katalog onun sahibidir. DocumentDB'de ve Aurora'da yaşar.</td><td>Sepet table'ı onu sort key'in içinde ödünç alır: <code>ITEM#P0001</code>. DynamoDB ürünün var olduğunu kontrol etmez. Bunu uygulama yapmak zorundadır.</td></tr>
-    <tr><td>Bir global secondary index'in key'i</td><td>Index kendi key'inin sahibidir, örneğin ürün id'si (bölüm 07).</td><td>Attribute değerlerini ana table'ın item'larından ödünç alır. DynamoDB onları senin için kopyalar.</td></tr>
-  </tbody>
-</table>
-<p><code>CART#</code> ve <code>ITEM#</code> önekleri bir gelenektir. Tek bir table birkaç tür item tutabilir ve önek türü gösterir.
-   Sepet sayfasının Load Simulation'ı aynı table'a <code>pk = SIM#...</code> olan item'lar yazar ve bunlar sepetlerle asla çakışmaz.</p>
-
-{{ k.quiz("ddb-q0", "Öğretim table'ına bak. Hangi istek tam olarak bir item döndürür?",
-   ["pk = CART#7f3a ve sk = ITEM#P0044 ile GetItem", "pk = CART#7f3a ile, sort key koşulu olmadan Query", "qty >= 2 filtresiyle Scan", "pk = CART#3c8d ile Query"],
-   0, "GetItem tam primary key'e ihtiyaç duyar ve bir çift bir item'ı adlandırır. CART#7f3a'nın Query'si üç item, CART#3c8d'nin Query'si iki item döndürür.") }}
-
-<h2 id="partitions" data-short="Partition ve hash"><span class="sec">04</span>Partition'lar: key ile bir arama neden hızlı kalır</h2>
-<p>DynamoDB bir table'ı birçok {{ k.term("partition") }}'a yayar. Partition, verinin kendi payına ve throughput'un kendi payına sahip bir storage birimidir.
-   Bir item'ı yerleştirmek için DynamoDB partition key'i bir hash fonksiyonuna verir. {{ k.term("hash function") }}, herhangi bir değeri bir sayıya çevirir ve aynı değer her zaman aynı sayıyı verir.
-   Sayı partition'ı seçer (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.Partitions.html">Partitions and data distribution</a>).</p>
-{{ k.fig("dynamodb-hash-table.png", "bir hash fonksiyonu bir adı (John Smith) bir slot numarasına (873) çevirir. John Smith'i tekrar bulmak için program aynı sayıyı hesaplar ve doğrudan o slot'a gider. DynamoDB bir partition key'den bir partition'a gitmek için aynı fikri kullanır.") }}
-{{ k.fig("dynamodb-partition-key.png", "AnimalType değeri Dog olan item üçüncü partition'a gider, çünkü \"Dog\"un hash'i oraya işaret eder. Onu okumak için DynamoDB aynı hash'i hesaplar ve sadece o partition'ı okur.") }}
-{% call k.predict("Öğretim table'ına bak. Üç partition ve dört sepet var. İki sepetin aynı partition'a düşmesi mümkün mü? Bu bir şeyi bozar mı?") %}
-<p>Evet, iki sepet aynı partition'a düşebilir. Hiçbir şey bozulmaz. Bir partition birçok item collection tutar. Partition'ın içinde her item collection birlikte ve sk'ye göre sıralı kalır.
-   Hash sadece bir key için işi hangi partition'ın yapacağına karar verir.</p>
-{% endcall %}
-{{ k.sim("hash", "Sekiz item, üç partition, bir hash") }}
-<p>Simülasyon küçük bir öğretim hash'i kullanır (karakter kodlarının toplamı, 3'e göre mod). DynamoDB kendi iç hash fonksiyonunu kullanır ve table büyüdükçe partition sayısı artar.
-   Fikir aynıdır: partition'a key tek başına karar verir, bu yüzden DynamoDB'nin başka hiçbir yere bakması gerekmez.</p>
-<p>Her partition'ın bir sınırı vardır. Her partition "saniyede en fazla 3.000 read unit ve saniyede 1.000 write unit kapasite verecek şekilde tasarlanmıştır"
-   (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html">Partition key design</a>).
-   Bu yüzden iyi bir partition key'in çok sayıda farklı değeri vardır. İstekler bunlara eşit dağılmalıdır. Trafiğin çoğunu tek bir değer alırsa, onun partition'ı sınıra ulaşır,
-   diğerleri ise boş bekler. Buna {{ k.term("hot partition") }} denir.</p>
-{{ k.quiz("ddb-q1", "Lale Market'in sepet trafiğini en iyi hangi partition key dağıtır?",
-   ["Ziyaretçinin şehri", "Ziyaretçinin tarayıcı id'si", "Sepetin tarihi", "Ürünün kategorisi"],
-   1, "Her ziyaretçinin farklı bir tarayıcı id'si vardır, bu yüzden trafik çok sayıda key değerine dağılır. Şehrin, tarihin ve kategorinin az değeri vardır ve bazı değerler çok yoğundur.") }}
-
-<h2 id="reads" data-short="GetItem, Query, Scan"><span class="sec">05</span>Okumalar: GetItem, Query ve Scan ve maliyetleri</h2>
-<p>DynamoDB'nin okumak için üç yolu vardır. Tek bir şeyde farklılaşırlar: istek key'in ne kadarını verir.</p>
+<h2 id="reads" data-short="GetItem, Query, Scan"><span class="sec">B2</span>Okumalar: GetItem, Query ve Scan, ve maliyetleri</h2>
+<p>DynamoDB'nin üç okuma yolu var. Tek bir konuda farklılaşırlar: istek key'in ne kadarını veriyor.</p>
 <table class="data">
   <thead><tr><th>İşlem</th><th>İstek ne verir</th><th>DynamoDB ne okur</th></tr></thead>
   <tbody>
-    <tr><td>GetItem</td><td>Tam primary key (pk ve sk)</td><td>Tam olarak bir item ya da hiçbir şey</td></tr>
-    <tr><td>Query</td><td>Partition key ve isteğe bağlı olarak sort key üzerinde bir koşul</td><td>Bir item collection'ı ya da onun bir aralığını, sort key sırasıyla</td></tr>
-    <tr><td>Scan</td><td>Hiç key</td><td>Table'ın her item'ını, sayfa sayfa</td></tr>
+    <tr><td>GetItem</td><td>Tam primary key (pk ve sk)</td><td>Tam olarak tek bir item ya da hiçbir şey</td></tr>
+    <tr><td>Query</td><td>Partition key ve isteğe bağlı olarak sort key üzerinde bir koşul</td><td>Tek bir item collection ya da onun bir aralığı, sort key sırasıyla</td></tr>
+    <tr><td>Scan</td><td>Hiç key yok</td><td>Table'ın her item'ı, sayfa sayfa</td></tr>
   </tbody>
 </table>
 {% call k.sql("Q1", "7f3a ziyaretçisinin sepetini göster") %}
@@ -241,37 +270,40 @@
     ReturnConsumedCapacity='TOTAL')</code></pre>
 <table class="clause">
   <tr><td>table.query(...)</td><td>Python için AWS SDK'nın (boto3) Query işlemi, <code>dbws-cart</code> table'ı üzerinde.</td></tr>
-  <tr><td>KeyConditionExpression=Key('pk').eq('CART#7f3a')</td><td>Partition key <code>CART#7f3a</code>'ya eşit olmalı. Bir Query her zaman tek bir partition key değeri adlandırmak zorundadır.</td></tr>
+  <tr><td>KeyConditionExpression=Key('pk').eq('CART#7f3a')</td><td>Partition key <code>CART#7f3a</code>'ya eşit olmalı. Bir Query her zaman tek bir partition key değeri belirtmelidir.</td></tr>
   <tr><td>ConsistentRead=True</td><td>Strongly consistent bir okuma: cevap, okumadan önce başarılı olan her yazmayı içerir. Varsayılan, eventually consistent bir okumadır.</td></tr>
-  <tr><td>ReturnConsumedCapacity='TOTAL'</td><td>DynamoDB'den bu isteğin kullandığı read unit'leri bildirmesini iste. Mağazanın Behind-the-scenes paneli bu sayıyı gösterir.</td></tr>
+  <tr><td>ReturnConsumedCapacity='TOTAL'</td><td>DynamoDB'den bu isteğin kullandığı okuma birimlerini bildirmesini iste. Mağazanın Behind-the-scenes paneli bu sayıyı gösterir.</td></tr>
 </table>
 {% endcall %}
 {% call k.sql("Q2", "İki ya da daha fazla adetli her sepet satırı (bir Scan)") %}
 <pre><code>table.scan(FilterExpression=Attr('qty').gte(2))</code></pre>
 <table class="clause">
-  <tr><td>table.scan(...)</td><td>Table'ı ilk item'dan son item'a kadar, sayfa sayfa (sayfa başına en fazla 1 MB) oku.</td></tr>
+  <tr><td>table.scan(...)</td><td>Table'ı ilk item'dan sonuncuya kadar sayfa sayfa oku (sayfa başına 1 MB'a kadar).</td></tr>
   <tr><td>FilterExpression=Attr('qty').gte(2)</td><td>Okumadan sonra sadece <code>qty &gt;= 2</code> olan item'ları tut. Filtre okumayı azaltmaz. DynamoDB'nin okuduğu her item için ödersin.</td></tr>
 </table>
 {% endcall %}
-<p>On-demand modda okumaların maliyet birimi {{ k.term("read request unit") }}'tir (RRU). Kurallar
+<p>Okumalar için maliyet birimi on-demand modda {{ k.term("read request unit") }}'tir (RRU). Kurallar
    (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/read-write-operations.html">Read and write operations</a>):</p>
 <ul>
-  <li>4 KB'a kadar strongly consistent bir okuma bir read unit tutar. 4 KB'a kadar eventually consistent bir okuma yarım read unit tutar.</li>
+  <li>4 KB'a kadar strongly consistent bir okuma bir okuma birimi tutar. 4 KB'a kadar eventually consistent bir okuma yarım birim tutar.</li>
   <li>Bir Query okuduğu bütün item'ların boyutlarını toplar ve toplamı bir sonraki 4 KB'a yuvarlar.</li>
-  <li>Bir Scan "döndürülen item'ların değil, değerlendirilen item'ların boyutunu dikkate alır".</li>
+  <li>Bir Scan "considers the size of the items that are evaluated, not the size of the items returned", yani döndürülen değil, değerlendirilen item'ların boyutunu sayar.</li>
 </ul>
-{% call k.predict("Öğretim table'ını kullan. CART#7f3a'nın Query'si kaç item okur? qty >= 2'li Scan kaç item okur ve kaç item döndürür?") %}
-<p>Query CART#7f3a'nın 3 item'ını okur ve 3 döndürür. Scan 8 item'ın hepsini okur ve qty değeri 2 ya da daha fazla olan 5 item'ı döndürür.
-   Buradaki bütün item'lar küçük, bu yüzden Query strongly consistent olduğunda 1 read unit tutar. Scan 5 için değil, 8 item için öder.</p>
+{% call k.predict("Öğretici table'ı kullan. CART#7f3a'nın Query'si kaç item okur? qty >= 2 olan Scan kaç item okur ve kaç item döndürür?") %}
+<p>Query CART#7f3a'nın 3 item'ını okur ve 3 döndürür. Scan 8 item'ın hepsini okur ve qty'si 2 ya da daha fazla olan 5 item'ı döndürür.
+   Buradaki bütün item'lar küçük, bu yüzden Query strongly consistent olduğunda 1 okuma birimi tutar. Scan 5 değil, 8 item için öder.</p>
 {% endcall %}
-{{ k.sim("queryscan", "Bir sepetin Query'si, sonra table'ın Scan'i") }}
-<p>Eventually consistent bir okuma son anın bir yazmasını kaçırabilir. Lale Market hızlı bir ön izleme için sepeti eventually consistent okur,
-   checkout'ta ise strongly consistent okur, çünkü sipariş son adedi içermelidir.</p>
+{{ k.sim("queryscan", "Bir sepeti Query et, sonra table'ı Scan et") }}
+<p>Eventually consistent bir okuma son anın bir yazmasını kaçırabilir. Lale Market sepeti hızlı bir ön izleme için eventually consistent,
+   checkout'ta ise strongly consistent okur, çünkü sipariş son miktarı içermelidir.</p>
+{{ k.quiz("ddb-q3", "Hangi işlem hem partition key'e hem sort key'e ihtiyaç duyar?",
+   ["Query", "Scan", "GetItem", "BatchWriteItem"],
+   2, "GetItem tam olarak tek bir item okur, bu yüzden tam primary key'e ihtiyaç duyar. Query sadece partition key'e ihtiyaç duyar.") }}
 
-<h2 id="writes" data-short="Condition, transaction"><span class="sec">06</span>Yazmalar: lock olmadan kurallar</h2>
-<p>DynamoDB'de "SELECT, sonra row lock altında UPDATE" yoktur. Bunun yerine bir yazma bir {{ k.term("condition expression") }} taşıyabilir.
-   DynamoDB koşulu güncel item üzerinde test eder ve tek adımda yazar. Koşul yanlışsa yazmaz ve <code>ConditionalCheckFailedException</code> döndürür.</p>
-<p>Lale Market'in kuralı şudur: bir sepette bir üründen en fazla 5 adet. Bu, ürün sayfasının gerçek isteğidir (<code>engines/dynamodb.py</code> dosyasından):</p>
+<h2 id="writes" data-short="Koşullar, transaction'lar"><span class="sec">B3</span>Yazmalar: kilitsiz kurallar</h2>
+<p>DynamoDB'de "SELECT, sonra bir row kilidi altında UPDATE" yoktur. Bunun yerine bir yazma bir {{ k.term("condition expression") }} taşıyabilir.
+   DynamoDB koşulu mevcut item üzerinde test eder ve tek adımda yazar. Koşul yanlışsa yazmaz ve <code>ConditionalCheckFailedException</code> döndürür.</p>
+<p>Lale Market'in kuralı şudur: bir sepette bir üründen en fazla 5 adet. Ürün sayfasının gerçek isteği budur (<code>engines/dynamodb.py</code> içinden):</p>
 {% call k.sql("Q3", "5 sınırıyla bir sepet satırına adet ekle") %}
 <pre><code>table.update_item(
     Key={'pk': 'CART#7f3a', 'sk': 'ITEM#P0001'},
@@ -280,107 +312,107 @@
     ReturnConsumedCapacity='TOTAL')</code></pre>
 <table class="clause">
   <tr><td>Key={'pk': ..., 'sk': ...}</td><td>Tek bir item'ın tam primary key'i. UpdateItem item'ı değiştirir ya da yoksa oluşturur.</td></tr>
-  <tr><td>ADD qty :q</td><td><code>:q</code> sayısını <code>qty</code>'nin güncel değerine ekle. İki istek aynı anda eklerse DynamoDB ikisini de uygular. Hiçbir ekleme kaybolmaz.</td></tr>
-  <tr><td>SET #n = :n, unit_price = :p, expires_at = :e</td><td>Adı, fiyatı ve yeni son kullanma zamanını yaz. <code>#n</code>, <code>name</code> attribute adının yerine geçer, çünkü "name" ayrılmış bir kelimedir.</td></tr>
-  <tr><td>ConditionExpression='attribute_not_exists(qty) OR qty &lt;= :max'</td><td>Sadece satır yeniyse ya da güncel adet yeni adetlere yer bırakıyorsa yaz. Uygulama <code>:max</code>'ı 5 eksi eklenecek adet olarak ayarlar.</td></tr>
+  <tr><td>ADD qty :q</td><td><code>:q</code> sayısını <code>qty</code>'nin mevcut değerine ekle. İki istek aynı anda eklerse DynamoDB ikisini de uygular. Hiçbir ekleme kaybolmaz.</td></tr>
+  <tr><td>SET #n = :n, unit_price = :p, expires_at = :e</td><td>İsmi, fiyatı ve yeni süre sonunu yaz. <code>#n</code>, <code>name</code> attribute adının yerine geçer, çünkü "name" ayrılmış bir kelimedir.</td></tr>
+  <tr><td>ConditionExpression='attribute_not_exists(qty) OR qty &lt;= :max'</td><td>Sadece satır yeniyse ya da mevcut miktar yeni adetlere yer bırakıyorsa yaz. Uygulama <code>:max</code>'ı 5 eksi eklenecek adet olarak belirler.</td></tr>
 </table>
 {% endcall %}
-{{ k.sim("condition", "qty = 2 olan bir sepet satırında iki istek") }}
-<p>Reddedilen koşullu bir yazma da write capacity tüketir, çünkü DynamoDB koşulu test etmek için item'ı okudu.</p>
-<p>Birkaç item üzerindeki bir kural için DynamoDB'de {{ k.term("TransactWriteItems") }} vardır. "En fazla 100 yazma işlemini tek bir ya-hep-ya-hiç işlemde" gruplar.
-   Item'lar aynı hesap ve Region'daki bir ya da daha fazla table'da olabilir
+{{ k.sim("condition", "qty = 2 olan bir sepet satırına iki istek") }}
+<p>Reddedilen koşullu bir yazma yine de yazma kapasitesi tüketir, çünkü DynamoDB koşulu test etmek için item'ı okudu.</p>
+<p>Birkaç item üzerindeki bir kural için DynamoDB'nin {{ k.term("TransactWriteItems") }} işlemi vardır. "Up to 100 write actions in a single all-or-nothing operation", yani 100'e kadar yazma eylemini tek bir ya hep ya hiç işleminde gruplar.
+   Item'lar aynı hesap ve bölgedeki bir ya da daha fazla table'da olabilir
    (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis.html">DynamoDB transactions</a>).
-   Örnek: bir koltuğu al ve rezervasyonu birlikte yaz; koltuk doluysa ikisi de başarısız olsun. Transactional bir yazma, 1 KB'a kadar her item için iki write unit tutar.</p>
-{{ k.quiz("ddb-q2", "Sepet neden UpdateItem'dan önce bir GetItem değil de bir ConditionExpression kullanıyor?",
-   ["Bir GetItem, UpdateItem'dan daha pahalıdır", "Test ve yazma tek adımda olur", "UpdateItem güncel değeri okuyamaz", "Bir condition okumayı strongly consistent yapar"],
-   1, "Bir GetItem ile sonraki UpdateItem arasında ikinci bir tarayıcı sekmesi adet ekleyebilir. DynamoDB koşulu yazma anında test eder.") }}
+   Örnek: bir koltuğu tut ve rezervasyonu birlikte yaz; koltuk doluysa ikisi de başarısız olsun. Transactional bir yazma, 1 KB'a kadar her item için iki yazma birimi tutar.</p>
+{{ k.quiz("ddb-q2", "Sepet neden UpdateItem'dan önce bir GetItem değil de bir ConditionExpression kullanır?",
+   ["GetItem, UpdateItem'dan daha pahalıdır", "Test ve yazma tek adımda olur", "UpdateItem mevcut değeri okuyamaz", "Bir koşul okumayı strongly consistent yapar"],
+   1, "Bir GetItem ile sonraki bir UpdateItem arasında ikinci bir tarayıcı sekmesi adet ekleyebilir. DynamoDB koşulu yazma anında test eder.") }}
 
-<h2 id="design" data-short="Key tasarımı ve GSI"><span class="sec">07</span>Key'i sorulardan tasarla</h2>
-<p>Relational bir database'de önce table'ları tasarlarsın, herhangi bir query'yi sonra yazarsın. DynamoDB'de önce access pattern'leri listelersin, sonra key'i
-   her pattern tek bir GetItem ya da tek bir Query olacak şekilde tasarlarsın. Bu, DynamoDB'nin ana becerisidir.</p>
+<h2 id="design" data-short="Key tasarımı ve GSI"><span class="sec">B4</span>Key'i sorulardan tasarla</h2>
+<p>İlişkisel bir database'te önce table'ları tasarlar, herhangi bir query'yi sonra yazarsın. DynamoDB'de önce access pattern'leri listeler, sonra key'i her pattern
+   bir GetItem ya da bir Query olacak şekilde tasarlarsın. Bu, DynamoDB'nin ana becerisidir.</p>
 <table class="data">
   <thead><tr><th>Sepetin access pattern'i</th><th>Uygulama ne biliyor</th><th>İşlem</th></tr></thead>
   <tbody>
     <tr><td>Sepetimi göster</td><td>tarayıcı id'm</td><td>Query pk = <code>CART#&lt;tarayıcı id&gt;</code></td></tr>
-    <tr><td>Bir ürünün adedini değiştir</td><td>tarayıcı id'si ve ürün id'si</td><td>pk ve sk = <code>ITEM#&lt;ürün id&gt;</code> ile UpdateItem</td></tr>
-    <tr><td>Bir ürünü sepetten sil</td><td>tarayıcı id'si ve ürün id'si</td><td>pk ve sk ile DeleteItem</td></tr>
-    <tr><td>Checkout'tan sonra sepeti boşalt</td><td>tarayıcı id'si</td><td>Query, sonra istek başına en fazla 25 silme ile BatchWriteItem</td></tr>
+    <tr><td>Bir ürünün miktarını değiştir</td><td>tarayıcı id'si ve ürün id'si</td><td>pk ve sk = <code>ITEM#&lt;ürün id&gt;</code> ile UpdateItem</td></tr>
+    <tr><td>Sepetten bir ürünü sil</td><td>tarayıcı id'si ve ürün id'si</td><td>pk ve sk ile DeleteItem</td></tr>
+    <tr><td>Checkout'tan sonra sepeti boşalt</td><td>tarayıcı id'si</td><td>Query, sonra istek başına 25'e kadar silmeli BatchWriteItem</td></tr>
   </tbody>
 </table>
 {{ k.fig("dynamodb-sort-key.png", "üç item'ın partition key'i Dog. DynamoDB onları tek bir partition'da ve Name sort key'inin sırasıyla tutar: Bowser, Fido, Rover. Lale Market sepeti de aynı şekilde çalışır: sepet başına bir partition key, ürüne göre sıralı item'lar.") }}
-<p>Şimdi yeni bir soru geliyor: "Hangi sepetlerde P0044 kitabı var?" Table'ın partition key'i sepettir, bu yüzden bu sorunun key'i yoktur.
-   Cevap bir {{ k.term("global secondary index") }}'tir (GSI). GSI, seçilmiş attribute'ların farklı bir key'le tutulan ikinci bir kopyasıdır. DynamoDB onu senin için güncel tutar
-   ve table'a yapılan her yazma index'e de yazar.</p>
+<p>Şimdi yeni bir soru geliyor: "P0044 kitabı hangi sepetlerde var?" Table'ın partition key'i sepettir, bu yüzden bu sorunun bir key'i yoktur.
+   Cevap bir {{ k.term("global secondary index") }}'tir (GSI). Bir GSI, seçilen attribute'ların farklı bir key'e sahip ikinci bir kopyasıdır. DynamoDB onu senin için güncel tutar
+   ve table'a her yazma index'e de yazar. Index kendi key'inin sahibidir. Attribute değerlerini ana table'ın item'larından ödünç alır.</p>
 {{ k.fig("dynamodb-gsi.png", "GameTitleIndex index'inin partition key'i GameTitle, sort key'i TopScore. \"Galaxy Invaders'ın en yüksek skorları\" artık tek bir Query. UserId ile key'lenmiş ana table'da aynı soru bir Scan ister.") }}
-{{ k.sim("gsi", "Hangi sepetlerde P0044 var? Ana table'ın Scan'i, sonra bir GSI'ın Query'si") }}
-<p>Lale Market sepet table'ının GSI'ı yoktur, çünkü mağaza bu soruyu hiç sormaz. Index'i sadece gerçek bir access pattern için ekle: her index her yazmaya yazma maliyeti ekler.</p>
+{{ k.sim("gsi", "P0044 hangi sepetlerde? Ana table'ın Scan'i, sonra bir GSI'ın Query'si") }}
+<p>Lale Market sepet table'ının GSI'ı yok, çünkü mağaza bu soruyu hiç sormaz. Sadece gerçek bir access pattern için index ekle: her index her yazmaya yazma maliyeti ekler.</p>
 
-<h2 id="ttl" data-short="TTL ve Streams"><span class="sec">08</span>Time to live ve Streams</h2>
-<p>Terk edilmiş bir sepet bir gün sonra işe yaramaz. Her sepet item'ının saniye cinsinden bir Unix zamanı olan <code>expires_at</code> attribute'u vardır. Table'da bu attribute üzerinde {{ k.term("TTL") }} açıktır.
-   DynamoDB "süresi dolan item'ları, son kullanma zamanlarından sonraki birkaç gün içinde, write throughput tüketmeden otomatik olarak siler"
+<h2 id="ttl" data-short="TTL ve Streams"><span class="sec">B5</span>Time to live ve Streams</h2>
+<p>Terk edilen bir sepet bir gün sonra işe yaramaz. Her sepet item'ının saniye cinsinden bir Unix zamanı olan <code>expires_at</code>'i vardır. Table'da bu attribute üzerinde {{ k.term("TTL") }} açıktır.
+   DynamoDB "automatically deletes expired items within a few days of their expiration time, without consuming write throughput", yani süresi dolan item'ları yazma kapasitesi harcamadan birkaç gün içinde siler
    (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html">Time to live</a>).
-   Silme olana kadar süresi dolmuş bir item bir okumada hâlâ görünebilir. Onu göstermemesi gereken bir program <code>expires_at</code> üzerinde bir filtre kullanır.</p>
-<p>{{ k.term("DynamoDB Streams") }} bir item'ın her değişikliğini kaydeder: ekleme, güncelleme ve silme. Her item için değişiklikler sıralarını korur.
-   Bir tüketici, örneğin bir AWS Lambda fonksiyonu, stream'i okur ve tepki verir. Bir e-posta gönderir, bir arama index'ini günceller ya da analitik için bir kopya yazar.
-   Bir DynamoDB table'ı event-driven bir tasarımın başlangıcı böyle olur. Lale Market Streams kullanmaz. Bir production mağazası, sepeti tarayıcıdan gelen bir çağrı yerine bir sipariş event'inden sonra boşaltmak için onları kullanabilirdi.</p>
+   Silinene kadar süresi dolmuş bir item bir okumada yine görünebilir. Onu göstermemesi gereken bir program <code>expires_at</code> üzerinde bir filtre kullanır. M7'deki oturum yarışının DynamoDB'ye tam süre sonu için sadece "kısmen" vermesinin nedeni budur.</p>
+<p>{{ k.term("DynamoDB Streams") }} bir item'ın her değişikliğini kaydeder: insert, update ve delete. Her item için değişiklikler sıralarını korur.
+   Örneğin bir AWS Lambda fonksiyonu gibi bir tüketici stream'i okur ve tepki verir. Bir e-posta gönderir, bir arama index'ini günceller ya da analitik için bir kopya yazar. Bir DynamoDB table'ı event-driven bir tasarımın başlangıcı böyle olur.
+   Lale Market Streams kullanmaz. Gerçek bir mağaza, tarayıcıdan gelen bir çağrı yerine bir sipariş event'inden sonra sepeti boşaltmak için onları kullanabilir.</p>
 
-<div class="part"><b>Bölüm 2</b><h2 id="part2" data-short="BÖLÜM 2: Amazon DynamoDB">Amazon DynamoDB: AWS servisi</h2>
-<p>AWS senin için neyi çalıştırır ve hangi seçenekler bir tasarımı değiştirir.</p></div>
+<div class="part"><b>Bölüm C</b><h2 id="partC" data-short="Bölüm C: AWS servisi">AWS servisi: DynamoDB'nin senin için çalıştırdıkları</h2>
+<p>Bir key-value store'u kendin çalıştırdığında ne yapman gerekir ve bunun yerine AWS ne yapar.</p></div>
 
-<h2 id="selfrun" data-short="Kendin çalıştırmak"><span class="sec">09</span>Bir key-value store'u kendin çalıştırdığında yapman gerekenler</h2>
-<p>Açık kaynak key-value ve wide-column database'leri (örneğin Apache Cassandra) aynı partition fikrini kullanır. Birini kendin çalıştırdığında şu işleri çözmek zorundasın:</p>
+<h2 id="selfrun" data-short="Kendin çalıştırırsan"><span class="sec">C1</span>Bir key-value store'u kendin çalıştırdığında ne yapmalısın</h2>
+<p>Açık kaynak key-value ve wide-column database'ler (örneğin Apache Cassandra) aynı partition fikrini kullanır. Birini kendin çalıştırdığında şu görevleri çözmelisin:</p>
 <ol>
   <li><b>Makineler.</b> Sunucuları seç, satın al ya da kirala ve her birine database'i kur.</li>
-  <li><b>Kopyalar.</b> Her partition'ı farklı veri merkezlerindeki birkaç makinede tut ve bir arızadan sonra yeni bir kopya oluştur.</li>
+  <li><b>Kopyalar.</b> Her partition'ı farklı veri merkezlerindeki birkaç makinede tut ve bir arızadan sonra yeni bir kopya kur.</li>
   <li><b>Büyüme.</b> Veri büyüdüğünde makine ekle ve partition'ları kesinti olmadan onlara taşı.</li>
-  <li><b>Kapasite.</b> Yılın zirvesine göre plan yap. Zirveyi bekleyen makineler bütün yıl para tutar.</li>
-  <li><b>Backup'lar ve yamalar.</b> Her node'u yedekle, bir geri yüklemeyi test et ve her node'un yazılımını güncelle.</li>
+  <li><b>Kapasite.</b> Yılın tepesi için plan yap. Tepeyi bekleyen makineler bütün yıl para tutar.</li>
+  <li><b>Yedekler ve patch'ler.</b> Her node'u yedekle, bir geri yüklemeyi test et ve her node'un yazılımını güncelle.</li>
 </ol>
 
-<h2 id="service" data-short="Servis olarak DynamoDB"><span class="sec">10</span>DynamoDB senin için ne yapar</h2>
-<p>DynamoDB serverless'tır. Bir table oluşturursun ve istek gönderirsin. Hiçbir sunucu görmezsin. DynamoDB her partition'ı birden fazla Availability Zone'da saklar,
+<h2 id="service" data-short="Servis olarak DynamoDB"><span class="sec">C2</span>DynamoDB senin için ne yapar</h2>
+<p>DynamoDB serverless'tır. Bir table oluşturur ve istek gönderirsin. Hiçbir zaman bir sunucu görmezsin. DynamoDB her partition'ı birden fazla Availability Zone'da saklar,
    veri ya da trafik büyüdüğünde partition ekler ve veriyi senin için taşır.</p>
 <table class="data">
-  <thead><tr><th>İş</th><th>Kendi key-value cluster'ın</th><th>Amazon DynamoDB</th></tr></thead>
+  <thead><tr><th>Görev</th><th>Kendi key-value cluster'ın</th><th>Amazon DynamoDB</th></tr></thead>
   <tbody>
     <tr><td>Makineler</td><td>Sen seçer ve işletirsin.</td><td>Görülecek makine yok. Table'lar ve isteklerle çalışırsın.</td></tr>
-    <tr><td>Birkaç veri merkezinde kopyalar</td><td>Replication'ı sen yapılandırır ve çalışır hâlde tutarsın.</td><td>DynamoDB kopyaları birkaç Availability Zone'da tutar.</td></tr>
-    <tr><td>Büyüme</td><td>Node ekler ve veri taşırsın.</td><td>DynamoDB partition'ları kendisi ekler ve veriyi kendisi taşır.</td></tr>
-    <tr><td>Zirve trafik</td><td>Zirve için makine alırsın.</td><td>On-demand mod istek başına ücretlendirir. Auto scaling'li provisioned mod yükü takip eder.</td></tr>
-    <tr><td>Backup'lar</td><td>Sen planlar, saklar ve test edersin.</td><td>Table'a yük bindirmeden point-in-time recovery ve on-demand backup'lar.</td></tr>
-    <tr><td>Birkaç Region</td><td>Replication'ı ve çakışma yönetimini sen kurarsın.</td><td>Global tables diğer Region'lara replike eder ve her replica yazma alabilir.</td></tr>
+    <tr><td>Birkaç veri merkezinde kopyalar</td><td>Replikasyonu sen ayarlar ve çalışır tutarsın.</td><td>DynamoDB kopyaları birkaç Availability Zone'da tutar.</td></tr>
+    <tr><td>Büyüme</td><td>Node ekler ve veriyi taşırsın.</td><td>DynamoDB partition'ları kendisi ekler ve veriyi kendisi taşır.</td></tr>
+    <tr><td>Tepe trafik</td><td>Tepe için makine satın alırsın.</td><td>On-demand mod istek başına ücretlendirir. Auto scaling'li provisioned mod yükü takip eder.</td></tr>
+    <tr><td>Yedekler</td><td>Sen planlar, saklar ve test edersin.</td><td>Table'a yük bindirmeyen point-in-time recovery ve on-demand yedekler.</td></tr>
+    <tr><td>Birkaç bölge</td><td>Replikasyonu ve çakışma yönetimini sen kurarsın.</td><td>Global tables diğer bölgelere replike eder ve her replica yazma alabilir.</td></tr>
   </tbody>
 </table>
-<p>Bölüm 01'deki seçeneklerin (DAX, global tables, Streams, zero-ETL) hepsi aynı servisin parçalarıdır. Onları bir table için açarsın. Kurmazsın.</p>
+<p>M5'teki seçeneklerin (DAX, global tables, Streams, zero-ETL) hepsi aynı servisin parçalarıdır. Onları bir table için açarsın. Kurmazsın.</p>
 
-<h2 id="lalemarket" data-short="Lale Market'te DynamoDB"><span class="sec">11</span>Lale Market'te DynamoDB</h2>
+<h2 id="lalemarket" data-short="Lale Market'te DynamoDB"><span class="sec">C3</span>Lale Market'te DynamoDB</h2>
 <ul>
-  <li>On-demand modda, point-in-time recovery, <code>expires_at</code> üzerinde TTL ve at-rest şifreleme ile tek bir table: <code>dbws-cart</code>.</li>
-  <li>DynamoDB Engine App, private bir subnet'teki bir EC2 instance'ta çalışır. DynamoDB'ye bir gateway VPC endpoint üzerinden ulaşır, böylece trafik internete gitmez.</li>
-  <li>Kimlik doğrulama instance'ın IAM rolünü (SigV4) kullanır. Parola yoktur. Rol sadece sepet table'ına ve sadece uygulamanın kullandığı işlemlere izin verir.</li>
+  <li>On-demand modda, point-in-time recovery, <code>expires_at</code> üzerinde TTL ve diskte şifrelemeyle tek bir table: <code>dbws-cart</code>.</li>
+  <li>DynamoDB Engine App private bir subnet'teki bir EC2 instance'ında çalışır. DynamoDB'ye bir gateway VPC endpoint üzerinden ulaşır, böylece trafik internete gitmez.</li>
+  <li>Kimlik doğrulama instance'ın IAM role'ünü kullanır (SigV4). Şifre yoktur. Role sadece sepet table'ına ve sadece uygulamanın kullandığı eylemlere izin verir.</li>
   <li>Sepet sayfasında iki deney var: strongly ya da eventually consistent okumalar ve 200 sentetik alışverişçiden paralel yazan bir Load Simulation.</li>
 </ul>
 
-<h2 id="recall" data-short="Recall test"><span class="sec">12</span>Recall test</h2>
+<h2 id="recall" data-short="Hatırlama testi" data-group="Sonunda">Hatırlama testi</h2>
 <p>Bölümlere geri bakmadan cevapla.</p>
-{{ k.quiz("ddb-r1", "Filtreli bir Scan 10 item döndürüyor. ScannedCount 50.000. Neyin parasını ödersin?",
-   ["Scan'in döndürdüğü 10 item'ın", "Scan'in okuduğu 50.000 item'ın", "Sadece Scan'in ilk sayfasının", "Hiçbir şeyin, filtre Scan'i bedava yapar"],
-   1, "DynamoDB değerlendirdiği item'lar için ücret alır. Filtre okumadan sonra çalışır.") }}
-{{ k.quiz("ddb-r2", "Hangi işlem hem partition key'e hem sort key'e ihtiyaç duyar?",
-   ["Query", "Scan", "GetItem", "BatchWriteItem"],
-   2, "GetItem tam olarak bir item okur, bu yüzden tam primary key'e ihtiyaç duyar. Query sadece partition key'e ihtiyaç duyar.") }}
+{{ k.quiz("ddb-r1", "Filtreli bir Scan 10 item döndürüyor. ScannedCount 50.000. Ne için ödersin?",
+   ["Scan'in döndürdüğü 10 item için", "Scan'in okuduğu 50.000 item için", "Sadece Scan'in ilk sayfası için", "Hiçbir şey, çünkü bir filtre Scan'i ücretsiz yapar"],
+   1, "DynamoDB değerlendirdiği item'lar için ücretlendirir. Filtre okumadan sonra çalışır.") }}
+{{ k.quiz("ddb-r2", "İki aday arasındaki yakın bir yarışta karar kaydı neyi içermeli?",
+   ["Sadece kazananın adını", "Kazananı, karar veren gereksinimi ve cevabı değiştirecek koşulu", "İki servisin fiyat listesini", "Bütün AWS servislerinin bir listesini"],
+   1, "Karar veren gereksinim ve seçimi tersine çevirecek koşul, ekibe kararın ne zaman yeniden kontrol edilmesi gerektiğini söyler.") }}
 {{ k.quiz("ddb-r3", "Bir DynamoDB tasarımının şu adımlarını doğru sıraya koy: kodu yaz, access pattern'leri listele, key'i tasarla.",
    ["Key, kod, access pattern'ler", "Kod, access pattern'ler, key", "Access pattern'ler, key, kod", "Access pattern'ler, kod, key"],
-   2, "Key sorulardan gelir. Key'i önce tasarlarsan bir soru bir Scan olarak sonuçlanabilir.") }}
-{{ k.quiz("ddb-r4", "Trafiğin çoğunu tek bir partition key değeri alıyor. Bu problemin adı nedir ve genel çözümü nedir?",
-   ["Hot partition. Çok sayıda, eşit kullanılan değeri olan bir key kullan.", "Lost update. Her yazmaya bir ConditionExpression ekle.", "Cold start. Bütün table için DAX'ı aç.", "Tam Scan. Sıcak değer üzerine bir filtre ekle."],
-   0, "Her partition'ın bir throughput sınırı vardır. Çok değerli ve eşit kullanılan bir key yükü birçok partition'a dağıtır.") }}
+   2, "Key sorulardan gelir. Key'i önce tasarlarsan bir soru bir Scan'e dönüşebilir.") }}
+{{ k.quiz("ddb-r4", "Tek bir partition key değeri trafiğin çoğunu alıyor. Bu sorunun adı nedir ve olağan çözüm nedir?",
+   ["Hot partition. Eşit kullanılan çok sayıda değeri olan bir key kullan.", "Lost update. Her yazmaya bir ConditionExpression ekle.", "Cold start. Bütün table için DAX'i aç.", "Tam Scan. Sıcak değer üzerine bir filtre ekle."],
+   0, "Her partition'ın bir throughput sınırı vardır. Eşit kullanılan çok sayıda değeri olan bir key, yükü birçok partition'a yayar.") }}
 
 <section class="lesson-foot">
   <h2>Daha derine in</h2>
   <p><b>Ana kaynak:</b> <a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.CoreComponents.html">Core components of DynamoDB</a>, sonra
      <a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-general-nosql-design.html">NoSQL design for DynamoDB</a>.</p>
-  <p><b>Mağazada kullan:</b> <a href="/guided-e-commerce-app/">Guided mission</a>'da "A condition stops a bad write" adımını ara. Free app'teki <a href="/free-e-commerce-app/cart">sepet sayfasında</a> consistency deneyi var.</p>
-  <p><b>Soru sor.</b> Bir kısım net değilse eğitmenine ya da AI asistanına sor. Kendi uygulamandan bir access pattern getir ve key'ini birlikte tasarlayın.</p>
+  <p><b>Mağazada kullan:</b> <a href="/guided-e-commerce-app/">Guided mission</a>'da "A condition stops a bad write" adımına bak. Free uygulamanın <a href="/free-e-commerce-app/cart">sepet sayfasında</a> consistency deneyi var.</p>
+  <p><b>Soru sor.</b> Bir kısım net değilse eğitmenine ya da AI asistanına sor. Kendi uygulamandan bir access pattern getir ve onun key'ini birlikte tasarlayın.</p>
 </section>
 {% endblock %}

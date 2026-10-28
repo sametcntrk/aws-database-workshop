@@ -15,7 +15,20 @@
   const toc = $("#toc-list");
   const heads = $$(".lesson h2[id]");
   if (toc) {
-    toc.innerHTML = heads.map((h) => `<li><a href="#${h.id}">${esc(h.dataset.short || h.textContent.replace(/^\d+\s*/, ""))}</a></li>`).join("");
+    // Groups: an h2 inside a .part banner opens a group (Part A, B, ...); an h2 with data-group opens or continues a named group.
+    // Each item shows the section number (the .sec span, for example A2) before its short title.
+    const item = (h) => { const n = h.querySelector(".sec"); return `<li><a href="#${h.id}">${n ? `<span class="toc-n">${esc(n.textContent)}</span>` : ""}${esc(h.dataset.short || h.textContent.replace(/^\d+\s*/, ""))}</a></li>`; };
+    let html = "", open = null;
+    const close = () => { if (open !== null) { html += "</ol></li>"; open = null; } };
+    heads.forEach((h) => {
+      const banner = h.closest(".part");
+      const g = banner ? (h.dataset.short || h.textContent) : h.dataset.group;
+      if (banner) { close(); html += `<li class="toc-g"><a class="toc-gh" href="#${h.id}">${esc(g)}</a><ol>`; open = g; return; }
+      if (g && g !== open) { close(); html += `<li class="toc-g"><a class="toc-gh" href="#${h.id}">${esc(g)}</a><ol>`; open = g; }
+      html += item(h);
+    });
+    close();
+    toc.innerHTML = html;
     const links = $$("a", toc);
     const io = new IntersectionObserver((es) => es.forEach((e) => {
       if (e.isIntersecting) links.forEach((a) => a.classList.toggle("on", a.getAttribute("href") === `#${e.target.id}`));
