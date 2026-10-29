@@ -1095,6 +1095,7 @@ DDB_NAMES["ix"] = "Timestream for InfluxDB"
 SVC = {"ddb": "DynamoDB", "aur": "Aurora PostgreSQL", "ec": "ElastiCache (Valkey)", "doc": "DocumentDB", "ks": "Keyspaces",
        "rs": "Redshift", "os": "OpenSearch", "ix": "Timestream for InfluxDB", "np": "Neptune", "s3": "S3", "rds": "RDS for PostgreSQL",
        "mdb": "MemoryDB", "ath": "Athena", "efs": "EFS", "dsql": "Aurora DSQL"}
+SVC["cas"] = "Apache Cassandra"   # self-managed, on EC2 (Keyspaces card 10)
 
 
 def scorecard(lang, d):
@@ -1565,6 +1566,35 @@ def ks_consistency(lang):
             "out": {"name": T(lang, "reads", "okumalar"), "cols": ["consistency", T(lang, "answer", "cevap"), T(lang, "cost per 4 KB", "4 KB başına maliyet")]}, "steps": steps}
 
 
+
+def ks_lwt(lang):
+    """A lightweight transaction (IF condition) on one cart row: two browser tabs read qty = 2 and race. The rule "at most 5" is checked by the
+    application; the IF condition makes sure that the value it checked is still the value in the row."""
+    row = [["CART-7f3a", "P0001", 2]]
+    log, steps = [], []
+
+    def snap(say, cls, mark="new"):
+        steps.append({"say": say, "marks": {"t": {0: cls}}, "rows": {"t": deepcopy(row)}, "out": deepcopy(log),
+                      "outmarks": {len(log) - 1: mark} if log else {}, "count": {}})
+    snap(T(lang, "The rule: at most 5 pieces of one product in a cart. Two browser tabs read the row at the same moment: both see qty = 2. Tab A wants to add 2, tab B wants to add 3. Each tab checks the rule with the value it read: 2 + 2 = 4 and 2 + 3 = 5, both are allowed.",
+           "Kural: bir sepette bir üründen en fazla 5 adet. İki tarayıcı sekmesi row'u aynı anda okur: ikisi de qty = 2 görür. Sekme A 2 eklemek, sekme B 3 eklemek istiyor. Her sekme kuralı okuduğu değerle test eder: 2 + 2 = 4 ve 2 + 3 = 5, ikisi de izinli görünür."), "read")
+    row[0][2] = 4
+    log.append(["A: UPDATE ... SET qty = 4 IF qty = 2", T(lang, "[applied] = True, qty = 4", "[applied] = True, qty = 4")])
+    snap(T(lang, "Tab A sends UPDATE ... SET qty = 4 IF qty = 2. The row still has qty = 2, so the condition is true. Keyspaces tests and writes in one step: qty becomes 4.",
+           "Sekme A UPDATE ... SET qty = 4 IF qty = 2 gönderir. Row'da hâlâ qty = 2 var, koşul doğru. Keyspaces tek adımda test eder ve yazar: qty 4 olur."), "match")
+    log.append(["B: UPDATE ... SET qty = 5 IF qty = 2", T(lang, "[applied] = False, qty = 4 (no write, 1 WRU)", "[applied] = False, qty = 4 (yazılmadı, 1 WRU)")])
+    snap(T(lang, "Tab B sends UPDATE ... SET qty = 5 IF qty = 2. Now qty is 4, so the condition is false. Keyspaces does not write and answers [applied] = False with the current value 4. The refusal still uses a write unit. Without IF, tab B would write 5 and tab A's 2 pieces would be lost.",
+           "Sekme B UPDATE ... SET qty = 5 IF qty = 2 gönderir. Artık qty 4, koşul yanlış. Keyspaces yazmaz ve güncel değer 4 ile [applied] = False döndürür. Bu ret de bir yazma birimi harcar. IF olmasaydı sekme B 5 yazardı ve sekme A'nın 2 adedi kaybolurdu."), "bad", "bad")
+    snap(T(lang, "Tab B uses the value from the answer: 4 + 3 = 7 is more than 5. The application tells the user \"at most 1 more piece\" and sends nothing. The rule held without a lock in the application.",
+           "Sekme B cevaptaki değeri kullanır: 4 + 3 = 7, yani 5'ten fazla. Uygulama kullanıcıya \"en fazla 1 adet daha\" der ve hiçbir şey göndermez. Kural uygulamada bir kilit olmadan korundu."), "match", "bad")
+    steps.append({"say": T(lang, "Result: one tab won, the other saw the new value. In Apache Cassandra the same IF runs a Paxos round with extra round trips. Amazon Keyspaces states no extra charge and no performance penalty for LWTs.",
+                           "Sonuç: bir sekme kazandı, diğeri yeni değeri gördü. Apache Cassandra'da aynı IF ek gidiş dönüşlü bir Paxos turu çalıştırır; Amazon Keyspaces LWT için ek ücret ve performans cezası olmadığını söyler."),
+                  "marks": {"t": {0: "done"}}, "rows": {"t": deepcopy(row)}, "out": deepcopy(log), "count": {}})
+    return {"tables": [{"id": "t", "name": T(lang, "the cart row", "sepet row'u"), "cols": ["cart_id", "product_id", "qty"],
+                        "rows": [["CART-7f3a", "P0001", 2]], "key": [0, 1], "ref": [], "pk": [0], "sk": [1]}],
+            "out": {"name": T(lang, "requests", "istekler"), "cols": ["CQL", T(lang, "answer of Keyspaces", "Keyspaces'in cevabı")]}, "steps": steps}
+
+
 KS_CANDS = ["Keyspaces", "DynamoDB", "Aurora PostgreSQL", "Timestream for InfluxDB", "ElastiCache (Valkey)"]
 
 
@@ -1589,8 +1619,15 @@ def keyspaces(lang):
         "decide_report": decide_generic(lang, ("A monthly report: purchases per segment and city, from all users", "Aylık bir rapor: bütün kullanıcılardan segment ve şehre göre satın almalar"),
                                         [("GROUP BY over all partitions", "Bütün partition'lar üzerinde GROUP BY"),
                                          ("JOIN with the customer data", "Müşteri verisiyle JOIN")], KS_CANDS, w2),
-        "partition": ks_partition(lang), "nokey": ks_nokey(lang), "consistency": ks_consistency(lang),
+        "partition": ks_partition(lang), "nokey": ks_nokey(lang), "consistency": ks_consistency(lang), "lwt": ks_lwt(lang),
+        # the Turkish page: five scorecard simulations built from the M2 cards (e2e_usecases.KS_USECASES); decide_feed and decide_report
+        # above are the legacy 2/1/0 decisions of the old English page only
+        **{uc["sim"]: usecase_scorecard(lang, uc) for uc in _uc.KS_USECASES if uc["sim"]},
     }
+    for v in spec.values():          # color language of the page: partition key yellow, clustering column blue
+        for t in v.get("tables", []):
+            if t["cols"][:1] == ["user_id"]:
+                t["pk"], t["sk"] = [0], [1]
     return {k: _localize(v, lang) for k, v in spec.items()}
 
 

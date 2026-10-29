@@ -18,6 +18,8 @@ CATEGORY = {"ddb": ("key-value", "key-value"), "aur": ("relational", "ilişkisel
             "doc": ("document", "document"), "ks": ("wide-column", "wide-column"), "ix": ("time series", "time series"),
             "rs": ("data warehouse", "data warehouse"), "os": ("search engine", "search engine")}
 LINK = {"aur": "aurora", "ec": "elasticache", "doc": "documentdb", "ks": "keyspaces", "ix": "influxdb", "rs": "redshift", "os": "opensearch", "ddb": "dynamodb"}
+CATEGORY["cas"] = ("self-managed wide-column", "kendi işlettiğin wide-column")   # Apache Cassandra on EC2 (Keyspaces card 10)
+LINK["cas"] = "keyspaces"
 
 R_AXES = [("R1 Access pattern", "R1 Access pattern"), ("R2 Scale and traffic shape", "R2 Ölçek ve trafik şekli"),
           ("R3 Durability", "R3 Dayanıklılık"), ("R4 Operations and team", "R4 Operasyon ve ekip"), ("R5 Cost model", "R5 Maliyet modeli")]
@@ -1098,3 +1100,514 @@ AURORA_USECASES = [
 ]
 
 USECASES["aurora"] = AURORA_USECASES
+
+
+# ================================================================ Keyspaces (Amazon Keyspaces for Apache Cassandra): the ten M2 cards
+# Facts used in the reasons (official sources, hedges kept):
+#   TTL: "typically deletes expired data from storage within 10 days", expired data is filtered out of query results, "One TTL delete is consumed per KB
+#        of data per row that is deleted or updated" (https://docs.aws.amazon.com/keyspaces/latest/devguide/TTL.html)
+#   Tombstones: "removes tombstoned data automatically (typically within 10 days)", tombstoned data counts towards storage, RCUs and WCUs until deleted
+#        (https://docs.aws.amazon.com/keyspaces/latest/devguide/client-side-timestamps.html)
+#   LWT: "there is no additional charge for using LWTs", a failed condition still consumes WRUs (https://docs.aws.amazon.com/keyspaces/latest/devguide/lightweight_transactions.html);
+#        Apache Cassandra: IF NOT EXISTS "will incur a non-negligible performance cost, because Paxos is used" (https://cassandra.apache.org/doc/latest/cassandra/developing/cql/dml.html)
+#   Consistency: reads LOCAL_ONE or LOCAL_QUORUM, all writes LOCAL_QUORUM, three copies in several AZs; 1 RRU = one LOCAL_QUORUM read or two LOCAL_ONE reads
+#        of up to 4 KB, 1 WRU = one write of up to 1 KB (https://docs.aws.amazon.com/keyspaces/latest/devguide/consistency.html,
+#        https://docs.aws.amazon.com/keyspaces/latest/devguide/ReadWriteCapacityMode.OnDemand.html)
+#   No CREATE INDEX, no materialized views, no aggregate functions, no TRUNCATE (https://docs.aws.amazon.com/keyspaces/latest/devguide/cassandra-apis.html)
+#   CDC streams: 24 hours retention, NEW_AND_OLD_IMAGES default (https://docs.aws.amazon.com/keyspaces/latest/devguide/cdc_how-it-works.html)
+#   Per partition 3,000 RCUs and 1,000 WCUs; partitions may be split (https://docs.aws.amazon.com/keyspaces/latest/devguide/bp-partition-key-design.html)
+#   Row max 1 MB; 3,000 CQL queries per TCP connection per second (https://docs.aws.amazon.com/keyspaces/latest/devguide/quotas.html)
+#   On-demand: "scales up to any previously reached traffic level instantly" (https://docs.aws.amazon.com/keyspaces/latest/devguide/how-it-works.html)
+#   Multi-Region: active-active, "replication lag across Regions is typically less than one second"; PITR 35 days.
+KS_USECASES = [
+    # ------------------------------------------------------------------ 1. activity history per user (Lale Market)
+    usecase("activity", 1, sim="race_activity", kind="race",
+        title=_t("Kullanıcı başına aktivite geçmişi (Lale Market)"),
+        key=_t("Partition key: user_id. Clustering column: event_time (en yeni önce). Row: event türü, ürün, detay."),
+        story=_t("Lale Market'te her ürün görüntüleme, arama, sepete ekleme ve satın alma bir event row'u yazar. Ürün sayfasındaki \"Son baktıkların\" şeridi ziyaretçinin son 40 event'inden en yeni 8 ürün görüntülemesini seçer, \"Aktivitem\" sayfası en yeni 20'sini okur ve geriye doğru sayfalar. "
+                 "Destek ekibi \"bu müşteri dün 14:00 ile 16:00 arasında ne yaptı?\" diye sorar. Normal günde saniyede 1.200 event yazılır; kampanya akşamlarında üç saat boyunca saniyede 15.000. Okumalar yazmaların onda biri kadardır. "
+                 "Event'ler 7 gün sonra değersizdir ve kendiliğinden silinmelidir. İki milyon kullanıcı var. Uygulama ekibi üç geliştiricidir; iki kişilik veri ekibi öneri modelini her gece bu geçmişten Spark Cassandra Connector ve CQL ile besler. Kimse sunucu işletmek istemiyor."),
+        reqs=[
+            req(True, "İki soru: \"bu kullanıcının en yeni N event'i\" ve \"bu kullanıcının şu iki saat arasındaki event'leri\". Her soru kullanıcı id'sini bilir. Hiçbir ekran iki kullanıcıyı birlikte okumaz. Bir event bir kez yazılır ve değişmez.",
+                      "\"Son baktıkların\" şeridi her ürün sayfasında görünür. Sıralama database'te hazır değilse uygulama her seferinde yüzlerce event okur ve sıralar; sayfa yavaşlar. Zaman aralığı sorusu destek ekibinin şikâyet incelemesidir; cevap yoksa ekip log dosyalarında arar."),
+            req(True, "Normalde saniyede 1.200 yazma, kampanya akşamı üç saat boyunca 15.000 yazma; okumalar onda bir. Her okuma tepe anında da 20 ms'nin altında dönmeli. Kampanya için node eklemek ya da sunucu büyütmek gerekmemeli; tek seferlik bir kapasite ayarı kabul edilir.",
+                      "Kampanya akşamı yılın en çok satış yapılan saatleridir. Event yazması yavaşlarsa ürün sayfasının cevabı da yavaşlar, çünkü yazma sayfa isteğinin içindedir. Elle büyütme unutulursa yazmalar reddedilir ve geçmiş eksik kalır."),
+            req(False, "Bir event'in kaybı kabul edilebilir ama istenmez. Bir Availability Zone arızası geçmişi silmemeli.",
+                       "Aktivite geçmişi öneri modelinin girdisidir; birkaç event'in kaybı önerileri bozmaz. Ama bir AZ arızasında bütün geçmişin kaybı, modelin bir hafta kör kalması demektir."),
+            req(False, "Uygulama ekibi üç kişi. Veri ekibi Spark Cassandra Connector ve CQL ile çalışıyor ve gece işini değiştirmek istemiyor. Sunucu, yama ve kapasite planı istenmiyor.",
+                       "Veri ekibinin gece işi bugün çalışıyor; başka bir API, o işin yeniden yazılması ve yeniden test edilmesi demektir. Küçük ekipte operasyon işi doğrudan ürün işinden çalınır."),
+            req(False, "Trafik dalgalı: istek başına ödeme isteniyor. Veri 7 gün sonra kendiliğinden silinmeli; silme için ayrı bir iş yazılmamalı. Bir event 1 KB'tan küçük.",
+                       "Tepe için boyutlandırılmış bir sunucu ayın çoğunda boş durur ve ödenir. Silme işi yazılırsa o da bir operasyon yükü ve bir arıza noktasıdır."),
+        ],
+        cands=["ks", "ddb", "aur"],
+        scores={
+            "ks": [sc(10, "Partition key user_id, clustering column event_time DESC (Ö1, Ö3): en yeni N event tek partition'dan LIMIT ile, saat aralığı aynı partition'da tek bir dilimdir. Puan kırılmadı."),
+                   sc(9, "Yazmalar user_id'nin token'ına göre partition'lara dağılır (Ö2); on-demand mod trafiği izler. 1 puan kırıldı: on-demand table daha önce ulaştığı trafik seviyesine anında çıkar; ilk kampanyada 15.000/s için table önceden ısıtılmalı (warm throughput) ya da trafik kademeli artmalıdır."),
+                   sc(10, "Her yazma LOCAL_QUORUM ile, birkaç AZ'deki üç kopyanın ikisine yazıldıktan sonra onaylanır. Puan kırılmadı."),
+                   sc(8, "Veri ekibi bildiği CQL ve Spark Cassandra Connector ile okumaya devam eder; sunucu yoktur. 2 puan kırıldı: uygulama ekibi CQL'i, Cassandra driver'ını ve bağlantı havuzu ayarını öğrenir."),
+                   sc(7, "İstek başına ödeme; table TTL'i (Ö6) event'i 7 gün sonra kendisi siler. 3 puan kırıldı: TTL silmesi ayrıca ölçülür (silinen her KB için bir TTL delete) ve süresi dolan veri storage'dan genellikle 10 gün içinde silinir; o zamana kadar storage ücreti sürer.")],
+            "ddb": [sc(10, "Partition key kullanıcı, sort key zaman; ters sırayla ve limitli tek bir Query. Puan kırılmadı."),
+                    sc(9, "On-demand mod ve partition'lara dağılım. 1 puan kırıldı: on-demand table da önceki tepesinin üstüne çıkarken kademeli büyür; ilk kampanyadan önce warm throughput ayarlanmalıdır."),
+                    sc(10, "Her yazma birkaç AZ'de saklanır. Puan kırılmadı."),
+                    sc(6, "Serverless ve uygulama ekibinin bildiği SDK. 4 puan kırıldı: veri ekibinin CQL ve Spark Cassandra Connector bilgisi kullanılamaz; gece işi DynamoDB'ye uygun bir okuma yoluyla (export ya da başka bir connector) yeniden yazılır ve test edilir."),
+                    sc(8, "İstek başına ödeme; TTL silmesi yazma kapasitesi harcamaz. 2 puan kırıldı: TTL genellikle birkaç gün içinde siler ve süresi dolan event okumada görünebilir; uygulama okuduktan sonra zamanı kendisi filtreler.")],
+            "aur": [sc(8, "(user_id, event_time) index'i ile ORDER BY event_time DESC LIMIT 8 hızlıdır ve saat aralığı da aynı index'le okunur. 2 puan kırıldı: 7 günde yüz milyonlarca row'luk tek bir table oluşur; index'i ve eski veriyi yönetmek için table zamana göre parçalara bölünür (pg_partman)."),
+                    sc(4, "6 puan kırıldı: saniyede 15.000 insert tek writer'a gider ve her insert bir index yazması daha yapar; kampanya akşamı writer'ın sınırına dayanır ve ürün sayfası yavaşlar."),
+                    sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                    sc(6, "Ekip SQL biliyor. 4 puan kırıldı: günlük parçaları düşürmek, vacuum ve kapasite bakımı ekibin işidir; veri ekibinin gece işi JDBC ile yeniden yazılır."),
+                    sc(6, "4 puan kırıldı: tepe yazmaya göre ayarlanmış minimum kapasite kampanya dışında da ödenir; silme, eski günlük parçanın düşürülmesi için zamanlanmış bir iş ister.")],
+        },
+        h2h={
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı tek gereksinim R4'tür; R1, R2 ve R3'te iki servis neredeyse aynıdır. DynamoDB de partition key ile kullanıcıyı, sort key ile zamanı tutar, en yeni N event'i ters sırayla ve limitle tek istekte okur ve trafiği partition'lara dağıtır. "
+                      "DynamoDB'nin gerçek üstünlükleri: TTL silmesi ücretsizdir, uygulama ekibi SDK'yı zaten bilir ve değişiklik akışı Lambda'ya doğrudan bağlanır. Keyspaces'in üstünlüğü bu iş yükünde tek bir şeydir: veri ekibinin bugün çalışan CQL ve Spark Cassandra Connector işi değişmeden kalır. "
+                      "Fark bir puandır ve bu yüzden kart bir yakın yarıştır. Hangi koşul değişseydi DynamoDB seçilirdi: veri ekibi gece işini zaten yeniden yazıyor olsaydı ya da ekipte CQL bilen kimse olmasaydı; o zaman R4 tersine döner ve DynamoDB iki puan öne geçer."),
+            "aur": _t("İlişkisel (Aurora PostgreSQL) ile kafa kafaya. Ayrıştığı gereksinimler R2 ve R5. Aurora'nın gücü gerçektir: aynı soruyu SQL ile sorar, isterse event'leri siparişlerle JOIN eder ve \"bu hafta en çok bakılan 10 ürün\" gibi bir raporu da aynı yerde cevaplar. "
+                      "Ama bu iş yükü JOIN ve rapor istemez; istediği şey çok sayıda küçük yazmanın her boyutta aynı hızda kabul edilmesidir. Aurora'da bütün yazmalar tek writer'dan geçer ve kampanya akşamının 15.000 insert'i o writer'ın sınırına dayanır; ayrıca 7 günlük veriyi temizlemek bir bakım işidir. "
+                      "Hangi koşul değişseydi Aurora PostgreSQL seçilirdi: trafik saniyede birkaç yüz event olsaydı ve ürün ekibi her hafta event'ler üzerinde yeni SQL raporları isteseydi; o zaman tek bir relational database hem yazmayı taşır hem soruları cevaplardı."),
+        },
+        verdict=_t("Karar: Keyspaces 44, DynamoDB 43, Aurora PostgreSQL 34. Kategori (kullanıcı başına zaman sıralı row'lar) kesin doğrudur; Keyspaces ile DynamoDB arasındaki farkı veri ekibinin CQL bilgisi (R4) belirler. "
+                   "Yine de Keyspaces seçersek artımız: veri ekibinin işi değişmez, en yeni N event tek partition okumasıdır, 7 günlük temizlik table TTL'iyle kendiliğinden olur. "
+                   "Potansiyel eksimiz: uygulama ekibi CQL ve driver ayarı öğrenir; TTL silmesi ölçülür ve ödenir; \"bütün kullanıcılarda en çok bakılan ürün\" gibi bir soru bu table'da cevaplanamaz. Bir koşul değişseydi: ekipte CQL bilen kimse olmasaydı DynamoDB kazanırdı.")),
+
+    # ------------------------------------------------------------------ 2. time-ordered sensor readings
+    usecase("sensor", 2, sim="race_sensor", kind="race",
+        title=_t("Zaman sıralı sensör okumaları (rüzgâr santrali)"),
+        key=_t("Partition key: (sensor_id, day). Clustering column: ts (en yeni önce). Row: değer, birim, kalite."),
+        story=_t("Bir enerji şirketinin rüzgâr santrallerinde 8.000 titreşim ve sıcaklık sensörü var; her biri iki saniyede bir okuma gönderir: saniyede 4.000 yazma, günün her saati düz. "
+                 "Bakım mühendisinin ekranı bir sensörün seçilen saatteki ya da gündeki ham okumalarını gösterir; arıza tespit servisi her dakika bir türbinin son 10 dakikasını okur. Ham okumalar 90 gün saklanır, sonra silinir; bu yaklaşık 31 milyar row ve birkaç TB demektir. "
+                 "Saatlik ortalamalar gece çalışan bir Spark işiyle hesaplanır ve ayrı bir rapor sistemine yazılır. Dört kişilik ekip önceki üründe kendi veri merkezlerinde Apache Cassandra işletti ve CQL biliyor; bu kez sunucu işletmek istemiyor."),
+        reqs=[
+            req(True, "Sorular: \"bu sensörün şu saatteki ya da şu gündeki okumaları, zaman sırasıyla\" ve \"bu türbinin sensörlerinin son 10 dakikası\". Her soru sensör id'sini ve zamanı bilir. Okumalar yazıldıktan sonra değişmez.",
+                      "Mühendis bir alarmın nedenini ham okumalarda arar; aralık okuması yavaşsa arıza analizi saatler sürer. Arıza tespit servisi dakikada bir çalışır; cevabı gecikirse kırık bir rulman bir dakika daha geç fark edilir."),
+            req(True, "Saniyede 4.000 yazma, düz ve sürekli, günde yaklaşık 345 milyon row. Okuma azdır ama 50 ms'nin altında dönmeli. 90 günlük veri her gün büyür ve sonra sabit kalır.",
+                      "Yazma yolu durursa okumalar kaybolur; sensörler tampon tutmaz. Veri büyüdükçe okuma yavaşlarsa 90. günde sistem işe yaramaz."),
+            req(False, "Tek bir okumanın kaybı kabul edilebilir ama istenmez; garanti talepleri ham okumalara dayanır. Bir AZ arızası veri kaybettirmemeli.",
+                       "Türbin üreticisiyle bir garanti anlaşmazlığında ham titreşim verisi kanıttır; eksik bir gün tazminatı kaybettirebilir."),
+            req(False, "Dört kişilik ekip CQL biliyor ve Cassandra veri modellemesini (query-first tasarım) uyguladı. Sunucu, compaction ayarı ve repair işi istemiyor. Ortalamaları gece Spark işi hesaplayacak.",
+                       "Ekip Cassandra'nın işletme yükünü (node değiştirme, repair, compaction) tanıyor ve bir daha taşımak istemiyor. Bilinen bir model yeni bir modelden daha az hata üretir."),
+            req(False, "Trafik düz: önceden alınan kapasite istek başına ödemeden ucuz olmalı. 90 gün sonra silme kendiliğinden olmalı. Storage birkaç TB'tır ve GB fiyatı önemlidir.",
+                       "Düz trafik için on-demand fiyatı boşa ödenen bir esnekliktir. Birkaç TB'lık storage'ın fiyat farkı her ay faturada görünür."),
+        ],
+        cands=["ks", "ddb", "ix"],
+        scores={
+            "ks": [sc(9, "PRIMARY KEY ((sensor_id, day), ts) (Ö1, Ö3): bir sensörün bir günü tek partition'dır ve saat aralığı o partition'da tek dilimdir; gün, partition'ın sonsuz büyümesini önler. 1 puan kırıldı: birkaç günlük bir aralık için uygulama gün başına bir sorgu gönderir ve sonuçları birleştirir."),
+                   sc(9, "4.000 yazma/s token'a göre dağılır (Ö2); provisioned kapasite ve auto scaling düz trafiğe uyar. 1 puan kırıldı: driver'ın bağlantı sayısı ayarlanmalıdır (bağlantı başına saniyede 3.000 CQL sorgusu sınırı)."),
+                   sc(10, "Üç AZ'de üç kopya, LOCAL_QUORUM yazma; point-in-time recovery 35 gün. Puan kırılmadı."),
+                   sc(9, "Ekip CQL'i ve query-first tasarımı biliyor; compaction ve repair yoktur. 1 puan kırıldı: driver'a SigV4 kimlik plugin'i, TLS ve bağlantı havuzu (driver'ın açık tuttuğu ve istekler arasında yeniden kullandığı bağlantılar) ayarı eklenir."),
+                   sc(7, "Provisioned mod düz trafikte ucuzdur; TTL (Ö6) 90 gün sonra siler. 3 puan kırıldı: birkaç TB storage her ay ödenir, TTL silmesi KB başına ölçülür ve süresi dolan veri storage'dan genellikle 10 gün içinde silinir.")],
+            "ddb": [sc(9, "Partition key sensör ve gün, sort key zaman; aralık tek bir Query. 1 puan kırıldı: birkaç günlük aralık için gün başına bir Query."),
+                    sc(10, "Düz yazma, partition'lara dağılım, provisioned kapasite. Puan kırılmadı."),
+                    sc(10, "Birkaç AZ'de saklanır, point-in-time recovery. Puan kırılmadı."),
+                    sc(6, "Serverless. 4 puan kırıldı: ekibin CQL ve Cassandra bilgisi kullanılamaz; yeni bir API ve yeni bir okuma yolu (Spark için export ya da connector) öğrenilir."),
+                    sc(8, "Provisioned ve reserved capacity düz trafikte ucuzdur; TTL silmesi ücretsizdir. 2 puan kırıldı: birkaç TB storage her ay ödenir; nadiren okunan veri için Standard-IA table class seçilebilir ama o zaman okuma pahalanır.")],
+            "ix": [sc(10, "Bir ölçüm, tag olarak sensor_id; zaman aralığı ve \"son 10 dakika\" doğal sorgulardır; saatlik ortalama da tek sorgudur. Puan kırılmadı."),
+                   sc(8, "Saniyede 4.000 nokta bir instance'ın erişimindedir. 2 puan kırıldı: instance sınıfı ve disk önceden seçilir; büyüme daha büyük bir instance ister."),
+                   sc(8, "Multi-AZ seçeneğiyle standby. 2 puan kırıldı: Multi-AZ elle seçilir; tek instance'lık kurulumda bir AZ arızası kesinti demektir."),
+                   sc(7, "Yönetilen instance. 3 puan kırıldı: ekip Flux ya da InfluxQL ve instance işletmeyi öğrenir; Cassandra bilgisi kullanılmaz; retention ve disk ayarı ekibin işidir."),
+                   sc(9, "Instance saat başına ve disk; düz trafikte boşa giden kapasite azdır, retention 90 günden eskiyi siler. 1 puan kırıldı: birkaç TB disk instance'a bağlıdır ve büyümesi planlanmalıdır.")],
+        },
+        h2h={
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı gereksinimler R4 ve R5. Veri modelinde iki servis aynıdır: sensör ve gün partition key, zaman sıralama alanıdır; ikisi de düz yazmayı partition'lara dağıtır ve üç AZ'de saklar. "
+                      "DynamoDB'nin gerçek üstünlükleri: TTL silmesi ücretsizdir, reserved capacity düz trafiği ucuzlatır ve Standard-IA table class'ı soğuk veriyi ucuz tutar. Keyspaces'in üstünlüğü ekiptedir: dört kişi CQL ile ve Cassandra'nın query-first modeliyle yıllarca çalıştı; aynı modeli sunucusuz kullanırlar. "
+                      "Fark bir puandır. Hangi koşul değişseydi DynamoDB seçilirdi: ekip Cassandra'yı bilmeseydi ya da şirketin diğer servisleri DynamoDB üzerinde olsaydı ve alarm için değişiklik akışı Lambda'ya bağlanacak olsaydı; o zaman R4 tersine döner."),
+            "ix": _t("Time series (Timestream for InfluxDB) ile kafa kafaya. Ayrıştığı gereksinimler R1, R3 ve R4. InfluxDB bu verinin doğal evidir: zaman aralığı, son N dakika ve pencere ortalaması tek sorgudur; Keyspaces ortalamayı hiç hesaplamaz. "
+                      "Bu iş yükünde ortalamayı zaten gece Spark işi hesaplıyor ve ekranlar ham okuma istiyor; bu yüzden InfluxDB'nin en güçlü yanı burada kullanılmaz. Buna karşılık InfluxDB bir instance'tır: sınıf, disk, Multi-AZ ve retention ekibin kararlarıdır ve ekip yeni bir sorgu dili öğrenir. "
+                      "Hangi koşul değişseydi Timestream for InfluxDB seçilirdi: mühendis ekranı ham okumanın yanında canlı 5 dakikalık ortalama ve tepe değer grafiği isteseydi ve gece Spark işi hiç yazılmayacak olsaydı; o zaman pencere sorguları R1'i tek başına karşılardı."),
+        },
+        verdict=_t("Karar: Keyspaces 44, DynamoDB 43, Timestream for InfluxDB 42. Üç güçlü adayın en yakın yarışıdır. Keyspaces'i ekibin CQL ve Cassandra modelleme bilgisi (R4) öne geçirir; DynamoDB maliyette, InfluxDB pencere sorgularında daha iyidir. "
+                   "Yine de Keyspaces seçersek artımız: ekip bildiği modeli sunucusuz kullanır, (sensor_id, day) partition key'i her partition'ı küçük tutar, 90 günlük temizlik TTL ile kendiliğinden olur. "
+                   "Potansiyel eksimiz: ortalama ve tepe değer database'te hesaplanmaz, gece işi şarttır; TTL silmesi ve birkaç TB storage ödenir. Bir koşul değişseydi: ekranlar canlı pencere ortalaması isteseydi InfluxDB kazanırdı.")),
+
+    # ------------------------------------------------------------------ 3. messaging inbox (Keyspaces loses to DynamoDB)
+    usecase("inbox", 3,
+        title=_t("Mesajlaşma kutusu: destek sohbetleri"),
+        key=_t("Partition key: conversation_id. Clustering column: sent_at, message_id (en yeni önce). İkinci table: kullanıcının sohbet listesi."),
+        story=_t("Bir e-ticaret şirketinin müşteri destek uygulamasında günde 300.000 aktif sohbet var; tepe anında saniyede 2.500 mesaj yazılır. Sohbet ekranı bir sohbetin en yeni 50 mesajını gösterir ve yukarı kaydırınca eskileri getirir. "
+                 "İkinci ekran temsilcinin sohbet listesidir: en son mesaj alan sohbet en üstte. Bir mesaj 15 dakika içinde düzenlenebilir. Yeni mesaj gelince temsilcinin telefonuna bir bildirim gider. "
+                 "Mesajlar iki yıl saklanır, sonra silinir. Dört kişilik ekip şirketin diğer servislerini DynamoDB ve Lambda ile yazdı; ekipte CQL bilen kimse yok."),
+        reqs=[
+            req(True, "Sorular: \"bu sohbetin en yeni 50 mesajı, sonra daha eskiler\" ve \"bu temsilcinin sohbetleri, en son mesaj alan önce\". Her yazma sohbet id'sini ve gönderen id'sini bilir. Bir mesaj 15 dakika içinde düzenlenebilir.",
+                      "Sohbet ekranı yavaşsa müşteri cevabı geç görür ve ikinci kez yazar. Sohbet listesi yanlış sıradaysa temsilci yeni mesajı kaçırır ve müşteri bekler; bu doğrudan memnuniyet puanına yansır."),
+            req(True, "Tepe anında saniyede 2.500 mesaj yazma ve 10.000 okuma. Bir sohbet birkaç mesajdan birkaç bin mesaja kadar büyüyebilir. Okuma 30 ms'nin altında.",
+                      "Kampanya sonrası şikâyet dalgasında yazmalar beş katına çıkar; database o anda yavaşlarsa destek tamamen durur."),
+            req(False, "Mesaj kaybı ciddidir: bir şikâyet kaydı kaybolursa hukuki risk vardır. Bir AZ arızası kayıp yaratmamalı.",
+                       "Destek mesajları bir anlaşmazlıkta kanıttır; kayıp mesaj, şirketin \"müşteriye cevap verdik\" diyememesi demektir."),
+            req(False, "Ekip DynamoDB SDK'sını, Lambda'yı ve değişiklik akışıyla bildirim göndermeyi biliyor. Yeni bir veri modeli ve yeni bir driver istemiyor.",
+                       "Bildirim yolu bugün diğer servislerde çalışıyor; aynı kalıbı kullanmak hata riskini ve teslim süresini düşürür."),
+            req(False, "Mesaj küçük (1 KB'tan az). Trafik gün içinde dalgalı. İki yıl sonra silme kendiliğinden olmalı.",
+                       "İki yıllık mesaj birikimi storage'ı belirler; dalgalı trafik istek başına ödemeyi anlamlı yapar."),
+        ],
+        cands=["ks", "ddb", "aur"],
+        scores={
+            "ks": [sc(8, "PRIMARY KEY ((conversation_id), sent_at, message_id) en yeni önce (Ö1, Ö3): sohbetin son 50 mesajı tek partition okumasıdır; düzenleme bir UPDATE'tir. 2 puan kırıldı: temsilcinin sohbet listesi için ikinci bir table gerekir (Keyspaces'te secondary index yoktur, Ö7); \"en son mesaj zamanı\" clustering column olduğu ve key değişemediği için her yeni mesajda eski row silinip yenisi yazılır, silme tombstone bırakır."),
+                   sc(10, "Yazmalar sohbet id'sinin token'ına göre dağılır (Ö2); Keyspaces'te bir partition'ın boyutu pratikte sınırsızdır. Puan kırılmadı."),
+                   sc(10, "Üç AZ'de üç kopya, LOCAL_QUORUM yazma, 35 günlük point-in-time recovery. Puan kırılmadı."),
+                   sc(6, "Serverless. 4 puan kırıldı: ekip CQL'i, Cassandra driver'ını ve bağlantı havuzunu sıfırdan öğrenir; bildirim için CDC stream'i (Ö8) Lambda'ya doğrudan bağlanmaz, Streams API ya da KCL ile bir tüketici yazılır."),
+                   sc(7, "İstek başına ödeme, TTL (Ö6) iki yıl sonra siler. 3 puan kırıldı: sohbet listesi her mesajda bir silme ve bir yazma daha demektir; TTL silmesi KB başına ölçülür ve tombstone'lar silinene kadar (genellikle 10 gün) storage'da sayılır.")],
+            "ddb": [sc(9, "Partition key sohbet, sort key zaman; en yeni 50 tek Query. Sohbet listesi için bir GSI (temsilci + son mesaj zamanı). 1 puan kırıldı: GSI eventually consistent'tır; liste bir an eski sırada görünebilir. GSI'ın sort key'i değişince index'teki eski entry'yi database kendisi siler ve yeniden yazar; bu ek yazma R5'te sayıldı."),
+                    sc(10, "On-demand mod, partition'lara dağılım. Puan kırılmadı."),
+                    sc(10, "Birkaç AZ'de saklanır, point-in-time recovery. Puan kırılmadı."),
+                    sc(10, "Ekip SDK'yı biliyor; Streams kaydı bildirim Lambda'sını doğrudan tetikler. Puan kırılmadı."),
+                    sc(8, "İstek başına ödeme; TTL silmesi ücretsiz. 2 puan kırıldı: GSI her mesajda ikinci bir yazma birimi tüketir; iki yıllık mesajlar GB-ay ödenir.")],
+            "aur": [sc(9, "messages ve conversations table'ları; ORDER BY sent_at DESC LIMIT 50 ve sohbet listesi aynı SQL ile. 1 puan kırıldı: conversations.last_message_at her mesajda güncellenir ve bu row sık güncellenen bir row olur."),
+                    sc(6, "4 puan kırıldı: saniyede 2.500 insert ve 2.500 update tek writer'dan geçer; iki yılda milyarlarca row'luk table zamana göre parçalara bölünmelidir."),
+                    sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                    sc(8, "Ekip SQL'i bilir. 2 puan kırıldı: bildirim için bir outbox table'ı ya da değişiklik yakalama işi kurulur."),
+                    sc(6, "4 puan kırıldı: tepe için ayarlanmış minimum kapasite gece de ödenir; iki yıllık table'ın parçalarını düşürmek zamanlanmış bir iştir.")],
+        },
+        h2h={
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı gereksinimler R1 ve R4. Mesajlaşma, wide-column modelinin klasik örneğidir ve Keyspaces sohbet ekranını kusursuz karşılar. Fark ikinci sorudadır: temsilcinin sohbet listesi. "
+                      "DynamoDB bu soruyu bir GSI ile çözer ve database index'i kendisi günceller. Keyspaces'te secondary index yoktur; uygulama ikinci bir table'a yazar ve sıralama alanı key'in parçası olduğu için her mesajda eski row'u silip yenisini yazar. Üstüne ekip DynamoDB'yi ve Streams ile Lambda bildirim kalıbını zaten biliyor. "
+                      "Bu iş yükünde wide-column kategorisi doğrudur ama kategori içinde doğru store DynamoDB'dir; kart bu yüzden vardır. Hangi koşul değişseydi Keyspaces seçilirdi: ekip mevcut bir Cassandra mesajlaşma servisini taşıyor olsaydı ve sohbet listesi zaten ayrı bir table olarak CQL ile yazılmış olsaydı."),
+            "aur": _t("İlişkisel (Aurora PostgreSQL) ile kafa kafaya. Ayrıştığı gereksinimler R2 ve R5. Aurora iki soruyu da SQL ile, iki table ve iki index'le cevaplar; mesaj ile sohbet arasında foreign key de vardır ve destek raporları aynı database'te yazılır. "
+                      "Zayıf yanı yazma hacmi ve büyümedir: her mesaj bir insert ve sohbet row'unda bir update'tir, ikisi de tek writer'dan geçer; iki yıllık milyarlarca row'luk table zamana göre parçalara bölünmeli ve eski parçalar düşürülmelidir. "
+                      "Hangi koşul değişseydi Aurora PostgreSQL seçilirdi: mesaj trafiği saniyede birkaç yüz olsaydı, saklama süresi 90 gün olsaydı ve destek yöneticileri her hafta mesajlar üzerinde yeni SQL raporları isteseydi."),
+        },
+        verdict=_t("Karar: DynamoDB 47, Keyspaces 41, Aurora PostgreSQL 39. Keyspaces bu kartı kaybeder: sohbet ekranında güçlüdür, ama sohbet listesi için secondary index olmaması (Ö7) ve ekibin CQL bilmemesi (R4) DynamoDB'yi açıkça öne geçirir. "
+                   "Yine de Keyspaces seçersek artımız: partition boyutu sorun olmaz, mesaj sırası table'da hazırdır, TTL ile iki yıllık temizlik kendiliğinden olur. "
+                   "Potansiyel eksimiz: sohbet listesi için ikinci table, silme ve yeniden yazma ve tombstone'lar; bildirim için ayrı bir CDC tüketicisi; ekip için yeni bir API. Bir koşul değişseydi: mevcut bir Cassandra servisi taşınıyor olsaydı Keyspaces kazanırdı.")),
+
+    # ------------------------------------------------------------------ 4. audit logs
+    usecase("audit", 4,
+        title=_t("Denetim kayıtları (audit log)"),
+        key=_t("İki table: audit_by_account ((account_id), ts, event_id) ve audit_by_operator ((operator_id, day), ts, event_id)."),
+        story=_t("Bir ödeme şirketinin 600 iç aracı var; her yönetici işlemi (kim, hangi hesapta, ne yaptı, önceki ve sonraki değer) bir denetim kaydı yazar. Saniyede 3.000 kayıt, gün boyu düz. "
+                 "İki soru vardır: denetçi \"bu hesapta son 90 günde kim ne yaptı\" diye sorar; güvenlik ekibi \"bu operatör dün ne yaptı\" diye sorar. Kayıt bir kez yazılır, asla değişmez. Bir yıl çevrim içi saklanır, sonra yedi yıllık arşive (S3) gider. "
+                 "Şirketin platform ekibi diğer log servislerini zaten Keyspaces üzerinde çalıştırıyor ve CQL biliyor. Yeni bir soru gelirse yeni bir table eklemeyi kabul ediyorlar."),
+        reqs=[
+            req(True, "İki sabit soru: hesaba göre zaman sıralı ve operatöre göre gün içinde zaman sıralı. Her kayıt iki soruda da eksiksiz görünmeli: biri yazılıp diğeri kaybolmamalı. Kayıt değiştirilemez olmalı.",
+                      "Denetimde \"kayıt bir listede var, diğerinde yok\" durumu kaydın güvenilirliğini bitirir. Değiştirilebilen bir denetim kaydı denetim kaydı değildir."),
+            req(True, "Saniyede 3.000 yazma, düz; bir yılda yaklaşık 95 milyar kayıt. Okuma az ama bir hesabın 90 günü birkaç saniyede gelmeli.",
+                      "Veri her gün büyür. Büyüdükçe yavaşlayan bir okuma, denetçinin bir yıl sonra sistemi kullanamaması demektir."),
+            req(True, "Kayıp kabul edilmez. Yanlışlıkla silinen bir kayıt geri getirilebilmeli.",
+                       "Düzenleyici bir denetimde eksik kayıt ceza ve lisans riski demektir. Bu yüzden R3 bu kartta zorunludur."),
+            req(False, "Platform ekibi CQL biliyor ve diğer log servislerini Keyspaces'te işletiyor. Arşiv işi bir kez yazılacak ve kendiliğinden çalışacak.",
+                       "Aynı ekibin aynı aracı bilmesi, gece çağrısında doğru kişinin doğru şeyi bilmesi demektir."),
+            req(False, "Trafik düz; önceden alınan kapasite uygun. Bir yıllık çevrim içi veri büyüktür; GB fiyatı ve iki table'a yazmanın bedeli hesaplanmalı.",
+                       "Her kayıt iki kez yazılır ve iki kez saklanır; bu, faturanın iki katına yakın olması demektir."),
+        ],
+        cands=["ks", "ddb", "aur"],
+        scores={
+            "ks": [sc(9, "Soru başına bir table (Ö1, Ö3); iki table'a aynı kayıt bir logged batch ile yazılır ve batch'in komutlarının hepsi sonunda uygulanır. Değiştirilemezlik iki yolla sağlanır: uygulamanın IAM role'üne UPDATE ve DELETE izni verilmez ve kayıt IF NOT EXISTS ile yazılır (Ö5), böylece aynı key sessizce ezilmez; Keyspaces LWT için ek ücret almaz. 1 puan kırıldı: secondary index olmadığı için (Ö7) her yeni soru yeni bir table ve geçmiş verinin o table'a doldurulması demektir."),
+                   sc(10, "Düz 3.000 yazma/s token'a göre dağılır (Ö2); (operator_id, day) partition key'i bir operatörün partition'ını gün gün böler. Puan kırılmadı."),
+                   sc(10, "Üç AZ'de üç kopya, LOCAL_QUORUM yazma, 35 günlük point-in-time recovery; 35 günden eski bir kaybı CDC ile yazılan S3 arşivi karşılar. Puan kırılmadı."),
+                   sc(9, "Ekip CQL'i ve Keyspaces'i biliyor. 1 puan kırıldı: arşiv için CDC stream'inden (Ö8) okuyup S3'e yazan bir tüketici yazılır; stream kayıtları 24 saat tutulur, tüketici bu sürede okumalıdır."),
+                   sc(6, "Provisioned mod düz trafiğe uyar; table TTL'i (Ö6) bir yıl sonra siler. 4 puan kırıldı: her kayıt iki table'da saklanır ve iki kez yazılır; TTL silmesi KB başına ölçülür. DynamoDB'nin GSI'ı da ikinci kopyadır; aradaki 1 puan TTL silme ücretidir.")],
+            "ddb": [sc(9, "Hesaba göre partition key ve zamana göre sort key; operatör sorusu için bir GSI; değiştirilemezlik IAM ve attribute_not_exists koşuluyla. 1 puan kırıldı: GSI eventually consistent'tır; yeni bir soru yeni bir GSI ister."),
+                    sc(10, "Düz yazma, partition'lara dağılım. Puan kırılmadı."),
+                    sc(10, "Birkaç AZ'de saklanır, point-in-time recovery. Puan kırılmadı."),
+                    sc(6, "Serverless. 4 puan kırıldı: ekip diğer log servislerini Keyspaces'te işletiyor; ikinci bir veri servisi, ikinci bir izleme ve ikinci bir API demektir."),
+                    sc(7, "Reserved capacity düz trafikte ucuzdur, TTL silmesi ücretsiz. 3 puan kırıldı: GSI her kaydı ikinci kez yazar ve saklar; bir yıllık veri GB-ay ödenir.")],
+            "aur": [sc(10, "Tek table ve iki index; denetçinin yeni sorusu da bir SQL'dir. Puan kırılmadı."),
+                    sc(4, "6 puan kırıldı: bir yılda 95 milyar row tek bir writer ve tek bir volume için çok büyüktür; insert hızı sürdürülebilir olsa bile index'ler ve parça yönetimi yük olur."),
+                    sc(10, "Üç AZ'de altı kopya, point-in-time restore. Puan kırılmadı."),
+                    sc(7, "Ekip SQL bilir. 3 puan kırıldı: günlük parçaları düşürmek, vacuum ve arşiv işi ekibin işidir."),
+                    sc(6, "4 puan kırıldı: büyük storage ve tepe yazmaya göre boyutlandırılmış instance sürekli ödenir.")],
+        },
+        h2h={
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı gereksinimler R4 ve R5. Modelde iki servis eşittir: hesap partition key, zaman sıralama alanı; ikinci soru için DynamoDB bir GSI kullanır, Keyspaces ikinci bir table. "
+                      "DynamoDB'nin artısı ikinci kopyayı database'in tutmasıdır; Keyspaces'te uygulama iki table'a bir logged batch ile yazar. Bu iş yükünde fark ekipte ve işletmededir: platform ekibi diğer log servislerini Keyspaces'te çalıştırıyor, izleme, kapasite ve arşiv kalıbı hazırdır. "
+                      "İkinci bir veri servisi eklemek bu ekip için yeni bir nöbet ve yeni bir hata türü demektir. Hangi koşul değişseydi DynamoDB seçilirdi: şirketin log servisleri DynamoDB üzerinde olsaydı ya da denetim soruları her çeyrek değişip her seferinde yeni bir index gerektirseydi; GSI eklemek ve doldurmak, yeni bir table kurup geçmişi kopyalamaktan kolaydır."),
+            "aur": _t("İlişkisel (Aurora PostgreSQL) ile kafa kafaya. Ayrıştığı gereksinim R2'dir. Aurora R1'i en iyi karşılar: tek table, iki index ve denetçinin aklına gelen her yeni soru bir SQL cümlesidir. "
+                      "Ama bu iş yükünün belirleyici sayısı yılda 95 milyar kayıttır: tek bir writer ve tek bir volume için bu büyüklük, zamana göre parçalama, parçaları düşürme ve büyük index bakımı demektir; sorgular da veri büyüdükçe dikkat ister. "
+                      "Hangi koşul değişseydi Aurora PostgreSQL seçilirdi: kayıt sayısı saniyede birkaç yüz olsaydı ve denetçiler kayıtlar üzerinde serbest SQL sorguları ve JOIN'li raporlar isteseydi; o zaman tek bir relational database hem yazmayı hem soruları taşırdı."),
+        },
+        verdict=_t("Karar: Keyspaces 44, DynamoDB 42, Aurora PostgreSQL 37. Kayıtlar bir kez yazılır, sorular sabittir ve hacim büyüktür; bu, wide-column'un tam alanıdır. Keyspaces'i DynamoDB'nin önüne ekibin mevcut Keyspaces işletmesi (R4) geçirir. "
+                   "Yine de Keyspaces seçersek artımız: soru başına bir table ile iki soru da tek partition okumasıdır, logged batch iki table'ı birlikte yazar, bir yıllık temizlik TTL ile olur. "
+                   "Potansiyel eksimiz: her kayıt iki kez saklanır; yeni bir soru yeni bir table ve geçmişin doldurulması demektir; arşiv için CDC tüketicisi 24 saat içinde okumalıdır. Bir koşul değişseydi: sorular her çeyrek değişseydi DynamoDB'nin GSI'ları ya da Aurora'nın SQL'i öne geçerdi.")),
+
+    # ------------------------------------------------------------------ 5. shopping cart in a Cassandra shop
+    usecase("cart", 5,
+        title=_t("Bir Cassandra mağazasında alışveriş sepeti"),
+        key=_t("Partition key: cart_id. Clustering column: product_id. Row: adet, fiyat. Kural: okunan değerle koşullu yazma, örneğin SET qty = 4 IF qty = 2 (lightweight transaction)."),
+        story=_t("Bir moda e-ticaret şirketi sepet servisini dört yıldır kendi veri merkezindeki Apache Cassandra cluster'ında çalıştırıyor: Java servisi, CQL, DataStax driver'ı. "
+                 "Sepetin kuralı: bir üründen en fazla 5 adet; servis okuduğu değeri koşul yapan bir lightweight transaction ile bunu korur (qty 2 okunduysa: UPDATE ... SET qty = 4 IF qty = 2). Sepetler 24 saat sonra TTL ile kaybolur. "
+                 "Normalde saniyede 800 sepet yazması, kampanyada 8.000. Şirket bütün servislerini 9 ay içinde AWS'e taşıyor ve sepet servisinin kodunu yeniden yazmayı planlamıyor. Ekipteki iki geliştirici CQL bilir; Cassandra node'larını işleten kişi şirketten ayrılıyor."),
+        reqs=[
+            req(True, "Sorular ve kural aynen kalmalı: \"bu sepetin satırları\", \"bu satıra 2 ekle, toplam 5'i geçmesin\". Kural iki sekme aynı anda eklese bile korunmalı. CQL kodu değişmemeli.",
+                      "Kural bozulursa bir müşteri kampanya ürününden 50 adet alır ve stok planı bozulur. Kod değişirse dört yıllık testlerin hepsi yeniden yazılır."),
+            req(True, "Normalde saniyede 800 yazma, kampanyada 8.000; tepe anında da 20 ms'nin altında. Kampanyadan önce node eklemek gerekmemeli.",
+                      "Bugün her kampanyadan iki hafta önce node eklenip veri dengeleniyor; bu iş tek bir kişiye bağlı ve o kişi ayrılıyor."),
+            req(False, "Bir sepetin kaybı istenmez; bir AZ arızası sepetleri silmemeli.",
+                       "Sepet resmi kayıt değildir ama kampanya gecesi binlerce sepetin kaybı büyük bir satış kaybıdır."),
+            req(False, "Node, repair, compaction ve sürüm yükseltme işi kalmamalı. Ekip CQL bilir; yeni bir API öğrenmek için zaman yok.",
+                       "Node'ları işleten kişi ayrılıyor; işletme bilgisi onunla gidiyor. Yeni bir API, taşıma süresini ikiye katlar."),
+            req(False, "Kampanya dışında trafik düşük; tepe için sürekli ödeme istenmez. Sepet verisi küçük; 24 saat sonra silinir.",
+                       "Bugün kampanya tepesine göre boyutlandırılmış 12 node yılın tamamında ödeniyor."),
+        ],
+        cands=["ks", "ddb", "aur"],
+        scores={
+            "ks": [sc(9, "Aynı CQL: partition key cart_id, clustering column product_id (Ö1, Ö3); kural aynı lightweight transaction ile korunur (Ö5) ve Keyspaces LWT için ek ücret almaz. 1 puan kırıldı: koşul yanlış çıktığında da yazma birimi harcanır ve uygulama bu cevabı (applied = false) okumalıdır; bu zaten kodda var."),
+                   sc(10, "On-demand mod kampanya tepesini izler, node eklemek yoktur (Ö2). Puan kırılmadı."),
+                   sc(10, "Üç AZ'de üç kopya. Puan kırılmadı."),
+                   sc(9, "Node, repair ve compaction yoktur; kod aynı kalır. 1 puan kırıldı: driver'a SigV4 kimlik plugin'i, TLS (port 9142) ve bağlantı havuzu ayarı eklenir."),
+                   sc(8, "İstek başına ödeme; TTL (Ö6) 24 saat sonra siler. 2 puan kırıldı: TTL silmesi KB başına ölçülür; koşulu tutmayan LWT'ler de yazma birimi harcar.")],
+            "ddb": [sc(9, "Partition key sepet, sort key ürün; kural koşullu yazma ile. 1 puan kırıldı: süresi dolan sepet okumada birkaç gün görünebilir, uygulama filtreler."),
+                    sc(10, "On-demand mod. Puan kırılmadı."),
+                    sc(10, "Birkaç AZ'de saklanır. Puan kırılmadı."),
+                    sc(3, "7 puan kırıldı: bütün sepet servisi CQL'den DynamoDB SDK'sına yeniden yazılır, veri modeli ve testler yeniden yapılır; 9 aylık taşıma planında bu, servisin en büyük işi olur."),
+                    sc(9, "İstek başına ödeme, TTL silmesi ücretsiz. 1 puan kırıldı: koşullu yazmalar ve tutarlı okumalar tepe maliyetini artırır.")],
+            "aur": [sc(10, "Sepet ve kural SQL ile, tek transaction'da; stokla aynı database'te birleşebilir. Puan kırılmadı."),
+                    sc(7, "3 puan kırıldı: kampanya tepesi tek writer'a gider; minimum kapasite önceden yükseltilmelidir."),
+                    sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                    sc(3, "7 puan kırıldı: servis CQL'den SQL'e yeniden yazılır; 24 saatlik silme için zamanlanmış bir iş eklenir."),
+                    sc(7, "3 puan kırıldı: minimum kapasite gece de ödenir; küçük ve geçici veri için kalıcı bir relational database pahalı bir yerdir.")],
+        },
+        h2h={
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı tek gereksinim R4'tür ve fark büyüktür. Yeni bir projede bu kart bir yakın yarış olurdu: DynamoDB de sepeti partition key ve sort key ile tutar, kuralı koşullu yazma ile korur ve TTL silmesi ücretsizdir. "
+                      "Bu iş yükü yeni bir proje değildir; çalışan, test edilmiş bir CQL servisinin taşınmasıdır. Keyspaces'te aynı CQL, aynı lightweight transaction ve aynı TTL çalışır; değişen şey driver'ın bağlantı ayarıdır. DynamoDB'de servis baştan yazılır. "
+                      "Hangi koşul değişseydi DynamoDB seçilirdi: şirket sepet servisini zaten yeniden yazmaya karar vermiş olsaydı ya da diğer servisler DynamoDB üzerinde olsaydı ve ekip tek bir veri servisinde birleşmek isteseydi; o zaman taşıma bedeli bir kez ödenir ve DynamoDB'nin entegrasyonları kazanır."),
+            "aur": _t("İlişkisel (Aurora PostgreSQL) ile kafa kafaya. Ayrıştığı gereksinimler R2, R4 ve R5. Aurora'nın gücü sepeti stok ve siparişle aynı transaction'da tutabilmesidir; kural bir CHECK ya da koşullu UPDATE'tir ve checkout tek database'te biter. "
+                      "Ama bu şirketin sepeti zaten ayrı bir servistir ve sipariş başka bir sistemde yazılıyor; Aurora'nın en güçlü yanı burada kullanılmaz. Buna karşılık servis yeniden yazılır, kampanya tepesi tek writer'a gider ve 24 saatlik silme bir bakım işi olur. "
+                      "Hangi koşul değişseydi Aurora PostgreSQL seçilirdi: taşıma sırasında sepet, stok ve sipariş tek bir servis ve tek bir database'te birleştirilecek olsaydı; o zaman checkout'un tek transaction'ı yeniden yazma bedeline değerdi."),
+        },
+        verdict=_t("Karar: Keyspaces 46, DynamoDB 41, Aurora PostgreSQL 37. Belirleyici olan R4'tür: Keyspaces çalışan CQL servisini, lightweight transaction kuralını ve TTL'i değiştirmeden taşır ve node işletmeyi bitirir. "
+                   "Yine de Keyspaces seçersek artımız: kod aynı kalır, kampanya öncesi node eklemek biter, LWT ek ücret almaz. "
+                   "Potansiyel eksimiz: koşulu tutmayan LWT'ler ve TTL silmeleri ödenir; sepetle stok aynı transaction'da birleştirilemez (kural tek row'dadır). Bir koşul değişseydi: servis zaten yeniden yazılacak olsaydı DynamoDB yarışa girerdi.")),
+
+    # ------------------------------------------------------------------ 6. device state with TTL (clear loss: DynamoDB wins)
+    usecase("device", 6, sim="lose_device", kind="lose",
+        title=_t("TTL ile cihaz durumu (akıllı termostatlar)"),
+        key=_t("Partition key: device_id (tek parça). Row: son sıcaklık, mod, pil. Her yazma USING TTL 86400 ile."),
+        story=_t("Bir akıllı ev şirketinin 1,5 milyon termostatı var. Her termostat dakikada bir son durumunu gönderir: saniyede yaklaşık 25.000 yazma, gün boyu düz. Mesajlar AWS IoT Core üzerinden bir Lambda fonksiyonuna gelir. "
+                 "Mobil uygulama bir evin termostatını açınca son durumu okur. 24 saat hiç mesaj göndermeyen cihazın durumu kendiliğinden kaybolmalı ve uygulama \"çevrim dışı\" göstermelidir. Sıcaklık 35 dereceyi geçince kullanıcının telefonuna bir bildirim gider. "
+                 "Geçmiş tutulmaz; geçmiş ayrı bir time series sisteme gider. Beş kişilik ekip IoT Core, Lambda ve DynamoDB SDK'sı ile çalışıyor; ekipte CQL bilen yok."),
+        reqs=[
+            req(True, "Sorular: \"bu cihazın son durumu\" ve \"bu cihazın son durumunu bu mesajla değiştir\". Cihaz id'si her mesajda ve her uygulama açılışında bilinir. 24 saat mesaj gelmezse durum yok olmalı.",
+                      "Uygulama tek bir cihazı gösterir; model bundan karmaşıksa karmaşıklık boşa ödenir. Durum kendiliğinden yok olmazsa uygulama aylarca önce sökülmüş bir termostatı \"çevrim içi\" gösterir."),
+            req(True, "Saniyede 25.000 yazma, düz ve sürekli; okuma az (saniyede 300). Yazma 50 ms'nin altında onaylanmalı; Lambda her mesajda kısa sürede bitmeli.",
+                      "Yazma yavaşlarsa Lambda süresi uzar, eşzamanlı Lambda sayısı sınıra dayanır ve mesajlar gecikir."),
+            req(False, "Kaybolan bir durum bir dakika sonra yeniden gelir. Bir AZ arızası birkaç dakikadan uzun eski durum göstermemeli.",
+                       "Veri kendini dakikada bir yeniler; dayanıklılık burada bir rahatlıktır, zorunluluk değildir."),
+            req(False, "Ekip IoT Core, Lambda ve DynamoDB SDK'sı kullanıyor; CQL ve Cassandra driver'ı istemiyor. Sıcaklık bildirimi yazan koddan ayrı bir fonksiyonda çalışmalı.",
+                       "Bildirim kuralı yazan Lambda'nın içine girerse her yeni kural o fonksiyonu değiştirir ve yazma yolunu yavaşlatır. Lambda'dan uzun ömürlü TLS bağlantıları yönetmek ayrı bir iştir."),
+            req(False, "Yazma sayısı sabit ve yüksek; yazma birimi fiyatı belirleyicidir. Süresi dolan durumların silinmesi ayrıca ödenmemeli.",
+                       "Günde iki milyardan fazla yazma: birim fiyattaki küçük bir fark ayda binlerce dolardır."),
+        ],
+        cands=["ks", "ddb", "ec"],
+        scores={
+            "ks": [sc(10, "Tek parçalı primary key device_id (Ö1); INSERT var olan row'un üzerine yazar ve USING TTL 86400 (Ö6) her yazmada 24 saati yeniler; süresi dolan row okumada görünmez. Puan kırılmadı."),
+                   sc(9, "25.000 yazma/s token'a göre dağılır (Ö2). 1 puan kırıldı: her Lambda ortamı Keyspaces'e TLS ile ayrı bağlantılar açar; bağlantı başına saniyede 3.000 CQL sorgusu sınırı ve bağlantı havuzu ayarı izlenmelidir."),
+                   sc(10, "Üç AZ'de üç kopya. Puan kırılmadı."),
+                   sc(4, "Serverless. 6 puan kırıldı: ekip CQL'i, Cassandra driver'ını ve SigV4 plugin'ini öğrenir; bildirim için CDC stream'i (Ö8) Lambda'yı doğrudan tetiklemez, Streams API ya da KCL ile çalışan ayrı bir tüketici yazılır ve işletilir."),
+                   sc(6, "Provisioned mod düz trafiğe uyar. 4 puan kırıldı: R5'in \"silme ayrıca ödenmemeli\" şartı karşılanmaz: süresi dolan her durumun silinmesi KB başına bir TTL delete olarak ödenir; 25.000 yazma birimi de sürekli ödenir.")],
+            "ddb": [sc(10, "Tek parçalı key cihaz id'si; her mesaj aynı key'e yazarak öncekinin üzerine yazar, uygulama key ile okur; TTL alanı 24 saat sonrasını tutar. Puan kırılmadı; süresi dolup henüz silinmemiş durumu uygulama zaman alanıyla kendisi \"çevrim dışı\" sayar (zaten okuduğu bir alan)."),
+                    sc(10, "Düz 25.000 yazma partition'lara dağılır; Lambda SDK ile HTTPS üzerinden yazar, bağlantı havuzu gerekmez. Puan kırılmadı."),
+                    sc(10, "Birkaç AZ'de saklanır. Puan kırılmadı."),
+                    sc(10, "Ekip SDK'yı biliyor; Streams kaydı bildirim Lambda'sını doğrudan tetikler. Puan kırılmadı."),
+                    sc(7, "Provisioned ve reserved capacity düz trafikte ucuzdur; TTL silmesi ücretsizdir. 3 puan kırıldı: 25.000 yazma birimi sürekli ödenir ve 1 KB'ı geçen mesaj iki birim tutar.")],
+            "ec": [sc(10, "SET ile durum ve EX ile 24 saat; key tam süre sonunda yok olur. Puan kırılmadı."),
+                   sc(10, "Bellekten, mikrosaniyede yazma ve okuma. Puan kırılmadı."),
+                   sc(5, "5 puan kırıldı: Serverless'ta dayanıklı bir yazma log'u yoktur; arızada son durumlar kaybolabilir (bir dakika içinde yeniden gelir)."),
+                   sc(7, "Serverless. 3 puan kırıldı: bildirim için değişiklik akışı yoktur; keyspace notification kalıcı değildir, kural yazan Lambda'ya ya da ayrı bir kuyruğa girer."),
+                   sc(6, "Veri GB-saat ve istek başına. 4 puan kırıldı: 1,5 milyon durum bellekte tutulur ve bellek GB fiyatı diskten yüksektir; minimum bir ücret vardır.")],
+        },
+        h2h={
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı gereksinimler R4 ve R5. Veri modelinde iki servis aynıdır: tek parçalı key, üzerine yazma, 24 saatlik süre sonu; ikisi de düz yazmayı partition'lara dağıtır. "
+                      "Fark ekipte ve entegrasyondadır: ekip IoT Core, Lambda ve DynamoDB SDK'sını kullanıyor; Lambda HTTPS ile yazar ve bağlantı havuzu yönetmez; Streams kaydı bildirim fonksiyonunu doğrudan tetikler ve TTL silmesi ücretsizdir. Keyspaces'te ekip yeni bir sorgu dili ve driver öğrenir, CDC için ayrı bir tüketici işletir ve her süresi dolan durum için öder. "
+                      "Bu iş yükünde wide-column modeli doğru olsa bile Keyspaces'in tek üstünlüğü olan Cassandra uyumluluğu hiç kullanılmaz. Hangi koşul değişseydi Keyspaces seçilirdi: şirketin mevcut cihaz servisi Cassandra üzerinde çalışıyor ve AWS'e kod değişmeden taşınıyor olsaydı."),
+            "ec": _t("Bellek içi key-value (ElastiCache) ile kafa kafaya. Ayrıştığı gereksinimler R3, R4 ve R5. ElastiCache en hızlı ve en kesin süre sonunu verir: EXPIRE tam zamanında key'i siler ve okuma mikrosaniyededir. "
+                      "Ama bu iş yükü mikrosaniye istemez; mobil uygulama saniyede 300 kez okur. Buna karşılık 1,5 milyon durum bellekte sürekli ödenir, arızada son durumlar kaybolabilir ve bildirim için kalıcı bir değişiklik akışı yoktur. "
+                      "Hangi koşul değişseydi ElastiCache seçilirdi: uygulama her ekran yenilemesinde binlerce cihazı birden okusaydı (bir bina yönetim paneli gibi) ve okuma gecikmesi 1 ms'nin altında olmak zorunda olsaydı; o zaman bellek fiyatı hızın bedeli olarak kabul edilirdi."),
+        },
+        verdict=_t("Karar: DynamoDB 47, Keyspaces 39, ElastiCache (Valkey) 38. Net bir kaybetme: Keyspaces gerçek bir adaydır ve veri modeli kusursuz uyar, ama ekip CQL bilmiyor, bildirim için CDC ayrı bir tüketici ister ve TTL silmeleri ödenir; DynamoDB bunların hepsini ekibin bildiği araçlarla ve ücretsiz TTL ile yapar. "
+                   "Yine de Keyspaces seçersek artımız: süresi dolan durum okumada hiç görünmez (Keyspaces filtreler), model aynı kalır, ileride Cassandra kullanan bir ekip devralabilir. "
+                   "Potansiyel eksimiz: yeni API ve driver, Lambda'dan bağlantı havuzu yönetimi, ayrı bir CDC tüketicisi, her TTL silmesinin faturası. Bir koşul değişseydi: mevcut bir Cassandra servisi taşınıyor olsaydı Keyspaces kazanırdı.")),
+
+    # ------------------------------------------------------------------ 7. click streams ("both together" with Redshift)
+    usecase("clicks", 7,
+        title=_t("Tıklama akışı: kaldığın yerden devam et"),
+        key=_t("Partition key: user_id. Clustering column: clicked_at (en yeni önce). TTL 30 gün. Analiz kopyası: CDC ile S3 ve Redshift."),
+        story=_t("Bir haber sitesinin günde 6 milyon okuyucusu var. Her makale açılışı ve her kaydırma bir tıklama row'u yazar; normalde saniyede 8.000, son dakika haberlerinde 40.000. Ana sayfadaki \"kaldığın yerden devam et\" şeridi okuyucunun son 100 tıklamasından yarım bırakılan makaleleri seçer. "
+                 "Okuma oturumlarını Spark işleri sessionization ile çıkarır; ekip bu işleri Spark Cassandra Connector ve CQL ile yazdı. Yayın yönetmenleri her pazartesi geçen haftanın bütün tıklamaları üzerinde rapor ister: kategoriye ve saate göre okuma süresi. "
+                 "Tıklamalar 30 gün sonra silinir; raporlar için özetler bir yıl saklanır."),
+        reqs=[
+            req(True, "Okuyucu başına soru: \"bu okuyucunun son 100 tıklaması, en yeni önce\". Her istek okuyucu id'sini bilir. Haftalık rapor bütün okuyucuları birlikte tarar ve gruplar; bu ikinci bir soru türüdür.",
+                      "Şerit her ana sayfa açılışında görünür; yavaş olursa ana sayfa yavaşlar. Haftalık rapor yanlış ya da eksikse yayın planı yanlış veriye dayanır."),
+            req(True, "Normalde saniyede 8.000, son dakika haberlerinde birkaç dakika içinde 40.000 yazma. Okuyucu başına okuma 20 ms'nin altında.",
+                      "Son dakika haberi sitenin en çok okunan anıdır; yazma o anda yavaşlarsa tıklamalar kaybolur ve şerit yanlış olur."),
+            req(False, "Birkaç tıklamanın kaybı kabul edilir; bir AZ arızası 30 günlük geçmişi silmemeli.",
+                       "Tıklamalar istatistik içindir; tek tek değerli değildir ama toplamları yayın kararlarını belirler."),
+            req(False, "Ekip Spark Cassandra Connector ve CQL ile sessionization yazdı; değiştirmek istemiyor. Haftalık rapor için analistler SQL ister.",
+                       "Çalışan sessionization işini yeniden yazmak iki ay sürer. Analistler SQL bilir; başka bir sorgu dili öğrenmezler."),
+            req(False, "Trafik çok dalgalı; istek başına ödeme. 30 günlük silme kendiliğinden olmalı. Rapor taraması okuyucu şeridini yavaşlatmamalı.",
+                       "Haftalık büyük tarama aynı database'te çalışırsa pazartesi sabahı ana sayfa yavaşlar."),
+        ],
+        cands=["ks", "ddb", "rs"],
+        scores={
+            "ks": [sc(9, "Partition key user_id, clustering column clicked_at DESC (Ö1, Ö3): son 100 tıklama tek partition okumasıdır. 1 puan kırıldı: haftalık rapor Keyspaces'te cevaplanamaz (aggregate fonksiyon ve GROUP BY yok); tıklamalar CDC stream'i (Ö8) ile S3'e ve oradan Redshift'e kopyalanır."),
+                   sc(9, "Yazmalar okuyucu id'sinin token'ına göre dağılır (Ö2); on-demand mod. 1 puan kırıldı: son dakika sıçraması önceki tepeyi aşarsa table'ın önceden ısıtılması (warm throughput) gerekir."),
+                   sc(10, "Üç AZ'de üç kopya. Puan kırılmadı."),
+                   sc(8, "Spark işi aynı CQL ile çalışır. 2 puan kırıldı: CDC'den S3'e yazan tüketici bir kez yazılır ve stream kayıtları 24 saat tutulduğu için tüketici sürekli çalışmalıdır."),
+                   sc(7, "İstek başına ödeme; TTL (Ö6) 30 gün sonra siler. 3 puan kırıldı: TTL silmesi KB başına ölçülür; analiz kopyası için S3 ve Redshift ayrıca ödenir.")],
+            "ddb": [sc(9, "Partition key okuyucu, sort key zaman; son 100 tek Query. 1 puan kırıldı: haftalık rapor için Redshift'e zero-ETL kopyası gerekir."),
+                    sc(9, "On-demand mod. 1 puan kırıldı: sıçrama önceki tepenin iki katını aşarsa warm throughput gerekir."),
+                    sc(10, "Birkaç AZ'de saklanır. Puan kırılmadı."),
+                    sc(6, "Serverless. 4 puan kırıldı: sessionization işi Spark Cassandra Connector'dan başka bir okuma yoluna yeniden yazılır."),
+                    sc(7, "İstek başına ödeme, TTL silmesi ücretsiz. 3 puan kırıldı: zero-ETL kopyası ve Redshift ayrıca ödenir; 40.000 yazma/s tepe yazma birimi olarak ödenir.")],
+            "rs": [sc(3, "Haftalık rapor için en iyi yerdir (columnar tarama, SQL). 7 puan kırıldı: \"bu okuyucunun son 100 tıklaması\" ana sayfa başına milisaniyelerde ve saniyede binlerce kez sorulamaz; warehouse tek kayıt aramaları için yapılmamıştır."),
+                   sc(5, "5 puan kırıldı: saniyede 40.000 tek tek insert yerine streaming ingestion ya da toplu yükleme gerekir; veri saniyeler ile dakikalar arasında gecikir."),
+                   sc(10, "Yönetilen storage, birkaç AZ, snapshot'lar. Puan kırılmadı."),
+                   sc(9, "Analistler SQL bilir. 1 puan kırıldı: sessionization işi Redshift SQL'ine taşınır."),
+                   sc(5, "5 puan kırıldı: ana sayfa trafiğini taşıyacak sürekli bir warehouse kapasitesi ödenir; bu kapasite şerit için gereksiz pahalıdır.")],
+        },
+        h2h={
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı gereksinim R4'tür. İki servis de son 100 tıklamayı tek istekte okur, sıçramayı partition'lara dağıtır ve haftalık rapor için bir analiz kopyası ister: DynamoDB zero-ETL ile Redshift'e, Keyspaces CDC ile S3'e. "
+                      "DynamoDB'nin artıları gerçektir: TTL silmesi ücretsizdir ve zero-ETL kopyası bir tüketici yazmadan kurulur. Keyspaces'in artısı ekiptedir: sessionization işi Spark Cassandra Connector ve CQL ile yazıldı ve değişmeden çalışır. "
+                      "Fark iki puandır. Hangi koşul değişseydi DynamoDB seçilirdi: sessionization işi zaten yeniden yazılacak olsaydı ya da raporun saatler değil dakikalar içinde güncel olması istenseydi; zero-ETL kopyası kod yazmadan bunu sağlar ve CDC tüketicisi işletme yükünü kaldırır."),
+            "rs": _t("Data warehouse (Redshift) ile kafa kafaya. Bu kart bir \"ikisi birlikte\" kartıdır: Redshift bir alternatif değil, ikinci store'dur. Haftalık rapor bütün okuyucuları tarar ve kategoriye ve saate göre gruplar; bu tam olarak columnar warehouse'un işidir ve Keyspaces bunu hiç yapamaz. "
+                      "Ama \"bu okuyucunun son 100 tıklaması\" ana sayfanın her açılışında, saniyede binlerce kez ve milisaniyelerde sorulur; warehouse bunun için yapılmamıştır ve sürekli büyük bir kapasite ister. Best practice: tıklamalar önce Keyspaces'e yazılır, CDC ile S3'e ve oradan Redshift'e akar. "
+                      "Hangi koşul değişseydi Redshift tek başına seçilirdi: \"kaldığın yerden devam et\" şeridi kaldırılsaydı ve tıklamalar sadece raporlar için toplansaydı; o zaman tıklamalar doğrudan Redshift'e akar ve ikinci store gereksiz olurdu."),
+        },
+        verdict=_t("Karar: Keyspaces 43, DynamoDB 41, Redshift 32. Okuyucu başına soru için Keyspaces, haftalık rapor için Redshift: doğru cevap ikisi birlikte. Keyspaces'i DynamoDB'nin önüne ekibin Spark Cassandra Connector işi (R4) geçirir. "
+                   "Yine de Keyspaces seçersek artımız: şerit tek partition okumasıdır, sıçrama partition'lara dağılır, sessionization işi değişmez, 30 günlük temizlik TTL ile olur. "
+                   "Potansiyel eksimiz: rapor için CDC tüketicisi, S3 ve Redshift ayrıca kurulur ve ödenir; TTL silmesi ödenir. Bir koşul değişseydi: şerit kalksaydı Redshift tek başına yeterdi; sessionization yeniden yazılacak olsaydı DynamoDB öne geçerdi.")),
+
+    # ------------------------------------------------------------------ 8. fraud signals per account (close race, DynamoDB wins)
+    usecase("fraud", 8, sim="race_fraud", kind="race",
+        title=_t("Hesap başına dolandırıcılık sinyalleri"),
+        key=_t("Partition key: account_id. Clustering column: ts (en yeni önce). Row: sinyal türü, cihaz, ülke, risk puanı."),
+        story=_t("Bir ödeme şirketi her kart işleminde hesabın son 200 güvenlik sinyalini okur: giriş, cihaz değişikliği, IP ülkesi, şifre sıfırlama. Okuma, 50 ms'lik yetkilendirme bütçesinin içinde 10 ms'yi geçmemelidir. "
+                 "Saniyede 6.000 yetkilendirme ve 20.000 yeni sinyal yazılır. Sinyaller 90 gün saklanır. Yeni bir cihaz görülünce bir kural motoru birkaç saniye içinde tetiklenmeli ve gerekirse hesabı geçici olarak kilitlemelidir. "
+                 "Altı kişilik ekip diğer servislerini DynamoDB ve Lambda ile yazdı; ekipte bir kişi önceki işinde Cassandra kullandı."),
+        reqs=[
+            req(True, "Sorular: \"bu hesabın son 200 sinyali, en yeni önce\" ve \"bu hesaba bu sinyali ekle\". Hesap id'si her istekte bilinir. Okuma her yetkilendirmede yapılır.",
+                      "Son sinyaller okunamazsa ya da sırası yanlışsa çalınmış bir hesapta yeni cihazdan yapılan ödeme onaylanır."),
+            req(True, "Saniyede 20.000 yazma ve 6.000 okuma; okuma 10 ms'nin altında (p99). Kampanya günlerinde işlem sayısı iki katına çıkar.",
+                      "Yetkilendirme 50 ms'yi geçerse kart ağı işlemi reddeder; müşteri kasada bekler ve satış kaybolur."),
+            req(True, "Sinyal kaybı kabul edilmez: kaybolan bir \"şifre sıfırlandı\" sinyali bir dolandırıcılığı gizler. Bir AZ arızası kayıp yaratmamalı.",
+                       "Bir dolandırıcılık incelemesinde eksik sinyal hem para kaybı hem düzenleyici sorundur. Bu yüzden R3 bu kartta zorunludur."),
+            req(False, "Yeni cihaz sinyali yazan koddan ayrı bir kural motorunu birkaç saniye içinde tetiklemeli. Ekip Lambda ve DynamoDB SDK'sını biliyor.",
+                       "Kural motoru yazma yolunun içinde çalışırsa her yeni kural yetkilendirmeyi yavaşlatır."),
+            req(False, "Trafik gün içinde dalgalı, kampanyada iki kat. 90 gün sonra silme kendiliğinden olmalı.",
+                       "90 günlük sinyal birikimi storage'ı; sürekli yazma ise faturanın çoğunu belirler."),
+        ],
+        cands=["ks", "ddb", "ec"],
+        scores={
+            "ks": [sc(10, "Partition key account_id, clustering column ts DESC (Ö1, Ö3): son 200 sinyal tek partition'dan LIMIT 200 ile. Puan kırılmadı."),
+                   sc(9, "Yazmalar hesap id'sinin token'ına göre dağılır (Ö2), tek haneli milisaniye. 1 puan kırıldı: R3 yüzünden okuma LOCAL_QUORUM'dur (son yazılan sinyal görünür); tek haneli milisaniye p99 10 ms bütçesine sığar ama payı azdır, bağlantı havuzu sıcak tutulmalıdır."),
+                   sc(10, "Üç AZ'de üç kopya, her yazma LOCAL_QUORUM. Puan kırılmadı."),
+                   sc(7, "Serverless. 3 puan kırıldı: ekibin çoğu CQL'i ve driver'ı öğrenir; kural motoru için CDC stream'i (Ö8) Lambda'yı doğrudan tetiklemez, KCL ile çalışan bir tüketici yazılır."),
+                   sc(7, "İstek başına ödeme, TTL (Ö6) 90 gün sonra siler. 3 puan kırıldı: TTL silmesi KB başına ölçülür; 20.000 yazma/s sürekli yazma birimidir.")],
+            "ddb": [sc(10, "Partition key hesap, sort key zaman; ters sırayla Limit 200 tek Query. Puan kırılmadı."),
+                    sc(9, "On-demand ya da provisioned, tek haneli milisaniye. 1 puan kırıldı: R3 yüzünden okuma strongly consistent'tır; tek haneli milisaniye bütçeye sığar ama payı azdır."),
+                    sc(10, "Birkaç AZ'de saklanır, point-in-time recovery. Puan kırılmadı."),
+                    sc(8, "Ekip SDK'yı biliyor; Streams kaydı kural Lambda'sını doğrudan tetikler. 2 puan kırıldı: kural Lambda'sı için hata kuyruğu ve yeniden deneme ayarı kurulur."),
+                    sc(8, "İstek başına ödeme, TTL silmesi ücretsiz. 2 puan kırıldı: 20.000 yazma/s sürekli yazma birimidir; 90 günlük storage GB-ay ödenir.")],
+            "ec": [sc(9, "Hesap başına bir sorted set, score zaman; son 200 tek komut. 1 puan kırıldı: 90 günlük silme için score'a göre ayrı temizlik komutları gerekir."),
+                   sc(10, "Bellekten, mikrosaniye. Puan kırılmadı."),
+                   sc(4, "6 puan kırıldı: Serverless'ta dayanıklı bir yazma log'u yoktur; arızada son sinyaller kaybolabilir ve bu iş yükünde kayıp kabul edilmez."),
+                   sc(8, "Serverless. 2 puan kırıldı: kural motoru için kalıcı bir değişiklik akışı yoktur; sinyali yazan kod ayrıca bir kuyruğa yazar."),
+                   sc(4, "6 puan kırıldı: 90 günlük sinyal bütün hesaplar için bellekte tutulur; bellek GB fiyatı bu boyutta faturanın çoğu olur.")],
+        },
+        h2h={
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı gereksinimler R4 ve R5. R1, R2 ve R3'te iki servis eşittir: hesap partition key, zaman sıralama alanı, son 200 sinyal tek istek; ikisi de son yazmayı gören bir okuma seviyesi sunar ve üç AZ'de saklar. "
+                      "Fark entegrasyondadır: DynamoDB'de Streams kaydı kural motorunun Lambda'sını doğrudan tetikler ve TTL silmesi ücretsizdir; Keyspaces'te CDC için KCL ile çalışan bir tüketici yazılır ve TTL silmesi ödenir. Ekipte Cassandra bilen tek kişi bu farkı kapatmaya yetmez. "
+                      "Fark iki puandır; kart bu yüzden bir yakın yarıştır ve Keyspaces kaybeder. Hangi koşul değişseydi Keyspaces seçilirdi: dolandırıcılık ekibinin mevcut sinyal servisi Cassandra üzerinde çalışıyor ve kural motoru zaten bir Kinesis ya da KCL tüketicisi olsaydı."),
+            "ec": _t("Bellek içi key-value (ElastiCache) ile kafa kafaya. Ayrıştığı gereksinimler R3 ve R5. ElastiCache en hızlı cevabı verir: sorted set ile son 200 sinyal mikrosaniyededir ve 10 ms bütçesinin neredeyse hepsi kural hesabına kalır. "
+                      "Ama bu kartta R3 zorunludur: kaybolan bir sinyal bir dolandırıcılığı gizler ve Serverless'ta dayanıklı bir yazma log'u yoktur. Üstüne 90 günlük sinyal bütün hesaplar için bellekte tutulur ve bu fatura büyüktür. "
+                      "Best practice çoğu zaman ikisinin birlikte kullanılmasıdır: kalıcı kayıt Keyspaces ya da DynamoDB'de, en sıcak hesapların son sinyalleri ElastiCache'te. Hangi koşul değişseydi ElastiCache tek başına seçilirdi: sinyaller sadece son bir saat için tutulsaydı ve kaybı kabul edilseydi."),
+        },
+        verdict=_t("Karar: DynamoDB 45, Keyspaces 43, ElastiCache (Valkey) 35. Yakın bir yarış ve Keyspaces kaybeder: veri modeli ve hız aynıdır, ama kural motorunu Streams ile doğrudan tetiklemek ve ücretsiz TTL DynamoDB'yi iki puan öne geçirir. "
+                   "Yine de Keyspaces seçersek artımız: son 200 sinyal tek partition okumasıdır, LOCAL_QUORUM okuma son sinyali görür, süresi dolan sinyal okumada hiç görünmez. "
+                   "Potansiyel eksimiz: ekip CQL öğrenir, kural motoru için KCL tüketicisi işletilir, TTL silmeleri ödenir. Bir koşul değişseydi: sinyal servisi zaten Cassandra üzerinde olsaydı Keyspaces kazanırdı.")),
+
+    # ------------------------------------------------------------------ 9. product reviews per product (Keyspaces loses to Aurora)
+    usecase("reviews", 9,
+        title=_t("Ürün başına yorumlar"),
+        key=_t("Partition key: product_id. Clustering column: created_at. Sıralama \"en faydalı\" ve yıldız filtresi için ikinci ve üçüncü table."),
+        story=_t("Bir pazaryerinde 5 milyon ürün yorumu var; dakikada 300 yeni yorum yazılır ve ürün sayfaları saniyede 2.000 kez yorum okur. Ürün sayfası yorumları üç biçimde gösterir: en yeni önce, en faydalı önce (\"faydalı\" oyları sürekli değişir) ve sadece 1 yıldızlılar. "
+                 "Sayfanın üstünde ortalama puan ve yıldız başına sayı vardır. Her yorum yayınlanmadan önce moderasyon kuyruğundan geçer: moderatör \"bekleyen yorumlar, en eskisi önce\" listesini görür. "
+                 "Ekip SQL biliyor; analistler yorumlar üzerinde her ay yeni sorular soruyor (\"iade edilen ürünlerin yorum puanı\")."),
+        reqs=[
+            req(True, "Sorular: ürüne göre en yeni önce, en faydalı önce ve yıldıza göre filtre; ürün başına ortalama ve yıldız başına sayı; moderasyon durumuna göre bekleyenler. Faydalı oyu ve moderasyon durumu yazıldıktan sonra değişir.",
+                      "\"En faydalı\" sıralaması satış dönüşümünü doğrudan etkiler; yanlış sıra kötü bir ürünü iyi gösterir. Ortalama yanlışsa müşteri güveni kaybolur."),
+            req(True, "Saniyede 2.000 okuma ve dakikada 300 yazma; okuma 50 ms'nin altında. 5 milyon yorum, yılda yüzde 30 büyüme.",
+                      "Yorumlar ürün sayfasının parçasıdır; yavaşlarsa sayfa yavaşlar."),
+            req(False, "Yorum kaybı istenmez; bir AZ arızası kayıp yaratmamalı.",
+                       "Yorumlar kullanıcıların emeğidir ve yasal bir şikâyette kanıttır."),
+            req(False, "Ekip SQL biliyor. Analistler her ay yeni sorular soruyor ve yorumları siparişlerle ve iadelerle birleştiriyor.",
+                       "Her yeni soru için yeni bir table tasarlamak ve doldurmak analist sorularını haftalarca geciktirir."),
+            req(False, "Trafik düz ve orta; veri küçük (birkaç GB). Basit bir fatura istenir.",
+                       "Küçük veri için en basit model en ucuz modeldir."),
+        ],
+        cands=["ks", "aur", "doc"],
+        scores={
+            "ks": [sc(4, "En yeni önce yorumlar partition key product_id ve clustering column created_at ile tek partition okumasıdır (Ö1, Ö3). 6 puan kırıldı: \"en faydalı önce\" için ayrı bir table gerekir ve faydalı oyu clustering column olduğu için her oyda row silinip yeniden yazılır; yıldız filtresi ve moderasyon kuyruğu ayrı table'lar ister, çünkü secondary index yoktur (Ö7); ortalama ve sayı için aggregate fonksiyon yoktur, uygulama counter column'larıyla kendisi tutar."),
+                   sc(10, "Saniyede 2.000 okuma ve küçük yazma hacmi kolayca dağılır (Ö2). Puan kırılmadı."),
+                   sc(10, "Üç AZ'de üç kopya. Puan kırılmadı."),
+                   sc(6, "Serverless. 4 puan kırıldı: ekip CQL öğrenir; analistlerin her yeni sorusu yeni bir table ve geçmişin doldurulması demektir; yorumlar siparişlerle birleştirilemez."),
+                   sc(7, "İstek başına ödeme. 3 puan kırıldı: her yorum dört table'a yazılır ve her faydalı oyu bir silme ve bir yazmadır; tombstone'lar silinene kadar kapasite ve storage'da sayılır.")],
+            "aur": [sc(10, "Tek reviews table'ı; ORDER BY helpful DESC, WHERE stars = 1, avg(stars) ve GROUP BY stars, WHERE status = 'pending' hepsi SQL; uygun index'lerle her biri hızlıdır. Puan kırılmadı."),
+                    sc(8, "2 puan kırıldı: saniyede 2.000 okuma için bir reader instance eklenir ve ortalamalar sık okunduğu için önbelleğe ya da saklanmış bir özete alınır."),
+                    sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                    sc(9, "Ekip ve analistler SQL bilir; yorumlar siparişler ve iadelerle JOIN edilir. 1 puan kırıldı: yeni sorular için index'ler eklenir ve izlenir."),
+                    sc(8, "2 puan kırıldı: minimum kapasite sürekli ödenir; birkaç GB veri için bu küçük ama sıfır değildir.")],
+            "doc": [sc(9, "Bir yorum bir document; (product_id, helpful) ve (product_id, stars) index'leri ve aggregation pipeline ile ortalama. 1 puan kırıldı: sık okunan ortalama her seferinde hesaplanmamalı, ürün document'ında saklanmalı."),
+                    sc(8, "2 puan kırıldı: okumalar için replica eklenir; yazmalar tek primary'den geçer."),
+                    sc(10, "Üç AZ'de kopyalar. Puan kırılmadı."),
+                    sc(7, "3 puan kırıldı: ekip MongoDB sorgu dilini öğrenir; analistlerin siparişlerle birleştirme soruları $lookup ile yazılır ve SQL kadar rahat değildir."),
+                    sc(8, "2 puan kırıldı: instance saat başına ödenir.")],
+        },
+        h2h={
+            "aur": _t("İlişkisel (Aurora PostgreSQL) ile kafa kafaya. Ayrıştığı gereksinimler R1 ve R4 ve fark büyüktür. Yorumlar küçük, orta trafikli ve birçok farklı sırayla, filtreyle ve toplamla sorulan bir veridir; bu, relational modelin tam alanıdır. Aurora tek bir table ve birkaç index ile bütün soruları cevaplar ve analistlerin yeni sorusu bir SQL cümlesidir. "
+                      "Keyspaces'in gücü (her boyutta aynı hızda yazma, partition'lara dağılım) bu iş yükünde gerekmez: dakikada 300 yazma tek bir writer için çok küçüktür. Buna karşılık Keyspaces her sıralama için bir table, her faydalı oyunda bir silme ve tombstone, ortalama için uygulama tarafında sayaç ister. "
+                      "Hangi koşul değişseydi Keyspaces seçilirdi: yorumlar saniyede on binlerce yazılsaydı ve ürün sayfası sadece \"en yeni 20 yorum\"u gösterseydi; o zaman tek bir sıralama, tek bir table ve Keyspaces'in ölçeği kazanırdı."),
+            "doc": _t("Document (DocumentDB) ile kafa kafaya. Ayrıştığı gereksinimler R1 ve R4. DocumentDB de bu iş yükünü iyi karşılar: bir yorum bir document'tır, alanlarına index kurulur ve ortalama aggregation pipeline ile hesaplanır; yorumun içindeki fotoğraf listesi ve cevaplar document'ın içinde durabilir. "
+                      "Keyspaces'e karşı farkı Aurora ile aynıdır: her yeni sıralama ve filtre bir index'tir, yeni bir table değildir ve değişen \"faydalı\" sayısı bir alanın güncellenmesidir. Aurora'ya karşı farkı analist sorularındadır: siparişler ve iadelerle birleştirme SQL'de daha doğaldır. "
+                      "Hangi koşul değişseydi DocumentDB seçilirdi: yorumların şekli kategoriye göre çok farklı olsaydı (fotoğraflar, video, iç içe cevaplar, kategoriye özel puan alanları) ve ekip zaten MongoDB API'sini kullansaydı."),
+        },
+        verdict=_t("Karar: Aurora PostgreSQL 45, DocumentDB 42, Keyspaces 37. Keyspaces bu kartı açıkça kaybeder: sorular çok sayıda sıralama, filtre ve toplam ister ve yazma hacmi küçüktür; wide-column'un \"soru başına table\" kuralı burada bir yük olur. "
+                   "Yine de Keyspaces seçersek artımız: en yeni yorumlar her boyutta tek partition okumasıdır ve yazma hacmi on katına çıksa da sorun olmaz. "
+                   "Potansiyel eksimiz: dört table'a yazma, her faydalı oyunda silme ve tombstone, uygulamada sayaçlar, analistler için ayrı bir kopya. Bir koşul değişseydi: yazma hacmi on binlere çıksaydı ve tek bir sıralama yetseydi Keyspaces yarışa girerdi.")),
+
+    # ------------------------------------------------------------------ 10. migration of an on-premises Cassandra workload (clear win)
+    usecase("migration", 10, sim="win_migration", kind="win",
+        title=_t("Kendi veri merkezindeki bir Cassandra'nın AWS'e taşınması"),
+        key=_t("Mevcut 50 table, aynı CQL ve aynı primary key'ler. Değişen: driver bağlantı ayarı (TLS 9142, SigV4)."),
+        story=_t("Bir telekom şirketi abone başına arama ve veri kullanım kayıtlarını altı yıldır kendi veri merkezindeki 24 node'luk Apache Cassandra 3.11 cluster'ında tutuyor: 50 table, yaklaşık 40 TB, saniyede 30.000 yazma. "
+                 "Java servisleri CQL ve DataStax driver'ı kullanıyor; lightweight transaction ve TTL var; secondary index, materialized view ve UDF yok (ekip bunu Keyspaces'in desteklenmeyen özellikler listesiyle kontrol etti). Donanımın garantisi 6 ay sonra bitiyor ve şirket veri merkezinden çıkıyor. "
+                 "Cluster'ı üç kişilik bir ekip işletiyor: node değiştirme, repair, compaction ayarı, sürüm yükseltme ve kampanyadan önce kapasite ekleme. Yönetim bu işletme yükünün bitmesini ve kodun yeniden yazılmamasını istiyor."),
+        reqs=[
+            req(True, "50 table'ın şeması, CQL sorguları, lightweight transaction'lar ve TTL'ler aynen çalışmalı. Servis kodunda sadece bağlantı ayarı değişebilir. Taşıma 6 ay içinde bitmeli.",
+                      "Kod değişirse altı yıllık iş kuralları yeniden yazılır ve yeniden test edilir; 6 ayda bitmez ve donanım garantisiz kalır."),
+            req(True, "Saniyede 30.000 yazma, ay sonu fatura döneminde iki katı. Okumalar abone başına ve 20 ms'nin altında. 40 TB veri büyümeye devam ediyor.",
+                      "Fatura dönemi yavaşlarsa faturalar gecikir ve müşteri hizmetleri çağrı alır."),
+            req(False, "Kayıt kaybı kabul edilmez; yanlış bir silme geri alınabilmeli.",
+                       "Arama kayıtları faturanın kaynağıdır ve yasal olarak saklanır."),
+            req(False, "Node, repair, compaction ve sürüm yükseltme işi bitmeli. Ekip CQL biliyor; yeni bir API öğrenmek planda yok.",
+                       "Üç kişilik işletme ekibi başka projelere geçecek; işletme bilgisi o zaman kaybolur."),
+            req(False, "Bugün ay sonu tepesine göre boyutlandırılmış 24 node yılın tamamında ödeniyor. Kapasite trafiği izlemeli; uzun süreli saklama ucuz olmalı.",
+                       "Ayın 25 günü yarı boş duran node'lar donanım, lisans ve elektrik faturasıdır."),
+        ],
+        cands=["ks", "cas", "ddb"],
+        scores={
+            "ks": [sc(10, "CQL 3.11 uyumlu: aynı table'lar, aynı partition key ve clustering column'lar (Ö1, Ö3), aynı lightweight transaction'lar (Ö5) ve aynı TTL'ler (Ö6) çalışır. Ekip desteklenmeyen özellikler listesini kontrol etti; şemada hiçbiri yok. Puan kırılmadı."),
+                   sc(10, "Yazmalar token'a göre dağılır (Ö2); provisioned kapasite ve auto scaling ay sonu tepesini izler, node eklemek yoktur. Puan kırılmadı."),
+                   sc(10, "Üç AZ'de üç kopya, 35 günlük point-in-time recovery. Puan kırılmadı."),
+                   sc(8, "Node, repair ve compaction yoktur. 2 puan kırıldı: driver'a SigV4 plugin'i, TLS ve bağlantı havuzu ayarı eklenir; bakım script'lerindeki TRUNCATE ve nodetool komutları değiştirilir (Keyspaces'te TRUNCATE yoktur, Ö7 ve index kullanılmadığı için şema aynen kalır)."),
+                   sc(9, "Provisioned mod ve auto scaling tepeyi izler; düz kısım ucuzdur. 1 puan kırıldı: TTL silmeleri KB başına ölçülür ve 40 TB storage GB-ay ödenir.")],
+            "cas": [sc(10, "Aynı Cassandra, EC2 üzerinde; kod ve şema hiç değişmez. Puan kırılmadı."),
+                    sc(8, "2 puan kırıldı: ay sonu tepesi için node'lar önceden eklenir ve veri dengelenir; bu iş bugünkü gibi elle yapılır."),
+                    sc(8, "2 puan kırıldı: replication factor, AZ yerleşimi, repair ve yedekler ekibin işidir; yanlış ayarlanmış bir repair veri tutarsızlığı bırakabilir."),
+                    sc(4, "6 puan kırıldı: işletme yükü aynen kalır, sadece donanım EC2'ye taşınır; işletme ekibi başka projelere geçemez."),
+                    sc(7, "3 puan kırıldı: tepeye göre boyutlandırılmış instance'lar ve üç kopyanın diski yılın tamamında ödenir.")],
+            "ddb": [sc(5, "5 puan kırıldı: veri modeli benzerdir (partition key ve sort key), ama 50 table'ın her sorgusu, LWT'si ve TTL'i DynamoDB API'sine yeniden yazılır ve veri dönüştürülerek taşınır."),
+                    sc(10, "Partition'lara dağılım, tepe kapasite. Puan kırılmadı."),
+                    sc(10, "Birkaç AZ, point-in-time recovery. Puan kırılmadı."),
+                    sc(2, "8 puan kırıldı: ekip yeni bir API öğrenir ve bütün servisler yeniden yazılır; 6 aylık planda bu mümkün değildir."),
+                    sc(6, "4 puan kırıldı: yeniden yazma projesinin maliyeti ve iki sistemin bir süre birlikte çalışmasının bedeli eklenir.")],
+        },
+        h2h={
+            "cas": _t("Kendi işlettiğin wide-column (Apache Cassandra, EC2 üzerinde) ile kafa kafaya. Ayrıştığı gereksinimler R2, R3, R4 ve R5. EC2 üzerindeki Cassandra en düşük taşıma riskini verir: aynı sürüm, aynı ayarlar, aynı araçlar; ileride Keyspaces'te olmayan bir özelliğe (secondary index, materialized view) ihtiyaç olursa o da hazırdır. "
+                      "Ama bu şirketin taşınma nedeni sadece donanım değildir; işletme yüküdür. EC2'de node değiştirme, repair, compaction, sürüm yükseltme ve kapasite ekleme aynen kalır ve üç kişilik ekip yine bu işe bağlanır. Keyspaces'te bu işlerin hiçbiri yoktur. "
+                      "Hangi koşul değişseydi Apache Cassandra (EC2) seçilirdi: servisler Keyspaces'in desteklemediği bir özelliğe dayansaydı (örneğin çok sayıda secondary index, materialized view ya da kullanıcı tanımlı fonksiyon) ve onları yeniden tasarlamak 6 aya sığmasaydı; o zaman EC2 bir ara adım olurdu."),
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı gereksinimler R1 ve R4. DynamoDB uzun vadede güçlü bir hedeftir: veri modeli Cassandra'ya çok benzer, entegrasyonları zengindir (Streams ile Lambda, zero-ETL) ve TTL silmesi ücretsizdir. "
+                      "Ama bu iş yükü bir taşımadır, yeni bir tasarım değildir: 50 table'ın her sorgusu, her lightweight transaction'ı ve her TTL'i yeni bir API'ye çevrilir, veri dönüştürülerek taşınır ve bütün servisler yeniden test edilir. 6 aylık planda bu mümkün değildir. "
+                      "Hangi koşul değişseydi DynamoDB seçilirdi: şirket servislerini zaten yeniden yazıyor olsaydı ya da taşıma için iki yıl olsaydı ve ekip uzun vadede tek bir AWS veri servisinde birleşmek isteseydi; o zaman önce Keyspaces'e taşıyıp sonra servis servis DynamoDB'ye geçmek de bir yoldur."),
+        },
+        verdict=_t("Karar: Keyspaces 47, Apache Cassandra 37, DynamoDB 33. Net bir kazanma: Keyspaces zorunlu iki gereksinimde de tam puan alır; aynı CQL kodu çalışır ve işletme yükü biter. Kendi işlettiğin Cassandra kodu korur ama yükü korur; DynamoDB yükü bitirir ama kodu yeniden yazdırır. "
+                   "Yine de Keyspaces seçersek artımız: node, repair ve compaction yok; kapasite tepeyi izler; point-in-time recovery hazırdır. "
+                   "Potansiyel eksimiz: driver ayarı ve bakım script'leri değişir; ileride bir secondary index gerekirse ikinci bir table yazılır (Ö7); TTL silmeleri ödenir. Bir koşul değişseydi: servisler Keyspaces'in desteklemediği özelliklere dayansaydı EC2 üzerindeki Cassandra bir ara adım olurdu.")),
+]
+USECASES["keyspaces"] = KS_USECASES
