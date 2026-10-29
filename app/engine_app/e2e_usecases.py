@@ -37,7 +37,7 @@ def sc(points, reason, en=None):
 
 def usecase(uid, no, title, key, story, reqs, cands, scores, h2h, verdict, sim=None, kind=None):
     """kind: "race" (close race), "win" (clear win), "lose" (clear loss) or None (card only)."""
-    assert len(reqs) == 5 and all(len(scores[c]) == 5 for c in cands) and cands[0] == "ddb"
+    assert len(reqs) == 5 and all(len(scores[c]) == 5 for c in cands) and cands[0] in CATEGORY   # the chosen service of the page comes first
     return {"id": uid, "no": no, "sim": sim, "kind": kind, "title": title, "key": key, "story": story,
             "reqs": reqs, "cands": cands, "scores": scores, "h2h": h2h, "verdict": verdict}
 
@@ -564,3 +564,537 @@ def apply_en(usecases, en):
 
 from .e2e_usecases_en import EN as _EN  # noqa: E402
 apply_en(DDB_USECASES, _EN)
+
+
+# ====================================================================== Aurora PostgreSQL (page id "aurora"), Turkish only
+# Sources of the limits and numbers quoted in the reasons below (the hedges are the hedges of the source):
+#  - Aurora storage: "copies of the data across three Availability Zones", six storage nodes, volume grows automatically:
+#    https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Overview.StorageReliability.html and
+#    https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Concepts.AuroraHighAvailability.html
+#  - Aurora Replicas: "up to 15 Aurora Replicas", replica lag "usually considerably less than 100 milliseconds":
+#    https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Managing.Performance.html
+#  - Failover: "service is typically restored in less than 60 seconds, and often less than 30 seconds":
+#    https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Concepts.AuroraHighAvailability.html
+#  - Serverless v2: each ACU "approximately 2 GiB of memory", 0.5 to 256 ACU, 0 ACU with auto-pause on supported versions:
+#    https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless-v2.how-it-works.html
+#  - Aurora Standard (pay per I/O request) and Aurora I/O-Optimized (no I/O charge, best when I/O is 25% or more of the spend):
+#    https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Overview.StorageReliability.html
+#  - Zero-ETL to Redshift: data available in Redshift "within seconds of being written":
+#    https://aws.amazon.com/blogs/database/amazon-aurora-postgresql-zero-etl-integration-with-amazon-redshift-is-generally-available/
+#  - PostgreSQL row-level security: https://www.postgresql.org/docs/current/ddl-rowsecurity.html
+#  - PostgreSQL exclusion constraints and primary key index: https://www.postgresql.org/docs/current/ddl-constraints.html
+#  - PostgreSQL VACUUM and dead row versions: https://www.postgresql.org/docs/current/routine-vacuuming.html
+#  - RDS Multi-AZ failover "typically 60-120 seconds": https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZSingleStandby.html
+#  - DynamoDB transactions "up to 100 write actions": https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis.html
+#  - DynamoDB TTL deletes "within a few days": https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html
+#  - DocumentDB transactions (version 4.0 and later): https://docs.aws.amazon.com/documentdb/latest/developerguide/transactions.html
+
+CATEGORY["rds"] = ("relational", "ilişkisel")
+LINK["rds"] = "aurora"
+
+AURORA_USECASES = [
+    # ------------------------------------------------------------------ 1. checkout: order, stock, payment (clear win)
+    usecase("checkout", 1, sim="win_checkout", kind="win",
+        title=_t("Sipariş, stok ve ödeme: checkout (Lale Market)"),
+        key=_t("Table'lar: products, orders, order_items, payments. Kural: stok sıfırın altına inmez, sipariş stoksuz var olmaz."),
+        story=_t("Lale Market'in checkout düğmesi dört şeyi birden yapar: sepetteki her ürünün stoğunu düşürür, siparişi ve line'larını yazar ve ödeme kaydını açar. "
+                 "Mağazanın kuralı: bir sipariş hiçbir zaman stok düşmeden var olmaz, stok hiçbir zaman sıfırın altına inmez ve son adedi aynı saniyede isteyen iki müşteriden tam olarak biri alır. "
+                 "Normal günde saatte 400 sipariş, kampanya akşamlarında saatte 3.000 sipariş; yani saniyede en fazla birkaç checkout. Ürün sayfası stoğu saniyede 300 kez okur. "
+                 "Bugün 5.000 sipariş ve 12.500 line var; yılda iki katına çıkıyor. Sipariş paranın resmi kaydıdır: kaybolan bir sipariş kaybolan paradır. Ekipte üç geliştirici var, hepsi SQL biliyor, database yöneticisi yok."),
+        reqs=[
+            req(True, "Checkout'un dört yazması (stok, sipariş, line'lar, ödeme) ya hep ya hiç olmalı. Stok için \"stock - qty >= 0\" kuralı yazma anında korunmalı. Son adet için iki eşzamanlı checkout'tan tam olarak biri kazanmalı. "
+                      "Bir line var olmayan bir ürünü, bir sipariş var olmayan bir müşteriyi gösterememeli. Sorular: \"bu müşterinin siparişleri\", \"bu siparişin line'ları ürün adlarıyla\", \"stoğu 10'un altındaki ürünler\".",
+                      "Ödeme alınıp sipariş yazılmazsa müşteri parasını öder ve ürün gelmez; stok düşüp sipariş yazılmazsa depo var olmayan bir siparişe mal ayırır. Kural uygulama kodunda \"önce oku sonra yaz\" ile korunursa iki sekme aynı son adedi satar."),
+            req(True, "Normal günde saniyede 0,1 checkout, kampanya akşamı saniyede 1 ile 3; tepe anında 10. Ürün sayfası saniyede 300 stok okuması, sipariş geçmişi saniyede 50 okuma. Checkout 100 ms'nin altında dönmeli. Veri yılda iki katına çıkıyor ama birkaç GB'ı geçmiyor.",
+                      "Yazma hacmi küçüktür; burada ölçek değil doğruluk belirleyicidir. Ama ürün sayfasının stok okuması her ziyaretçinin önündedir ve checkout'u yavaşlatmamalıdır."),
+            req(True, "Sipariş paranın resmi kaydıdır. Bir Availability Zone arızasında tek bir commit edilmiş sipariş kaybolmamalı; yanlış bir toplu silme bir saat öncesine geri alınabilmeli. Bu kartta dayanıklılık zorunludur.",
+                       "Kaybolan sipariş, ödenmiş ama gönderilmemiş üründür: para iadesi, destek talebi ve muhasebe düzeltmesi. Yedekten geri dönüş saatler sürerse mağaza o saatlerde satış yapamaz."),
+            req(False, "Üç geliştirici, SQL biliyor, database yöneticisi yok. Sunucu boyutlandırmak, yama geçmek, yedek almak ve failover kurmak istenmiyor. Yeni bir kolon ya da yeni bir table eklemek bir migration ile yapılabilir; ekip bunu biliyor.",
+                       "Küçük ekipte database operasyonu ürün geliştirmeden çalınan zamandır. Bir failover'ı gece üçte elle yapmak zorunda kalan ekip bir sonraki ayı kaybeder."),
+            req(False, "Trafik küçük ve çoğunlukla düz, kampanya akşamları birkaç kat. Saat başına ya da kapasite başına ödeme kabul; ama boş gecelerde büyük bir sunucu ödemek istenmiyor. Veri küçük (birkaç GB).",
+                       "Yük küçük olduğu için fatura kapasitenin alt sınırıyla belirlenir; alt sınırı yüksek olan bir model boş gecelerde boşa öder."),
+        ],
+        cands=["aur", "ddb", "doc"],
+        scores={
+            "aur": [sc(10, "Dört yazma tek transaction'dır (Ö5): BEGIN, UPDATE products ... WHERE stock >= qty, INSERT orders, INSERT order_items, INSERT payments, COMMIT; biri başarısız olursa hepsi geri alınır. CHECK (stock >= 0) ve foreign key'ler (Ö1, Ö2) var olmayan ürünü ve negatif stoğu database'in kendisi reddeder. Koşullu UPDATE row lock altında test eder: son adedi tam olarak bir checkout alır. Bütün sorular SQL'dir (Ö3). Puan kırılmadı."),
+                    sc(10, "Saniyede 10 checkout tek writer için küçük bir yüktür; 300 stok okuması primary key ile index araması (Ö4), reader instance'a yönlendirilebilir (Ö7). Serverless v2 kampanya akşamı kapasiteyi 0,5 ACU adımlarıyla artırır; tepe saniyede 10 checkout olduğu için ACU büyüme gecikmesi bu hacimde hissedilmez (kart 3 ve 8'deki yoğun satır yarışı burada yoktur). Puan kırılmadı."),
+                    sc(10, "Aurora'nın paylaşılan storage'ı veriyi üç Availability Zone'da altı storage node'a yazar (Ö7); bir AZ arızası commit edilmiş siparişi kaybetmez. Point-in-time restore yanlış bir silmeyi saniye hassasiyetiyle geri alır. Puan kırılmadı."),
+                    sc(9, "Yedek, yama, failover ve storage büyümesi yönetilir; ekip bildiği SQL ve psycopg ile çalışır. 1 puan kırıldı: schema, index'ler, ACU aralığı ve bağlantı havuzu yine ekibin kararıdır ve migration disiplini ister."),
+                    sc(8, "Serverless v2 ACU-saniye olarak ödenir, boş gecelerde 0,5 ACU'ya iner. 2 puan kırıldı: minimum ACU boş gecede de ödenir ve Aurora Standard'da I/O isteği başına ek ücret vardır; küçük bir mağaza için bu, istek başına ödemeden pahalı olabilir.")],
+            "ddb": [sc(5, "TransactWriteItems en fazla 100 item'ı ya hep ya hiç yazar ve stok için ConditionExpression \"stock >= :q\" koşulu tek item'da korunur. 5 puan kırıldı: foreign key yoktur, var olmayan ürünü ya da müşteriyi gösteren bir line database tarafından reddedilmez; \"stoğu 10'un altındaki ürünler\" ve \"siparişin line'ları ürün adlarıyla\" soruları ya ikinci bir index ya da uygulama tarafında birleştirme ister. Kurallar uygulama kodunda yaşar."),
+                    sc(10, "On-demand mod saniyede 10 transaction'ı ve 300 okumayı tek haneli milisaniyede karşılar. Puan kırılmadı."),
+                    sc(10, "Her yazma birkaç AZ'de saklanır; point-in-time recovery vardır. Puan kırılmadı."),
+                    sc(7, "Serverless: yama, yedek, failover yok. 3 puan kırıldı: ekip SQL biliyor, DynamoDB için access pattern'leri önceden listeleyip key tasarlamayı ve JOIN'siz düşünmeyi öğrenir; her yeni rapor sorusu yeni bir tasarım adımıdır."),
+                    sc(9, "İstek başına ödeme; boş gecede sıfıra yakın. 1 puan kırıldı: transactional yazma normal yazmanın iki katı birim tüketir.")],
+            "doc": [sc(4, "DocumentDB 4.0 ve sonrası birden fazla document üzerinde ACID transaction destekler; sipariş ve line'ları tek document'ta tutmak doğaldır. 6 puan kırıldı: foreign key ve CHECK yoktur, stok kuralı ve ürünün varlığı uygulama kodunda korunur; \"stoğu 10'un altındaki ürünler\" ve müşteri siparişleri soruları için ayrı index'ler kurulur ve JOIN benzeri $lookup sınırlıdır."),
+                    sc(9, "Saniyede 10 yazma ve 300 okuma tek primary ve replica'larla rahat karşılanır. 1 puan kırıldı: primary instance sınıfı önceden seçilir."),
+                    sc(10, "Üç AZ'de altı kopya, sürekli yedek. Puan kırılmadı."),
+                    sc(6, "Yedek ve yama yönetilir. 4 puan kırıldı: instance boyutlandırma ve replica yönetimi ekibin işidir, MongoDB API'si bu SQL ekibi için yenidir ve kurallar database'de değil kodda yaşar."),
+                    sc(6, "Instance saat başına ve I/O başına ödenir. 4 puan kırıldı: Multi-AZ için en az iki instance boş gecelerde de çalışır; bu küçük iş yükü için en pahalı seçenektir.")],
+        },
+        h2h={
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı gereksinim R1'in kural kısmı ve R4. DynamoDB'nin gücü R2 ve R5'te görünür: kampanya akşamı için hiçbir şey ayarlanmaz ve boş gecede ödeme sıfıra yakındır; TransactWriteItems ile dört yazma ya hep ya hiç yapılabilir. "
+                      "Aurora'nın gücü kuralın yerindedir: stok, sipariş, line ve ödeme dört ayrı table'dır ve aralarındaki kuralları (foreign key, CHECK, koşullu UPDATE) database'in kendisi her yazmada uygular; DynamoDB'de bu kurallar uygulama kodunda yaşar ve ikinci bir program ya da bir bug onları atlayabilir. "
+                      "Bu iş yükünde ilişkisel seçilir, çünkü yazma hacmi küçük, kurallar table'lar arası ve veri paranın resmi kaydıdır; DynamoDB'nin ölçek gücü burada kullanılmayacak bir güçtür. "
+                      "Hangi koşul değişseydi DynamoDB seçilirdi: checkout hacmi saniyede binlere çıksaydı, sipariş tek bir value olarak yazılıp ilişkisi olmasaydı ve raporlar ayrı bir analitik kopyadan sorulsaydı."),
+            "doc": _t("Document (DocumentDB) ile kafa kafaya. Ayrıştığı gereksinimler R1'in kural kısmı, R4 ve R5. DocumentDB'nin gücü siparişin şeklinde görünür: sipariş, line'ları ve adresiyle tek bir document'tır ve tek okumayla gelir; transaction desteği de vardır. "
+                      "Aurora'nın gücü kuralların database'de yaşamasıdır: var olmayan ürünü gösteren line, negatif stok ve iki kez satılan son adet database tarafından reddedilir; DocumentDB'de bu kontroller uygulama kodunda yazılır ve her yeni program onları yeniden yazar. "
+                      "Ayrıca \"stoğu azalan ürünler\" ve \"bu müşterinin bütün siparişleri ürün adlarıyla\" gibi sorular SQL'de JOIN ile tek sorgudur. Bu iş yükünde ilişkisel seçilir, çünkü sipariş birbiriyle ilişkili dört şeyin kaydıdır, tek bir belge değildir. "
+                      "Hangi koşul değişseydi DocumentDB seçilirdi: sipariş iç içe, sık şekil değiştiren ve ilişkisi olmayan bir belge olsaydı, ekip MongoDB API'sini zaten biliyor olsaydı ve stok kuralı başka bir sistemde korunuyor olsaydı."),
+        },
+        verdict=_t("Karar: Aurora 47, DynamoDB 41, DocumentDB 35. Net bir kazanma: iş yükü ilişkisel modelin tam tanımıdır; dört table arası kural, ya hep ya hiç yazma ve küçük yazma hacmi. Aurora hiçbir zorunlu gereksinimde puan kaybetmez. "
+                   "Yine de ilişkisel seçersek artımız: kurallar database'de yaşar ve her programa uygulanır, checkout tek transaction'dır, her yeni rapor sorusu bir SQL cümlesidir, sipariş altı kopyayla kalıcıdır. "
+                   "Potansiyel eksimiz: bütün yazmalar tek writer'dan geçer ve saniyede on binlerce checkout'a çıkılırsa tasarım değişir; boş gecelerde minimum ACU ödenir; schema değişiklikleri migration disiplini ister; ödeme dış bir servisse transaction ödeme çağrısı boyunca açık tutulmamalı, ödeme önce yetkilendirilmelidir (B5). Bir koşul değişseydi: checkout hacmi saniyede binlere çıksaydı ve sipariş ilişkisiz tek bir value olsaydı DynamoDB yarışa girerdi.")),
+
+    # ------------------------------------------------------------------ 2. product catalog with relations (race vs DocumentDB)
+    usecase("catalog", 2, sim="race_catalog", kind="race",
+        title=_t("İlişkileriyle ürün kataloğu: kategori, marka, varyant"),
+        key=_t("Table'lar: products, categories, brands, variants, prices. Değişken özellikler JSONB kolonunda."),
+        story=_t("Bir pazar yerinin kataloğunda 50.000 ürün ve 300.000 varyant var: bir ayakkabının numarası ve rengi, bir televizyonun ekran boyu. Her ürün tam olarak bir markaya ve bir kategoriye aittir; her varyantın depo başına stoğu ve para birimine göre fiyatı vardır. "
+                 "Ürün sayfası saniyede 2.000 kez okunur (önünde bir cache var), satıcılar saniyede 50 değişiklik yapar. Kategori ekibi her ay yeni özellikler tanımlar: \"su geçirmez\", \"ekran yenileme hızı\". "
+                 "Sorular: \"bu kategoride, bu markanın, 42 numara ve kırmızı varyantları\", \"fiyatı değişen ürünler\", \"stoğu biten varyantların ürünleri\". Metin araması ayrı bir arama servisine verilecek. Dört geliştirici, SQL biliyor; katalog kaybolursa satıcı beslemelerinden günlerce yeniden kurulur."),
+        reqs=[
+            req(True, "Ürün id'siyle okuma; kategori + marka + varyant özelliğiyle filtre; ürün, varyant, fiyat ve stok ilişkileri tek sorguda. Kurallar: bir varyant tam olarak bir ürüne aittir, fiyat sıfırdan büyüktür, silinen markanın ürünü kalmaz. Yeni özellik eklemek table'ı yeniden tasarlamamalı.",
+                      "Varyantın sahibi olmayan bir ürün sayfası boş bir kutudur; sıfır fiyatlı bir ürün bedava satılır. Her yeni özellik için bir migration penceresi, kategori ekibini database ekibine bağlar."),
+            req(True, "Saniyede 2.000 okuma (cache arkasında), 50 yazma. Her okuma 50 ms'nin altında. Katalog yılda iki katına çıkıyor; 100.000 ürün ve 600.000 varyant için tasarım değişmemeli.",
+                      "Ürün sayfası mağazanın vitrinidir; yavaş sayfa satış kaybıdır. Yılda iki kat büyüme için her yıl yeniden tasarım yapılamaz."),
+            req(False, "Katalog satıcı beslemelerinden yeniden kurulabilir ama bu günler sürer. Bir AZ arızası kayıp yapmamalı.",
+                       "Katalog kaybı mağazayı günlerce kapatmaz ama vitrini boşaltır; dayanıklılık burada güçlü bir tercihtir, zorunluluk değildir."),
+            req(False, "Dört geliştirici, SQL biliyor. Aylık yeni özellikler migration istemeden eklenebilmeli. Sunucu boyutlandırma, yama ve yedek istenmiyor.",
+                       "Her ay bir ALTER TABLE ve bir bakım penceresi kategori ekibinin takvimini kilitler; ekip bilmediği bir API'ı öğrenirken hata yapar."),
+            req(False, "Trafik gün içinde düz, okuma ağırlıklı. Kapasite başına ödeme uyar. Veri orta boy (on GB).",
+                       "Düz trafikte kapasite başına ödeme istek başına ödemeden ucuz olabilir; büyümede bir instance sınıfı atlamak maliyeti bir gecede katlar."),
+        ],
+        cands=["aur", "doc", "os"],
+        scores={
+            "aur": [sc(9, "Ürün, kategori, marka, varyant ve fiyat ayrı table'lar; foreign key'ler (Ö2) bir varyantı tam olarak bir ürüne bağlar, CHECK (price > 0) sıfır fiyatı reddeder (Ö1), ON DELETE kuralları markası silinen ürünü yönetir. Filtreler ve ilişkiler JOIN ile tek sorgudur (Ö3). Değişken özellikler bir JSONB kolonunda durur ve GIN index ile sorgulanır (Ö8). 1 puan kırıldı: JSONB içindeki bir özelliğe göre filtre, normal bir kolona göre filtreden daha az doğaldır; operatörleri ve GIN index'i ekip öğrenir."),
+                    sc(9, "2.000 okuma primary key ve index aramalarıdır (Ö4) ve reader instance'lara dağıtılır (Ö7); 50 yazma tek writer için küçüktür. 1 puan kırıldı: reader sayısını ve ACU aralığını ekip seçer."),
+                    sc(10, "Üç AZ'de altı kopya, point-in-time restore. Puan kırılmadı."),
+                    sc(8, "Yedek, yama ve failover yönetilir; ekip SQL'i biliyor. Yeni özellik JSONB'ye yazılır, migration gerekmez. 2 puan kırıldı: yeni bir ilişki (örneğin \"ürün setleri\") yine bir migration'dır ve instance ya da ACU kararı ekibindir."),
+                    sc(8, "ACU-saat ya da instance-saat; düz trafikte öngörülebilir. 2 puan kırıldı: gece düşük trafikte de minimum kapasite ödenir; okuma için reader instance ayrıca ödenir.")],
+            "doc": [sc(8, "Ürün bir document, varyantlar içinde bir dizi: tek okumayla ürün sayfası gelir; her alana ve dizi içindeki alanlara index kurulur (multikey). Yeni özellik sadece yeni document'lara yazılır. 2 puan kırıldı: foreign key yoktur, marka ve kategori id olarak yazılır ve varlığı uygulama kontrol eder; \"fiyat > 0\" schema validation ile kısmen korunur; \"stoğu biten varyantların ürünleri\" gibi ilişkili sorular $lookup ile daha zahmetlidir."),
+                    sc(9, "Okumalar en fazla 15 replica'ya dağılır; 50 yazma tek primary için küçüktür. 1 puan kırıldı: instance sınıfı ve replica sayısı önceden seçilir; büyüme bir büyütme adımıdır."),
+                    sc(10, "Üç AZ'de altı kopya, sürekli yedek. Puan kırılmadı."),
+                    sc(8, "Şema serbest, yeni özellik migration istemez; yedek ve yama yönetilir. 2 puan kırıldı: MongoDB API'si bu SQL ekibi için yenidir ve instance boyutlandırma ekibin işidir."),
+                    sc(7, "Instance saat başına ve I/O başına. 3 puan kırıldı: Multi-AZ için birkaç instance gece de çalışır; büyümede bir sınıf atlamak maliyeti sıçratır.")],
+            "os": [sc(6, "Varyant özelliklerine göre filtre ve facet OpenSearch'ün ana işidir; metin araması da burada olur. 4 puan kırıldı: ilişkiler index'e yazılırken düzleştirilir, transaction ve foreign key yoktur, \"fiyat > 0\" gibi kurallar yoktur; bir markanın adı değişince bütün ürün dokümanları yeniden yazılır."),
+                   sc(9, "2.000 okuma ve 50 yazma bir domain için küçüktür; refresh aralığı yüzünden yeni yazma kısa bir süre görünmeyebilir. 1 puan kırıldı: shard sayısı ve node sınıfı önceden seçilir."),
+                   sc(5, "Replica shard'lar node arızasını karşılar. 5 puan kırıldı: arama index'i resmi kayıt değildir; mapping değişince index baştan kurulur ve kaynak veri başka bir yerde durmalıdır."),
+                   sc(6, "Yönetilen domain. 4 puan kırıldı: mapping tasarımı, reindex ve shard planı ekibin işidir; katalog kuralları kodda yaşar."),
+                   sc(6, "Node saat başına. 4 puan kırıldı: üç node'luk bir domain gece de ödenir ve katalog için ayrıca bir kayıt sistemi gerekir.")],
+        },
+        h2h={
+            "doc": _t("Document (DocumentDB) ile kafa kafaya. Bu, okuyucunun en çok \"neden o değil?\" dediği yarıştır, çünkü bir ürün sayfası tam bir document gibi görünür ve varyant özellikleri kategoriye göre değişir. Ayrıştığı gereksinimler R1'in kural kısmı ve R4. "
+                      "DocumentDB'nin gücü şekildedir: ürün, varyantları ve özellikleriyle tek bir document'tır, tek okumayla gelir ve yeni özellik hiçbir değişiklik istemez. Aurora aynı esnekliği JSONB kolonuyla verir ama ilişkileri table olarak tutar: bir varyant foreign key ile tam olarak bir ürüne bağlıdır, fiyat kuralı CHECK ile database'de korunur ve \"stoğu biten varyantların ürünleri\" bir JOIN'dir. "
+                      "Bu iş yükünde ilişkisel seçilir, çünkü katalog ilişkilerle doludur (marka, kategori, varyant, fiyat, depo) ve bu ilişkilerin doğruluğunu database'in korumasını istiyoruz; esnek özellikler JSONB'ye sığar. İki puanlık fark bir karar değildir; ekip MongoDB biliyorsa DocumentDB de savunulabilir. "
+                      "Hangi koşul değişseydi DocumentDB seçilirdi: ürün gerçekten ilişkisiz tek bir belge olsaydı, özelliklerin şekli her ay köklü değişseydi ya da ekip MongoDB API'sini zaten biliyor ve bir DocumentDB cluster'ı işletiyor olsaydı."),
+            "os": _t("Search engine (OpenSearch) ile kafa kafaya. Ayrıştığı gereksinimler R1'in kural kısmı, R3 ve R4. OpenSearch'ün gücü filtre ve facet'tedir: \"42 numara, kırmızı, su geçirmez\" sorusunu milisaniyede cevaplar ve metin aramasını, yazım hatası toleransını da verir. "
+                      "Ama bir arama index'i resmi kayıt değildir: ilişkiler index'e yazılırken düzleştirilir, marka adı değişince bütün ürün dokümanları yeniden yazılır, transaction ve foreign key yoktur ve mapping değişince index baştan kurulur. "
+                      "Bu yüzden bu iki servis birbirinin alternatifi değil tamamlayıcısıdır: katalog ilişkileriyle Aurora'da yaşar, arama kopyası OpenSearch'e akar. Bu iş yükünde ilişkisel seçilir, çünkü kayıt sistemi istenir ve metin araması zaten ayrı bir servise verilecektir. "
+                      "Hangi koşul değişseydi OpenSearch seçilirdi: katalog başka bir sistemde zaten kalıcı olsaydı ve buradaki iş sadece facet'li arama ve relevance olsaydı; o zaman OpenSearch tek başına seçilir ve kaynak kayıt oradan beslenir."),
+        },
+        verdict=_t("Karar: Aurora 44, DocumentDB 42, OpenSearch 32. Yakın bir yarış: iki aday da R2 ve R3'ü karşılar; yarışı R1'in kural kısmı belirler: ilişkilerin doğruluğunu database koruyor mu, uygulama mı. "
+                   "Yine de ilişkisel seçersek artımız: varyant ve fiyat kuralları database'de, yeni özellikler JSONB'de migration'sız, her yeni soru bir SQL, arama servisi zero-ETL ya da CDC ile beslenir. "
+                   "Potansiyel eksimiz: JSONB içi filtreler GIN index ve özel operatör ister; her yeni ilişki bir migration'dır; metin araması ve facet için OpenSearch ayrıca gerekir. Bir koşul değişseydi: ürün ilişkisiz tek bir belge olsaydı ve ekip MongoDB biliyor olsaydı DocumentDB kazanırdı.")),
+
+    # ------------------------------------------------------------------ 3. inventory with reservations (card only)
+    usecase("inventory", 3,
+        title=_t("Depo bazlı stok ve rezervasyon"),
+        key=_t("Table'lar: stock (sku, warehouse, on_hand, reserved), reservations (sku, warehouse, qty, expires_at)."),
+        story=_t("Bir mağazanın üç deposu ve 20.000 ürünü var. Checkout başlarken ürün 15 dakika rezerve edilir; ödeme gelmezse rezervasyon düşer ve stok serbest kalır. "
+                 "Kural: bir depoda kullanılabilir stok = eldeki stok - rezerve edilen, ve bu değer hiçbir zaman sıfırın altına inmez. Kampanya anında saniyede 300 rezervasyon denemesi olur ve bunların yarısı aynı on ürüne gider. "
+                 "Depo ekibi her sabah \"depo başına eşiğin altındaki ürünler\" raporunu ister ve rezervasyonların süresi dolduğunda stok kendiliğinden geri dönmelidir. Stok muhasebenin resmi kaydıdır; bir rezervasyonun kaybı fazla satıştır. Ekipte dört geliştirici var, SQL biliyor."),
+        reqs=[
+            req(True, "\"Bu depoda bu üründen 2 adet rezerve et, ama kullanılabilir stok 2'nin altındaysa reddet\" tek adımda ve atomik olmalı; rezervasyon kaydı ile stok sayacı birlikte değişmeli. Süresi dolan rezervasyon stoğu geri vermeli. Depo başına eşik raporu tek sorgu olmalı.",
+                      "Rezervasyon yazılıp sayaç artmazsa aynı adet iki kişiye satılır; sayaç artıp rezervasyon yazılmazsa stok sonsuza kadar kilitli kalır. Rapor birçok okuma istiyorsa depo ekibi her sabah bekler."),
+            req(True, "Kampanya anında saniyede 300 rezervasyon, yarısı aynı on ürüne; normalde saniyede 10. Her rezervasyon 100 ms'nin altında onaylanmalı.",
+                      "Aynı on ürün aynı satırlara gider: bu satırlar bir kuyruk olur. Kuyruk uzarsa checkout yavaşlar ve müşteri düğmeye tekrar basar."),
+            req(True, "Stok ve rezervasyon muhasebenin kaydıdır; AZ arızasında kayıp olmamalı. Bu kartta zorunlu.",
+                       "Kaybolan rezervasyon fazla satıştır; kaybolan stok sayacı envanter sayımıdır."),
+            req(False, "Dört geliştirici, SQL biliyor. Süresi dolan rezervasyonlar için ayrı bir temizlik işi istenmiyor ama kabul edilir. Sunucu boyutlandırma istenmiyor.",
+                       "Temizlik işi gecikirse stok boşken satılamaz; erken çalışırsa ödeme sırasındaki rezervasyon düşer."),
+            req(False, "Trafik çoğunlukla düz, kampanya anları kısa. Kapasite başına ödeme kabul.",
+                       "Kısa tepe için büyütülen kapasite ayın geri kalanında boş durur."),
+        ],
+        cands=["aur", "ddb", "ec"],
+        scores={
+            "aur": [sc(10, "UPDATE stock SET reserved = reserved + 2 WHERE sku = ... AND warehouse = ... AND on_hand - reserved >= 2 ve INSERT reservations aynı transaction'dadır (Ö5); koşul row lock altında test edilir ve iki istek yarışsa ikincisi yeni değeri görür. CHECK (reserved <= on_hand) kuralı database'de durur (Ö1). Eşik raporu GROUP BY ile tek sorgudur (Ö3). Puan kırılmadı."),
+                    sc(8, "Saniyede 300 kısa transaction tek writer için küçüktür. 2 puan kırıldı: aynı on ürünün satırları tek writer'da birbirini bekler; row başına saniyede 15 kısa UPDATE tek başına sorun değildir (bir UPDATE milisaniyenin altındadır, B2), risk aynı row'u ödeme boyunca kilitli tutan uzun transaction'lardır ve minimum ACU kampanya öncesi yükseltilmelidir; bu bir tahmindir, ölçüm değil."),
+                    sc(10, "Altı kopya, üç AZ, point-in-time restore. Puan kırılmadı."),
+                    sc(8, "Yönetilen yedek ve failover; ekip SQL biliyor. 2 puan kırıldı: süresi dolan rezervasyon için zamanlanmış bir temizlik işi yazılır (PostgreSQL'de bir row'a \"şu saatte kendini sil\" denemez; DynamoDB'deki TTL bunu yapar) ve ACU aralığı ekibin kararıdır."),
+                    sc(8, "ACU-saat. 2 puan kırıldı: kampanya için yükseltilen minimum ACU unutulursa ay boyu ödenir; Aurora Standard'da I/O isteği başına ücret vardır.")],
+            "ddb": [sc(6, "Depo + ürün bir item; ConditionExpression \"on_hand - reserved >= :q\" ile atomik rezervasyon tek item'da korunur ve rezervasyon kaydı TransactWriteItems ile aynı anda yazılır. 4 puan kırıldı: transaction iki kat birim tüketir; \"depo başına eşiğin altındaki ürünler\" raporu ya bir GSI ya da bütün table'ın okunmasıdır; rezervasyon ve sayaç iki ayrı item olduğu için ikisi birden ancak transaction ile tutarlı kalır."),
+                    sc(10, "On-demand mod 300 isteği tek haneli milisaniyede karşılar; aynı on ürün on ayrı item'dır ve partition sınırının çok altındadır. Puan kırılmadı."),
+                    sc(10, "Birkaç AZ'de saklanır, point-in-time recovery. Puan kırılmadı."),
+                    sc(8, "Serverless; TTL süresi dolan rezervasyonu siler. 2 puan kırıldı: TTL silmesi genellikle birkaç gün içinde olur, bu yüzden sayacı geri veren mantık Streams ile ayrıca yazılır ve ekip key tasarımını öğrenir."),
+                    sc(9, "İstek başına; boş günlerde sıfıra yakın. 1 puan kırıldı: transactional yazmalar iki kat birimdir.")],
+            "ec": [sc(6, "DECRBY ile atomik sayaç ve SET NX EX 900 ile tam süreli rezervasyon tek komuttur. 4 puan kırıldı: sayaç ve rezervasyon iki ayrı key'dir, ikisini birden tutarlı değiştirmek Lua script'i ister; eşik raporu için bütün key'ler taranır."),
+                   sc(10, "Bellekten mikrosaniye; Serverless ölçeklenir. Puan kırılmadı."),
+                   sc(3, "Serverless replica'ları birkaç AZ'de tutar ama her yazmayı diske yazan dayanıklı bir log yoktur; bir arıza son rezervasyonları ve sayaçları kaybedebilir. 7 puan kırıldı: bu kartta kayıp fazla satıştır ve dayanıklılık zorunludur."),
+                   sc(8, "Serverless; EXPIRE temizlik işini gereksiz kılar. 2 puan kırıldı: Lua script'i ekibin bakımına girer."),
+                   sc(8, "ECPU ve GB-saat. 2 puan kırıldı: bellek GB başına diskten pahalıdır; stok verisi küçük olduğu için fark küçüktür.")],
+        },
+        h2h={
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı gereksinimler R1'in rapor ve süre sonu kısmı ile R2. DynamoDB'nin gücü tepe anındadır: 300 rezervasyon on ayrı item'a dağılır, kimse kapasite ayarlamaz ve koşullu yazma tek item'da atomiktir. "
+                      "Aurora'nın gücü kuralın bütünlüğündedir: sayaç ve rezervasyon aynı transaction'da değişir, kullanılabilir stok kuralı CHECK ile database'de durur ve depo başına eşik raporu bir GROUP BY'dır; DynamoDB'de rapor bir GSI ya da tam okuma, süresi dolan rezervasyonun sayacı geri vermesi ise ayrı bir Streams tüketicisidir. "
+                      "Bu iş yükünde ilişkisel seçilir, çünkü stok muhasebenin kaydıdır, kurallar iki table'ı birden kapsar ve rapor her sabah sorulur; tepe anındaki satır kuyruğu minimum ACU ile yönetilebilir. "
+                      "Hangi koşul değişseydi DynamoDB seçilirdi: rezervasyon hacmi saniyede on binlere çıksaydı, rapor ayrı bir analitik kopyadan sorulsaydı ve süresi dolan rezervasyonun stoğu geri vermesi için zaten bir Streams tüketicisi olsaydı."),
+            "ec": _t("Bellek içi key-value (ElastiCache) ile kafa kafaya. Ayrıştığı gereksinim R3 dayanıklılık ve bu kartta zorunludur. ElastiCache'in gücü tam süreli rezervasyondur: SET NX EX 900 ile rezervasyon tam olarak 15 dakika sonra yok olur, temizlik işi gerekmez ve DECRBY sayaçları mikrosaniyede değiştirir. "
+                      "Ama her yazmayı diske yazan dayanıklı bir log yoktur; bir arıza son rezervasyonları kaybeder ve kaybolan her rezervasyon fazla satıştır. Sayaç ve rezervasyon iki ayrı key olduğu için ikisini tutarlı değiştirmek de bir Lua script'i ister. "
+                      "Bu yüzden bu iş yükünde kalıcı kayıt ilişkisel database'de tutulur; ElastiCache en fazla rezervasyon süresi için bir yardımcı olabilir. Hangi koşul değişseydi ElastiCache seçilirdi: rezervasyon başka bir yerde kalıcı olsaydı ve buradaki kopya sadece hızlı bir kilit ve sayaç olsaydı ya da dayanıklı log istenseydi ve bellek içi hız şart olsaydı (o zaman MemoryDB)."),
+        },
+        verdict=_t("Karar: Aurora 44, DynamoDB 43, ElastiCache 35. Yakın bir yarış ve kararı R1'in bütünlük kısmı verir: sayaç, rezervasyon ve rapor aynı database'de, aynı transaction'da. "
+                   "Yine de ilişkisel seçersek artımız: kullanılabilir stok kuralı database'de, rezervasyon ve sayaç tek transaction'da, eşik raporu tek sorgu, stok altı kopyayla kalıcı. "
+                   "Potansiyel eksimiz: kampanya ürününün satırı tek writer'da bir kuyruk olur ve minimum ACU önceden yükseltilir; süresi dolan rezervasyonlar için zamanlanmış bir temizlik işi yazılır (temizlik DELETE ... WHERE expires_at < now() ile onay UPDATE ... WHERE expires_at >= now() aynı row lock sırasına girer; biri kazanır, diğeri yeni değeri görür). Bir koşul değişseydi: rezervasyon hacmi saniyede on binlere çıksaydı DynamoDB kazanırdı; ekip DynamoDB'yi SQL kadar iyi bilseydi R4 eşitlenir ve bu bir puanlık yarış tersine dönebilirdi.")),
+
+    # ------------------------------------------------------------------ 4. customer accounts and addresses (card only)
+    usecase("accounts", 4,
+        title=_t("Müşteri hesapları, adresler ve izinler"),
+        key=_t("Table'lar: customers, addresses, payment_methods, consents. E-posta benzersiz, adres müşteriye bağlı."),
+        story=_t("Bir perakende uygulamasının iki milyon müşterisi var. Her müşterinin birkaç adresi, birkaç ödeme yöntemi ve pazarlama izinleri (KVKK) vardır. Login saniyede 500 kez hesabı okur; hesap değişikliği saniyede 20'dir. "
+                 "Kurallar: bir e-posta tam olarak bir hesaba aittir; bir adres var olmayan bir müşteriye ait olamaz; \"verimi sil\" isteği müşteriyi, adreslerini, ödeme yöntemlerini ve izinlerini birlikte ve eksiksiz siler. "
+                 "Hukuk ekibi her çeyrek yeni bir izin türü tanımlar. Siparişler aynı database'te durur ve müşteriye bağlıdır. Ekipte beş geliştirici var, SQL biliyor; hesap verisinin kaybı güven kaybıdır ve kabul edilmez."),
+        reqs=[
+            req(True, "Hesabı id ve e-posta ile okuma; e-posta benzersizliği yazma anında korunmalı; adres ve ödeme yöntemi var olan bir müşteriye bağlı olmalı; \"verimi sil\" bütün ilgili kayıtları ya hep ya hiç silmeli. Sorular: \"bu müşterinin adresleri ve son siparişleri\", \"izni geri çeken müşteriler\".",
+                      "Aynı e-postayla iki hesap, şifre sıfırlamada yanlış kişiye e-posta demektir. Yarım kalan bir silme, hukuki yükümlülüğün ihlalidir."),
+            req(True, "Saniyede 500 hesap okuması ve 20 yazma; sabah ve akşam tepe. Her okuma 20 ms'nin altında. Müşteri sayısı yılda yüzde 30 büyüyor.",
+                      "Login her oturumun ilk adımıdır; yavaşsa her şey yavaştır. Büyüme için her yıl yeniden tasarım yapılamaz."),
+            req(True, "Hesap verisi kalıcıdır; AZ arızasında kayıp olmamalı; yanlış bir silme geri alınabilmeli. Bu kartta zorunlu.",
+                       "Kaybolan hesap kaybolan müşteridir; adresini ve kartını yeniden giren müşteri güvenini kaybeder."),
+            req(False, "Beş geliştirici, SQL biliyor. Çeyrekte bir yeni izin türü kesintisiz eklenebilmeli. Sunucu boyutlandırma ve yama istenmiyor.",
+                       "Her çeyrek bir bakım penceresi hukuk ekibinin takvimini database ekibine bağlar."),
+            req(False, "Düz ve okuma ağırlıklı trafik; kapasite başına ödeme uyar. Veri küçük (birkaç GB).",
+                       "Düz trafikte kapasite başına ödeme öngörülebilirdir; önemli olan büyümede sıçrama olmamasıdır."),
+        ],
+        cands=["aur", "ddb", "doc"],
+        scores={
+            "aur": [sc(10, "UNIQUE (email) e-posta kuralını yazma anında korur (Ö1); addresses.customer_id REFERENCES customers ON DELETE CASCADE adresi var olan bir müşteriye bağlar ve \"verimi sil\" tek DELETE ile adresleri, ödeme yöntemlerini ve izinleri siler; siparişler muhasebe için kalır: orders.customer_id ON DELETE SET NULL ile müşterisiz kalır ve aynı transaction'da anonimleştirilir (Ö2, Ö5). \"Adresleri ve son siparişleri\" bir JOIN'dir (Ö3); \"izni geri çekenler\" bir WHERE'dir. Yeni izin türü consents table'ına yeni bir row türü olarak girer. Puan kırılmadı."),
+                    sc(9, "500 okuma primary key ve e-posta index'i ile aramadır (Ö4); reader instance'lar okumayı taşır (Ö7). 1 puan kırıldı: reader sayısı ve ACU aralığı ekibin kararıdır."),
+                    sc(10, "Altı kopya, point-in-time restore yanlış silmeyi geri alır. Puan kırılmadı."),
+                    sc(8, "Yönetilen yedek, yama, failover; SQL ekibin dili. 2 puan kırıldı: yeni bir alan (izin türü değil, izin alanı) ALTER TABLE ister ve migration aracı disiplinle kullanılmalıdır."),
+                    sc(8, "ACU-saat ya da instance-saat, düz trafikte öngörülebilir. 2 puan kırıldı: gece düşük trafikte de minimum kapasite ödenir.")],
+            "ddb": [sc(6, "Hesap kullanıcı id'siyle tek item, adresler ve izinler aynı partition'da sort key ile. 4 puan kırıldı: e-posta benzersizliği ikinci bir item ve bir transaction ister; \"verimi sil\" aynı partition'daki item'ları TransactWriteItems ile (100'e kadar) birlikte siler ama siparişler gibi başka table'lardaki bağlı kayıtları database bilmez, uygulama bulur; \"adresleri ve son siparişleri\" iki table'dan iki okumadır; \"izni geri çekenler\" bir GSI ya da tam okumadır."),
+                    sc(10, "Okumalar partition'lara dağılır; büyüme için hiçbir şey değişmez. Puan kırılmadı."),
+                    sc(10, "Birkaç AZ, point-in-time recovery. Puan kırılmadı."),
+                    sc(8, "Serverless; yeni izin türü yeni bir value. 2 puan kırıldı: benzersizlik deseni ve GSI bakımı ekibin öğreneceği tasarımlardır."),
+                    sc(9, "İstek başına; düz trafikte provisioned + auto scaling. 1 puan kırıldı: GSI yazmaları ayrıca ödenir.")],
+            "doc": [sc(8, "Müşteri bir document, adresler ve izinler içinde dizi; unique index ile e-posta benzersizdir; \"verimi sil\" tek deleteOne'dır. 2 puan kırıldı: ödeme yöntemleri ve siparişler ayrı collection'larda ise aralarındaki bağ uygulama tarafından kontrol edilir; \"adresleri ve son siparişleri\" $lookup ister."),
+                    sc(9, "Okumalar replica'lara dağılır. 1 puan kırıldı: instance sınıfı önceden seçilir."),
+                    sc(10, "Altı kopya, sürekli yedek. Puan kırılmadı."),
+                    sc(7, "Şema serbest; yedek ve yama yönetilir. 3 puan kırıldı: MongoDB API'si bu ekip için yenidir ve instance boyutlandırma ekibin işidir."),
+                    sc(7, "Instance saat başına. 3 puan kırıldı: Multi-AZ için birkaç instance gece de çalışır.")],
+        },
+        h2h={
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı gereksinim R1'in kural ve ilişki kısmı. DynamoDB'nin gücü R2 ve R5'te: 500 okuma ve yılda yüzde 30 büyüme için hiçbir şey yapılmaz, istek başına ödenir. "
+                      "Aurora'nın gücü kuralların yerindedir: e-posta benzersizliği bir UNIQUE constraint'tir, adresin sahibi bir foreign key'dir ve \"verimi sil\" ON DELETE CASCADE ile tek bir DELETE'tir; DynamoDB'de benzersizlik bir transaction deseni, silme bir okuma ve item item silme, \"izni geri çekenler\" ise bir GSI'dır. "
+                      "Siparişler de aynı database'te müşteriye bağlı olduğu için \"adresleri ve son siparişleri\" tek JOIN'dir. Bu iş yükünde ilişkisel seçilir, çünkü hesap, adres, ödeme yöntemi ve sipariş birbirine bağlı kayıtlardır ve hukuki silme kuralı eksiksiz olmak zorundadır. "
+                      "Hangi koşul değişseydi DynamoDB seçilirdi: hesap tek başına okunup yazılan, ilişkisi olmayan bir profil olsaydı, okuma hacmi saniyede on binlere çıksaydı ve siparişler zaten başka bir sistemde olsaydı."),
+            "doc": _t("Document (DocumentDB) ile kafa kafaya. Ayrıştığı gereksinimler R1'in ilişki kısmı, R4 ve R5. DocumentDB'nin gücü hesabın şeklidir: müşteri, adresleri ve izinleriyle tek bir document'tır, tek okumayla gelir, unique index e-postayı korur ve \"verimi sil\" tek bir silmedir. "
+                      "Fark siparişlerde ve ödeme yöntemlerinde başlar: bunlar ayrı collection'lardır ve aralarındaki bağı database kontrol etmez; \"adresleri ve son siparişleri\" bir $lookup'tır ve ekip MongoDB API'sini bilmez. Aurora'da bu bağlar foreign key, soru bir JOIN'dir. "
+                      "Bu iş yükünde ilişkisel seçilir, çünkü hesap tek başına değil, siparişleriyle birlikte yaşar ve ekip SQL biliyor. Hangi koşul değişseydi DocumentDB seçilirdi: hesap, siparişlerden bağımsız bir profil servisi olsaydı, profilin şekli sık ve köklü değişseydi ve ekip MongoDB'yi zaten biliyor olsaydı."),
+        },
+        verdict=_t("Karar: Aurora 45, DynamoDB 43, DocumentDB 41. Üç aday da R2 ve R3'ü karşılar; yarışı R1'in kural ve ilişki kısmı belirler: benzersizlik, sahiplik ve eksiksiz silme database'de mi, uygulamada mı. "
+                   "Yine de ilişkisel seçersek artımız: e-posta benzersizliği ve adres sahipliği database'de, hukuki silme tek DELETE, siparişlerle JOIN, hesap altı kopyayla kalıcı. "
+                   "Potansiyel eksimiz: yeni bir izin alanı ALTER TABLE ister; okuma hacmi on binlere çıkarsa reader filosu büyütülür; gece minimum kapasite ödenir. Bir koşul değişseydi: hesap ilişkisiz bir profil olsaydı ve okuma hacmi on katına çıksaydı DynamoDB kazanırdı; ekip DynamoDB'yi SQL kadar iyi bilseydi iki puanlık fark kapanırdı.")),
+
+    # ------------------------------------------------------------------ 5. multi-tenant SaaS with row-level security (card only)
+    usecase("tenant", 5,
+        title=_t("Çok kiracılı SaaS: row-level security ile tenant ayrımı"),
+        key=_t("Her table'da tenant_id kolonu. Policy: bir session sadece kendi tenant_id'sinin row'larını görür."),
+        story=_t("Bir faturalama SaaS'ı 800 şirkete hizmet veriyor; hepsi aynı database'i paylaşıyor ve her row bir tenant_id taşıyor. En büyük kural: uygulamada bir bug olsa bile A şirketi B şirketinin faturalarını asla görmemeli. "
+                 "Saniyede 2.000 okuma ve 100 yazma; mesai saatlerinde tepe. Fatura verisi bugün 200 GB. Her gece her şirket için bir dışa aktarma çalışır. Yeni bir şirket açılışı bir kayıt eklemektir, yeni bir database değil. "
+                 "Faturalar müşterilere, kalemlere ve ödemelere bağlıdır; raporlar şirket başına aylık toplamları ister. Ekipte altı geliştirici ve bir operasyon mühendisi var; ekip PostgreSQL biliyor. Fatura verisi resmi kayıttır."),
+        reqs=[
+            req(True, "Her sorgu, uygulama kodu unutmuş olsa bile, sadece o session'ın tenant'ının row'larını görmeli ve değiştirmeli. Fatura, kalem, müşteri ve ödeme ilişkileri korunmalı; aylık toplamlar tenant başına tek sorgu olmalı.",
+                      "Bir WHERE tenant_id = ... unutulduğunda B şirketinin faturaları A'nın ekranında belirir; bu sözleşme ihlali ve itibar kaybıdır."),
+            req(True, "Saniyede 2.000 okuma ve 100 yazma, mesai saatlerinde tepe. Her okuma 30 ms'nin altında. 800 tenant 3.000 tenant'a çıkacak; gürültülü bir tenant diğerlerini yavaşlatmamalı.",
+                      "Tek bir büyük tenant'ın gece dışa aktarması diğerlerinin sabah işini yavaşlatırsa 799 şirket şikâyet eder."),
+            req(True, "Fatura resmi kayıttır; AZ arızasında kayıp olmamalı. Bu kartta zorunlu.",
+                       "Kaybolan fatura, hem müşterinin hem vergi dairesinin kaydıdır."),
+            req(False, "Altı geliştirici, bir operasyon mühendisi, PostgreSQL biliyor. Yeni tenant için sunucu ya da database kurulmamalı. Yama, yedek ve failover istenmiyor.",
+                       "Tenant başına database kurmak 800 bakım işi demektir; bir operasyon mühendisi bunu taşıyamaz."),
+            req(False, "Trafik mesai saatlerine bağlı; gece düşük ama dışa aktarma var. Kapasite başına ödeme uyar; büyümede maliyet tenant sayısıyla doğrusal artmalı.",
+                       "3.000 tenant için maliyet sıçrarsa fiyat modeli bozulur."),
+        ],
+        cands=["aur", "rds", "ddb"],
+        scores={
+            "aur": [sc(10, "ALTER TABLE invoices ENABLE ROW LEVEL SECURITY ve CREATE POLICY ... USING (tenant_id = current_setting('app.tenant')::int) ile database her sorguya tenant filtresini kendisi ekler; uygulama unutsa da başka tenant'ın row'u dönmez (Ö8, row-level security). Foreign key'ler ilişkileri korur (Ö2), aylık toplamlar GROUP BY'dır (Ö3). Puan kırılmadı."),
+                    sc(9, "2.000 okuma index aramalarıdır (Ö4); reader instance'lar okumayı ve gece dışa aktarmalarını writer'dan ayırır (Ö7); Serverless v2 mesai saatinde büyür. 1 puan kırıldı: bütün tenant'lar tek writer'ı paylaşır, gürültülü tenant için uygulama tarafında kota gerekir."),
+                    sc(10, "Üç AZ'de altı kopya, failover genellikle 60 saniyenin altında, point-in-time restore. Puan kırılmadı."),
+                    sc(9, "Yönetilen yedek, yama, failover ve storage; yeni tenant bir INSERT. 1 puan kırıldı: policy'ler her role için test edilmelidir ve table sahibi policy'yi atlar; bu, uygulamanın sahip olmayan bir role ile bağlanmasını ister."),
+                    sc(8, "ACU-saat; gece düşük kapasiteye iner. 2 puan kırıldı: minimum kapasite ve reader instance gece de ödenir; I/O isteği başına ücret Standard yapılandırmada eklenir.")],
+            "rds": [sc(10, "Aynı PostgreSQL: row-level security, foreign key ve GROUP BY birebir aynıdır. Puan kırılmadı."),
+                    sc(7, "2.000 okuma bir instance ve read replica'larla karşılanır. 3 puan kırıldı: her read replica database'in tam bir kopyasıdır ve kurulması saatler sürer; storage ve IOPS önceden boyutlandırılır; 3.000 tenant için instance sınıfı büyütülür."),
+                    sc(8, "Multi-AZ dağıtımında başka bir AZ'de senkron bir standby kopya vardır ve AWS failover süresini genellikle 60 ile 120 saniye olarak verir. 2 puan kırıldı: tek bir standby kopya, Aurora'nın altı kopyasından daha az yedeklidir ve failover daha uzundur."),
+                    sc(8, "Yönetilen yedek ve yama; PostgreSQL ekibin bildiği engine. 2 puan kırıldı: storage boyutu, IOPS ve instance sınıfı ekibin kararıdır, 200 GB'lık replica kurulumu uzundur ve policy'ler burada da her role için test edilir."),
+                    sc(9, "Instance-saat ve GB-ay. 1 puan kırıldı: mesai dışında da aynı instance ödenir; küçük ve düz yükte Aurora'dan ucuz olabilir, 3.000 tenant'ta bir sınıf atlamak maliyeti sıçratır.")],
+            "ddb": [sc(4, "Partition key tenant_id ile her tenant'ın verisi bir arada durur ve IAM policy'sinde dynamodb:LeadingKeys koşulu bir tenant'ı kendi partition key'iyle sınırlar. 6 puan kırıldı: fatura, kalem, müşteri ve ödeme arasındaki ilişkileri database korumaz; aylık toplam bir GROUP BY değil, bütün fatura item'larının okunmasıdır; her yeni rapor sorusu bir key tasarımıdır."),
+                    sc(10, "Okumalar partition'lara dağılır; gürültülü tenant kendi partition'larında kalır. Puan kırılmadı."),
+                    sc(10, "Birkaç AZ, point-in-time recovery. Puan kırılmadı."),
+                    sc(7, "Serverless; yeni tenant yeni bir key. 3 puan kırıldı: ekip PostgreSQL biliyor; fatura toplamları ve dışa aktarma için ayrı bir analitik yol kurulur."),
+                    sc(8, "İstek başına. 2 puan kırıldı: her gece 800 tenant'ın tam okuması okuma birimi olarak ödenir.")],
+        },
+        h2h={
+            "rds": _t("İlişkisel (RDS for PostgreSQL) ile kafa kafaya. Bu, aynı kategorinin ve aynı engine'in iki yönetilen biçimi arasındaki yarıştır: row-level security, foreign key ve SQL ikisinde de birebir aynıdır. Ayrıştığı gereksinimler R2 ve R3. "
+                      "RDS'in gücü sadeliği ve küçük yükte fiyatıdır: tek bir instance, bildiğin community PostgreSQL, instance-saat olarak öngörülebilir fatura. Aurora'nın gücü storage katmanındadır: veri üç AZ'de altı kopyadır, yeni bir reader dakikalar içinde aynı paylaşılan storage'a bağlanır (kopya alınmaz), failover genellikle 60 saniyenin altındadır ve Serverless v2 mesai saatinde büyüyüp gece küçülür. "
+                      "Bu iş yükünde Aurora seçilir, çünkü 800 tenant tek writer'ı paylaşır ve okuma ölçeği reader'larla, dayanıklılık altı kopyayla, mesai dalgası ACU ile karşılanır; RDS'te her reader tam bir kopyadır ve standby tektir. "
+                      "Hangi koşul değişseydi RDS seçilirdi: yük küçük ve düz olsaydı (saniyede yüz okuma), tek bir instance yetseydi, ekip belirli bir community sürümüne ya da extension'a ihtiyaç duysaydı ya da maliyetin en küçük olması her şeyden önemli olsaydı."),
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı gereksinim R1: ilişkiler ve toplamlar. DynamoDB'nin tenant ayrımı gerçektir: partition key tenant_id ve IAM'de LeadingKeys koşulu, bir tenant'ın başka partition'ı okumasını servis seviyesinde engeller; bu, row-level security'nin key-value karşılığıdır ve R2'de de kimse boyutlandırmaz. "
+                      "Ama faturalama ilişkilerle doludur: fatura, kalem, müşteri, ödeme ve aylık toplamlar. Aurora'da bunlar foreign key ve GROUP BY'dır; DynamoDB'de ilişkileri uygulama korur ve toplam, tenant'ın bütün fatura item'larının okunmasıdır. "
+                      "Bu iş yükünde ilişkisel seçilir, çünkü tenant ayrımı yalnız başına yetmez; faturanın doğruluğu ve raporları da database'den beklenir. Hangi koşul değişseydi DynamoDB seçilirdi: her tenant'ın verisi ilişkisiz, key ile okunan belgeler olsaydı, raporlar zero-ETL ile analitik bir kopyadan sorulsaydı ve tenant sayısı yüz binlere çıksaydı."),
+        },
+        verdict=_t("Karar: Aurora 46, RDS 42, DynamoDB 39. Tenant ayrımı üç adayda da mümkündür; yarışı R1'in ilişki kısmı ve R2'nin okuma ölçeği belirler. Aurora ve RDS aynı PostgreSQL'dir; fark storage ve failover modelindedir. "
+                   "Yine de Aurora seçersek artımız: policy database'de uygulanır ve unutulamaz, ilişkiler ve toplamlar SQL'dir, reader'lar gece dışa aktarmalarını writer'dan ayırır, altı kopya ve kısa failover. "
+                   "Potansiyel eksimiz: bütün tenant'lar tek writer'ı paylaşır ve gürültülü tenant için kota gerekir; policy'ler role bazında test edilir; gece minimum kapasite ödenir; kendi ayrı database'ini isteyen kurumsal bir tenant bu modelin dışındadır ve ayrı bir cluster alır. Bir koşul değişseydi: yük küçük ve düz olsaydı RDS for PostgreSQL daha ucuz bir seçim olurdu.")),
+
+    # ------------------------------------------------------------------ 6. reporting over years of history (clear loss)
+    usecase("reporting", 6, sim="lose_reporting", kind="lose",
+        title=_t("Raporlama: son 90 günden üç yıllık geçmişe"),
+        key=_t("Table'lar: orders, order_items, products, customers; üç yıl, iki milyar row. Sorular ay, şehir ve kategoriye göre toplamlar."),
+        story=_t("Finans ekibi checkout database'indeki siparişler üzerinde dashboard istiyor. İlk istek \"son 90 gün, kategoriye göre gelir\" idi ve reader instance'ta saniyeler içinde çalıştı. "
+                 "Şimdi gereksinim büyüdü: üç yıllık geçmiş, sipariş ve line'larda iki milyar row, 40 analist, her beş dakikada yenilenen 30 dashboard ve her hafta yeni bir soru: \"şehre, kampanyaya ve cihaz tipine göre iade oranı\". "
+                 "Her sorgu geçmişin tamamını tarar ama her row'un sadece üç dört kolonunu okur. Sorgular 10 saniyede dönmeli ve checkout'u yavaşlatmamalı. Veri checkout'tan saniyeler içinde gelmeli. Veri ekibi iki kişi, analistler SQL biliyor; dashboard verisi bir kopyadır, kaynak checkout'tadır."),
+        reqs=[
+            req(True, "JOIN ve GROUP BY içeren serbest SQL; her hafta yeni bir soru; cevap 10 saniyenin altında. Analistler kolon adlarını bilir, key tasarımı istemez.",
+                      "10 saniyeyi aşan dashboard kullanılmaz; her yeni soru için bir mühendis gerekirse finans ekibi beklemeye başlar."),
+            req(True, "İki milyar row üzerinde, her sorguda geçmişin tamamını tarayan ama sadece birkaç kolon okuyan 30 eşzamanlı sorgu. Checkout database'i bu taramaları hissetmemeli.",
+                      "Tam row'ları okuyan bir tarama iki milyar row'da yüzlerce GB okur; 30 sorgu aynı anda bunu yaparsa disk ve bellek checkout'tan çalınır."),
+            req(False, "Veri bir kopyadır; kaybı kaynaktan yeniden yükleme demektir. Yine de günlük yedek istenir.",
+                       "Kopya kaybolursa dashboard'lar bir gün kapanır; para kaybolmaz."),
+            req(False, "İki kişilik veri ekibi; analistler SQL biliyor. Kopyayı güncel tutan boru hattı kod istemeden kurulabilmeli.",
+                       "Elle yazılan bir boru hattı iki kişilik ekibin bütün zamanını alır ve bir hafta sonra eskir."),
+            req(False, "Analistler mesai saatinde çalışır; kullanım kadar ödeme istenir, 7/24 çalışan bir filo istenmez. Veri büyük (yüzlerce GB).",
+                       "7/24 çalışan reader filosu gece boş durur ve ödenir; yüzlerce GB için GB başına fiyat belirleyicidir."),
+        ],
+        cands=["aur", "rs", "os"],
+        scores={
+            "aur": [sc(7, "SQL, JOIN ve GROUP BY tam olarak vardır (Ö3) ve her yeni soru bir cümledir. 3 puan kırıldı: row storage her row'un tamamını okur; iki milyar row'da 10 saniye sınırı index ve partition ile de garanti değildir ve çoğu soru için önceden hesaplanmış özet table'lar yazılır."),
+                    sc(4, "Taramalar reader instance'a yönlendirilir (Ö7), writer'ı taşımaz ve SQL değişmez. 6 puan kırıldı: 30 eşzamanlı tam tarama için birkaç büyük reader gerekir; her tarama sadece üç kolon için tam page'leri okur; replica gecikmesi büyük taramalarda artar ve aynı paylaşılan storage'ın I/O'su paylaşılır."),
+                    sc(10, "Altı kopya, sürekli yedek. Puan kırılmadı."),
+                    sc(7, "Yönetilen; kopya zaten checkout'un kendisidir, boru hattı gerekmez. 3 puan kırıldı: özet table'lar, partition bakımı ve vacuum iki kişilik ekibin işidir; ikinci bir reader filosu yönetilir."),
+                    sc(4, "ACU-saat. 6 puan kırıldı: 30 eşzamanlı tarama için büyük reader'lar mesai saatinde çalışır, yüzlerce GB row storage'da index'lerle birlikte katlanır ve Standard'da her tarama I/O olarak ödenir.")],
+            "rs": [sc(10, "SQL, JOIN, GROUP BY ve window fonksiyonları; analistler aynı SQL'i yazar. Puan kırılmadı."),
+                   sc(10, "Column storage sadece sorulan kolonları okur, MPP taramayı node'lara böler; zero-ETL ile veri checkout'tan ayrı bir sistemde durur ve Aurora taramayı hissetmez. Puan kırılmadı."),
+                   sc(9, "Yönetilen storage dayanıklıdır, snapshot alınır. 1 puan kırıldı: veri bir kopyadır ve zero-ETL yeniden tohumlama ister."),
+                   sc(8, "Aurora'dan Redshift'e zero-ETL entegrasyonu veriyi yazıldıktan saniyeler içinde kopyalar, boru hattı kodu yoktur. 2 puan kırıldı: kaynak table'larda primary key şarttır; sort key, distribution key ve workload yönetimi ekibin kararıdır."),
+                   sc(8, "Serverless RPU-saat: analist çalışmayınca ödeme düşer. 2 puan kırıldı: taban kapasite ve veri kopyasının storage'ı ayrıca ödenir.")],
+            "os": [sc(4, "Aggregation'lar toplamları verir ve dashboard araçları bağlanır. 6 puan kırıldı: finans soruları JOIN ister ve JOIN yoktur, veri index'e yazılırken düzleştirilir; SQL desteği sınırlıdır ve her yeni soru mapping'e bağlıdır."),
+                   sc(8, "Shard'lara dağılmış aggregation'lar hızlıdır. 2 puan kırıldı: shard sayısı ve node sınıfı önceden seçilir; iki milyar doküman için bellek büyük olmalıdır."),
+                   sc(8, "Replica shard'lar ve snapshot. 2 puan kırıldı: kopya; mapping değişince reindex."),
+                   sc(5, "Yönetilen domain. 5 puan kırıldı: Aurora'dan OpenSearch'e akış için CDC araçları ve düzleştirme mantığı kurulur; mapping ve reindex ekibin işidir."),
+                   sc(6, "Node saat başına, 7/24. 4 puan kırıldı: analistlerin boş saatlerinde de node'lar çalışır.")],
+        },
+        h2h={
+            "rs": _t("Data warehouse (Redshift) ile kafa kafaya. Ayrıştığı gereksinimler R2 ve R5, ve ikisi de Redshift lehinedir. Redshift'in gücü storage biçimindedir: kolonları ayrı ayrı saklar, \"kategoriye göre gelir\" sorusu için sadece üç kolonu okur ve taramayı node'lara böler; Aurora her row'un tamamını page page okur ve iki milyar row'da bu yüzlerce GB'dır. "
+                      "Aurora'nın gücü SQL'in aynısını vermesi ve verinin zaten orada olmasıdır; ilk istekteki \"son 90 gün\" sorusu reader'da gerçekten yeterliydi. Ama gereksinim üç yıl, 30 eşzamanlı tarama ve 10 saniye olunca ilişkisel database ya özet table'larla ya da büyük bir reader filosuyla cevap verir ve bu, checkout database'ini bir analitik sisteme dönüştürmektir. "
+                      "Bu yüzden bu iş yükünde Aurora kaybeder ve doğru cevap ikisi birliktedir: Aurora kayıt sistemi olarak kalır, zero-ETL kopyayı saniyeler içinde Redshift'e taşır ve analistler orada çalışır. Hangi koşul değişseydi Aurora seçilirdi: soru gerçekten son 90 günle sınırlı kalsaydı, eşzamanlı dashboard sayısı birkaç olsaydı ve 10 saniye sınırı özet table'larla karşılanabilseydi; o zaman bir reader instance yeterdi."),
+            "os": _t("Search engine (OpenSearch) ile kafa kafaya. Ayrıştığı gereksinimler R1 ve R4. OpenSearch'ün gücü aggregation'dadır: shard'lara dağılmış toplamlar ve bir dashboard aracı ile \"kategoriye göre gelir\" hızlı çizilir; log analitiği bu yüzden OpenSearch'te yaşar. "
+                      "Ama finans soruları JOIN ister: sipariş, line, ürün ve müşteri dört ayrı table'dır ve OpenSearch'te JOIN yoktur; veri index'e yazılırken düzleştirilir ve her yeni soru mapping'e bağlıdır. Aurora bu soruları SQL ile cevaplar ama tarama maliyetiyle; Redshift ikisini de verir. "
+                      "Bu iş yükünde OpenSearch, Aurora'nın bir puan gerisinde kalır ve ikisi farklı nedenlerle kaybeder: Aurora ölçekte, OpenSearch ilişkilerde. Hangi koşul değişseydi OpenSearch seçilirdi: veri zaten düz olaylar olsaydı (tıklama, log), sorular JOIN istemeseydi ve dashboard'ın yanında metin araması ve anomali tespiti de istenseydi."),
+        },
+        verdict=_t("Karar: Redshift 45, Aurora 32, OpenSearch 31. Net bir kaybetme: Aurora gerçek bir adaydır (veri oradadır, SQL aynıdır) ama R2'nin tarama ölçeği ve R5'in 7/24 reader faturası onu sona atar. Doğru cevap \"ikisi birlikte\"dir: kaynak Aurora'da, analiz Redshift'te. "
+                   "Yine de Aurora seçersek artımız: boru hattı yok, veri saniye gecikmesiz, analistler aynı database'te çalışır, ilk 90 günlük soru gerçekten çalışır. "
+                   "Potansiyel eksimiz: iki milyar row'luk taramalar reader'ları ve paylaşılan storage'ın I/O'sunu doldurur, 10 saniye sınırı özet table'lar ister ve bunların bakımı iki kişilik ekibin işidir, mesai saatinde büyük reader'lar ödenir. Bir koşul değişseydi: soru son 90 günle sınırlı kalsaydı Aurora'nın reader'ı yeterdi.")),
+
+    # ------------------------------------------------------------------ 7. invoices and ledgers (race vs RDS for PostgreSQL)
+    usecase("ledger", 7, sim="race_ledger", kind="race",
+        title=_t("Faturalar ve çift taraflı defter"),
+        key=_t("Table'lar: accounts, journal_entries, postings (debit ve credit row'ları), invoices, invoice_lines."),
+        story=_t("Bir fintech, işletmeler için fatura ve muhasebe tutuyor. Her finansal olay bir journal entry'dir ve en az iki posting row'u yazar: bir borç, bir alacak; ikisinin toplamı her zaman sıfırdır. "
+                 "Fatura kalemleri, vergi oranları ve ödemeler hesaplara bağlıdır. Normalde saniyede 150 posting, ay sonunda iki gün boyunca on katı. Kayıtlar yedi yıl saklanır ve denetçiler her çeyrek dışa aktarma ister. "
+                 "Kural: hiçbir entry dengesiz commit edilemez, hiçbir posting var olmayan bir hesabı gösteremez, commit edilmiş bir kayıt silinmez (ters kayıt yazılır). Kayıp sıfır olmalı. Ekipte beş geliştirici var, biri PostgreSQL'i iyi biliyor."),
+        reqs=[
+            req(True, "Bir entry'nin bütün posting'leri ya hep ya hiç yazılmalı ve toplamı sıfır olmalı; posting var olan bir hesabı göstermeli; hesap bakiyesi her an posting'lerin toplamına eşit olmalı. Sorular: \"bu hesabın bakiyesi\", \"bu çeyreğin bütün entry'leri\", \"dengesi tutmayan entry var mı\". Yedi yıllık posting için table zamana göre partition'lara bölünür (partition: PostgreSQL'de büyük bir table'ı aya ya da yıla göre ayrı parçalarda tutmak; sorgu ve silme sadece ilgili parçaya dokunur).",
+                      "Dengesiz bir entry muhasebenin kendisini bozar; denetçi bulduğunda şirket ceza alır. Bakiye ayrı bir sayaçta tutulup posting'lerle uyuşmazsa hangisi doğrudur, kimse bilmez."),
+            req(True, "Saniyede 150 posting, ay sonunda iki gün 1.500. Her entry 50 ms'nin altında commit edilmeli. Yedi yılda milyarlarca posting.",
+                      "Ay sonu kapanışı takvime bağlıdır; yavaşlarsa muhasebe ekibi gece kalır. Yedi yıllık veri büyür ve sorgular yavaşlamamalıdır."),
+            req(True, "Sıfır kayıp: commit edilmiş posting bir AZ arızasında kaybolmamalı; yedek dakika hassasiyetinde geri yüklenebilmeli. Bu kartta zorunlu.",
+                       "Kaybolan posting, kaybolan paradır ve hukuki sorumluluktur."),
+            req(False, "Beş geliştirici, biri PostgreSQL uzmanı. Ay sonu için kapasite elle büyütülmek istenmiyor. Yedi yıllık arşiv için partition istenir.",
+                       "Her ay sonu elle büyütme ve küçültme bir risk toplantısıdır; unutulursa ya pahalı ya yavaş olur."),
+            req(False, "Trafik düz, ay sonunda on kat. Veri büyük ve büyüyor (yedi yıl). Kapasite başına ödeme kabul; ay sonu için ay boyu ödemek istenmiyor.",
+                       "Ay sonuna göre boyutlandırılmış sunucu ayın 28 gününde boş durur; yedi yıllık storage GB başına ödenir."),
+        ],
+        cands=["aur", "rds", "ddb"],
+        scores={
+            "aur": [sc(10, "Entry ve posting'leri tek transaction'da yazılır (Ö5); DEFERRABLE bir constraint ya da bir trigger fonksiyonu commit anında toplamın sıfır olduğunu doğrular (Ö1, Ö6); posting.account_id REFERENCES accounts (Ö2); bakiye bir view ya da materialized view olarak posting'lerden hesaplanır (Ö6); \"dengesiz entry var mı\" bir GROUP BY HAVING'dir (Ö3). Puan kırılmadı."),
+                    sc(9, "Saniyede 1.500 kısa transaction tek writer için erişilebilir; Serverless v2 ay sonunda kapasiteyi kendisi artırır. 1 puan kırıldı: maksimum ACU ay sonuna göre ayarlanmalı ve milyarlarca posting için partition tasarımı yapılmalıdır."),
+                    sc(10, "Üç AZ'de altı kopya; point-in-time restore saniye hassasiyetinde. Puan kırılmadı."),
+                    sc(9, "Yedek, yama, failover ve storage büyümesi yönetilir; ay sonu kapasitesi kendiliğinden gelir. 1 puan kırıldı: partition'lar ve vacuum ayarı yedi yıllık table'larda ekibin işidir."),
+                    sc(7, "ACU-saat, ay sonunda artıp sonra düşer; storage GB-ay. 3 puan kırıldı: yedi yıllık defter büyüdükçe storage ve index'ler katlanır; Aurora Standard'da her posting'in I/O'su ayrıca ödenir ve ay sonu I/O'su yüksektir; I/O-Optimized seçilirse instance fiyatı artar.")],
+            "rds": [sc(10, "Aynı PostgreSQL: transaction, deferrable constraint, trigger, view ve partition birebir aynıdır. Puan kırılmadı."),
+                    sc(8, "1.500 posting bir instance için erişilebilir. 2 puan kırıldı: instance sınıfı ay sonuna göre seçilir ve ay boyu kalır; sınıf değişikliği yeniden başlatma ister."),
+                    sc(9, "Multi-AZ dağıtımında senkron bir standby, otomatik yedek ve point-in-time restore: commit edilmiş posting kaybolmaz. 1 puan kırıldı: fark kayıp değil, kesinti süresi ve kopya sayısıdır; tek standby kopya ve AWS'in genellikle 60 ile 120 saniye verdiği failover süresi."),
+                    sc(8, "Yönetilen yedek ve yama; PostgreSQL uzmanı ekip rahat eder. 2 puan kırıldı: storage boyutu ve IOPS ekibin kararıdır ve yedi yılda birkaç kez büyütülür; replica tam kopyadır."),
+                    sc(8, "Instance-saat ve GB-ay; I/O ücreti yoktur ve küçük, düz yükte Aurora'dan ucuz olabilir. 2 puan kırıldı: ay sonu için büyük instance ayın geri kalanında da ödenir.")],
+            "ddb": [sc(5, "Entry ve posting'leri TransactWriteItems ile ya hep ya hiç yazılır (en fazla 100 item). 5 puan kırıldı: toplamın sıfır olması uygulama kodunda kontrol edilir, var olan hesap foreign key ile değil kodla doğrulanır, bakiye ayrı bir sayaçtır ve posting'lerle uyuşmazlığı database görmez; \"dengesiz entry var mı\" tam bir okumadır."),
+                    sc(10, "1.500 yazma partition'lara dağılır. Puan kırılmadı."),
+                    sc(10, "Birkaç AZ, point-in-time recovery. Puan kırılmadı."),
+                    sc(6, "Serverless. 4 puan kırıldı: denetçi dışa aktarmaları ve çeyrek raporları için ayrı bir analitik yol kurulur; ekip SQL'i bırakıp key tasarlar."),
+                    sc(8, "İstek başına. 2 puan kırıldı: her entry transactional yazmadır ve iki kat birim tüketir.")],
+        },
+        h2h={
+            "rds": _t("İlişkisel (RDS for PostgreSQL) ile kafa kafaya. Aynı engine, aynı SQL, aynı constraint ve trigger: R1'de fark yoktur. Ayrıştığı gereksinimler R2, R3 ve R5. RDS'in gücü sadelik ve fiyattır: PostgreSQL uzmanı ekip bildiği community sürümünü tek instance'ta işletir, I/O ücreti yoktur ve küçük, düz bir yükte fatura Aurora'dan düşük olabilir. "
+                      "Aurora'nın gücü ay sonunda ve dayanıklılıkta görünür: Serverless v2 iki günlük on katlık yükü kendisi karşılar ve sonra küçülür, veri altı kopyadır, failover genellikle 60 saniyenin altındadır ve storage kendiliğinden büyür; RDS'te instance ay sonuna göre seçilip ay boyu kalır ve standby tek kopyadır. "
+                      "Bu iş yükünde Aurora seçilir, çünkü sıfır kayıp ikisinde de sağlanır ama ay sonu dalgası ve kesinti süresi Aurora lehinedir; iki puanlık fark yakın bir yarıştır ve ekip zaten birkaç RDS işletiyorsa RDS savunulabilir. "
+                      "Hangi koşul değişseydi RDS seçilirdi: yük düz ve küçük olsaydı, ay sonu dalgası olmasaydı, belirli bir community sürümü ya da extension gerekseydi ya da en düşük fatura dayanıklılık farkından daha önemli olsaydı."),
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı gereksinim R1'in denge kuralı ve R4. DynamoDB'nin gücü R2'dedir: ay sonu için hiçbir şey ayarlanmaz ve 1.500 yazma partition'lara dağılır; TransactWriteItems entry ve posting'leri birlikte yazar. "
+                      "Ama bir defterin kuralları table'lar arasıdır: posting'lerin toplamı sıfır, hesap var olmalı, bakiye posting'lerin toplamına eşit. Aurora'da bunlar deferrable constraint, foreign key ve view'dır ve her programa uygulanır; DynamoDB'de hepsi uygulama kodunda yaşar ve \"dengesiz entry var mı\" sorusu bütün table'ın okunmasıdır. "
+                      "Bu iş yükünde ilişkisel seçilir, çünkü denetlenebilirlik ve kuralın database'de olması paranın kaydı için şarttır. Hangi koşul değişseydi DynamoDB seçilirdi: posting hacmi saniyede on binlere çıksaydı, denge kuralı başka bir sistemde zaten doğrulanıyor olsaydı ve raporlar analitik kopyadan sorulsaydı."),
+        },
+        verdict=_t("Karar: Aurora 45, RDS 43, DynamoDB 39. Aurora ve RDS aynı PostgreSQL'dir ve R1'de eşittir; yarışı R2'nin ay sonu dalgası ve R3'teki kesinti süresi ile kopya sayısı belirler; sıfır kayıp ikisinde de sağlanır. "
+                   "Yine de Aurora seçersek artımız: denge kuralı database'de, ay sonu kapasitesi kendiliğinden, altı kopya ve kısa failover, storage kendiliğinden büyür. "
+                   "Potansiyel eksimiz: yedi yıllık defterin storage ve I/O'su faturada büyür ve Standard ile I/O-Optimized arasında seçim yapılır; partition ve vacuum bakımı ekibindir. Bir koşul değişseydi: yük düz ve küçük olsaydı RDS for PostgreSQL seçilirdi.")),
+
+    # ------------------------------------------------------------------ 8. reservations with constraints (race vs DynamoDB)
+    usecase("booking", 8, sim="race_booking", kind="race",
+        title=_t("Randevu ve rezervasyon: çakışmayan zaman aralıkları"),
+        key=_t("Table'lar: doctors, appointments (doctor_id, slot tstzrange, patient_id). Kural: aynı doktorun aralıkları çakışmaz."),
+        story=_t("Bir sağlık platformu 300 klinik için randevu veriyor. Her randevu bir doktora ait bir zaman aralığıdır ve aynı doktorun iki aralığı asla çakışmamalı: 09:00-09:30 doluysa 09:15-09:45 alınamaz. "
+                 "Sabah 08:00-09:00 arasında saniyede 50 randevu denemesi olur; gün boyunca saniyede 5. Hasta önce aralığı 10 dakika tutar, sonra onaylar; onaylanmayan tutma düşer. "
+                 "Sorular: \"bu doktorun yarın boş aralıkları\", \"bu hastanın randevuları\", \"bu kliniğin haftalık doluluğu\". Randevu resmi kayıttır: kaybolan randevu kapıda bekleyen hastadır. Hatırlatma mesajları ayrı bir servistedir. Ekipte dört geliştirici var, SQL biliyor."),
+        reqs=[
+            req(True, "\"Bu doktor için bu aralığı sadece çakışan başka aralık yoksa yaz\" tek adımda ve atomik olmalı; aralıklar serbest uzunluktadır (15, 30, 45 dakika). Boş aralık sorusu tek sorgu olmalı. Tutma süresi dolunca aralık serbest kalmalı.",
+                      "İki hasta aynı doktora çakışan aralık alırsa biri kapıda bekler; kural uygulamada \"önce oku sonra yaz\" ile korunursa sabah yarışında delinir."),
+            req(True, "Sabah bir saat boyunca saniyede 50 randevu denemesi, çoğu aynı on klinikteki doktorlara; gün boyu saniyede 5. Her deneme 100 ms'nin altında cevaplanmalı.",
+                      "Sabah yarışı platformun itibarıdır; yavaşlarsa hasta aynı düğmeye tekrar basar ve yük katlanır."),
+            req(False, "Randevu resmi kayıttır; AZ arızasında kayıp olmamalı. Tutmanın (10 dakika) kaybı kabul edilir.",
+                       "Kaybolan randevu kapıda bekleyen hastadır; kaybolan tutma sadece yeniden seçmektir."),
+            req(False, "Dört geliştirici, SQL biliyor. Süresi dolan tutmalar için temizlik işi kabul edilir ama istenmez. Sunucu boyutlandırma istenmiyor.",
+                       "Temizlik işi gecikirse aralık boşken alınamaz."),
+            req(False, "Trafik gün içinde dalgalı, sabah tepe. Kapasite başına ödeme kabul; gece düşük ödeme istenir.",
+                       "Sabah bir saat için ay boyu büyük kapasite ödemek israftır."),
+        ],
+        cands=["aur", "ddb", "ec"],
+        scores={
+            "aur": [sc(10, "EXCLUDE USING gist (doctor_id WITH =, slot WITH &&) exclusion constraint'i (&&: iki aralık çakışıyor mu) çakışan aralığı database seviyesinde reddeder; bu kural serbest uzunluktaki aralıklar için de geçerlidir (Ö1). Tutma ve onay aynı transaction'da, koşullu UPDATE ile yapılır (Ö5). \"Boş aralıklar\" bir aralık sorgusudur (Ö3); hasta ve klinik ilişkileri foreign key'dir (Ö2). Puan kırılmadı."),
+                    sc(8, "Saniyede 50 kısa transaction tek writer için küçüktür; GiST index aralık sorgusunu hızlandırır (Ö4). 2 puan kırıldı: aynı on kliniğin doktorları aynı index page'lerinde yarışır ve sabah tepe için minimum ACU önceden yükseltilmelidir; 100 ms sınırı tepe anında ACU büyürken zorlanabilir."),
+                    sc(10, "Altı kopya, üç AZ, point-in-time restore. Puan kırılmadı."),
+                    sc(8, "Yönetilen yedek ve failover; SQL ekibin dili. 2 puan kırıldı: btree_gist extension'ı etkinleştirilir ve aralık tipleri öğrenilir; süresi dolan tutmalar için zamanlanmış bir temizlik işi yazılır."),
+                    sc(8, "ACU-saat; gece 0,5 ACU'ya iner. 2 puan kırıldı: sabah için yükseltilen minimum ACU unutulursa gün boyu ödenir; Standard'da I/O ayrıca ödenir.")],
+            "ddb": [sc(6, "Doktor partition key, aralık başlangıcı sort key; sabit 15 dakikalık hücrelerde attribute_not_exists koşulu çift kaydı tek yazmada engeller. 4 puan kırıldı: \"çakışan aralık yoksa\" koşulu tek bir item'ın koşulu olarak yazılamaz, çünkü koşul sadece yazılan item'ı test eder; 15 dakikanın katı olan aralıklar için uygulama aralığı 15 dakikalık hücrelere böler ve 1 ile 3 item'ı transaction ile yazar (mümkün, ama kural uygulamadadır); \"boş aralıklar\" sorusu için dolu hücreler okunup uygulamada hesaplanır."),
+                    sc(10, "On-demand mod sabah tepesini ayarsız karşılar; her doktor ayrı bir partition key'dir. Puan kırılmadı."),
+                    sc(10, "Birkaç AZ, point-in-time recovery. Puan kırılmadı."),
+                    sc(8, "Serverless; TTL tutmayı siler. 2 puan kırıldı: TTL silmesi genellikle birkaç gün içinde olur, bu yüzden koşula süre karşılaştırması eklenir; hücre tasarımı ve transaction deseni ekibin öğreneceği işlerdir."),
+                    sc(9, "İstek başına; gece sıfıra yakın. 1 puan kırıldı: birkaç hücreyi transaction ile yazmak iki kat birim tüketir.")],
+            "ec": [sc(5, "Doktor başına bir sorted set ve SET NX EX 600 ile tutma tam süreli ve atomiktir. 5 puan kırıldı: çakışma kontrolü sorted set üzerinde bir Lua script'idir; hasta ve klinik ilişkileri ve haftalık doluluk raporu yoktur."),
+                   sc(10, "Bellekten mikrosaniye; Serverless ölçeklenir. Puan kırılmadı."),
+                   sc(3, "Replica'lar birkaç AZ'de ama dayanıklı yazma log'u yoktur; bir arıza son randevuları kaybedebilir. 7 puan kırıldı: randevu resmi kayıttır ve kaybı kapıda bekleyen hastadır."),
+                   sc(8, "Serverless; EXPIRE temizlik işini gereksiz kılar. 2 puan kırıldı: Lua script'i ekibin bakımına girer."),
+                   sc(8, "ECPU ve GB-saat. 2 puan kırıldı: bellek GB başına pahalıdır; randevu verisi küçük olduğu için fark küçüktür.")],
+        },
+        h2h={
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı gereksinim R1'in çakışma kuralı. DynamoDB'nin gücü sabah tepesindedir: her doktor ayrı bir partition key'dir, 50 deneme ayarsız karşılanır ve sabit hücrelerde attribute_not_exists koşulu çift kaydı tek yazmada engeller; DynamoDB sayfasındaki koltuk kartı bu modelin ne kadar güçlü olduğunu gösterir. "
+                      "Fark aralığın şeklindedir: randevular serbest uzunluktadır ve \"çakışan aralık yoksa yaz\" kuralı başka row'lara bakmayı gerektirir; DynamoDB'de koşul sadece yazılan item'ı test eder, bu yüzden uygulama aralığı hücrelere böler ve birkaç item'ı transaction ile yazar. Aurora'da aynı kural bir exclusion constraint'tir ve database her yazmada kendisi uygular. "
+                      "Bu iş yükünde ilişkisel seçilir, çünkü çakışma kuralı tek bir kaydın içinde değil, kayıtlar arasındadır ve hacim tek writer'ın rahat erişimindedir; bir puanlık fark yakın bir yarıştır. "
+                      "Hangi koşul değişseydi DynamoDB seçilirdi: aralıklar sabit 15 dakikalık hücreler olsaydı (koşul tek item'da kalırdı), açılış trafiği saniyede on binlere çıksaydı ve raporlar ayrı bir kopyadan sorulsaydı."),
+            "ec": _t("Bellek içi key-value (ElastiCache) ile kafa kafaya. Ayrıştığı gereksinimler R1'in ilişki kısmı ve R3. ElastiCache'in gücü tutmadadır: SET NX EX 600 ile tutma atomiktir ve tam olarak 10 dakika sonra kendiliğinden düşer; temizlik işi gerekmez ve mikrosaniyede cevap verir. "
+                      "Ama randevu resmi kayıttır ve dayanıklı yazma log'u olmayan bir store'da bir arıza son randevuları kaybeder; çakışma kontrolü de sorted set üzerinde bir Lua script'idir ve hasta, klinik ve doluluk raporu gibi ilişkiler yoktur. "
+                      "Bu yüzden kalıcı kayıt ilişkisel database'de tutulur; ElastiCache en fazla 10 dakikalık tutma için bir yardımcı olabilir ve bu, ikisini birlikte kullanmaktır. Hangi koşul değişseydi ElastiCache seçilirdi: randevu başka bir sistemde zaten kalıcı olsaydı ve buradaki iş sadece kısa süreli tutma ve sayaç olsaydı ya da dayanıklı log istenseydi ve bellek içi hız şart olsaydı (MemoryDB)."),
+        },
+        verdict=_t("Karar: Aurora 44, DynamoDB 43, ElastiCache 34. En yakın yarış budur ve kararı tek bir kural verir: çakışma kuralı kayıtlar arasındadır ve exclusion constraint onu database'de uygular. "
+                   "Yine de ilişkisel seçersek artımız: çakışma kuralı database'de ve her programa uygulanır, boş aralıklar tek sorgu, hasta ve klinik ilişkileri foreign key, randevu altı kopyayla kalıcı. "
+                   "Potansiyel eksimiz: sabah tepesi için minimum ACU önceden yükseltilir; süresi dolan tutmalar için temizlik işi yazılır; btree_gist ve aralık tipleri öğrenilir. Bir koşul değişseydi: aralıklar tek bir sabit hücre olsaydı ve trafik lansman gibi sıçrasaydı DynamoDB kazanırdı; ekip DynamoDB'yi SQL kadar iyi bilseydi bu bir puanlık yarış tersine dönebilirdi.")),
+
+    # ------------------------------------------------------------------ 9. workflow state with audit (card only)
+    usecase("workflow", 9,
+        title=_t("İş akışı durumu ve denetim izi"),
+        key=_t("Table'lar: orders (status), order_status_history (from, to, who, when). Geçişler bir states table'ıyla sınırlı."),
+        story=_t("Bir sipariş karşılama sistemi her siparişi bir durum makinesinde ilerletir: new, paid, picked, shipped, delivered, cancelled. İzin verilen geçişler bellidir: picked'tan new'e dönülemez. "
+                 "Her geçiş kim tarafından, ne zaman, hangi durumdan hangi duruma yapıldıysa kaydedilmeli ve bu kayıt beş yıl saklanmalı. Günde 20.000 geçiş, yani saniyede yarım; kargo entegrasyonu saniyede 20'lik kısa tepeler yapar. "
+                 "Operasyon ekibi \"iki günden uzun süredir picked'ta takılı siparişler\" ve \"bu siparişin bütün geçmişi\" sorularını sorar. Geçiş ile denetim kaydı birlikte yazılmalı; biri olmadan diğeri olmamalı. Ekipte üç geliştirici var, SQL biliyor."),
+        reqs=[
+            req(True, "\"Durumu sadece picked ise shipped yap ve aynı anda denetim row'u yaz\" tek adımda ve atomik olmalı; izin verilmeyen geçiş database tarafından reddedilmeli. Sorular: \"takılı siparişler\" (duruma ve süreye göre), \"bu siparişin geçmişi\" (zaman sırasıyla).",
+                      "Geçiş yazılıp denetim kaydı yazılmazsa denetçi boşluk bulur; izin verilmeyen geçiş kabul edilirse teslim edilmiş sipariş yeniden ödeme ister."),
+            req(True, "Saniyede yarım geçiş, tepe 20. Her geçiş 50 ms'nin altında. Beş yılda 36 milyon denetim row'u.",
+                      "Hacim küçüktür; burada doğruluk ve sorgulanabilirlik belirleyicidir."),
+            req(False, "Denetim izi beş yıl saklanır; AZ arızasında kayıp olmamalı.",
+                       "Kaybolan denetim kaydı denetçiye açıklanamayan bir boşluktur."),
+            req(False, "Üç geliştirici, SQL biliyor. Geçiş kuralı tek bir yerde tanımlanmalı ve her programa uygulanmalı. Sunucu boyutlandırma istenmiyor.",
+                       "Kural her programda ayrı yazılırsa bir program eski kuralla çalışır."),
+            req(False, "Trafik düşük ve düz; kapasite başına en küçük ödeme istenir.",
+                       "Küçük yükte faturayı kapasitenin alt sınırı belirler."),
+        ],
+        cands=["aur", "ddb", "doc"],
+        scores={
+            "aur": [sc(10, "UPDATE orders SET status = 'shipped' WHERE order_id = ... AND status = 'picked' ve INSERT order_status_history aynı transaction'dadır (Ö5); bir trigger fonksiyonu geçişi allowed_transitions table'ına göre reddeder ve denetim row'unu kendisi yazar, böylece kural tek yerde durur ve her programa uygulanır (Ö6, Ö2). \"Takılı siparişler\" status ve updated_at üzerinde bir WHERE, \"geçmiş\" bir ORDER BY'dır (Ö3). Puan kırılmadı."),
+                    sc(10, "Saniyede 20 kısa transaction tek writer için küçüktür; 36 milyon denetim row'u index ile sorgulanır (Ö4). Puan kırılmadı."),
+                    sc(10, "Altı kopya, point-in-time restore. Puan kırılmadı."),
+                    sc(9, "Yönetilen; kural trigger'da tek yerde. 1 puan kırıldı: trigger kodu da sürüm kontrolünde tutulmalı ve migration ile dağıtılmalıdır."),
+                    sc(8, "ACU-saat; düşük yükte 0,5 ACU. 2 puan kırıldı: minimum ACU düşük yükte de ödenir; sıfır ACU'ya duraklatma desteklenen sürümlerde mümkündür ama ilk bağlantı gecikir.")],
+            "ddb": [sc(6, "ConditionExpression status = :from ile geçiş tek yazmada korunur ve denetim item'ı aynı partition'a TransactWriteItems ile yazılır. 4 puan kırıldı: izin verilen geçişler tablosu uygulama kodundadır; \"takılı siparişler\" sorusu status + updated_at üzerinde bir GSI ister ve beş yıllık geçmiş için ayrı bir tasarım yapılır."),
+                    sc(10, "Partition'lara dağılır. Puan kırılmadı."),
+                    sc(10, "Birkaç AZ, point-in-time recovery. Puan kırılmadı."),
+                    sc(8, "Serverless. 2 puan kırıldı: geçiş kuralı her programda ya da bir Lambda'da yaşar; Streams ile denetim izi alternatiftir ama ayrı bir bileşendir."),
+                    sc(10, "İstek başına; günde 20.000 yazma neredeyse bedavadır. Puan kırılmadı.")],
+            "doc": [sc(8, "Sipariş bir document, geçmiş içinde bir dizi; updateOne filtresi status = picked ile geçiş ve $push ile denetim kaydı tek atomik yazmadır. 2 puan kırıldı: izin verilen geçişler kodda yaşar; beş yıllık geçmiş document içinde büyür ve \"takılı siparişler\" için status + updated_at index'i kurulur."),
+                    sc(9, "Küçük yük. 1 puan kırıldı: instance sınıfı önceden seçilir."),
+                    sc(10, "Altı kopya. Puan kırılmadı."),
+                    sc(7, "Yönetilen. 3 puan kırıldı: MongoDB API'si ekip için yenidir; kural kodda."),
+                    sc(7, "Instance saat başına. 3 puan kırıldı: düşük yükte de instance'lar çalışır; bu iş yükü için en pahalı seçenektir.")],
+        },
+        h2h={
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı gereksinimler R1'in kural kısmı ve R4. DynamoDB'nin gücü R5'te açıktır: günde 20.000 yazma istek başına neredeyse bedavadır ve koşullu yazma \"status = picked ise\" kuralını tek item'da korur; denetim item'ı da aynı partition'a transaction ile yazılır. "
+                      "Aurora'nın gücü kuralın yerindedir: izin verilen geçişler bir table'dır, trigger fonksiyonu her geçişi ona göre reddeder ve denetim row'unu kendisi yazar; hangi program yazarsa yazsın kural aynıdır. DynamoDB'de bu tablo uygulama kodundadır ve \"takılı siparişler\" sorusu bir GSI tasarımıdır. "
+                      "Bu iş yükünde ilişkisel seçilir, çünkü hacim küçüktür, kural tek yerde olmalıdır ve operasyon soruları serbest SQL'dir; DynamoDB'nin maliyet avantajı küçük yükte birkaç dolardır. "
+                      "Hangi koşul değişseydi DynamoDB seçilirdi: geçiş hacmi saniyede binlere çıksaydı, kural zaten bir iş akışı motorunda (örneğin Step Functions) yaşasaydı ve denetim izi bir Streams tüketicisiyle başka bir sisteme yazılsaydı."),
+            "doc": _t("Document (DocumentDB) ile kafa kafaya. Ayrıştığı gereksinimler R1'in kural kısmı, R4 ve R5. DocumentDB'nin gücü geçmişin şeklidir: sipariş ve geçmişi tek document'tır, updateOne ile geçiş ve $push ile denetim kaydı tek atomik yazmadır ve \"bu siparişin geçmişi\" tek okumadır. "
+                      "Fark kuralda ve büyümede başlar: izin verilen geçişler kodda yaşar ve beş yıllık geçmiş document'ın içinde büyür; Aurora'da kural bir table ve bir trigger'dır, geçmiş ayrı bir table'da index'le sorgulanır. "
+                      "Bu iş yükünde ilişkisel seçilir, çünkü ekip SQL biliyor, yük küçüktür ve kuralın database'de olması istenir; DocumentDB bu küçük yük için en pahalı seçenektir. Hangi koşul değişseydi DocumentDB seçilirdi: sipariş iç içe ve sık şekil değiştiren bir belge olsaydı, geçmiş kısa olsaydı ve ekip MongoDB API'sini zaten kullanıyor olsaydı."),
+        },
+        verdict=_t("Karar: Aurora 47, DynamoDB 44, DocumentDB 41. Üç aday da yükü taşır; yarışı R1'in kural kısmı belirler: geçiş kuralı ve denetim kaydı database'de tek yerde mi, uygulama kodunda mı. "
+                   "Yine de ilişkisel seçersek artımız: kural trigger'da tek yerde, geçiş ve denetim tek transaction, takılı siparişler tek sorgu, beş yıllık geçmiş index'li ve kalıcı. "
+                   "Potansiyel eksimiz: trigger kodu migration disipliniyle dağıtılır; küçük yükte minimum ACU ödenir. Bir koşul değişseydi: hacim saniyede binlere çıksaydı ve kural bir iş akışı motorunda yaşasaydı DynamoDB kazanırdı.")),
+
+    # ------------------------------------------------------------------ 10. geospatial search with PostGIS (card only)
+    usecase("geo", 10,
+        title=_t("Coğrafi sorular: teslimat bölgeleri ve en yakın nokta (PostGIS)"),
+        key=_t("Table'lar: zones (polygon), pickup_points (point), couriers (point, updated_at), orders. GiST index ile."),
+        story=_t("Bir teslimat şirketinin 1.200 teslimat bölgesi (çokgen), 3.000 teslim alma noktası ve 400 kuryesi var. Kuryeler konumlarını 10 saniyede bir gönderir: saniyede 40 yazma. "
+                 "Sorular: \"bu adres hangi bölgede\" (fiyat buna göre), \"bu adrese en yakın 5 teslim alma noktası\", \"bu bölgedeki açık siparişler ve kuryeler\", \"bu rotanın uzunluğu\". Bölge fiyatı sipariş yazılırken bölgeye göre hesaplanır ve siparişle aynı transaction'da kaydedilir. "
+                 "Saniyede 200 konum sorusu, 40 yazma; saat 18:00'de tepe. Bölgeler ayda bir değişir. Konum geçmişi 30 gün saklanır. Ekipte dört geliştirici var, SQL biliyor, coğrafi veri yeni."),
+        reqs=[
+            req(True, "\"Bu nokta hangi çokgenin içinde\", \"bu noktaya en yakın 5 nokta\", \"bu çokgendeki siparişler\" ve \"rota uzunluğu\" soruları doğrudan sorulabilmeli; bölge fiyatı siparişle aynı transaction'da yazılmalı; sipariş ve kurye ilişkileri korunmalı.",
+                      "Yanlış bölge yanlış fiyattır; fiyat siparişten ayrı yazılırsa ikisi uyuşmaz. Çokgen içi sorusu uygulamada hesaplanırsa 1.200 bölge her istekte taranır."),
+            req(True, "Saniyede 200 coğrafi soru, 40 konum yazması; 18:00 tepesinde iki katı. Her soru 50 ms'nin altında. Konum geçmişi 30 günde yüz milyon row.",
+                      "Teslimat uygulaması sahada çalışır; yavaş cevap kuryeyi bekletir. Konum geçmişi büyür ve sorgular yavaşlamamalıdır."),
+            req(False, "Sipariş ve bölge fiyatı resmi kayıttır; konum geçmişi 30 gün sonra silinebilir. AZ arızasında sipariş kaybı olmamalı.",
+                       "Kaybolan sipariş kaybolan teslimattır; kaybolan konum geçmişi sadece bir rapor boşluğudur."),
+            req(False, "Dört geliştirici, SQL biliyor, coğrafi veri yeni. Coğrafi fonksiyonlar öğrenilebilir olmalı; ayrı bir coğrafi servis işletilmek istenmiyor.",
+                       "Ayrı bir coğrafi servis, ayrı bir veri kopyası ve ayrı bir operasyon demektir."),
+            req(False, "Trafik gün içinde dalgalı; kapasite başına ödeme kabul. Veri orta boy.",
+                       "18:00 tepesi için ay boyu büyük kapasite istenmez."),
+        ],
+        cands=["aur", "os", "ddb"],
+        scores={
+            "aur": [sc(10, "PostGIS extension'ı (Ö8) ST_Contains, ST_DWithin, KNN sıralaması ve ST_Length fonksiyonlarını verir; GiST index çokgen ve nokta sorularını hızlandırır (Ö4). Bölge fiyatı siparişle aynı transaction'da yazılır (Ö5) ve sipariş, kurye, bölge ilişkileri foreign key'dir (Ö2); \"bu bölgedeki siparişler\" bir JOIN'dir (Ö3). Puan kırılmadı."),
+                    sc(9, "200 soru GiST index ile milisaniyelerdedir, 40 yazma küçüktür; reader instance tepe okumalarını taşır (Ö7). 1 puan kırıldı: yüz milyon konum row'u için partition ve 30 günlük silme işi tasarlanır."),
+                    sc(10, "Altı kopya, point-in-time restore. Puan kırılmadı."),
+                    sc(8, "Yönetilen; PostGIS tek komutla etkinleştirilir (CREATE EXTENSION postgis), ayrı servis gerekmez. 2 puan kırıldı: coğrafi tipler, projeksiyonlar ve GiST ekibin öğreneceği yeni konulardır."),
+                    sc(8, "ACU-saat; gece düşer. 2 puan kırıldı: minimum ACU ve konum geçmişinin storage'ı; Standard'da konum yazmalarının I/O'su ayrıca ödenir.")],
+            "os": [sc(7, "geo_point ve geo_shape alanlarıyla \"çokgen içinde mi\" ve \"en yakın noktalar\" soruları doğrudan sorulur. 3 puan kırıldı: bölge fiyatı siparişle aynı transaction'da yazılamaz, sipariş ve kurye ilişkileri index'e düzleştirilir ve rota uzunluğu gibi hesaplar uygulamaya kalır."),
+                   sc(9, "Coğrafi sorgular shard'lara dağılır; 40 yazma küçüktür. 1 puan kırıldı: shard ve node sınıfı önceden seçilir; refresh aralığı yeni konumu kısa süre geciktirir."),
+                   sc(6, "Replica shard'lar ve snapshot. 4 puan kırıldı: arama index'i resmi kayıt değildir; sipariş ve fiyat başka bir yerde durmalıdır, bu da iki sistem demektir."),
+                   sc(7, "Yönetilen domain. 3 puan kırıldı: mapping, shard planı ve Aurora'dan akış ekibin işidir; ayrı bir servis işletilir."),
+                   sc(6, "Node saat başına, 7/24. 4 puan kırıldı: coğrafi sorular için ayrı bir domain gece de ödenir ve kayıt sistemi ayrıca gerekir.")],
+            "ddb": [sc(3, "Konum, geohash önekli bir sort key ile saklanırsa \"yakındaki noktalar\" bir begins_with dilimiyle yaklaşık olarak bulunur. 7 puan kırıldı: \"bu nokta hangi çokgenin içinde\" sorusu key ile sorulamaz ve 1.200 çokgen uygulamada taranır; rota uzunluğu ve çokgen JOIN'i yoktur; bölge fiyatı ile sipariş TransactWriteItems ile yazılır ama fiyat hesabı önce uygulamada yapılır."),
+                    sc(10, "Yazma ve okuma partition'lara dağılır; TTL konum geçmişini 30 gün sonra siler. Puan kırılmadı."),
+                    sc(10, "Birkaç AZ, point-in-time recovery. Puan kırılmadı."),
+                    sc(6, "Serverless. 4 puan kırıldı: geohash kütüphanesi ve çokgen hesabı uygulama kodunda yaşar; ekip hem key tasarımını hem coğrafi hesabı öğrenir."),
+                    sc(9, "İstek başına; TTL silmesi bedavadır. 1 puan kırıldı: her konum sorusu birkaç okuma birimi tüketir.")],
+        },
+        h2h={
+            "os": _t("Search engine (OpenSearch) ile kafa kafaya. Ayrıştığı gereksinimler R1'in transaction kısmı, R3 ve R5. OpenSearch'ün gücü coğrafi sorudadır: geo_point ve geo_shape ile \"çokgen içinde mi\" ve \"en yakın 5 nokta\" milisaniyede cevaplanır ve dashboard araçları haritayı çizer. "
+                      "Fark kayıt sistemindedir: bölge fiyatı siparişle aynı transaction'da yazılmalıdır ve sipariş, kurye, bölge ilişkileri korunmalıdır; OpenSearch bir arama index'idir, siparişi ve fiyatı başka bir sistem tutar ve bu, iki sistem ve bir akış demektir. PostGIS aynı coğrafi soruları ilişkisel database'in içinde, siparişin yanında ve GiST index ile cevaplar. "
+                      "Bu iş yükünde ilişkisel seçilir, çünkü coğrafi soru siparişin fiyatını belirler ve onunla aynı yazmada kaydedilir; ayrı bir coğrafi servis istenmez. "
+                      "Hangi koşul değişseydi OpenSearch seçilirdi: coğrafi sorular siparişten bağımsız bir keşif ve dashboard işi olsaydı (\"haritada kuryeleri göster\"), metin araması da istenseydi ve sipariş zaten başka bir sistemde olsaydı."),
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı gereksinim R1. DynamoDB'nin gücü R2 ve R5'te: 40 konum yazması ve yüz milyon row için hiçbir boyutlandırma yoktur ve TTL 30 günlük geçmişi bedavaya siler; konum geçmişi tek başına DynamoDB için iyi bir iş yüküdür. "
+                      "Ama coğrafi sorular key ile sorulamaz: \"bu nokta hangi çokgenin içinde\" sorusu için 1.200 çokgen uygulamada taranır, \"en yakın 5 nokta\" geohash önekiyle sadece yaklaşık bulunur ve rota uzunluğu yoktur; PostGIS bunları tek fonksiyon ve bir GiST index ile cevaplar. "
+                      "Bu iş yükünde ilişkisel seçilir, çünkü sorular coğrafidir, ilişkilidir ve siparişle aynı transaction'da yazılır. Hangi koşul değişseydi DynamoDB seçilirdi: tek soru \"bu kuryenin son konumu\" olsaydı, bölge hesabı başka bir serviste yapılsaydı ve konum hacmi saniyede on binlere çıksaydı; o zaman konum geçmişi DynamoDB'de, bölgeler ve siparişler Aurora'da tutulur."),
+        },
+        verdict=_t("Karar: Aurora 45, DynamoDB 38, OpenSearch 35. Yarışı R1 belirler: coğrafi soru siparişin fiyatını belirler ve ilişkisel database PostGIS ile bu soruyu siparişin yanında cevaplar. "
+                   "Yine de ilişkisel seçersek artımız: çokgen, en yakın nokta ve rota soruları tek fonksiyon, GiST index ile hızlı, bölge fiyatı siparişle tek transaction'da, ayrı coğrafi servis yok. "
+                   "Potansiyel eksimiz: PostGIS ve GiST ekibin öğreneceği yeni konulardır; yüz milyon konum row'u için partition ve silme işi tasarlanır. Bir koşul değişseydi: coğrafi sorular siparişten bağımsız bir dashboard işi olsaydı OpenSearch yarışa girerdi.")),
+]
+
+USECASES["aurora"] = AURORA_USECASES

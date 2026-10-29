@@ -366,8 +366,9 @@ def aurora_write(lang):
             "out": {"name": T(lang, "reads", "okumalar"), "cols": ["instance", "statement", T(lang, "result", "sonuç")]}, "steps": steps}
 
 
-# ---------------------------------------------------------------- 0. Architecture decision: requirements remove candidates
-# Each candidate answers each requirement with yes or no, and a short reason. A "no" removes the candidate.
+# ---------------------------------------------------------------- 0a. Legacy elimination decisions (2/1/0 scale). Only the old English page
+# (templates/e2e/aurora.html) still uses decide_checkout, decide_dashboard and decide_sessions. The Turkish page uses the five
+# scorecard simulations built from the M2 cards (e2e_usecases.AURORA_USECASES) through usecase_scorecard: see _aurora().
 CANDIDATES = ["Aurora PostgreSQL", "DynamoDB", "Redshift", "ElastiCache (Valkey)", "OpenSearch"]
 REQS = {
     "acid": (("Several rows change as one all-or-nothing unit, many times each second (OLTP)",
@@ -465,6 +466,10 @@ def decide(lang, scenario):
             "out": None, "steps": steps}
 
 
+# ---------------------------------------------------------------- 0. Architecture decisions: five scorecard simulations built from the M2 cards
+# (e2e_usecases.AURORA_USECASES). A score can never differ between a card and its simulation.
+
+
 COUNT_TR = {"rows read": "okunan row", "rows returned": "dönen row", "index entries read": "okunan index entry",
             "table rows read": "okunan table row", "rows in result": "sonuçtaki row", "lines read": "okunan line",
             "lines in envelopes": "zarflardaki line", "writes refused": "reddedilen yazma"}
@@ -482,7 +487,8 @@ def aurora(lang):
 
 
 def _aurora(lang):
-    return {"decide_checkout": decide(lang, "checkout"), "decide_dashboard": decide(lang, "dashboard"), "decide_sessions": decide(lang, "sessions"),
+    return {**{uc["sim"]: usecase_scorecard(lang, uc) for uc in _uc.AURORA_USECASES if uc["sim"]},
+            "decide_checkout": decide(lang, "checkout"), "decide_dashboard": decide(lang, "dashboard"), "decide_sessions": decide(lang, "sessions"),   # old English page only
             "where": where_city(lang), "index": seq_vs_index(lang), "join": join_order(lang), "group": group_by_category(lang),
             "constraints": constraints(lang), "tx": tx_rollback(lang), "lost": last_piece(lang, False), "locked": last_piece(lang, True),
             "storage": aurora_write(lang)}
