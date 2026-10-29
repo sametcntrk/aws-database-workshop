@@ -17,7 +17,7 @@ A candidate with 0 or 1 on a "must" requirement is disqualified, but stays in th
 CATEGORY = {"ddb": ("key-value", "key-value"), "aur": ("relational", "ilişkisel"), "ec": ("in-memory key-value", "bellek içi key-value"),
             "doc": ("document", "document"), "ks": ("wide-column", "wide-column"), "ix": ("time series", "time series"),
             "rs": ("data warehouse", "data warehouse"), "os": ("search engine", "search engine")}
-LINK = {"aur": "aurora", "ec": "elasticache", "doc": "documentdb", "ks": "keyspaces", "ix": "influxdb", "rs": "redshift", "os": "opensearch", "ddb": "dynamodb"}
+LINK = {"aur": "aurora", "ec": "elasticache", "doc": "docdb", "ks": "keyspaces", "ix": "influxdb", "rs": "redshift", "os": "opensearch", "ddb": "dynamodb"}
 CATEGORY["cas"] = ("self-managed wide-column", "kendi işlettiğin wide-column")   # Apache Cassandra on EC2 (Keyspaces card 10)
 LINK["cas"] = "keyspaces"
 
