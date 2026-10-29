@@ -1424,22 +1424,22 @@ def vk_race(lang, atomic):
 def vk_zset(lang):
     members = [["C00002", 98210.10], ["C00004", 45120.00], ["C00001", 36708.47], ["C00005", 27300.55], ["C00003", 1599.41]]
     order = lambda: sorted(deepcopy(members), key=lambda r: -r[1])
-    steps = [{"say": T(lang, "The leaderboard is a sorted set: members (customer ids) with scores (revenue). Valkey keeps the members in score order at each write.",
-                       "Leaderboard bir sorted set'tir: skorlu (gelir) üyeler (müşteri id'leri). Valkey her yazmada üyeleri skor sırasıyla tutar."),
+    steps = [{"say": T(lang, "A teaching copy of the leaderboard (key lm:tut:board, not the real lm:leaderboard) is a sorted set: members (customer ids) with scores (revenue). Valkey keeps the members in score order at each write.",
+                       "Liderlik tablosunun öğretici kopyası (key lm:tut:board; gerçek lm:leaderboard'a dokunulmaz) bir sorted set'tir: score'lu (gelir) member'lar (müşteri id'leri). Valkey her yazmada member'ları score sırasıyla tutar."),
               "marks": {}, "rows": {"z": order()}, "out": [], "count": {}}]
     members[4][1] += 20000
     z = order(); pos = next(i for i, r in enumerate(z) if r[0] == "C00003")
-    steps.append({"say": T(lang, f"ZINCRBY lm:leaderboard 20000 C00003: Elif places an order of 20,000. Her score becomes 21,599.41. Valkey moves her to her new place at once. The cost is O(log N).",
-                           f"ZINCRBY lm:leaderboard 20000 C00003: Elif 20.000'lik bir sipariş verir. Skoru 21.599,41 olur. Valkey onu hemen yeni yerine taşır. Maliyet O(log N)'dir."),
+    steps.append({"say": T(lang, f"ZINCRBY lm:tut:board 20000 C00003: Elif places an order of 20,000. Her score becomes 21,599.41. Valkey moves her to her new place at once. The cost is O(log N).",
+                           f"ZINCRBY lm:tut:board 20000 C00003: Elif 20.000'lik bir sipariş verir. Skoru 21.599,41 olur. Valkey onu hemen yeni yerine taşır. Maliyet O(log N)'dir."),
                   "marks": {"z": {pos: "new"}}, "rows": {"z": z}, "out": [], "count": {}})
     members[3][1] += 30000
     z = order(); pos = next(i for i, r in enumerate(z) if r[0] == "C00005")
-    steps.append({"say": T(lang, "ZINCRBY lm:leaderboard 30000 C00005: Zeynep jumps from fourth place to second place.", "ZINCRBY lm:leaderboard 30000 C00005: Zeynep dördüncü sıradan ikinci sıraya atlar."),
+    steps.append({"say": T(lang, "ZINCRBY lm:tut:board 30000 C00005: Zeynep jumps from fourth place to second place.", "ZINCRBY lm:tut:board 30000 C00005: Zeynep dördüncü sıradan ikinci sıraya atlar."),
                   "marks": {"z": {pos: "new"}}, "rows": {"z": z}, "out": [], "count": {}})
-    steps.append({"say": T(lang, "ZREVRANGE lm:leaderboard 0 2 WITHSCORES: the top three are ready. Valkey reads the first three members. It does not sort anything at read time.",
-                           "ZREVRANGE lm:leaderboard 0 2 WITHSCORES: ilk üç hazır. Valkey ilk üç üyeyi okur. Okuma anında hiçbir şey sıralamaz."),
+    steps.append({"say": T(lang, "ZREVRANGE lm:tut:board 0 2 WITHSCORES: the top three are ready. Valkey reads the first three members. It does not sort anything at read time.",
+                           "ZREVRANGE lm:tut:board 0 2 WITHSCORES: ilk üç hazır. Valkey ilk üç üyeyi okur. Okuma anında hiçbir şey sıralamaz."),
                   "marks": {"z": {0: "match", 1: "match", 2: "match"}}, "rows": {"z": z}, "out": [[i + 1, r[0], round(r[1], 2)] for i, r in enumerate(z[:3])], "count": {}})
-    return {"tables": [{"id": "z", "name": "lm:leaderboard (sorted set)", "cols": ["member", "score"], "rows": order(), "key": [0], "ref": []}],
+    return {"tables": [{"id": "z", "name": "lm:tut:board (sorted set)", "cols": ["member", "score"], "rows": order(), "key": [0], "ref": []}],
             "out": {"name": "ZREVRANGE 0 2", "cols": ["rank", "member", "score"]}, "steps": steps}
 
 
@@ -1474,7 +1474,8 @@ def vk_cache_aside(lang):
 VK_CANDS = ["ElastiCache (Valkey)", "DynamoDB", "Aurora PostgreSQL", "Redshift", "OpenSearch"]
 
 
-def elasticache(lang):
+def _ec_legacy(lang):
+    """The three 2/1/0 decisions of the old English page (templates/e2e/elasticache.html) only."""
     w1 = verdicts(VK_CANDS, [
         V((1, "data in memory, microseconds", "veri bellekte, mikrosaniyeler"), (0, "single-digit milliseconds", "tek haneli milisaniyeler"), (0, "milliseconds, disk-based", "milisaniyeler, disk tabanlı"),
           (0, "analytic queries", "analitik query'ler"), (0, "search queries", "arama query'leri")),
@@ -1505,12 +1506,108 @@ def elasticache(lang):
         "decide_ratelimit": decide_generic(lang, ("An API rate limit: at most 100 calls per user per minute, checked on every call", "Bir API hız sınırı: kullanıcı başına dakikada en fazla 100 çağrı, her çağrıda kontrol edilir"),
                                            [("An atomic counter per user that resets itself every minute", "Kullanıcı başına, her dakika kendini sıfırlayan atomik bir sayaç"),
                                             ("The check adds less than one millisecond to each call", "Kontrol her çağrıya bir milisaniyeden az ekler")], VK_CANDS, w3),
-        "race_naive": vk_race(lang, False), "race_atomic": vk_race(lang, True), "zset": vk_zset(lang), "cache": vk_cache_aside(lang),
     }
+    return spec
+
+
+
+
+def _slot(key):
+    """The real Valkey cluster hash slot: CRC16 (XMODEM) of the key, or of the text inside the first {...}, mod 16384."""
+    import binascii
+    k = key
+    a = key.find("{")
+    if a != -1:
+        b = key.find("}", a + 1)
+        if b > a + 1:
+            k = key[a + 1:b]
+    return binascii.crc_hqx(k.encode(), 0) % 16384
+
+
+EC_SHARDS = [(0, 5460), (5461, 10922), (10923, 16383)]   # an even split of the 16,384 slots over three shards
+
+
+def _shard(slot):
+    return next(i for i, (lo, hi) in enumerate(EC_SHARDS) if lo <= slot <= hi)
+
+
+EC_SLOT_KEYS = ["lm:deal", "lm:deal:stock", "lm:session:7f3a", "lm:session:3c8d", "lm:leaderboard", "lm:orders:today"]
+EXTRA_TABLES["valkey_slots"] = {"cols": ["key", "hash slot", "shard"],
+                                "rows": [[k, _slot(k), _shard(_slot(k)) + 1] for k in EC_SLOT_KEYS]}
+
+
+def vk_slots(lang):
+    """Six real Lale Market keys go to their hash slots and shards. Then a two-key command fails across slots, and works with a hash tag."""
+    rows, steps = [], []
+    shards = lambda: [[f"shard {i + 1}", f"{lo}–{hi}", ", ".join(r[0] for r in rows if r[2] == i + 1) or "–"] for i, (lo, hi) in enumerate(EC_SHARDS)]
+    steps.append({"say": T(lang, "Cluster mode splits the key space into 16,384 hash slots. Here three shards own one third each. The client calculates CRC16(key) mod 16384 for each key.",
+                           "Cluster mode key uzayını 16.384 hash slot'a böler. Burada üç shard her biri üçte birin sahibidir. İstemci her key için CRC16(key) mod 16384 hesaplar."),
+                  "marks": {}, "rows": {"k": [], "s": shards()}, "out": [], "count": {"keys placed": 0}})
+    for k in EC_SLOT_KEYS:
+        sl = _slot(k); sh = _shard(sl) + 1
+        rows.append([k, sl, sh])
+        steps.append({"say": T(lang, f"{k}: CRC16 mod 16384 = {sl}. Slot {sl} belongs to shard {sh}. Every command on this key goes to shard {sh}.",
+                               f"{k}: CRC16 mod 16384 = {sl}. Slot {sl} shard {sh}'in payıdır. Bu key'e giden her komut shard {sh}'e gider."),
+                      "marks": {"k": {len(rows) - 1: "new"}, "s": {sh - 1: "read"}}, "rows": {"k": deepcopy(rows), "s": shards()}, "out": [], "count": {"keys placed": len(rows)}})
+    a, b = _slot("lm:deal"), _slot("lm:deal:stock")
+    steps.append({"say": T(lang, f"MGET lm:deal lm:deal:stock asks for two keys in one command. Their slots are {a} and {b}, so the cluster refuses it with a CROSSSLOT error. Neighbour names are not neighbour slots.",
+                           f"MGET lm:deal lm:deal:stock tek komutta iki key ister. Slot'ları {a} ve {b}'dir, bu yüzden cluster komutu CROSSSLOT hatasıyla reddeder. Adları komşu olan key'lerin slot'ları komşu değildir."),
+                  "marks": {"k": {0: "bad", 1: "bad"}}, "rows": {"k": deepcopy(rows), "s": shards()},
+                  "out": [["MGET lm:deal lm:deal:stock", f"{a}, {b}", "CROSSSLOT"]], "outmarks": {0: "bad"}, "count": {"keys placed": len(rows)}})
+    t1, t2 = "{lm:deal}:info", "{lm:deal}:stock"
+    s1, s2 = _slot(t1), _slot(t2)
+    rows2 = deepcopy(rows) + [[t1, s1, _shard(s1) + 1], [t2, s2, _shard(s2) + 1]]
+    steps.append({"say": T(lang, f"With a hash tag, only the text inside the braces is hashed. {t1} and {t2} both hash lm:deal, so both are in slot {s1}, and MGET works. The price: all keys with this tag sit on one shard.",
+                           f"Hash tag ile sadece süslü parantezin içindeki metin hash'lenir. {t1} ve {t2} ikisi de lm:deal'i hash'ler, ikisi de slot {s1}'dedir ve MGET çalışır. Bedeli: bu tag'i taşıyan bütün key'ler tek bir shard'da durur."),
+                  "marks": {"k": {len(rows2) - 2: "match", len(rows2) - 1: "match"}}, "rows": {"k": rows2, "s": shards()},
+                  "out": [["MGET lm:deal lm:deal:stock", f"{a}, {b}", "CROSSSLOT"], [f"MGET {t1} {t2}", f"{s1}, {s2}", "OK"]], "outmarks": {0: "bad", 1: "match"},
+                  "count": {"keys placed": len(rows2)}})
+    return {"tables": [{"id": "k", "name": T(lang, "keys and their slots", "key'ler ve slot'ları"), "cols": ["key", "hash slot", "shard"], "rows": [], "key": [0], "ref": [], "pk": [0]},
+                       {"id": "s", "name": T(lang, "three shards", "üç shard"), "cols": ["shard", "slots", T(lang, "keys", "key'ler")], "rows": shards(), "key": [0], "ref": []}],
+            "out": {"name": T(lang, "multi-key commands", "çok key'li komutlar"), "cols": [T(lang, "command", "komut"), "slots", T(lang, "reply", "cevap")]},
+            "steps": steps}
+
+
+def vk_failover(lang):
+    """Asynchronous replication: the lock of worker A reaches the primary, A gets OK, the primary fails before the replica has the key."""
+    prim = [["lm:deal:stock", "46"], ["lm:orders:today", "42"]]
+    repl = deepcopy(prim)
+    log, steps = [], []
+
+    def snap(say, pm=None, rm=None, om="new"):
+        steps.append({"say": say, "marks": {"p": pm or {}, "r": rm or {}}, "rows": {"p": deepcopy(prim), "r": deepcopy(repl)},
+                      "out": deepcopy(log), "outmarks": {len(log) - 1: om} if log else {}, "count": {"lock holders": sum(1 for x in log if x[3] == "OK" and x[2].startswith("SET lock"))}})
+    snap(T(lang, "A primary in AZ a and its replica in AZ b. The replica copies the writes of the primary asynchronously: the primary answers OK first and copies later.",
+           "AZ a'da bir primary ve AZ b'de onun replica'sı. Replica, primary'nin yazmalarını asenkron kopyalar: primary önce OK der, sonra kopyalar."))
+    prim.append(["lock:payout:2026-10-28", "worker-A"])
+    log.append(["1", "A", "SET lock:payout:2026-10-28 worker-A NX PX 900000", "OK"])
+    snap(T(lang, "Worker A takes the lock of tonight's payout run. The primary writes the key and answers OK at once. A starts to pay the sellers.",
+           "Worker A bu gecenin ödeme kilidini alır. Primary key'i yazar ve hemen OK der. A satıcılara ödemeye başlar."), {2: "new"}, None, "match")
+    snap(T(lang, "The primary fails before the copy reaches the replica. The replica has the first two keys, but not the lock.",
+           "Primary, kopya replica'ya ulaşmadan çöker. Replica'da ilk iki key var, ama kilit yok."), {0: "bad", 1: "bad", 2: "bad"}, None, "match")
+    snap(T(lang, "Failover: the service promotes the replica to the new primary within seconds. Clients connect again to the same endpoint. Nobody sees an error.",
+           "Failover: servis replica'yı saniyeler içinde yeni primary yapar. İstemciler aynı endpoint'e yeniden bağlanır. Kimse bir hata görmez."), None, {0: "match", 1: "match"}, "match")
+    repl.append(["lock:payout:2026-10-28", "worker-B"])
+    log.append(["2", "B", "SET lock:payout:2026-10-28 worker-B NX PX 900000", "OK"])
+    snap(T(lang, "Worker B tries the lock. On the new primary the key does not exist, so NX succeeds. Two workers now hold the same lock and pay the same sellers twice. Each command was correct. The loss is in the replication gap.",
+           "Worker B kilidi dener. Yeni primary'de key yoktur, bu yüzden NX başarılı olur. Artık iki worker aynı kilidi tutar ve aynı satıcılara iki kez ödeme yapar. Her komut doğruydu. Kayıp, kopyalama aralığındadır."),
+         None, {2: "bad"}, "bad")
+    return {"tables": [{"id": "p", "name": T(lang, "primary (AZ a)", "primary (AZ a)"), "cols": ["key", "value"], "rows": deepcopy(prim[:2]), "key": [0], "ref": []},
+                       {"id": "r", "name": T(lang, "replica (AZ b), then the new primary", "replica (AZ b), sonra yeni primary"), "cols": ["key", "value"], "rows": deepcopy(prim[:2]), "key": [0], "ref": []}],
+            "out": {"name": T(lang, "commands and replies", "komutlar ve cevaplar"), "cols": ["#", "worker", T(lang, "command", "komut"), T(lang, "reply", "cevap")]},
+            "steps": steps}
+
+
+def elasticache(lang):
+    spec = {**{uc["sim"]: usecase_scorecard(lang, uc) for uc in _uc.EC_USECASES if uc["sim"]},
+            **_ec_legacy(lang),   # old English page only
+            "race_naive": vk_race(lang, False), "race_atomic": vk_race(lang, True), "zset": vk_zset(lang), "cache": vk_cache_aside(lang),
+            "slots": vk_slots(lang), "failover": vk_failover(lang)}
     return {k: _localize(v, lang) for k, v in spec.items()}
 
 
-COUNT_TR.update({"pieces sold": "satılan adet", "cache hits": "cache hit", "database reads": "database okuması"})
+COUNT_TR.update({"pieces sold": "satılan adet", "cache hits": "cache hit", "database reads": "database okuması",
+                 "keys placed": "yerleşen key", "lock holders": "kilidi tutan worker"})
 SIMS["elasticache"] = elasticache
 
 
