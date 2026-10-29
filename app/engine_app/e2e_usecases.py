@@ -1611,3 +1611,540 @@ KS_USECASES = [
                    "Potansiyel eksimiz: driver ayarı ve bakım script'leri değişir; ileride bir secondary index gerekirse ikinci bir table yazılır (Ö7); TTL silmeleri ödenir. Bir koşul değişseydi: servisler Keyspaces'in desteklemediği özelliklere dayansaydı EC2 üzerindeki Cassandra bir ara adım olurdu.")),
 ]
 USECASES["keyspaces"] = KS_USECASES
+
+# ====================================================================== Amazon DocumentDB (page id "docdb"), Turkish only
+# Sources of the limits and numbers quoted in the reasons below (the hedges are the hedges of the source):
+#  - Cluster volume "replicate data six ways across three Availability Zones", 0-16 instances, one primary, up to 15 replicas,
+#    replica lag "usually less than 100 milliseconds", "Writes to an Amazon DocumentDB cluster are atomic within a single document",
+#    "Attempting to write to a reader results in an error": https://docs.aws.amazon.com/documentdb/latest/devguide/how-it-works.html
+#  - Failover "up to 30 seconds of downtime for your cluster, but often less time than that":
+#    https://docs.aws.amazon.com/whitepapers/latest/get-started-documentdb/amazon-documentdb-architecture.html
+#  - Quotas: document size 16 MiB, nesting 200 levels, 64 indexes per collection, 32 keys in a compound index, cluster 256 TiB (8.0):
+#    https://docs.aws.amazon.com/documentdb/latest/devguide/limits.html
+#  - Transactions (4.0 and later) "across multiple documents, statements, collections, and databases"; one minute execution limit;
+#    document-level write locks time out after 1 minute: https://docs.aws.amazon.com/documentdb/latest/devguide/transactions.html
+#  - Change streams: default retention three hours, "between 1 hour and 7 days": https://docs.aws.amazon.com/documentdb/latest/devguide/change_streams.html
+#  - TTL deletes "are best effort and are not guaranteed within a specific timeframe", each deletion incurs IO costs:
+#    https://docs.aws.amazon.com/documentdb/latest/devguide/how-it-works.html (TTL deletes)
+#  - Elastic clusters "support workloads with millions of reads/writes per second and petabytes of storage capacity", up to 32 shards:
+#    https://docs.aws.amazon.com/documentdb/latest/devguide/elastic-how-it-works.html
+#  - Serverless: 0.5-256 DCU, each DCU "approximately 2 gibibytes (GiB) of memory", on 5.0 and 8.0:
+#    https://docs.aws.amazon.com/documentdb/latest/devguide/docdb-serverless-how-it-works.html
+#  - Pricing components: instance hours, I/O requests per million, storage, backup storage: https://docs.aws.amazon.com/documentdb/latest/devguide/what-is.html
+#  - MongoDB API compatibility 3.6, 4.0, 5.0, 8.0; not every operator on every version: https://docs.aws.amazon.com/documentdb/latest/devguide/mongo-apis.html
+#  - $jsonSchema validation (4.0 and later, not on elastic clusters): https://docs.aws.amazon.com/documentdb/latest/devguide/json-schema-validation.html
+#  - $lookup: equality match (left outer join), correlated subqueries from 8.0.2: https://docs.aws.amazon.com/documentdb/latest/devguide/functional-differences.html
+#  - Retryable writes only from 8.0.2: https://docs.aws.amazon.com/documentdb/latest/devguide/retryable-writes.html
+#  - Multikey, compound, sparse, partial, TTL, text and vector indexes: https://docs.aws.amazon.com/documentdb/latest/devguide/indexes-multikey.html
+#  - DynamoDB item size 400 KB, transactions up to 100 actions, TTL "within a few days": DynamoDB Developer Guide (see the DynamoDB section above)
+#  - Aurora: six copies in three AZs, up to 15 replicas, Serverless v2 0.5 ACU minimum: see the Aurora section above
+#  - ElastiCache Serverless and EXPIRE: https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.html
+
+DOCDB_USECASES = [
+    # ------------------------------------------------------------------ 1. product catalog with variable attributes (clear win)
+    usecase("catalog", 1, sim="win_catalog", kind="win",
+        title=_t("Değişken özellikli ürün kataloğu (Lale Market)"),
+        key=_t("Collection: products. Document: _id, name, category, price, attributes (iç içe), tags (array)."),
+        story=_t("Lale Market'in kataloğunda 200 ürün var, gerçek bir pazar yerinde 200.000 olur. Her ürün türünün özellikleri farklıdır: kulaklıkta renk ve garanti ayı, kitapta sayfa sayısı ve dil, kazakta beden ve kumaş. "
+                 "Ürün sayfası ürünü bütün özellikleri ve etiketleriyle tek seferde ister; kategori sayfası \"Elektronik, siyah, rating'e göre\" filtreler. Pazarlama ekibi her ay yeni bir özellik ekler (\"su geçirmez\", \"enerji sınıfı\") ve bu özellik sadece yeni ürünlerde dolu başlar. "
+                 "Saniyede 2.000 okuma (önünde bir cache var), saniyede 20 yazma; kampanya gününde okuma beş katına çıkar. Katalog kaybolursa satıcı beslemelerinden bir günde yeniden kurulur. Dört geliştirici, ikisi MongoDB API'sini önceki işinden biliyor; sunucu boyutlandırmak istenmiyor. Metin araması ayrı bir arama servisine verilecek."),
+        reqs=[
+            req(True, "\"Bu ürün id'sinin tamamı\" tek okumada gelmeli. \"Elektronik ve siyah, rating'e göre\" ve \"garanti_ay >= 24 ve rating >= 4,5\" gibi iç içe field'lara göre filtreler yeniden tasarım istemeden çalışmalı. Her ürün türü kendi field'larını taşımalı; yeni özellik migration istememeli. Bir ürünün tek bir özelliğini değiştirmek bütün ürünü yeniden yazmamalı.",
+                      "Ürün sayfası mağazanın vitrinidir: ürün birkaç parçadan toplanırsa her sayfa birkaç okumadır. Yeni özellik için bir schema değişikliği pazarlama takvimini database ekibine bağlar. Ürünün tamamını yeniden yazan bir güncelleme, aynı anda başka bir satıcının değişikliğini ezer."),
+            req(True, "Saniyede 2.000 okuma, kampanyada 10.000; saniyede 20 yazma. Ürün sayfası 20 ms'nin altında dönmeli. Katalog yılda iki katına çıkıyor; 400.000 ürün için tasarım değişmemeli.",
+                      "Yavaş ürün sayfası satış kaybıdır. Okuma hacmi yazmanın yüz katıdır; ölçek okuma tarafındadır ve okumayı yazmayı yormadan büyütmek gerekir."),
+            req(False, "Katalog satıcı beslemelerinden bir günde yeniden kurulabilir. Bir Availability Zone arızasında kayıp ve uzun kesinti olmamalı.",
+                       "Katalog kaybı mağazayı kapatmaz ama vitrini bir gün boşaltır; dayanıklılık güçlü bir tercihtir, zorunluluk değildir."),
+            req(False, "Dört geliştirici, ikisi MongoDB API'sini biliyor. Yedek, yama ve failover istenmiyor. Aylık yeni özellik kodda tek satırla eklenmeli.",
+                       "Bilmediği bir API'ı öğrenen ekip hata yapar; her ay bir schema değişikliği ve migration penceresi kategori ekibinin takvimini kilitler."),
+            req(False, "Okuma ağırlıklı, gün içinde düz, kampanyada tepe. Kapasite başına ya da kullanım başına ödeme, ikisi de uyar. Veri orta boy (birkaç GB).",
+                       "Düz trafikte kapasite başına ödeme öngörülebilirdir; kampanya tepesi için bütün yıl büyük sunucu ödemek istenmez."),
+        ],
+        cands=["doc", "aur", "os"],
+        scores={
+            "doc": [sc(10, "Ürün tek bir document'tır: attributes embedded document, tags bir array; _id ile tek okuma (Ö1, Ö2). \"Elektronik ve siyah\" filtresi dot notation ile iç içe field'a gider (Ö3) ve { category: 1, rating: -1 } compound index'i ile IXSCAN olur (Ö4). Yeni özellik sadece yeni document'lara yazılır; updateOne ile $set tek field'ı değiştirir (Ö5). Puan kırılmadı."),
+                    sc(10, "Okumalar en fazla 15 replica'ya dağılır (Ö8) ve kampanyada replica ya da serverless kapasite eklenir; 20 yazma tek primary için küçüktür. Index'li okuma milisaniyelerdedir. Puan kırılmadı."),
+                    sc(10, "Cluster volume veriyi üç Availability Zone'da altı kopya tutar; failover \"up to 30 seconds\", çoğu zaman daha kısa; sürekli yedek ve point-in-time restore. Puan kırılmadı."),
+                    sc(8, "Yedek, yama, failover ve storage büyümesi yönetilir; iki geliştirici MongoDB API'sini zaten biliyor. 2 puan kırıldı: ekip boyutlandırma istemiyor ama instance sınıfı ya da DCU aralığı yine seçilir; index tasarımı ekibin kararıdır ve her yeni filtre için index planlanır."),
+                    sc(8, "Instance saat başına ve I/O başına ya da serverless DCU-saat (0,5 DCU minimum) ödenir; düz okuma trafiğinde öngörülebilir. 2 puan kırıldı: Multi-AZ için en az iki instance gece de çalışır ve her COLLSCAN I/O olarak faturaya yansır.")],
+            "aur": [sc(8, "Ürün bir row, değişken özellikler JSONB kolonunda; GIN index ile iç içe field filtresi çalışır; tek field jsonb_set ile değişir. 2 puan kırıldı: JSONB içindeki özelliğe göre filtre ve sıralama normal kolona göre daha az doğaldır, operatörleri ekip öğrenir; JSONB güncellemesi row'un tamamını yeniden yazar (MVCC)."),
+                    sc(9, "2.000 okuma index aramasıdır ve reader instance'lara dağıtılır; 20 yazma küçüktür. 1 puan kırıldı: reader sayısı ve ACU aralığı ekip tarafından seçilir."),
+                    sc(10, "Üç AZ'de altı kopya, point-in-time restore. Puan kırılmadı."),
+                    sc(7, "Yedek ve yama yönetilir. 3 puan kırıldı: ekibin SQL ve JSONB operatörlerini öğrenmesi gerekir; JSONB dışına çıkan her field ALTER TABLE'dır; migration disiplini ister."),
+                    sc(7, "ACU-saat ya da instance-saat, 0,5 ACU minimum. 3 puan kırıldı: gece de minimum kapasite ödenir; reader instance ayrıca ödenir; Aurora Standard'da I/O ayrıca sayılır.")],
+            "os": [sc(6, "Özelliklere göre filtre ve facet OpenSearch'ün ana işidir; metin araması da buradadır. 4 puan kırıldı: kısmi güncelleme yerine document yeniden index'lenir; mapping değişince index baştan kurulur; bir arama index'i kataloğun kayıt sistemi değildir."),
+                   sc(9, "2.000 okuma küçük bir domain için rahattır. 1 puan kırıldı: refresh aralığı yüzünden yeni yazma kısa süre görünmeyebilir; shard sayısı önceden seçilir."),
+                   sc(5, "Replica shard node arızasını karşılar. 5 puan kırıldı: arama index'i kaynak veri değildir; kaynak başka bir yerde durmalı ve index oradan yeniden kurulabilmelidir."),
+                   sc(6, "Yönetilen domain. 4 puan kırıldı: mapping tasarımı, reindex ve shard planı ekibin işidir; ekip OpenSearch bilmiyor."),
+                   sc(6, "Node saat başına. 4 puan kırıldı: üç node'luk domain gece de ödenir ve katalog için ayrıca bir kayıt sistemi gerekir.")],
+        },
+        h2h={
+            "aur": _t("İlişkisel (Aurora) ile kafa kafaya. Ayrıştığı gereksinimler R1 ve R4. Aurora'nın gücü ilişkilerdedir: marka, kategori ve varyant ayrı table'lar olsaydı foreign key ve CHECK ile database onları korurdu ve \"stoğu biten varyantların ürünleri\" bir JOIN olurdu; JSONB kolonu değişken özellikleri de taşır. "
+                      "Bu iş yükünde ilişki yok denecek kadar azdır: marka bir metin field'ıdır, stok başka bir sistemdedir ve özellikler ürün türüne göre değişir. Document database'in gücü tam buradadır: ürün tek bir document'tır, iç içe field ve array index'lenir, yeni özellik bir migration değildir ve ekip API'ı biliyor. "
+                      "Aurora sayfasındaki katalog kartı bu kararın tersini verdi; orada katalog marka, kategori, varyant ve fiyat ilişkileriyle doluydu ve ilişkilerin doğruluğunu database korumalıydı. Fark ürünün şeklinde değil ilişkilerin sayısındadır. "
+                      "Hangi koşul değişseydi Aurora seçilirdi: varyant, fiyat ve depo stoğu aynı database'de ilişki olarak tutulsaydı, \"fiyat sıfırdan büyük\" gibi kurallar database'de korunmak istenseydi ya da ekip sadece SQL biliyor olsaydı."),
+            "os": _t("Search engine (OpenSearch) ile kafa kafaya. Ayrıştığı gereksinimler R1'in güncelleme kısmı, R3 ve R4. OpenSearch'ün gücü aramadadır: \"siyah, 24 ay garanti, 1.000 TL altı\" sorusunu facet sayılarıyla milisaniyede cevaplar ve yazım hatası toleranslı metin aramasını verir. "
+                      "Ama bir arama index'i kayıt sistemi değildir: özelliğin tek bir field'ını değiştirmek document'ı yeniden index'lemektir, mapping değişince index baştan kurulur ve kaynak veri başka bir yerde durmalıdır. "
+                      "Bu yüzden iki servis rakip değil tamamlayıcıdır: katalog DocumentDB'de yaşar, arama kopyası change stream ile OpenSearch'e akar (kart 8 ikisini aynı arama sorusu için yarıştırır ve metin araması gelince ikisinin birlikte doğru cevap olduğunu yazar). Bu iş yükünde document database seçilir, çünkü kayıt sistemi istenir ve metin araması zaten ayrı bir servise verilecektir. "
+                      "Hangi koşul değişseydi OpenSearch seçilirdi: katalog başka bir sistemde zaten kalıcı olsaydı ve buradaki tek iş facet'li, relevance sıralı arama olsaydı."),
+        },
+        verdict=_t("Karar: DocumentDB 46, Aurora 41, OpenSearch 32. Net bir kazanma: iş yükü document modelinin tam tanımıdır; türe göre değişen özellikler, iç içe field'lara göre filtre, tek okumada bütün ürün ve ilişki yok. DocumentDB hiçbir zorunlu gereksinimde puan kaybetmez. "
+                   "Yine de document seçersek artımız: ürün tek document, yeni özellik migration'sız, iç içe field ve array index'li, okuma replica'larla büyür, ekip bildiği API ile çalışır. "
+                   "Potansiyel eksimiz: index planı ekibin işidir ve index'siz her yeni filtre COLLSCAN'dir; kurallar (fiyat > 0) $jsonSchema ile kısmen, çoğu kodda korunur; bütün yazmalar tek primary'den geçer; metin araması için OpenSearch ayrıca gerekir. Bir koşul değişseydi: varyant, fiyat ve stok ilişki olarak aynı database'de tutulsaydı Aurora yarışa girerdi.")),
+
+    # ------------------------------------------------------------------ 2. user profiles with nested preferences (race vs DynamoDB)
+    usecase("profiles", 2, sim="race_profiles", kind="race",
+        title=_t("İç içe tercihleri olan kullanıcı profilleri"),
+        key=_t("Collection: users. Document: _id, name, locale, addresses (array), prefs (iç içe), devices (array)."),
+        story=_t("Bir podcast uygulamasının üç milyon kullanıcısı var. Profil tek bir nesnedir: ad, dil, adres listesi, bildirim tercihleri, cihaz listesi. Her ekran açılışında uygulama profili okur; kullanıcı ayda birkaç kez bir tercihi ya da bir adresi değiştirir. "
+                 "Pazarlama ekibi profilin içine göre sorular sorar: \"İstanbul'da oturan ve podcast önerisi isteyen kullanıcılar\", \"iOS cihazı olup bildirimi kapalı olanlar\"; bu sorular haftada birkaç kez değişir. Ekip bir adresi array'in içinde, sırasını bilmeden güncellemek ister. "
+                 "Saniyede 12.000 profil okuması, 150 yazma; sabah ve akşam tepe. Her okuma 10 ms'nin altında olmalı. Beş geliştirici, uygulama zaten MongoDB driver'ı ile yazılmış; sunucu istenmiyor."),
+        reqs=[
+            req(True, "\"Bu kullanıcı id'sinin profili\" tek okuma. Array'in içindeki bir adresi (\"label'ı iş olan adres\") sırasını bilmeden tek yazmada değiştirmek. Profilin içine göre, haftada birkaç kez değişen sorular (\"İstanbul'da oturan ve podcast isteyen\") yeni tasarım istemeden cevaplanmalı.",
+                      "Her ekran bu okumayla başlar. Array içi güncelleme için profilin tamamını yeniden yazmak başka bir cihazdan gelen değişikliği ezer. Pazarlamanın her yeni sorusu için bir index projesi açılırsa kampanya takvimi kayar."),
+            req(True, "Saniyede 12.000 okuma ve 150 yazma; sabah 8 ve akşam 21 tepe. Okuma 10 ms'nin altında. Kullanıcı sayısı yılda yüzde 50 artıyor.",
+                      "Okuma hacmi yazmanın seksen katıdır; ölçek okuma tarafındadır. Büyüme için her yıl yeniden tasarım yapılamaz."),
+            req(False, "Profil kalıcıdır; kaybı kullanıcıyı adres ve tercihlerini yeniden girmeye zorlar. Bir AZ arızasında kayıp olmamalı.",
+                       "Profil kaybı destek talebi ve güven kaybıdır; para kaybı değildir."),
+            req(False, "Beş geliştirici, kod zaten MongoDB driver'ı ile yazılmış. Yeni field migration istemeden eklenmeli. Sunucu, yama ve failover istenmiyor.",
+                       "Driver'ı ve sorgu dilini değiştirmek uygulamanın veri katmanını yeniden yazmaktır; küçük ekipte bu aylarca sürer."),
+            req(False, "Okuma ağırlıklı, gün içinde iki tepe. Kapasite başına ya da istek başına ikisi de uyar. Profil küçük (10 KB'tan az).",
+                       "İki tepe arasında düşük trafikte boş kapasite ödemek istenmez; büyümede maliyet sıçramamalı."),
+        ],
+        cands=["doc", "ddb", "aur"],
+        scores={
+            "doc": [sc(9, "Profil tek bir document (Ö2), _id ile tek okuma (Ö1). \"label'ı iş olan adres\" updateOne ile $set ve arrayFilters kullanılarak array'in sırası bilinmeden değiştirilir (Ö5). \"İstanbul'da oturan ve podcast isteyen\" dot notation ile bir filtredir (Ö3) ve addresses.city ile prefs.podcast üzerine index kurulur (Ö4). 1 puan kırıldı: haftada değişen her yeni soru için bir index kurulur; index kurulana kadar soru üç milyon profilde bir COLLSCAN'dir ve replica'ya yönlendirilmelidir."),
+                    sc(8, "12.000 okuma replica'lara dağılır (Ö8), serverless DCU tepe saatlerde büyür. 2 puan kırıldı: replica sayısı ve DCU aralığı ekip tarafından seçilir; bütün yazmalar tek primary'den geçer ve yüzde 50 büyüme her yıl bir gözden geçirmedir."),
+                    sc(10, "Üç AZ'de altı kopya, sürekli yedek, otomatik failover. Puan kırılmadı."),
+                    sc(9, "Kod değişmez: aynı driver, aynı sorgular. Yeni field migration istemez. Yedek, yama, failover yönetilir. 1 puan kırıldı: replica sayısını, DCU aralığını ve index'lerin büyüklüğünü ekip izler."),
+                    sc(8, "Serverless DCU-saat tepe saatlerde büyür, gece 0,5 DCU'ya iner; ya da iki instance saat başına. 2 puan kırıldı: gece de minimum kapasite ve I/O ödenir; profil içi her yeni index yazma I/O'sunu artırır.")],
+            "ddb": [sc(8, "Simple primary key = kullanıcı id'si, GetItem tek okumadır; UpdateItem bir document yolunu (SET prefs.podcast = :v) değiştirir. 2 puan kırıldı: \"label'ı iş olan adres\" liste içinde index numarasıyla güncellenir, uygulama önce okuyup sırayı bulur; \"İstanbul'da oturan ve podcast isteyen\" gibi value içi sorular her biri için bir GSI ister ve haftada değişen sorular için GSI kurulamaz."),
+                    sc(10, "Okumalar partition'lara dağılır; 12.000 okuma on-demand ile kendiliğinden karşılanır, tek haneli milisaniye. Puan kırılmadı."),
+                    sc(10, "Birkaç AZ'de saklanır, point-in-time recovery. Puan kırılmadı."),
+                    sc(7, "Serverless, migration yok. 3 puan kırıldı: kod MongoDB driver'ı ile yazılmış; DynamoDB'ye geçmek sorguları ve veri erişim katmanını yeniden yazmaktır (gereksinim: \"aylarca sürer\"); bu, Aurora'nın aynı gerekçeyle kaybettiği 3 puandır."),
+                    sc(8, "İstek başına ödeme, gece sıfıra yakın. 2 puan kırıldı: 10 KB'a yaklaşan profil okuma başına birkaç birim tüketir; GSI'lar her yazmaya birim ekler.")],
+            "aur": [sc(8, "Profil JSONB bir kolonda; jsonb_set iç içe field'ı değiştirir; GIN index içine göre sorguyu karşılar. 2 puan kırıldı: array içindeki tek bir elemanı koşula göre değiştirmek JSONB'de zahmetlidir ve row'un tamamı yeniden yazılır; adresler ayrı table olursa profil bir JOIN'dir."),
+                    sc(7, "Reader instance'lar 12.000 okumayı taşır. 3 puan kırıldı: reader sayısı ve ACU aralığı ekibin kararıdır; büyüme bir kapasite projesidir."),
+                    sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                    sc(7, "Yönetilen servis. 3 puan kırıldı: kodun driver'ı ve sorgu dili değişir; JSONB dışı field ALTER TABLE'dır."),
+                    sc(7, "ACU-saat, 0,5 ACU minimum. 3 puan kırıldı: gece de minimum kapasite; reader ayrıca ödenir.")],
+        },
+        h2h={
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Bu, okuyucunun en çok \"neden o değil?\" dediği yarıştır, çünkü DynamoDB sayfasındaki profil kartı tam tersini verdi: orada DynamoDB 47, DocumentDB 42 idi. Fark iş yükündedir. Orada tek access pattern \"id ile profil\" idi ve profilin içine göre soru yoktu; burada pazarlama profilin içine göre haftada değişen sorular soruyor ve ekip array'in içindeki bir adresi sırasını bilmeden değiştirmek istiyor. "
+                      "DynamoDB'nin gücü R2'de görünür: 12.000 okuma ve büyüme için hiçbir boyutlandırma yoktur ve bütün yazmalar tek bir primary'den geçmez. DocumentDB'nin gücü R1'dedir: arrayFilters ile array içi güncelleme, dot notation ile içe göre filtre ve o filtreye index. "
+                      "Bu iş yükünde document seçilir, çünkü profilin içine göre sorular ana iştir ve kod zaten MongoDB driver'ı ile yazılmıştır. Bir puanlık fark tek başına bir karar değildir: kod MongoDB ile yazılmamış olsaydı DynamoDB'nin R4'ü 9 olurdu, DynamoDB bir puanla öne geçerdi ve karar R2'nin boyutlandırmasız ölçeğine kalırdı. "
+                      "Hangi koşul değişseydi DynamoDB seçilirdi: profilin içine göre sorular sabit üç soruya inseydi (her biri bir GSI), array içi güncelleme nadir olsaydı ve okuma hacmi saniyede yüz binlere çıksaydı."),
+            "aur": _t("İlişkisel (Aurora) ile kafa kafaya. Ayrıştığı gereksinimler R1'in array kısmı, R2 ve R4. Aurora'nın gücü profil başka ilişkisel verilerle birlikte sorgulanacaksa görünür: abonelik faturaları ve ödeme yöntemleri aynı database'de ise \"aboneliği biten ve bildirim isteyen kullanıcılar\" bir JOIN'dir; JSONB kolonu profilin esnek kısmını taşır ve GIN index içine göre sorguyu karşılar. "
+                      "Ama bu iş yükünde profil tek başına okunup yazılır; array içindeki bir adresi koşula göre değiştirmek JSONB'de zahmetlidir ve row'un tamamı yeniden yazılır; kod MongoDB driver'ı ile yazılmıştır ve SQL'e geçiş uygulamanın veri katmanını yeniden yazmaktır. "
+                      "Bu yüzden document seçilir. Hangi koşul değişseydi Aurora seçilirdi: profil abonelik ve ödeme verisiyle aynı transaction'da güncellenseydi, raporlar profil field'larına JOIN ile sorulsaydı ya da uygulama zaten SQL üzerinde kurulu olsaydı."),
+        },
+        verdict=_t("Karar: DocumentDB 44, DynamoDB 43, Aurora 39. Yakın bir yarış: iki aday da R3'ü tam karşılar; yarışı R1 (profilin içine göre değişen sorular ve array içi güncelleme) ve R4 (kod MongoDB driver'ı ile yazılmış) DocumentDB'ye, R2 DynamoDB'ye çeker. "
+                   "Yine de document seçersek artımız: kod değişmez, arrayFilters ile array içi güncelleme, içe göre her soru bir filtre ve bir index, yeni field migration'sız. "
+                   "Potansiyel eksimiz: replica ve DCU aralığı ekibin kararıdır; pazarlamanın index'siz sorusu COLLSCAN'dir ve primary'yi yorar, bu sorular replica'ya yönlendirilmelidir; bütün yazmalar tek primary'den geçer. Bir koşul değişseydi: içe göre sorular üç sabit soruya inseydi DynamoDB kazanırdı.")),
+
+    # ------------------------------------------------------------------ 3. content management: articles with blocks (card only)
+    usecase("cms", 3,
+        title=_t("İçerik yönetimi: makale ve blokları"),
+        key=_t("Collection: articles. Document: _id, title, slug, status, authors (array), blocks (array: paragraf, görsel, alıntı), tags (array)."),
+        story=_t("Bir yayın sitesinin editör ekibi günde 300 makale yayımlar; arşivde 2 milyon makale var. Bir makale sıralı bloklardan oluşur: paragraf, görsel, alıntı, gömülü video; her blok türünün field'ları farklıdır ve editör blokları sürükleyip sıralar. "
+                 "Makale sayfası makaleyi bütün bloklarıyla tek seferde ister; editör bir bloğu düzenlediğinde sadece o blok değişmeli. Sorular: \"slug ile makale\", \"etiketi ekonomi olan yayımlanmış makaleler, tarihe göre\", \"bu yazarın taslakları\". "
+                 "Saniyede 3.000 okuma (önünde CDN var), saniyede 5 yazma. Makale resmi içeriktir; yayımlanmış bir makale kaybolamaz ve eski sürümleri geri getirilebilmeli. Üç geliştirici, Node.js ve MongoDB driver'ı biliyor; görseller S3'te, makalede sadece key'i var."),
+        reqs=[
+            req(True, "slug ile tek okumada makale ve bütün blokları. Tek bir bloğu, array'deki sırası ne olursa olsun, tek yazmada değiştirmek. Etiket (array) ve durum field'ına göre, tarihe göre sıralı liste. Blok türleri farklı field'lar taşır; yeni blok türü migration istememeli.",
+                      "Makale parçalardan toplanırsa her sayfa birkaç okumadır; blok için bütün makaleyi yeniden yazmak iki editörün değişikliğini çarpıştırır. Yeni blok türü için schema değişikliği ürün takvimini kilitler."),
+            req(True, "Saniyede 3.000 okuma (CDN arkasında), 5 yazma. Makale sayfası 30 ms'nin altında. Arşiv 2 milyon makale, yılda 100.000 artıyor.",
+                      "Okuma hacmi küçük ve düz; ölçek burada belirleyici değildir ama arşiv büyüdükçe etiket sorgusu yavaşlamamalıdır."),
+            req(True, "Yayımlanmış makale kaybolamaz; bir AZ arızasında kayıp olmamalı ve yanlış bir silme geri alınabilmeli. Eski sürümler saklanmalı. Bu kartta dayanıklılık zorunludur.",
+                       "Yayımlanmış içerik yayıncının ürünüdür; kaybolan makale okuyucuya ve reklam verene karşı yükümlülüktür."),
+            req(False, "Üç geliştirici, Node.js ve MongoDB driver'ı biliyor. Yeni blok türü kodda eklenmeli. Sunucu, yama, yedek istenmiyor.",
+                       "Küçük ekipte database operasyonu ürün geliştirmeden çalınan zamandır."),
+            req(False, "Düz, okuma ağırlıklı, küçük yazma. Kapasite başına ödeme uyar; veri birkaç on GB (görseller hariç).",
+                       "Düz trafikte sabit kapasite öngörülebilir ve ucuzdur; sıçrama istenmez."),
+        ],
+        cands=["doc", "ddb", "aur"],
+        scores={
+            "doc": [sc(10, "Makale bir document, bloklar bir array (Ö2); slug üzerinde unique index ile tek okuma (Ö1, Ö4). Tek blok updateOne ile $set ve arrayFilters ile değişir (Ö5). tags array'i multikey index alır (Ö4), { status: 1, published_at: -1 } compound index listeyi sıralı verir (Ö3), { authors: 1, status: 1 } \"bu yazarın taslakları\" sorusunu karşılar. Yeni blok türü sadece yeni document'larda görünür. Puan kırılmadı."),
+                    sc(9, "3.000 okuma replica'lara dağılır (Ö8); 5 yazma küçüktür. 1 puan kırıldı: instance sınıfı ve replica sayısı önceden seçilir."),
+                    sc(9, "Üç AZ'de altı kopya, point-in-time restore; sürümler ayrı bir collection'da saklanır (büyüyen array için ayrı collection, A3). 1 puan kırıldı: sürüm geçmişini database değil uygulama yazar ve korur."),
+                    sc(8, "Aynı driver, aynı dil; yedek, yama ve failover yönetilir. 2 puan kırıldı: index planı ve instance boyutu ekibin işidir; 16 MiB sınırı için sürüm geçmişi makalenin içinde değil ayrı collection'da tutulur."),
+                    sc(8, "İki instance saat başına ya da serverless, I/O ayrıca. 2 puan kırıldı: gece de minimum kapasite ödenir; her yazma beş index'i (_id, slug, tags, status ve published_at, authors ve status) günceller ve I/O olarak sayılır.")],
+            "ddb": [sc(6, "Partition key slug, item makale; bloklar bir liste attribute'u. 4 puan kırıldı: tek bloğu güncellemek liste index numarası ister, uygulama önce okur; \"etiketi ekonomi olan, tarihe göre\" her etiket için ayrı item'lar ve bir GSI ister; 400 KB item sınırı bloklu uzun makaleyi zorlar."),
+                    sc(10, "Okuma ve yazma kendiliğinden ölçeklenir. Puan kırılmadı."),
+                    sc(9, "Birkaç AZ, point-in-time recovery. 1 puan kırıldı: sürüm geçmişini uygulama ayrı item'larda yazar ve korur."),
+                    sc(8, "Serverless, migration yok. 2 puan kırıldı: ekip SDK'yı ve key tasarımını öğrenir; etiket sorguları için tasarım adımı gerekir."),
+                    sc(8, "İstek başına, düşük. 2 puan kırıldı: 400 KB'a yaklaşan makale okuma başına çok birim tüketir; etiket GSI'ları yazma birimi ekler.")],
+            "aur": [sc(7, "articles, blocks, article_tags table'ları ya da JSONB bloklar. 3 puan kırıldı: bloklar ayrı table ise makale bir JOIN ve sıralama işidir; JSONB ise tek blok güncellemesi row'un tamamını yeniden yazar; yeni blok türü table modelinde migration'dır."),
+                    sc(9, "3.000 okuma index ile; 5 yazma küçük. 1 puan kırıldı: reader ve ACU kararı ekibindir."),
+                    sc(9, "Üç AZ'de altı kopya, point-in-time restore. 1 puan kırıldı: sürüm geçmişini uygulama ayrı bir table'da yazar."),
+                    sc(7, "Yönetilen. 3 puan kırıldı: ekip SQL'i az biliyor; driver ve sorgular değişir; migration disiplini."),
+                    sc(7, "ACU-saat, 0,5 minimum. 3 puan kırıldı: gece de minimum; reader ayrıca.")],
+        },
+        h2h={
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı gereksinim R1. DynamoDB'nin gücü R2 ve R5'te: 3.000 okuma ve 2 milyon makale için hiçbir boyutlandırma yoktur, gece ödeme sıfıra yakındır. "
+                      "Ama makale derin bir yapıdır: sıralı bloklar, her blokta farklı field'lar, etiket listesi. DynamoDB'de bir bloğu değiştirmek listedeki numarasını bilmeyi ister; \"etiketi ekonomi olan, tarihe göre\" sorusu için etiketler ayrı item'lara açılır ve bir GSI kurulur; 400 KB sınırı uzun makaleleri parçalamaya zorlar. DocumentDB'de blok arrayFilters ile bulunur, tags multikey index alır ve 16 MiB sınırı rahattır. "
+                      "Bu iş yükünde document seçilir, çünkü içerik iç içe ve array'li bir belgedir ve ekip MongoDB driver'ı ile çalışıyor. "
+                      "Hangi koşul değişseydi DynamoDB seçilirdi: makale düz bir metin ve birkaç field olsaydı, etiket sorgusu arama servisine verilseydi ve okuma hacmi saniyede yüz binlere çıksaydı."),
+            "aur": _t("İlişkisel (Aurora) ile kafa kafaya. Ayrıştığı gereksinimler R1 ve R4. Aurora'nın gücü, makale yazar, abonelik ve ödeme gibi ilişkili verilerle aynı database'de sorgulanacaksa görünür; blocks ve article_tags table'ları ile her soru bir SQL'dir ve foreign key yazarın varlığını korur. "
+                      "Ama bloklar sıralı ve türe göre farklı field'lıdır: table modelinde her blok türü için kolon ya da migration gerekir, JSONB modelinde tek blok güncellemesi row'un tamamını yeniden yazar ve array içi koşullu güncelleme zahmetlidir. Ekip SQL'i az biliyor. "
+                      "Bu yüzden document seçilir. Hangi koşul değişseydi Aurora seçilirdi: makale abonelik ve ödeme verisiyle aynı transaction'da güncellenseydi, editöryal raporlar JOIN ile sorulsaydı ya da ekip SQL ekibi olsaydı."),
+        },
+        verdict=_t("Karar: DocumentDB 44, DynamoDB 41, Aurora 39. Yarışı R1 belirler: sıralı ve türe göre farklı bloklar, array içi tek blok güncellemesi, etiket array'ine index. "
+                   "Yine de document seçersek artımız: makale tek document, blok arrayFilters ile değişir, tags multikey index'li, yeni blok türü migration'sız, sürümler ayrı collection'da. "
+                   "Potansiyel eksimiz: sürüm geçmişi makale içinde tutulursa document büyür (16 MiB); instance ve index kararları ekibindir; görsel dosyaları S3'te kalmalıdır. Bir koşul değişseydi: makale düz metin ve birkaç field olsaydı DynamoDB yarışa girerdi.")),
+
+    # ------------------------------------------------------------------ 4. event logs with flexible schema (clear loss: DynamoDB wins)
+    usecase("events", 4, sim="lose_events", kind="lose",
+        title=_t("Esnek şemalı event log'ları: tıklama ve uygulama olayları"),
+        key=_t("Her event bir document: event_type, user_id, ts, payload (türe göre farklı). Sadece eklenir, 30 gün saklanır."),
+        story=_t("Bir mobil uygulama her kullanıcı eyleminde bir event yazar: ekran açıldı, ürün görüntülendi, sepete eklendi. Her event türünün payload'ı farklıdır ve ürün ekibi her hafta yeni bir event türü ekler. "
+                 "Saniyede 20.000 event, kampanya gecesi 80.000; her event 1 KB. Event hiç güncellenmez, sadece eklenir; 30 gün sonra silinmelidir. Sorular: \"bu kullanıcının son 100 event'i\", \"bu event türünün son bir saati\"; analiz ekibi günlük kopyayı data warehouse'a alır. "
+                 "Kaybolan birkaç event kabul edilir (istatistik), ama toplu kayıp kabul edilmez. Üç geliştirici, MongoDB API'sini biliyor ve ilk tercihleri mevcut DocumentDB cluster'ına bir collection eklemek; sunucu boyutlandırmak istemiyorlar."),
+        reqs=[
+            req(True, "Yazma: saniyede 20.000 ekleme, türe göre farklı payload, yeni tür migration'sız. Okuma: \"bu kullanıcının son 100 event'i\" ve \"bu türün son bir saati\" zaman sırasıyla. 30 gün sonra otomatik silme. Güncelleme yok.",
+                      "Event yazması uygulamanın her isteğinin içindedir; yavaşlarsa uygulama yavaşlar. Silme işlemi elle yapılırsa storage ve fatura sınırsız büyür."),
+            req(True, "Saniyede 20.000 yazma, tepe 80.000; günde 1,7 milyar event, 30 günde 50 milyar event ve 50 TB. Yazma 10 ms'nin altında. Okumalar seyrek (saniyede 200).",
+                      "Bu bir yazma ölçeği problemidir: tek bir yazma düğümünün sınırı aşılır. Tepe gecesi yazma reddedilirse event'ler kaybolur."),
+            req(False, "Birkaç event kaybı kabul; toplu kayıp (bir saat) kabul değil. Veri 30 gün sonra zaten silinir.",
+                       "İstatistik için tek tek kayıp görünmez; bir saatlik boşluk raporları bozar."),
+            req(False, "Üç geliştirici, MongoDB API'sini biliyor. Sunucu boyutlandırmak ve shard yönetmek istenmiyor. Yeni event türü kodda bir satır olmalı.",
+                       "Yazma tepesi için instance büyütmek bir gece operasyonudur; ekip bunu istemiyor."),
+            req(False, "Yazma ağırlıklı, 30 günlük pencere, kampanya tepesi. Kullanım başına ödeme ve silmenin bedava olması istenir.",
+                       "50 TB'lık pencere için storage ve silme I/O'su faturanın büyük kalemidir; tepe için bütün ay kapasite ödenmek istenmez."),
+        ],
+        cands=["doc", "ddb", "os"],
+        scores={
+            "doc": [sc(7, "Event bir document, payload serbest (Ö2); { user_id: 1, ts: -1 } compound index ile \"son 100 event\" IXSCAN'dir (Ö4); TTL index 30 günlük silmeyi yapar. 3 puan kırıldı: TTL silmesi \"best effort\", belirli bir sürede garanti değildir ve her silme I/O olarak faturalanır; AWS bu iş yükü için TTL yerine haftalık collection'lar açıp drop etmeyi önerir, bu da uygulama tarafında ek iştir."),
+                    sc(4, "Bütün yazmalar tek primary instance'tan geçer (Ö8'in sınırı); saniyede 20.000 ve tepe 80.000 ekleme için en büyük instance sınıfı ya da elastic cluster (shard) gerekir. 6 puan kırıldı: instance-based cluster bu hacimde tek primary ile sınırlıdır; elastic cluster shard yönetimi ve shard key tasarımı ister; 50 TB storage ve her ekleme için index yazması I/O olarak sayılır."),
+                    sc(10, "Üç AZ'de altı kopya; yazma çoğunluğa kalıcı yazılmadan onaylanmaz. Dayanıklılık istenenden fazladır; bedeli R2 ve R5'te sayıldı. Puan kırılmadı."),
+                    sc(6, "Ekip API'ı biliyor; yedek ve yama yönetilir. 4 puan kırıldı: tepe için instance büyütme ya da elastic cluster'da shard sayısı ekibin operasyonudur; TTL yerine collection döndürme işi kodda yaşar."),
+                    sc(4, "Instance saat başına, I/O ve storage ayrıca. 6 puan kırıldı: tepe gecesi için büyük instance bütün ay ödenir; 50 TB storage, her ekleme için index I/O'su ve TTL silme I/O'su faturayı büyütür; silme bedava değildir.")],
+            "ddb": [sc(8, "Partition key user_id, sort key ts; \"son 100 event\" ters sıralı bir Query; value şemasızdır, payload serbesttir; TTL attribute'u 30 günü işaretler. 2 puan kırıldı: \"bu türün son bir saati\" için event_type üzerine bir GSI gerekir ve TTL silmesi \"within a few days\", kesin değildir; süresi dolan event okuma filtresi ister."),
+                    sc(10, "Yazmalar partition'lara dağılır; on-demand 80.000 yazma/saniyeyi kendiliğinden karşılar, tek haneli milisaniye. Puan kırılmadı."),
+                    sc(10, "Her yazma birkaç AZ'de saklanır. Puan kırılmadı."),
+                    sc(9, "Serverless: sunucu, shard, yama yok; yeni event türü sadece yeni item'a yazılır. 1 puan kırıldı: ekip MongoDB API'sinden SDK'ya geçer ve key tasarımını öğrenir."),
+                    sc(9, "İstek başına ödeme, TTL silmesi yazma kapasitesi tüketmez, storage GB başına. 1 puan kırıldı: 80.000 yazma/saniyede on-demand birimleri faturanın ana kalemidir; düz kısım için provisioned kapasite düşünülür.")],
+            "os": [sc(9, "Event bir JSON document; zaman sıralı sorgular ve türe göre filtre index'in doğal işidir; index'ler günlük döner (rollover) ve 30 gün sonra index silinir, bedava. 1 puan kırıldı: \"bu kullanıcının son 100 event'i\" index'ler arası arama ister ve refresh aralığı yüzünden event birkaç saniye geç görünür."),
+                   sc(8, "20.000 yazma/saniye bulk ile karşılanır; shard'lar yazmayı dağıtır. 2 puan kırıldı: tepe için node ve shard sayısı önceden planlanır; 50 TB için büyük bir domain gerekir."),
+                   sc(6, "Replica shard'lar node arızasını karşılar. 4 puan kırıldı: arama index'i kayıt sistemi değildir; domain kaybı event'lerin kaybıdır ve kaynak başka yerde durmalıdır."),
+                   sc(7, "Yönetilen domain, rollover ve ISM politikaları. 3 puan kırıldı: mapping, shard planı ve node boyutu ekibin işidir; ekip OpenSearch bilmiyor."),
+                   sc(7, "Node saat başına, storage node'da. 3 puan kırıldı: 50 TB için büyük domain bütün ay ödenir; silme bedavadır.")],
+        },
+        h2h={
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı gereksinimler R2, R4 ve R5. DocumentDB'nin gücü şekilde ve ekipte görünür: event serbest payload'lı bir document'tır, payload içine göre sorgu doğrudan mümkündür, ekip API'ı biliyor ve mevcut cluster'a bir collection eklemek bir günlük iştir; ama R1'de bile TTL silmesinin zamanı garanti olmadığı için DynamoDB'nin bir puan gerisindedir. "
+                      "Ama bu iş yükü bir yazma ölçeği problemidir: saniyede 20.000, tepe 80.000 ekleme. Instance-based cluster'da bütün yazmalar tek primary'den geçer; elastic cluster yazmayı shard'lara dağıtır ama shard key ve shard sayısı ekibin operasyonudur. DynamoDB yazmayı partition'lara kendiliğinden dağıtır, TTL silmesi yazma kapasitesi tüketmez ve istek başına öder. "
+                      "Bu kart document kategorisinin sınırını gösterir: esnek şema document database'i çağırır, ama yazma hacmi ve otomatik silme key-value'yu seçtirir. Şekil document'a uyar, ama yazma hacmi onu dışarıda bırakır. "
+                      "Hangi koşul değişseydi DocumentDB seçilirdi: yazma hacmi saniyede birkaç bine inseydi, event'ler payload içine göre sorgulansaydı (\"ödeme hatası veren event'lerin cihaz modeli\") ve 30 günlük silme haftalık collection'larla kabul edilseydi."),
+            "os": _t("Search engine (OpenSearch) ile kafa kafaya. Ayrıştığı gereksinimler R1'in sorgu kısmı, R3 ve R4. OpenSearch'ün gücü log'lardadır: event'ler günlük index'lere yazılır, 30 gün sonra index bedavaya silinir, \"bu türün son bir saati\" ve payload içinde herhangi bir field'a göre filtre index'in doğal işidir ve dashboard'lar hazırdır. "
+                      "Ama kayıt sistemi değildir: domain kaybı event'lerin kaybıdır ve kaynak başka bir yerde durmalıdır; mapping ve shard planı ekibin işidir; \"bu kullanıcının son 100 event'i\" birçok günlük index'te arama ister. DynamoDB kalıcı kayıt, kendiliğinden ölçek ve TTL verir. "
+                      "Bu iş yükünde OpenSearch ikinci sıradadır ve çoğu zaman DynamoDB'nin yanında bir analiz kopyası olarak durur. "
+                      "Hangi koşul değişseydi OpenSearch seçilirdi: ana iş payload içinde serbest arama ve dashboard olsaydı, event'ler başka bir kalıcı yerde (S3) zaten saklansaydı ve kullanıcı başına zaman sıralı okuma istenmeseydi."),
+        },
+        verdict=_t("Karar: DynamoDB 46, OpenSearch 37, DocumentDB 31. Net bir kaybetme: DocumentDB gerçek bir adaydır (esnek payload, ekip API'ı biliyor) ama R2 belirler: tek primary'den geçen yazmalar saniyede 80.000 eklemeyi taşımaz ve TTL silmesi I/O olarak ödenir. "
+                   "Yine de document seçersek artımız: mevcut cluster'a bir collection, aynı driver, payload içine göre sorgu. "
+                   "Potansiyel eksimiz: en büyük instance ya da elastic cluster shard yönetimi, 50 TB storage ve silme I/O'su, tepe gecesi reddedilen yazmalar. Bir koşul değişseydi: yazma hacmi saniyede birkaç bine inseydi ve payload içine göre sorgu ana iş olsaydı DocumentDB yarışa girerdi.")),
+
+    # ------------------------------------------------------------------ 5. IoT device configurations (card only)
+    usecase("devices", 5,
+        title=_t("IoT cihaz kayıtları ve konfigürasyonları"),
+        key=_t("Collection: devices. Document: _id (seri no), model, firmware, settings (modele göre iç içe), sensors (array), location."),
+        story=_t("Bir akıllı termostat üreticisinin sahada 800.000 cihazı var. Her cihazın bir kayıt document'ı vardır: model, firmware sürümü, modele göre farklı ayarlar (ısı eğrisi, sensör listesi), kurulum adresi, sahip. "
+                 "Destek ekibi herhangi bir field'a göre arar: \"firmware'i 2.3'ten eski ve İzmir'de olan cihazlar\", \"sensör listesinde nem sensörü olanlar\". Cihaz kendi ayarını saatte bir okur; ürün ekibi her sürümde ayar şekline yeni field'lar ekler. "
+                 "Saniyede 300 okuma, 20 yazma; telemetri (saniyede 50.000 ölçüm) bu kartın dışında, bir time series database'inde. İki geliştirici, MongoDB API'sini biliyor. Kayıt kaybolursa cihaz fabrika ayarına döner ve müşteri arar."),
+        reqs=[
+            req(True, "Seri no ile tek okumada bütün kayıt. Destek ekibinin herhangi bir field'a ve iç içe listeye göre, önceden bilinmeyen soruları. Modele göre farklı ayar şekli; yeni sürümde yeni field'lar migration'sız. Tek bir ayarı değiştirmek bütün kaydı yeniden yazmamalı.",
+                      "Destek sorusu için bütün kaydı okuyan bir tarama 800.000 cihazda yavaştır; migration her firmware sürümünü database projesine çevirir."),
+            req(True, "Saniyede 300 okuma, 20 yazma; cihaz sayısı yılda iki katına çıkıyor. Okuma 20 ms'nin altında.",
+                      "Hacim küçüktür; burada ölçek değil sorgu esnekliği belirleyicidir."),
+            req(False, "Kayıt kalıcıdır; kaybı cihazı fabrika ayarına düşürür. Bir AZ arızasında kayıp olmamalı.",
+                       "Kayıp destek çağrısı ve müşteri memnuniyetsizliğidir; para kaybı dolaylıdır."),
+            req(False, "İki geliştirici, MongoDB API'sini biliyor. Sunucu, yama, yedek istenmiyor. Yeni ayar field'ı kodda eklenmeli.",
+                       "İki kişilik ekipte operasyon ürünü durdurur."),
+            req(False, "Düşük ve düz trafik. En düşük sabit maliyet istenir; veri küçük (birkaç GB).",
+                       "Küçük iş yükünde fatura kapasitenin alt sınırıyla belirlenir."),
+        ],
+        cands=["doc", "ddb", "aur"],
+        scores={
+            "doc": [sc(10, "Kayıt bir document, settings modele göre iç içe (Ö2); _id = seri no ile tek okuma (Ö1). Destek ekibinin önceden bilinmeyen soruları find ile her field'da çalışır (Ö3); sık olanlara index kurulur, sensör listesi multikey index alır (Ö4). Tek ayar $set ile değişir (Ö5). Puan kırılmadı."),
+                    sc(9, "300 okuma ve 20 yazma tek primary ve bir replica ile rahattır (Ö8). 1 puan kırıldı: index'siz destek sorusu COLLSCAN'dir ve replica'ya yönlendirilmelidir; büyüme bir instance kararıdır."),
+                    sc(10, "Üç AZ'de altı kopya, point-in-time restore. Puan kırılmadı."),
+                    sc(9, "Aynı API, yedek ve yama yönetilir, yeni field migration'sız. 1 puan kırıldı: instance sınıfı ve index planı ekibindir."),
+                    sc(8, "Serverless 0,5 DCU'ya iner ya da iki küçük instance. 2 puan kırıldı: iki instance gece de ödenir; küçük iş yükünde istek başına ödemeden pahalı olabilir.")],
+            "ddb": [sc(7, "Partition key seri no, GetItem tek okuma; value şemasız. 3 puan kırıldı: destek ekibinin önceden bilinmeyen soruları key ile sorulamaz; her sık soru için GSI, nadir soru için Scan gerekir; iç içe listeye göre filtre Scan + filter'dır."),
+                    sc(10, "Ölçek kendiliğinden. Puan kırılmadı."),
+                    sc(10, "Birkaç AZ. Puan kırılmadı."),
+                    sc(8, "Serverless. 2 puan kırıldı: ekip API değiştirir ve destek soruları için tasarım adımı gerekir."),
+                    sc(9, "İstek başına, düşük trafikte sıfıra yakın. 1 puan kırıldı: destek Scan'leri okunan her item için öder.")],
+            "aur": [sc(8, "devices table'ı, settings JSONB; her soru SQL'dir, GIN index içe göre sorguyu karşılar. 2 puan kırıldı: modele göre farklı ayarlar JSONB'de yaşar ve JSONB içi filtre özel operatör ister; tek ayar güncellemesi row'u yeniden yazar."),
+                    sc(9, "Küçük hacim. 1 puan kırıldı: ACU aralığı ekibin kararıdır."),
+                    sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                    sc(7, "Yönetilen. 3 puan kırıldı: ekip SQL'e geçer; driver değişir."),
+                    sc(7, "0,5 ACU minimum. 3 puan kırıldı: gece de minimum kapasite; I/O ayrıca.")],
+        },
+        h2h={
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı gereksinim R1'in sorgu kısmı. DynamoDB'nin gücü R2 ve R5'te görünür: 800.000 kayıt ve yılda iki kat büyüme için hiçbir boyutlandırma yoktur ve düşük trafikte ödeme sıfıra yakındır; cihazın kendi ayarını seri no ile okuması tam bir key-value işidir. "
+                      "Ama destek ekibi önceden bilinmeyen sorular sorar ve iç içe listeye göre filtreler; DynamoDB'de her yeni soru bir GSI ya da bir Scan'dir, DocumentDB'de bir filtredir ve gerekirse bir index. "
+                      "Bu iş yükünde document seçilir, çünkü sorgu esnekliği ana iştir ve hacim küçüktür. Telemetri bu kartın dışındadır; iki servis birlikte doğru cevaptır: kayıt DocumentDB'de, ölçümler time series database'inde. "
+                      "Hangi koşul değişseydi DynamoDB seçilirdi: tek soru \"seri no ile kayıt\" olsaydı, destek soruları ayrı bir arama servisine verilseydi ve cihaz sayısı on milyonlara çıksaydı."),
+            "aur": _t("İlişkisel (Aurora) ile kafa kafaya. Ayrıştığı gereksinimler R1'in şekil kısmı ve R4. Aurora'nın gücü, cihaz kaydı müşteri, sözleşme ve servis talebi gibi ilişkili verilerle aynı database'de sorgulanacaksa görünür; JSONB ve GIN index ayar şeklinin esnek kısmını da taşır ve her destek sorusu bir SQL'dir. "
+                      "Ama ayarlar modele göre farklıdır ve her sürümde yeni field gelir; bu veri JSONB'ye yığılınca schema'nın avantajı kalmaz ve iç içe filtreler özel operatör ister. Ekip MongoDB API'sini biliyor, SQL'e geçiş driver ve sorgu değişikliğidir. "
+                      "Bu yüzden document seçilir. Hangi koşul değişseydi Aurora seçilirdi: cihaz kaydı müşteri ve sözleşme table'larıyla JOIN ile sorulsaydı, ayarlar modele göre değil sabit kolonlar olsaydı ya da ekip SQL ekibi olsaydı."),
+        },
+        verdict=_t("Karar: DocumentDB 46, DynamoDB 44, Aurora 41. Yarışı R1'in sorgu kısmı belirler: önceden bilinmeyen, iç içe field'lara göre destek soruları. "
+                   "Yine de document seçersek artımız: kayıt tek document, modele göre ayar şekli serbest, her soru bir filtre, aynı API. "
+                   "Potansiyel eksimiz: index'siz destek sorusu COLLSCAN'dir ve primary'yi yorabilir (replica'ya yönlendirilir); iki instance gece de ödenir; telemetri bu database'e yazılmamalıdır. Bir koşul değişseydi: destek soruları ayrı bir arama servisine verilseydi DynamoDB kazanırdı.")),
+
+    # ------------------------------------------------------------------ 6. mobile app sync (card only)
+    usecase("sync", 6,
+        title=_t("Mobil uygulama senkronizasyonu: liste document'ları"),
+        key=_t("Collection: lists. Document: _id, owner, title, items (array), updated_at, version. Change stream ile cihazlara yayın."),
+        story=_t("Bir alışveriş listesi uygulamasının 2 milyon kullanıcısı var; her kullanıcı birkaç cihazdan aynı listeyi düzenler. Liste bir document'tır: başlık, öğeler array'i (metin, işaretli mi, sıra), son değişiklik zamanı, sürüm numarası. "
+                 "Cihaz çevrimdışıyken değişiklik yapar, bağlanınca gönderir; sunucu sürüm numarasına bakarak eski bir yazmayı reddeder ve öğeyi array'in içinde değiştirir. Diğer cihazlar değişikliği saniyeler içinde almalıdır. "
+                 "Saniyede 4.000 okuma, 1.500 yazma (her yazma tek öğe); 200 milyon document. Uygulamanın API'si JSON'dur ve ekip MongoDB driver'ı kullanıyor. Kaybolan bir liste kullanıcı için kayıp veridir. Altı geliştirici, sunucu istemiyor."),
+        reqs=[
+            req(True, "\"Bu kullanıcının listeleri, son değişikliğe göre\" ve _id ile tek liste. Array'deki tek öğeyi \"version = 7 ise\" koşuluyla tek yazmada değiştirmek; koşul yanlışsa yazmamak. Değişiklikler diğer cihazlara saniyeler içinde akmalı.",
+                      "Koşulsuz yazma iki cihazın değişikliğini çarpıştırır ve biri kaybolur. Değişikliğin akışı için collection'ı her saniye sorgulamak 200 milyon document'ta mümkün değildir."),
+            req(True, "Saniyede 4.000 okuma, 1.500 yazma; 200 milyon document, yılda yüzde 40 artıyor. Yazma 15 ms'nin altında.",
+                      "1.500 yazma tek bir primary'nin rahat taşıdığı bir hacimdir; ama yılda yüzde 40 büyüme bunu birkaç yılda tek primary'nin sınırına taşır ve büyüme planlanmalıdır."),
+            req(True, "Liste kullanıcının verisidir; kayıp kabul edilmez. Bir AZ arızasında kayıp ve uzun kesinti olmamalı. Bu kartta dayanıklılık zorunludur.",
+                       "Kaybolan alışveriş listesi uygulamanın silinmesidir; dayanıklılık burada ürünün kendisidir."),
+            req(False, "Altı geliştirici, MongoDB driver'ı. Sunucu, yama, failover istenmiyor; yazma büyümesi için kolay bir yol istenir.",
+                       "Yazma sınırına yaklaşan bir cluster'ı gece büyütmek ekibin istemediği operasyondur."),
+            req(False, "Gün içinde düz, akşam tepe; yazma ağırlıklı. Kullanım başına ya da kapasite başına; büyümede sıçrama istenmez.",
+                       "1.500 yazma/saniye sürekli I/O üretir; I/O başına ödeme bütçeyi tahmin edilemez yapar."),
+        ],
+        cands=["doc", "ddb", "aur"],
+        scores={
+            "doc": [sc(10, "Liste bir document, öğeler array (Ö2); { owner: 1, updated_at: -1 } compound index ile kullanıcının listeleri (Ö3, Ö4). Filtresinde version: 7 olan bir updateOne, $set ile 'items.$[i].done' alanını değiştirir ve $inc ile version'ı artırır; koşul ve array içi güncelleme tek atomik yazmadır, matchedCount 0 ise eski yazma reddedilmiştir (Ö5). Change stream değişikliği saniyeler içinde yayın servisine verir (Ö7). Puan kırılmadı."),
+                    sc(9, "1.500 yazma tek primary'nin içindedir; okumalar replica'lara dağılır (Ö8). 1 puan kırıldı: yüzde 40 büyüme birkaç yıl içinde en büyük instance'a ya da elastic cluster'a geçiş demektir ve bu bir plan ister."),
+                    sc(10, "Üç AZ'de altı kopya; yazma çoğunluğa kalıcı yazılmadan onaylanmaz; point-in-time restore. Puan kırılmadı."),
+                    sc(8, "Aynı driver; yedek, yama, failover yönetilir; change stream yerleşiktir. 2 puan kırıldı: instance ve replica kararları ekibindir; change stream tüketicisi ve retention (varsayılan üç saat, en fazla yedi gün) ekibin kurduğu bir parçadır."),
+                    sc(8, "I/O-Optimized seçeneği ile I/O ücreti kalkar, instance fiyatı yükselir; yazma ağırlıklı iş yükünde öngörülebilir. 2 puan kırıldı: Multi-AZ instance'lar gece de ödenir; büyüme instance sınıfı atlatır.")],
+            "ddb": [sc(6, "Partition key owner, sort key list id; ConditionExpression version = :v ile koşullu yazma; Streams değişikliği akıtır. 4 puan kırıldı: array'deki tek öğeyi koşula göre bulmak index numarası ister, uygulama önce okur; \"son değişikliğe göre listeler\" için GSI gerekir; kod MongoDB driver'ı ile yazılmıştır."),
+                    sc(10, "Yazma ve okuma kendiliğinden ölçeklenir. Puan kırılmadı."),
+                    sc(10, "Birkaç AZ, point-in-time recovery. Puan kırılmadı."),
+                    sc(8, "Serverless, Streams ve Lambda yerleşik. 2 puan kırıldı: veri erişim katmanı yeniden yazılır; key tasarımı öğrenilir."),
+                    sc(8, "İstek başına. 2 puan kırıldı: 1.500 yazma/saniye ve GSI yazmaları sürekli birim tüketir; büyük listeler birkaç birim.")],
+            "aur": [sc(7, "lists ve items table'ları; UPDATE ... WHERE version = 7 koşullu yazma; mantıksal replication ya da trigger ile değişiklik akışı. 3 puan kırıldı: liste bir JOIN'dir ya da JSONB'de tutulur ve tek öğe için row yeniden yazılır; değişiklik akışı için ek bir parça kurulur."),
+                    sc(8, "1.500 yazma tek writer için rahattır; okumalar reader'lara. 2 puan kırıldı: reader ve ACU kararları; büyüme kapasite projesi."),
+                    sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                    sc(7, "Yönetilen. 3 puan kırıldı: ekip SQL'e geçer; değişiklik akışı ek bir mekanizmadır."),
+                    sc(7, "ACU-saat; I/O-Optimized seçeneği var. 3 puan kırıldı: minimum kapasite; reader ayrıca.")],
+        },
+        h2h={
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı gereksinimler R1 ve R2. DynamoDB'nin gücü R2'de görünür: 1.500 yazma ve yüzde 40 büyüme için hiçbir boyutlandırma yoktur, ConditionExpression sürüm kontrolünü yapar ve Streams ile Lambda değişikliği yayar; dayanıklılıkta ikisi eşittir. "
+                      "DocumentDB'nin gücü R1'in array kısmındadır: tek öğe arrayFilters ile koşulla birlikte tek atomik yazmada değişir; DynamoDB'de öğenin liste numarası bilinmeli ya da her öğe ayrı item olmalıdır. Ekip MongoDB driver'ı ile çalışıyor ve uygulamanın JSON'u document'ın kendisidir. "
+                      "Bu iş yükünde document seçilir, çünkü değişiklik array'in içindedir ve kod hazırdır. Fark üç puandır ve büyüme sürdükçe azalır. "
+                      "Hangi koşul değişseydi DynamoDB seçilirdi: her liste öğesi ayrı bir kayıt olarak modellenseydi (partition key liste, sort key öğe), yazma hacmi saniyede on binlere çıksaydı ya da ekip SDK ile başlıyor olsaydı."),
+            "aur": _t("İlişkisel (Aurora) ile kafa kafaya. Ayrıştığı gereksinimler R1 ve R4. Aurora'nın gücü, listeler paylaşım, abonelik ve fatura gibi ilişkili verilerle aynı database'de ise görünür; UPDATE ... WHERE version = 7 koşullu yazmayı yapar ve transaction birkaç table'ı birlikte değiştirir. "
+                      "Ama liste bir document'tır: öğeler table olursa her okuma bir JOIN, JSONB olursa tek öğe için row yeniden yazılır; değişiklik akışı için mantıksal replication ya da trigger kurulur. DocumentDB'de change stream yerleşiktir ve ekip API'ı biliyor. "
+                      "Bu yüzden document seçilir. Hangi koşul değişseydi Aurora seçilirdi: liste paylaşımı ve ödeme aynı transaction'da yazılsaydı, raporlar JOIN isteseydi ya da ekip SQL ekibi olsaydı."),
+        },
+        verdict=_t("Karar: DocumentDB 45, DynamoDB 42, Aurora 39. Yarışı R1 belirler: array içi koşullu güncelleme ve yerleşik change stream; R2'de DynamoDB öndedir. "
+                   "Yine de document seçersek artımız: liste tek document, arrayFilters ile tek öğe, sürüm koşulu aynı yazmada, change stream yayın servisini besler, kod hazır. "
+                   "Potansiyel eksimiz: yazmalar tek primary'den geçer ve büyüme planlanır; change stream retention en fazla yedi gündür, tüketici daha uzun durursa değişiklik kaybolur; I/O ücreti için I/O-Optimized seçilir. Bir koşul değişseydi: yazma hacmi saniyede on binlere çıksaydı DynamoDB kazanırdı.")),
+
+    # ------------------------------------------------------------------ 7. order documents with line items (race vs Aurora, both together)
+    usecase("orders", 7, sim="race_orders", kind="race",
+        title=_t("Sipariş document'ları: satırlar, adres ve durum geçmişi"),
+        key=_t("Collection: orders. Document: _id, customer_id, lines (array), address (iç içe), status, history (array). Checkout Aurora'da kalır."),
+        story=_t("Lale Market'in checkout'u stok ve ödemeyi Aurora'da tek transaction ile yazar. Sipariş onaylandıktan sonra \"siparişlerim\" ekranı, kargo takibi ve destek ekibi siparişin tamamını ister: satırlar ürün adlarıyla, teslimat adresi o günkü hâliyle, durum geçmişi (alındı, hazırlanıyor, kargoda, teslim). "
+                 "Ekip bu okuma modelini ayrı bir serviste tutmak istiyor, çünkü sipariş ekranı okumaları checkout writer'ını yormamalı ve okuma modeli checkout'un migration takviminden bağımsız değişmeli: her sipariş tek bir document, checkout commit'inden sonra bir event ile yazılır, her durum değişikliği history array'ine eklenir. Sorular: \"bu müşterinin siparişleri, yeniye göre\", \"kargoda olan ve üç günden eski siparişler\", \"bu ürünü içeren siparişler\". "
+                 "Günde 5.000 sipariş, saniyede 200 okuma; 3 yıl, 5 milyon sipariş. Üç geliştirici, SQL ve MongoDB ikisini de biliyor. Sipariş kaydı Aurora'da zaten kalıcıdır; bu kopya kaybolursa event'lerden yeniden kurulur."),
+        reqs=[
+            req(True, "Sipariş _id ile tek okumada satırlar, adres ve geçmişle gelmeli. Durum değişikliği geçmiş array'ine eklenip status field'ını tek yazmada değiştirmeli. \"Müşterinin siparişleri, yeniye göre\", \"kargoda ve üç günden eski\", \"bu ürünü içeren\" soruları index ile cevaplanmalı. Adres siparişteki hâliyle saklanmalı (müşteri adresini değiştirince sipariş değişmez).",
+                      "Sipariş ekranı parçalardan toplanırsa her açılış dört okumadır. Adres referansla tutulursa müşteri adresini değiştirince eski siparişin adresi değişir ve kargo yanlış yere gider."),
+            req(True, "Günde 5.000 sipariş (saniyede birkaç yazma), saniyede 200 okuma; 5 milyon document, yılda 1,8 milyon artıyor. Okuma 20 ms'nin altında.",
+                      "Hacim küçüktür; ölçek belirleyici değildir. Belirleyici olan okuma modelinin şekli ve ekibin işidir."),
+            req(False, "Kopya kaybolursa checkout event'lerinden yeniden kurulur (saatler). Bir AZ arızasında kesinti kısa olmalı.",
+                       "Kayıp para kaybı değildir; sipariş Aurora'da kalıcıdır. Yeniden kurulum saatlerinde \"siparişlerim\" ekranı boştur."),
+            req(False, "Üç geliştirici, SQL ve MongoDB. Sunucu, yama, yedek istenmiyor. Yeni durum türü ya da satır field'ı migration'sız gelmeli.",
+                       "Kargo şirketi değişince geçmişe yeni field'lar gelir; her biri için migration istenmez."),
+            req(False, "Düz ve küçük trafik. En düşük sabit maliyet; veri birkaç on GB.",
+                       "Küçük iş yükünde minimum kapasite faturayı belirler."),
+        ],
+        cands=["doc", "aur", "ddb"],
+        scores={
+            "doc": [sc(9, "Sipariş tek document: lines array, address embedded document, history array (Ö2); _id ile tek okuma (Ö1). Durum değişikliği updateOne ile $set ve $push tek atomik yazmadır (Ö5). { customer_id: 1, created_at: -1 } ve { status: 1, updated_at: 1 } compound index'leri ve lines.product_id üzerinde multikey index soruları IXSCAN yapar (Ö3, Ö4). Adres document'ın içine kopyalanır. 1 puan kırıldı: \"ürünlerin güncel adıyla sipariş raporu\" gibi bir soru gelirse kopyalanan ad yetmez ve products collection'ından $lookup gerekir."),
+                    sc(10, "Saniyede birkaç yazma ve 200 okuma bir primary ve bir replica için küçüktür (Ö8). Puan kırılmadı."),
+                    sc(10, "Üç AZ'de altı kopya, point-in-time restore. Puan kırılmadı."),
+                    sc(7, "Ekip API'ı biliyor; yedek ve yama yönetilir; yeni field migration'sız. 3 puan kırıldı: Aurora'dan bu collection'a event taşıyan parça (outbox ve tüketici) ekibin kurduğu ve işlettiği ek bir boru hattıdır; index planı ekibindir."),
+                    sc(6, "Serverless 0,5 DCU'ya iner ya da iki küçük instance. 4 puan kırıldı: Aurora zaten ödenirken ikinci bir yönetilen database'in minimum kapasitesi eklenir; küçük iş yükünde bu, faturanın görünür bir kalemidir.")],
+            "aur": [sc(7, "orders, order_items ve order_status_history table'ları zaten var; sipariş bir JOIN ile ya da JSONB kolonunda tutulan bir okuma modeli ile gelir; bütün sorular SQL'dir. 3 puan kırıldı: üç table'lı okuma her açılışta JOIN'dir; JSONB okuma modelinde history eklemek row'un tamamını yeniden yazar; adres kopyası ayrıca tasarlanır; \"bu ürünü içeren siparişler\" order_items üzerinden JOIN ve tekilleştirme ister."),
+                    sc(9, "Hacim küçük; aynı cluster taşır. 1 puan kırıldı: okuma modeli checkout ile aynı writer'da yaşar; raporlar reader'a yönlendirilir."),
+                    sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                    sc(8, "Ek database yok, aynı ekip, aynı SQL; event taşıma parçası gerekmez (aynı transaction'da yazılır). 2 puan kırıldı: yeni durum field'ları için migration; JSONB okuma modeli kullanılırsa operatörler öğrenilir."),
+                    sc(7, "Ek bir database ödenmez; mevcut Aurora kapasitesi kullanılır. 3 puan kırıldı: okuma modeli checkout cluster'ının ACU'sunu tüketir ve reader instance eklenirse o ödenir; I/O ayrıca.")],
+            "ddb": [sc(6, "Partition key customer_id, sort key sipariş zamanı; item sipariş, satırlar liste, adres map; \"müşterinin siparişleri\" bir Query. 4 puan kırıldı: \"kargoda ve üç günden eski\" ve \"bu ürünü içeren\" için GSI ve satırların ayrı item'lara açılması gerekir; history listesine ekleme list_append ile olur ama koşul ve sorgu sınırlıdır; ekip SDK öğrenir."),
+                    sc(10, "Kendiliğinden ölçek. Puan kırılmadı."),
+                    sc(10, "Birkaç AZ. Puan kırılmadı."),
+                    sc(7, "Serverless. 3 puan kırıldı: key tasarımı ve GSI planı; event taşıma parçası yine gerekir; ekip SDK'ya geçer."),
+                    sc(8, "İstek başına, küçük hacimde sıfıra yakın. 2 puan kırıldı: GSI yazmaları ve büyük sipariş item'ları birim tüketir.")],
+        },
+        h2h={
+            "aur": _t("İlişkisel (Aurora) ile kafa kafaya. Bu yarış \"ikinci bir database'e değer mi?\" sorusudur, çünkü sipariş Aurora'da zaten vardır. Ayrıştığı gereksinimler R1'in şekil kısmı, R4 ve R5 (R4'te Aurora bir puan önde, çünkü boru hattı yok). Aurora'nın gücü: ek database yok, event taşıma parçası yok, sipariş checkout ile aynı transaction'da yazılır ve her soru bir SQL'dir; JSONB kolonu okuma modelini de taşıyabilir. "
+                      "DocumentDB'nin gücü: sipariş ekranı tek document ve tek okumadır, durum geçmişi $push ile eklenir, adres siparişin içinde donar, yeni field'lar migration'sız gelir ve okuma yükü checkout cluster'ından ayrılır. "
+                      "Bu iş yükünde document bir puanla seçilir, çünkü sipariş ekranı bir belgedir (R1) ve okuma yükü checkout writer'ından ayrılır (R2); ama doğru cevap ikisi birliktedir: checkout ve stok Aurora'da (kayıt sistemi), sipariş document'ı DocumentDB'de (okuma modeli), arada bir event. Ekip ikinci database'in minimum maliyetini kabul etmezse Aurora'nın JSONB okuma modeli savunulabilir. "
+                      "Hangi koşul değişseydi Aurora seçilirdi: okuma hacmi checkout cluster'ını yormayacak kadar küçük kalsaydı, ekip tek database isteseydi ve sipariş ekranı JSONB kolonundan tek okumayla gelseydi."),
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı gereksinimler R1 ve R4. DynamoDB'nin gücü R2 ve R5'te: 5 milyon sipariş ve büyüme için boyutlandırma yoktur, küçük trafikte ödeme sıfıra yakındır ve \"müşterinin siparişleri, yeniye göre\" partition key ve sort key ile tam bir key-value sorusudur. "
+                      "Ama \"kargoda ve üç günden eski\" ve \"bu ürünü içeren siparişler\" key ile sorulamaz; GSI ve satırların ayrı item'lara açılması gerekir; durum geçmişine koşullu ekleme ve liste içi sorgu sınırlıdır. DocumentDB'de bunlar birer filtre ve index'tir. Ekip SDK'yı bilmiyor. "
+                      "Bu iş yükünde document seçilir, çünkü sorular sipariş document'ının içine göredir ve hacim küçüktür. "
+                      "Hangi koşul değişseydi DynamoDB seçilirdi: tek soru \"müşterinin siparişleri\" olsaydı, ürün ve durum soruları arama servisine verilseydi ve okuma hacmi saniyede on binlere çıksaydı."),
+        },
+        verdict=_t("Karar: DocumentDB 42, Aurora 41, DynamoDB 41. Yakın bir yarış: üç aday da R2 ve R3'ü karşılar; yarışı R1'in şekli (tek document, array içi geçmiş) ve R5 (ikinci database'in maliyeti) iki yöne çeker. Dürüst cevap ikisi birliktedir: kayıt Aurora'da, okuma modeli DocumentDB'de. "
+                   "Yine de document seçersek artımız: sipariş ekranı tek okuma, durum geçmişi $push, adres siparişte donmuş, index'li üç soru, okuma yükü checkout'tan ayrı. "
+                   "Potansiyel eksimiz: ikinci database'in minimum kapasitesi; Aurora'dan event taşıyan parça (outbox ve tüketici) ekibin kurduğu bir parçadır ve gecikirse \"siparişlerim\" ekranı geride kalır; ürün adı kopyası eski siparişlerde eski kalır. Bir koşul değişseydi: ekip tek database isteseydi ve okuma modeli JSONB'den tek okumayla gelseydi Aurora kazanırdı.")),
+
+    # ------------------------------------------------------------------ 8. catalog search by nested fields (race vs OpenSearch, both together later)
+    usecase("search", 8, sim="race_search", kind="race",
+        title=_t("İç içe field'lara göre katalog araması: filtre ve facet"),
+        key=_t("Collection: products. Sorgu: category, 'attributes.renk', 'attributes.garanti_ay' ve price üzerinde filtre, sıralama, limit. Facet sayıları $group ile."),
+        story=_t("Lale Market'in kategori sayfasında ziyaretçi filtre seçer: \"Elektronik, siyah, garanti 24 ay ve üzeri, 2.000 TL altı, rating'e göre\". Sayfa her filtre için seçenek sayılarını da gösterir (\"siyah (9), lacivert (6)\"). "
+                 "Katalog zaten DocumentDB'de (kart 1); soru bu filtrelerin ve facet sayılarının nereden geleceğidir. Metin araması (\"kablosz kulaklk\" gibi yazım hatalı) ayrı bir ihtiyaçtır ve bu kartta istenmiyor; ürün ekibi bunu bir sonraki çeyreğe bıraktı. "
+                 "Saniyede 1.200 filtreli okuma, kampanyada 5.000; 200.000 ürün; filtre field'ları 20 tane ve her ay bir yenisi geliyor. Cevap 50 ms'nin altında olmalı. Dört geliştirici, MongoDB biliyor, OpenSearch bilmiyor."),
+        reqs=[
+            req(True, "Dört beş field'ın (iç içe olanlar dahil) birleşimiyle filtre, bir field'a göre sıralama ve sayfalama. Her filtre field'ı için seçenek sayıları (facet). Yeni filtre field'ı ayda bir geliyor. Metin araması ve relevance istenmiyor (bu çeyrek).",
+                      "Filtre index'siz çalışırsa 200.000 document taranır ve sayfa saniyeler sürer; facet sayıları her sayfa açılışında bütün kategoriyi okuyorsa aynı şey olur."),
+            req(True, "Saniyede 1.200 filtreli okuma, kampanyada 5.000; cevap 50 ms'nin altında. 200.000 ürün.",
+                      "Kategori sayfası mağazanın en çok açılan sayfasıdır; kampanyada yavaşlarsa satış kaybıdır."),
+            req(False, "Katalog DocumentDB'de kalıcıdır; arama katmanı kaybolursa yeniden kurulur. Kısa kesinti kabul.",
+                       "Arama katmanının kaybı vitrini boşaltır ama veri kaybı değildir."),
+            req(False, "Dört geliştirici, MongoDB. İkinci bir sistem ve onu besleyen bir boru hattı istenmiyor; ama metin araması gelince bu değişebilir.",
+                       "İkinci sistem iki şema, iki deploy ve bir senkronizasyon hatası kaynağı demektir."),
+            req(False, "Okuma ağırlıklı, kampanyada tepe. Mevcut cluster'ın kapasitesi kullanılmak istenir.",
+                       "Ek bir servis ek bir sabit maliyettir; küçük mağaza için görünür bir kalemdir."),
+        ],
+        cands=["doc", "os", "aur"],
+        scores={
+            "doc": [sc(8, "Filtre find ile dot notation kullanır (Ö3); { category: 1, 'attributes.renk': 1, rating: -1 } gibi compound index'ler IXSCAN verir (Ö4); facet sayıları $match ve $group ile bir aggregation pipeline'dır (Ö6) ve kategori başına index'li çalışır. 2 puan kırıldı: 20 filtre field'ının her birleşimi için index kurulamaz (collection başına 64 index sınırı ve yazma maliyeti), bazı birleşimler index'in bir kısmını kullanıp kalan koşulu document üzerinde test eder; facet sayıları her filtre değişiminde yeniden hesaplanır; relevance sıralı metin araması yoktur."),
+                    sc(8, "1.200 ve kampanyada 5.000 okuma replica'lara dağılır (Ö8); index'li filtre milisaniyelerdedir. 2 puan kırıldı: facet pipeline'ları her sayfada çalışır, kampanyada saniyede binlerce $group replica sayısını artırmayı ister ve 50 ms'nin tutup tutmadığı bir yük testiyle ölçülmelidir."),
+                    sc(10, "Katalog zaten burada; üç AZ'de altı kopya. Puan kırılmadı."),
+                    sc(8, "İkinci sistem yok, aynı API, aynı cluster. 2 puan kırıldı: her yeni filtre field'ı için index kararı ve bazen bir compound index'in yeniden tasarımı; index'siz birleşim COLLSCAN'dir."),
+                    sc(8, "Mevcut cluster kullanılır; ek servis yok. 2 puan kırıldı: kampanyada replica ya da DCU eklenir; facet pipeline'ları I/O üretir.")],
+            "os": [sc(10, "Filtre, sıralama, sayfalama ve facet sayıları (aggregation) tek istekte ve index'in doğal işidir; yeni filtre field'ı mapping'e eklenir; metin araması ve relevance gelince hazırdır. Puan kırılmadı."),
+                   sc(9, "5.000 okuma küçük bir domain için rahattır; facet'ler milisaniyelerdedir. 1 puan kırıldı: shard ve node sayısı önceden seçilir; yeni ürün refresh aralığı kadar geç görünür."),
+                   sc(8, "Arama index'i kataloğun kopyasıdır ve DocumentDB'den yeniden kurulur; bu kartta kısa kesinti kabul edilir. 2 puan kırıldı: yeniden kurulum saatler sürer; mapping değişince index baştan kurulur; kopya DocumentDB'nin gerisinde kalabilir."),
+                   sc(7, "Yönetilen domain; facet ve filtre için ayar yok. 3 puan kırıldı: ikinci bir sistem, onu besleyen change stream tüketicisi ve ekibin bilmediği mapping dili; gereksinim ikinci sistemi açıkça istemiyor."),
+                   sc(7, "Node saat başına; küçük domain. 3 puan kırıldı: mevcut cluster'a ek bir sabit maliyet (en az iki node, Multi-AZ) ve boru hattının bedeli.")],
+            "aur": [sc(7, "Katalog Aurora'ya kopyalansaydı: JSONB ve GIN index ile filtre, GROUP BY ile facet. 3 puan kırıldı: katalog burada değil, kopyalanması gerekir; JSONB içi birleşik filtreler ve facet'ler büyük kategoride yavaştır; metin araması sınırlıdır."),
+                    sc(8, "5.000 okuma reader'larla. 2 puan kırıldı: reader sayısı ve ACU; facet GROUP BY'ları ACU tüketir."),
+                    sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                    sc(6, "Yönetilen. 4 puan kırıldı: ikinci sistem ve SQL'e geçiş; ekip bilmiyor."),
+                    sc(5, "0,5 ACU minimum ve reader. 5 puan kırıldı: sadece arama için ikinci bir ilişkisel database en pahalı seçenektir.")],
+        },
+        h2h={
+            "os": _t("Search engine (OpenSearch) ile kafa kafaya. Bu yarış \"ne zaman ikinci sistem?\" sorusudur. Ayrıştığı gereksinimler R1'in facet kısmı (OpenSearch iki puan önde), R3, R4 ve R5 (DocumentDB önde). OpenSearch'ün gücü tam bu iş yükündedir: filtre, sıralama, sayfalama ve facet sayıları tek istekte, yeni field mapping'e bir satır, metin araması ve yazım hatası toleransı gelince hazır. "
+                      "DocumentDB'nin gücü ikinci sistemin olmamasıdır: aynı cluster, aynı API, index'li filtreler ve $group ile facet'ler bu hacimde yeter; kayıt sistemi zaten burada. "
+                      "Bu iş yükünde document bir puanla seçilir, çünkü metin araması bu çeyrek istenmiyor, ekip OpenSearch bilmiyor ve facet'ler index'li pipeline ile 50 ms'nin altında kalıyor. Ama bu karar geçicidir: metin araması gelince doğru cevap ikisi birliktedir; katalog DocumentDB'de, arama kopyası change stream ile OpenSearch'te. Kart bunu karar kaydına yazar. "
+                      "Hangi koşul değişseydi OpenSearch seçilirdi: relevance sıralı ve yazım hatası toleranslı metin araması istenseydi, facet sayıları kampanyada replica'ları yormaya başlasaydı ya da filtre field'ı sayısı index'lenemeyecek kadar artsaydı."),
+            "aur": _t("İlişkisel (Aurora) ile kafa kafaya. Ayrıştığı gereksinimler R1, R4 ve R5. Aurora'nın gücü, katalog zaten ilişkisel bir database'de olsaydı görünürdü: JSONB ve GIN index filtreyi, GROUP BY facet'leri verir ve ikinci sistem gerekmezdi. "
+                      "Ama katalog DocumentDB'dedir; Aurora'yı sadece arama için eklemek ikinci bir database, bir kopyalama boru hattı ve SQL öğrenmek demektir; JSONB içi birleşik filtreler ve büyük kategoride facet GROUP BY'ları da OpenSearch kadar hızlı değildir. "
+                      "Bu iş yükünde document seçilir, çünkü arama katmanı ya mevcut cluster'da ya da bir search engine'de olmalıdır; ilişkisel database bu soruda üçüncü sıradadır. "
+                      "Hangi koşul değişseydi Aurora seçilirdi: katalog zaten Aurora'da olsaydı (Aurora sayfasının katalog kartı) ve arama JSONB ve GIN index ile bu hacimde yeterli olsaydı."),
+        },
+        verdict=_t("Karar: DocumentDB 42, OpenSearch 41, Aurora 36. Yakın bir yarış: yarışı R3, R4 ve R5 (kayıt sistemi aynı yerde, ikinci sistemin bedeli yok) DocumentDB'ye, R1'in facet kısmı OpenSearch'e çeker. "
+                   "Yine de document seçersek artımız: tek sistem, aynı API, index'li filtreler, $group ile facet, kayıt sistemi aynı yerde. "
+                   "Potansiyel eksimiz: her filtre birleşimi index'lenemez ve bazı sayfalar document üzerinde ek test yapar; facet pipeline'ları kampanyada replica ister; relevance ve yazım hatası toleransı yoktur. Bir koşul değişseydi: metin araması istendiği çeyrek OpenSearch eklenir ve change stream ile beslenir; o zaman ikisi birlikte doğru cevaptır.")),
+
+    # ------------------------------------------------------------------ 9. session documents (card only; ElastiCache wins)
+    usecase("sessions", 9,
+        title=_t("Oturum document'ları: teklif sihirbazının adımları"),
+        key=_t("Collection: sessions. Document: _id (session id), user_id, wizard (iç içe: araç, sürücüler, teminatlar), expires_at. TTL index."),
+        story=_t("Bir sigorta satış sitesinde ziyaretçi beş adımlık bir teklif sihirbazından geçer; her adımın cevapları oturum document'ında iç içe tutulur (araç, sürücüler listesi, seçilen teminatlar). Oturum 30 dakika hareketsizlikten sonra düşmeli ve her istekte süresi yenilenmeli. "
+                 "Her HTTP isteği oturumu okur; sihirbazın her adımı oturumun bir kısmını yazar. Pazarlama ekibi günde birkaç kez \"üçüncü adımda bırakılan oturumlar\" gibi sorular sorar. "
+                 "Saniyede 15.000 okuma, 5.000 yazma; oturum 5 KB. Oturum okuması her isteğin önündedir: 1 ms gecikme her sayfaya eklenir. Kaybolan bir oturum sihirbazı baştan başlatır; müşteri sinirlenir ama para kaybolmaz. Uygulama MongoDB driver'ı ile yazılmış ve ekip ilk olarak mevcut DocumentDB cluster'ına bir sessions collection'ı eklemeyi düşünüyor; sunucu istenmiyor."),
+        reqs=[
+            req(True, "Session id ile tek okuma; her istekte süre yenileme; sihirbaz adımının iç içe field'ını tek yazmada değiştirmek. 30 dakika sonra oturum okunmamalı. Günde birkaç kez oturumun içine göre analiz sorusu.",
+                      "Süresi dolmuş oturumun kabul edilmesi paylaşılan bilgisayarda bir sonraki kişiyi önceki teklifte bırakır. Her istekte bir okuma ve bir yazma olduğu için gecikme doğrudan sayfaya eklenir."),
+            req(True, "Saniyede 15.000 okuma ve 5.000 yazma (süre yenileme dahil); okuma 2 ms'nin altında. Tepe öğle ve akşam.",
+                      "Oturum okuması her isteğin ilk adımıdır; 5.000 yazma/saniye tek bir yazma düğümü için ağır bir yüktür."),
+            req(False, "Kaybolan oturum yeni bir sihirbaz demektir; kabul edilir ama sık olmamalı. Bir instance arızası bütün oturumları silmemeli.",
+                       "Toplu oturum kaybı o saatteki bütün teklifleri baştan başlatır; müşteri kaybıdır, para kaybı değil."),
+            req(False, "Kod MongoDB driver'ı ile yazılmış; ekip sunucu istemiyor. İkinci bir sistem kabul edilebilir, eğer kazancı açıksa.",
+                       "Oturum kodu küçüktür; değiştirmek bir haftalık iştir, uygulamanın geri kalanı değişmez."),
+            req(False, "Yazma ağırlıklı ve sürekli. 5 KB'lık oturumlar için bellek ya da I/O maliyeti öngörülebilir olmalı.",
+                       "Saniyede 5.000 süre yenilemesi I/O olarak faturalanırsa oturum katmanı en pahalı kalem olur."),
+        ],
+        cands=["doc", "ec", "ddb"],
+        scores={
+            "doc": [sc(9, "Oturum bir document, sihirbaz cevapları iç içe (Ö2); _id ile okuma (Ö1); adım $set ile tek yazmada değişir (Ö5); \"üçüncü adımda bırakılanlar\" wizard.step üzerinde bir filtre (Ö3). TTL index expires_at üzerinde silmeyi yapar. 1 puan kırıldı: TTL silmesi \"best effort\" ve zamanı garanti değildir; uygulama expires_at'i okumada kendisi karşılaştırır."),
+                    sc(5, "15.000 okuma replica'lara dağılır (Ö8). 5 puan kırıldı: zorunlu \"2 ms'nin altında okuma\" disk tabanlı motor ve ağ gidiş dönüşüyle her istekte tutmaz; 5.000 yazma/saniye tek primary'den geçer ve büyük bir instance ister."),
+                    sc(10, "Üç AZ'de altı kopya; instance arızası oturumları silmez. Puan kırılmadı."),
+                    sc(8, "Aynı driver, kod değişmez; yedek ve yama yönetilir. 2 puan kırıldı: yazma yükü için instance boyutlandırma ekibindir."),
+                    sc(7, "Instance saat başına ve I/O başına. 3 puan kırıldı: saniyede 5.000 süre yenilemesi ve TTL silmeleri sürekli I/O'dur; I/O-Optimized ile instance fiyatı yükselir.")],
+            "ec": [sc(10, "Oturum bir hash; GET ve HSET bellekten, mikrosaniyelerdedir; EXPIRE tam anında uygular ve süresi dolan oturum okunamaz; tek field HSET ile değişir. Puan kırılmadı."),
+                   sc(10, "15.000 okuma ve 5.000 yazma bellek içi store için küçüktür; serverless kendiliğinden ölçeklenir. Puan kırılmadı."),
+                   sc(6, "Serverless birkaç AZ'de replika tutar. 4 puan kırıldı: kalıcı bir yazma log'u yoktur; bir arızada son saniyelerin oturumları kaybolabilir; bu kartta kabul edilir ama sık olmamalıdır."),
+                   sc(9, "Serverless, sunucu yok. 1 puan kırıldı: oturum kodu Valkey komutlarına taşınır (bir hafta); \"üçüncü adımda bırakılanlar\" için key'ler taranır ya da ayrı bir sayaç tutulur."),
+                   sc(10, "GB-saat ve ECPU başına; 5 KB'lık oturumlar için bellek küçüktür. Puan kırılmadı.")],
+            "ddb": [sc(8, "Simple primary key session id, GetItem ve UpdateItem; TTL attribute'u. 2 puan kırıldı: TTL \"within a few days\", uygulama expires_at'i filtreler; iç içe sihirbaz field'ı document yolu ile değişir ama analiz sorusu Scan ya da GSI ister."),
+                    sc(6, "Yazma ve okuma kendiliğinden ölçeklenir. 4 puan kırıldı: okuma tek haneli milisaniyedir ve zorunlu 2 ms sınırını her istekte tutmaz; DAX gibi bir cache bunu çözer ama ikinci bir parçadır."),
+                    sc(10, "Birkaç AZ. Puan kırılmadı."),
+                    sc(8, "Serverless. 2 puan kırıldı: kod SDK'ya taşınır."),
+                    sc(8, "İstek başına. 2 puan kırıldı: 5.000 süre yenilemesi/saniye yazma birimi tüketir; 5 KB oturum okuma başına iki birim.")],
+        },
+        h2h={
+            "ec": _t("Bellek içi key-value (ElastiCache) ile kafa kafaya. Ayrıştığı gereksinimler R1'in süre sonu kısmı, R2 ve R5. ElastiCache'in gücü oturumun tanımıdır: bellekten mikrosaniyede okuma, EXPIRE ile tam anında süre sonu, saniyede 5.000 yazmanın bellek için küçük olması ve GB-saat ile öngörülebilir maliyet. "
+                      "DocumentDB'nin gücü oturumun içinde görünür: sihirbaz cevapları iç içe bir document'tır, \"üçüncü adımda bırakılanlar\" bir filtredir ve kod değişmez; dayanıklılıkta DocumentDB açık ara öndedir. "
+                      "Ama bu iş yükünde kategori bellek içidir: oturum geçicidir, kaybı kabul edilir ve her isteğin önünde durur. DocumentDB bu kartta kaybeder ve kart bunu söylemek için vardır: document şekli tek başına document database'i seçtirmez. Dürüst cevap ikisi birliktedir: oturum ElastiCache'te, tamamlanan teklif DocumentDB'de. "
+                      "Hangi koşul değişseydi DocumentDB seçilirdi: oturum kaybı kabul edilmeseydi (teklif oturumda tamamlanıp ödeme alınıyorsa), yazma hacmi saniyede birkaç yüze inseydi ve oturumun içine göre sorular ana iş olsaydı."),
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı gereksinimler R2 ve R5. DynamoDB'nin gücü: 15.000 okuma ve 5.000 yazma için boyutlandırma yoktur, oturum kalıcıdır ve TTL attribute'u silmeyi yapar; DocumentDB'de 5.000 yazma tek primary'den geçer ve instance boyutu ekibin işidir. "
+                      "DocumentDB'nin gücü: iç içe sihirbaz cevapları ve içe göre analiz sorusu doğrudan desteklenir, kod değişmez. İkisinde de süre sonu kesin değildir ve uygulama expires_at'i okumada karşılaştırır. "
+                      "Bu kartta DynamoDB de DocumentDB'nin bir puan önündedir, çünkü yazma hacmi ve maliyet oturum iş yükünü key-value'ya çeker; ama ikisi de zorunlu 2 ms sınırını tutmaz. Kart yine de document sayfasındadır, çünkü ekip ilk olarak \"mevcut cluster'a bir collection\" demiştir ve bu kart o cevabın bedelini gösterir. "
+                      "Hangi koşul değişseydi DynamoDB (ElastiCache yerine) seçilirdi: oturum kaybı kabul edilmeseydi ve 2 ms'lik okuma sınırı 10 ms'ye gevşeseydi."),
+        },
+        verdict=_t("Karar: ElastiCache 45, DynamoDB 40, DocumentDB 39. DocumentDB bu kartı kaybeder: yarışı zorunlu R2 belirler (2 ms'nin altında okuma ve 5.000 yazma/saniye tek primary'den), R5 (süre yenilemesi I/O olarak) farkı büyütür; R3'te DocumentDB en iyisidir ama bu kartta dayanıklılık tercihlidir. "
+                   "Yine de document seçersek artımız: kod değişmez, sihirbaz cevapları iç içe, içe göre analiz sorusu bir filtre, oturum kalıcı. "
+                   "Potansiyel eksimiz: büyük bir primary instance, sürekli I/O faturası, TTL silmesinin zamanı garanti değil, 2 ms'nin altı okuma garanti değil. Bir koşul değişseydi: oturum kaybı kabul edilmeseydi ve yazma hacmi birkaç yüze inseydi DocumentDB yarışa girerdi; bugünkü dürüst cevap \"oturum ElastiCache'te, tamamlanan teklif DocumentDB'de\".")),
+
+    # ------------------------------------------------------------------ 10. feature flags and settings (card only)
+    usecase("flags", 10,
+        title=_t("Feature flag'ler ve uygulama ayarları"),
+        key=_t("Collection: flags. Document: _id (flag adı), enabled, rules (array: segment, yüzde, ülke), variants (iç içe), version, history."),
+        story=_t("Bir e-ticaret şirketinin 40 mikroservisi 300 feature flag ve ayar okur: \"yeni checkout açık mı\", \"kargo bedava eşiği\", \"A/B varyantları\". Her flag'in kuralları farklıdır: bazıları yüzdeyle, bazıları ülke listesiyle, bazıları müşteri segmentiyle açılır; ürün ekibi her hafta yeni kural türü ister. "
+                 "Servisler flag'leri 30 saniyede bir okur ve bellekte tutar; değişiklik 10 saniye içinde bütün servislere yayılmalı. Kim neyi ne zaman değiştirdi sorusu denetim için saklanmalı. "
+                 "Saniyede 500 okuma, günde 50 yazma; veri birkaç MB. Yanlış bir flag değişikliği mağazayı kapatabilir; geri alınabilmeli. Platform ekibi dört kişi, MongoDB ve SQL ikisini de biliyor; şirketin zaten bir DocumentDB cluster'ı var ve en düşük operasyon istenir."),
+        reqs=[
+            req(True, "Flag adı ile tek okuma ve \"bütün flag'ler\" tek sorgu. Kural türüne göre farklı şekil, yeni kural türü migration'sız. Bir flag'i \"version = 12 ise\" koşuluyla değiştirip geçmişe eklemek. Değişiklik 10 saniye içinde servislere ulaşmalı.",
+                      "İki kişinin aynı flag'i aynı anda değiştirmesi mağazayı yanlış duruma sokar; geçmiş olmadan \"kim kapattı\" sorusu cevapsız kalır."),
+            req(True, "Saniyede 500 okuma, günde 50 yazma; 300 document, birkaç MB. Okuma 10 ms'nin altında.",
+                      "Hacim çok küçüktür; ölçek belirleyici değildir. Belirleyici olan şekil esnekliği, yayılma ve operasyondur."),
+            req(True, "Flag'ler mağazanın davranışını belirler; kayıp ya da geri alınamayan yanlış değişiklik kabul edilmez. Bu kartta dayanıklılık zorunludur.",
+                       "Flag'lerin kaybı bütün servisleri varsayılan davranışa düşürür; yanlış bir değişikliğin geri alınamaması kesintidir."),
+            req(False, "Dört kişilik platform ekibi; en düşük operasyon; yeni kural türü kodda eklenmeli. Mevcut DocumentDB cluster'ı paylaşılabilir.",
+                       "Flag sistemi için ayrı bir cluster işletmek ekibin istemediği bir iştir."),
+            req(False, "Çok küçük veri ve trafik; en düşük sabit maliyet. Mevcut bir cluster'da bir collection idealdir.",
+                       "Küçük iş yükünde ayrı bir database'in minimum kapasitesi faturanın tamamıdır."),
+        ],
+        cands=["doc", "ddb", "aur"],
+        scores={
+            "doc": [sc(10, "Flag bir document, kurallar türe göre farklı şekilli bir array (Ö2); _id ile okuma ve find({}) ile hepsi (Ö1, Ö3). Filtresinde version: 12 olan bir updateOne, $set, $inc ve history'ye $push ile koşulu ve geçmişi tek atomik yazmada yapar (Ö5). Change stream değişikliği saniyeler içinde servislere yayan bir tüketiciye verir (Ö7). Puan kırılmadı."),
+                    sc(10, "500 okuma ve günde 50 yazma mevcut cluster için görünmez bir yüktür (Ö8). Puan kırılmadı."),
+                    sc(9, "Üç AZ'de altı kopya, point-in-time restore; history array'i geri almayı verir. 1 puan kırıldı: history array'i sınırsız büyüyemez (A3); belirli bir boyuttan sonra eski kayıtlar ayrı bir collection'a taşınır ve bunu ekip izler."),
+                    sc(9, "Mevcut cluster'a bir collection; aynı API; yeni kural türü migration'sız. 1 puan kırıldı: change stream tüketicisi (yayın) ekibin kurduğu bir parçadır."),
+                    sc(8, "Mevcut cluster'da ek maliyet yaklaşık sıfır. 2 puan kırıldı: change stream açık olduğunda log I/O ve storage tüketir; cluster paylaşıldığı için flag sistemi diğer iş yükleriyle aynı faturadadır.")],
+            "ddb": [sc(7, "Partition key flag adı; value şemasız, kurallar bir liste; ConditionExpression version = :v; Streams değişikliği yayar. 3 puan kırıldı: \"bütün flag'ler\" bir Scan'dir (300 item, kabul edilir ama key-value'nun doğal sorusu değildir); geçmişe koşullu ekleme list_append ile olur ve item 400 KB'ı aşmamalıdır; ekip bir SDK daha öğrenir."),
+                    sc(10, "Kendiliğinden ölçek. Puan kırılmadı."),
+                    sc(10, "Birkaç AZ, point-in-time recovery. Puan kırılmadı."),
+                    sc(8, "Serverless, cluster yok; Streams ve Lambda yerleşik. 2 puan kırıldı: ikinci bir veri erişim katmanı ve key tasarımı."),
+                    sc(9, "İstek başına; bu hacimde sıfıra yakın. 1 puan kırıldı: Streams tüketicisi ve Scan okumaları birim tüketir.")],
+            "aur": [sc(8, "flags table'ı, rules JSONB, UPDATE ... WHERE version = 12, flag_history table'ı; her soru SQL. 2 puan kırıldı: türe göre farklı kurallar JSONB'de yaşar; değişiklik yayını için mantıksal replication ya da polling kurulur."),
+                    sc(10, "Görünmez yük. Puan kırılmadı."),
+                    sc(10, "Üç AZ'de altı kopya; point-in-time restore. Puan kırılmadı."),
+                    sc(7, "Mevcut Aurora varsa bir table. 3 puan kırıldı: değişiklik akışı için ek parça; migration disiplini."),
+                    sc(6, "Mevcut cluster'da sıfıra yakın; yoksa 0,5 ACU minimum. 4 puan kırıldı: sadece flag için ayrı Aurora en pahalı seçenektir.")],
+        },
+        h2h={
+            "ddb": _t("Key-value (DynamoDB) ile kafa kafaya. Ayrıştığı gereksinimler R1'in şekil kısmı ve R4. DynamoDB'nin gücü: cluster yok, 300 item için ödeme sıfıra yakın, ConditionExpression sürüm kontrolünü yapar ve Streams ile Lambda değişikliği 10 saniyede yayar; AWS'in kendi AppConfig servisi de bu iş için vardır ve bu kartın dışındadır. "
+                      "DocumentDB'nin gücü: kurallar türe göre farklı şekilli bir array'dir, koşullu güncelleme ve geçmişe ekleme tek atomik yazmadır, \"bütün flag'ler\" bir find'dır ve mevcut cluster'a bir collection eklemek sıfır operasyondur. "
+                      "Bu iş yükünde document seçilir, çünkü ekibin elinde bir DocumentDB cluster'ı vardır (R4, R5) ve flag şekli serbesttir (R1); iki puanlık farkın bir kısmı mevcut cluster'dan gelir ve cluster olmasaydı fark kapanırdı. "
+                      "Hangi koşul değişseydi DynamoDB seçilirdi: ekibin DocumentDB cluster'ı olmasaydı (ayrı cluster'ın minimumu bu iş için büyüktür), flag'ler sabit birkaç field olsaydı ya da ekip tamamen serverless bir platform istiyor olsaydı."),
+            "aur": _t("İlişkisel (Aurora) ile kafa kafaya. Ayrıştığı gereksinimler R1'in şekil kısmı, R4 ve R5. Aurora'nın gücü: flag_history table'ı denetim için doğaldır, UPDATE ... WHERE version koşulu çalışır ve ekip SQL biliyor; mevcut bir Aurora varsa flag'ler bir table'dır. "
+                      "Ama kurallar türe göre farklıdır ve her hafta yeni tür gelir; bu veri JSONB'ye yığılır ve schema'nın avantajı kalmaz; değişiklik yayını için mantıksal replication ya da polling kurulur, DocumentDB'de change stream yerleşiktir. "
+                      "Bu yüzden document seçilir. Hangi koşul değişseydi Aurora seçilirdi: ekibin elinde Aurora olup DocumentDB olmasaydı, flag kuralları sabit kolonlar olsaydı ve denetim raporları JOIN ile sorulsaydı."),
+        },
+        verdict=_t("Karar: DocumentDB 46, DynamoDB 44, Aurora 41. Yarışı R1'in şekli (türe göre kurallar, koşul ve geçmiş tek yazmada) ve R4 (mevcut cluster'a bir collection) belirler. "
+                   "Yine de document seçersek artımız: flag tek document, kural türü serbest, koşullu güncelleme ve history tek yazmada, change stream ile yayın, sıfır ek operasyon. "
+                   "Potansiyel eksimiz: change stream tüketicisi ekibin parçasıdır ve durursa yayın durur; servisler 30 saniyelik okumayla telafi eder ama o süre boyunca \"10 saniye\" gereksinimi karşılanmaz, bu yüzden tüketiciye bir alarm kurulur; history array'i büyürse ayrı collection'a alınır; mevcut cluster yoksa minimum kapasite bu iş için büyüktür. Bir koşul değişseydi: mevcut DocumentDB cluster'ı olmasaydı DynamoDB kazanırdı.")),
+]
+
+USECASES["docdb"] = DOCDB_USECASES

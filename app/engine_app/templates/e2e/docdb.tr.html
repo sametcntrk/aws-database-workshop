@@ -1,322 +1,1153 @@
 {% extends "e2e/_base.html" %}
 {% import "e2e/_macros.html" as k with context %}
-{# Turkish version of docdb.html. Terms stay in English; the explanations are Turkish. Keep both files in step. #}
+{# Turkish page of the Amazon DocumentDB E2E tutorial (new structure: Part A all cases, Ö1–Ö8, M1–M7 from the use case data, Part B practice, Part C service). Terms stay in English. The old English page docdb.html stays unchanged. #}
 {% block body %}
 
-<h2 id="goal" data-short="Ne öğreneceksin"><span class="sec">00</span>Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
-<p>Bölüm 01 mimarın kararını verir: Amazon DocumentDB nereye oturur, nereye oturmaz. Sonra tutorial iki bölümden oluşur.
-   Bölüm 1, MongoDB API'sinin document modelini öğretir: dokümanlar, koleksiyonlar, query'ler, index'ler ve aggregation. Bölüm 2 Amazon DocumentDB'yi gösterir: AWS senin için neyi çalıştırır ve Lale Market onu nasıl kullanır.</p>
-<p>Örnekler Lale Market'in ürün kataloğundan gelir. Başka bir örnek bir fikri daha kolay gösteriyorsa tutorial onu kullanır: bir kâğıt dosya, bir tarif kartı, bir emlak ilanı.</p>
+<h2 id="goal" data-short="Ne öğreneceksin" data-group="Başlarken">Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
+<p>Bu sayfa genel fikirden AWS servisine dört adımda gider:</p>
+<ol>
+  <li><b>Bölüm A, Temel.</b> Document database nedir; bir nesnenin bütün parçalarını tek bir kayıtta tutmak, kaydın içinde iç içe parçalar ve listeler, her alana göre soru sormak, hızlı arama yapıları, kaydın tek bir parçasını değiştirmek, sunucuda özet hesaplamak, değişiklikleri dışarı vermek, kopyalar ve tek yazma noktası. Her kavram bütün durumlarıyla bir tabloda verilir ve bölüm sekiz özelliğin (Ö1–Ö8) listesi ve MongoDB / DocumentDB / DynamoDB matrisiyle biter. Fikirler her document database'te aynıdır.</li>
+  <li><b>Mimar gözüyle.</b> Document database ne zaman doğru seçimdir, ne zaman değildir: on use case, her birinde seçimin nedeni, iki alternatifin aynı gereksinimlere cevabı ve yine de document seçersek artı ve eksilerimiz. Sonra AWS'teki seçenekler ve hangi durumda Amazon DocumentDB'nin seçileceği. Üçü yakın yarış olan beş karar simülasyonu.</li>
+  <li><b>Bölüm B, İleri.</b> Pratikte DocumentDB: canlı bir kayıt, find ve explain, update operator'ları, aggregation, değişiklik akışı ve süre sonu, maliyet.</li>
+  <li><b>Bölüm C, AWS servisi.</b> Bir MongoDB replica set'ini kendin çalıştırdığında ne yapman gerekir ve DocumentDB senin için neyi yapar.</li>
+</ol>
+<p>Örnekler Lale Market'in ürün kataloğundan gelir: her ürün tek bir kayıttır ve ürün türüne göre farklı özellikler taşır. Başka bir örnek bir fikri daha kolay gösteriyorsa tutorial onu kullanır: bir sigorta ofisindeki müşteri klasörü, bir alışveriş listesi, bir yemek tarifi.</p>
 <p>Bu tutorial'ın sonunda şunları yapabilirsin:</p>
 <ol>
-  <li>Bir document database'inin hangi iş yükleri için doğru seçim olduğunu ve hangileri için olmadığını söylemek.</li>
-  <li>Gerçek bir dokümanı okuyup alanlarını, iç içe nesnelerini ve dizilerini adlandırmak.</li>
-  <li>İç içe bir alanda filtreli ve projection'lı bir find yazmak ve her parçasını açıklamak.</li>
-  <li>Bir explain planını okuyup index scan'i collection scan'den ayırt etmek.</li>
-  <li>Bir diziyi açan (unwind) ve sonucu gruplayan bir aggregation pipeline'ı kurmak.</li>
-  <li>"Dokümanın içine göm" ile "başka bir koleksiyona referans ver" arasında karar vermek.</li>
+  <li>Gerçek bir JSON kaydını okuyup her parçasının adını ve rolünü söylemek.</li>
+  <li>Bir veriyi kaydın içine gömmek ile ayrı bir yerde tutup adıyla göstermek arasında seçim yapmak ve seçimi gerekçelendirmek.</li>
+  <li>İç içe bir alana göre bir filtre yazmak ve bir sorgu planında tam taramayı hızlı yoldan ayırmak.</li>
+  <li>Bir listenin içindeki tek bir elemanı, sırasını bilmeden ve kilit kullanmadan güvenli şekilde değiştirmek.</li>
+  <li>Bir document database'in hangi iş yükleri için doğru seçim olduğunu ve hangileri için olmadığını söylemek.</li>
+  <li>AWS'teki seçenekler arasında seçim yapmak ve seçimi yakın bir yarışta savunmak.</li>
 </ol>
 <p>Dört tür kutu sana yardım eder. <b>Simülasyon</b>: Oynat'a ya da Sonraki adım'a bas. <b>Önce tahmin et</b>: cevabı açmadan önce kendi cevabını yaz.
    <b>Checkpoint</b>: tek doğru cevabı olan bir soru. <b>Analoji</b>: günlük hayattan bir resim.</p>
 
-<h2 id="architect" data-short="Mimar gözüyle: ne zaman"><span class="sec">01</span>Mimar gözüyle: DocumentDB nereye oturur</h2>
-<p><b>Önce bu bölümü oku.</b> Kararı bu bölüm verir. Sonraki bölümler document modelinin nasıl çalıştığını öğretir.</p>
-<p><b>Kısaca:</b> Amazon DocumentDB, MongoDB API'siyle uyumlu, yönetilen bir document database'idir. Her iş nesnesini JSON benzeri tek bir doküman olarak saklar.
-   Bir koleksiyondaki iki dokümanın farklı alanları olabilir. Her alanda filtreleyebilir, sıralayabilir ve index oluşturabilirsin; iç içe nesnelerin ve dizilerin içindeki alanlarda da.</p>
-<p>Temel fikir, domain tasarımındaki anlamıyla {{ k.term("aggregate", "aggregate-ddd") }}'tir: uygulamanın birlikte okuyup yazdığı bir veri grubu.
-   Attribute'ları ve tag'leriyle bir ürün böyle bir gruptur. Verinin diskteki şekli ekranın ihtiyaç duyduğu şekle eşitse tek bir okuma yeter.</p>
+<div class="part"><b>Bölüm A</b><h2 id="partA" data-short="Bölüm A: Temel">Temel: document fikri, bütün durumlarıyla</h2>
+<p>Bir nesneyi bütün parçalarıyla tek bir JSON kaydında tutan, o kaydın her alanına göre soru cevaplayan bir database'in nasıl çalıştığı ve bunun karşılığında nelerden vazgeçtiği. Bu bölüm her kavramı önce tanımlar, sonra o kavramın <b>bütün durumlarını</b> bir tabloda gösterir. "Ya şöyle olursa?" sorusunun cevabı tabloda vardır. Fikirler her document database'te aynıdır; isimler standarttır ve sayfanın sonuna kadar değişmez.</p></div>
 
-<h3>Bir iş yükünde DocumentDB'yi işaret eden sinyaller</h3>
+<h2 id="why" data-short="Neden document?"><span class="sec">A1</span>Neden document database? Sigorta ofisindeki klasör</h2>
+<p>Bir sigorta ofisi her müşteri için bir klasör tutar. Klasörün içinde poliçe, sigortalı araçların listesi, adresler, imzalı formlar vardır. Müşteri aradığında görevli raftan tek bir klasör çeker ve her şeyi görür; beş ayrı defteri açıp numaraları eşleştirmez.
+   Klasörlerin içi birbirine benzemez: kasko müşterisinin klasöründe araç ruhsatı, konut müşterisinin klasöründe tapu fotokopisi vardır. Görevli buna şaşırmaz.</p>
+{% call k.callout("analogy", "Analoji") %}
+<p>Relational database bir defterler takımıdır: müşteriler bir defterde, araçlar bir defterde, adresler bir defterde; bir müşteriyi görmek için her defteri açar ve müşteri numarasını eşleştirirsin. Document database bir klasör rafıdır: bir şeyle ilgili her şey kendi klasöründedir. A2 klasöre ve rafa teknik adlarını verir.</p>
+{% endcall %}
+<p>Klasörün bir bedeli de vardır. Bazen aynı bilgi birçok klasörde görünmek zorundadır, örneğin bir acentenin adresi. O zaman her klasörde bir kopyası olur ve bir değişiklik bütün kopyaları güncellemelidir. Ayrıca klasörler sonsuza kadar kalınlaşamaz: rafın bir klasör kalınlığı sınırı vardır. Bir document database şunu verir ve şunu alır:</p>
 <table class="data">
-  <thead><tr><th>Sinyal</th><th>Gerçek bir projede neye benzer</th><th>Ona cevap veren özellik</th></tr></thead>
+  <caption>takas: document database neyi verir, neyi alır</caption>
+  <thead><tr><th>Document database'in verdiği</th><th>Karşılığında aldığı</th><th>Bu sayfada nerede</th></tr></thead>
   <tbody>
-    <tr><td>Aynı türdeki öğelerin farklı alanları var</td><td>Bir laptopun RAM'i ve CPU'su var. Bir kazağın bedeni ve kumaşı var. Bir kitabın yazarı ve sayfa sayısı var.</td><td>Sabit schema'sı olmayan dokümanlar (bölüm 03)</td></tr>
-    <tr><td>Ekran bir nesneyi bütün parçalarıyla gösterir</td><td>Bir ürün sayfası, bir kullanıcı profili, seçenekleriyle bir sigorta poliçesi.</td><td>İç içe nesneler ve diziler, <code>_id</code> ile tek okuma (bölüm 03)</td></tr>
-    <tr><td>Kullanıcılar birçok alanda, iç içe olanlarda da filtreler</td><td>"En az 24 ay garantili siyah elektronikler, en ucuz önce".</td><td>Dot notation'lı find, her alanda index (bölüm 04 ve 05)</td></tr>
-    <tr><td>Verinin şekli sık değişir</td><td>Pazarlama her hafta yeni bir attribute ekler.</td><td>Yeni bir alan schema değişikliği istemez. Eski dokümanlarda o alan basitçe yoktur.</td></tr>
-    <tr><td>Sunucuda özetler</td><td>"Kategori başına kaç ürün", "tag başına ortalama fiyat".</td><td>Aggregation pipeline (bölüm 06)</td></tr>
-    <tr><td>Ekip MongoDB biliyor</td><td>MongoDB API'si için mevcut kod, driver'lar ve beceriler.</td><td>MongoDB uyumluluğu: aynı driver'lar ve araçlar (bölüm 08)</td></tr>
-    <tr><td>Yazmalardan çok daha fazla okuma</td><td>Bir katalog her değişiklik için binlerce kez okunur.</td><td>Aynı storage üzerinde en fazla 15 replica instance (bölüm 08)</td></tr>
+    <tr><td>Bir nesne bütün parçalarıyla tek kayıtta; ekran tek okumayla dolar</td><td>Birçok nesnenin paylaştığı bilgi ya kopyalanır ya da ayrı tutulup ikinci bir okumayla getirilir</td><td>A2, A3</td></tr>
+    <tr><td>Her kayıt kendi alanlarını taşır; yeni alan bir şema değişikliği değildir</td><td>Database kayıtların içini senin yerine doğrulamaz; kuralların çoğu uygulamadadır</td><td>A2, M3</td></tr>
+    <tr><td>Her alana, iç içe alanlara ve listelerin içine göre soru</td><td>Hızlı cevap için o alana bir arama yapısı gerekir; yoksa her kayıt okunur</td><td>A4, A5</td></tr>
+    <tr><td>Bir kaydın tek bir parçası tek adımda ve güvenle değişir</td><td>Birkaç kaydı birlikte değiştirmek ek bir mekanizma ister; bütün yazmalar tek bir sunucudan geçer</td><td>A6, A9</td></tr>
+  </tbody>
+</table>
+<div class="flow">
+  <div class="box">ekran<small>"P0001 ürün sayfası"</small></div><span class="arrow">→</span>
+  <div class="box pk">tek okuma<small>adı P0001 olan kayıt</small></div><span class="arrow">→</span>
+  <div class="box hit">bütün ürün<small>ad, fiyat, özellikler, etiketler</small></div>
+</div>
+<div class="flow">
+  <div class="box">aynı ekran, defter modeli<small>"P0001 ürün sayfası"</small></div><span class="arrow">→</span>
+  <div class="box">ürün tablosu<small>ad, fiyat</small></div><span class="arrow">→</span>
+  <div class="box">özellik tablosu<small>renk, garanti</small></div><span class="arrow">→</span>
+  <div class="box">etiket tablosu<small>hızlı kargo, çevreci</small></div>
+</div>
+<p class="flow-cap">Aynı ekranın iki yolu. Üstte: klasör modeli, ürün tek kayıttır ve tek okumayla gelir. Altta: defter modeli, ürün üç tabloda durur ve sorgu anında birleştirilir. İkisi de doğru sonucu verir; fark kaç yere bakıldığındadır.</p>
+{% call k.ask("Relational database de JSON saklayabiliyor (örneğin PostgreSQL'in JSONB'si). Fark ne?") %}
+<p>Fark merkezdedir. Relational database'te ana birim table ve row'dur; JSON kolonu birkaç serbest alan için bir yardımcıdır ve ilişkiler, kurallar yine table'larla kurulur. Document database'te ana birim JSON kaydının kendisidir: sorgu dili, arama yapıları ve güncelleme komutları kaydın içine göre tasarlanmıştır. Verinin çoğu ilişkili row'lar ise relational, verinin çoğu kendi içinde bütün nesneler ise document doğal olandır. M2'deki kartlar bu sınırı puanlarla gösterir.</p>
+{% endcall %}
+{% call k.ask("Klasör modelinde iki müşteri aynı acenteyi gösteriyorsa ne olur?") %}
+<p>İki yol vardır: acentenin bilgisini her klasöre kopyalarsın (okuma hızlı, değişiklik bütün kopyalara yazılır) ya da acenteyi ayrı bir klasörde tutup müşteri klasörüne sadece acentenin numarasını yazarsın (değişiklik tek yerde, okuma iki adım). A3 bu seçimi bütün durumlarıyla bir tabloda verir; document database'in ana tasarım sorusu budur.</p>
+{% endcall %}
+{{ k.quiz("doc-q0", "Bir ürün sayfası ürünün adını, fiyatını, özelliklerini ve etiketlerini birlikte gösteriyor. Klasör modeli bu ekrana ne kazandırır?",
+   ["Ürün tek kayıttır ve ekran tek okumayla dolar", "Ürün üç tabloya bölünür ve daha az yer kaplar", "Database ürünün fiyat kuralını kendisi korur", "Bütün ürünler aynı alanlara sahip olmak zorundadır"],
+   0, "Klasör modelinde bir nesnenin bütün parçaları tek kayıttadır. Fiyat kuralını database'in koruması ve aynı alan zorunluluğu defter modelinin özellikleridir.") }}
+
+<h2 id="model" data-short="Document, field, _id"><span class="sec">A2</span>Document, field ve collection. _id: kaydın benzersiz adı</h2>
+{{ k.concept("Document, field ve collection",
+   "Document database veriyi <b>document</b>'lerde tutar. Bir document, bir JSON nesnesine benzeyen tek bir kayıttır: <b>field</b> adı ve değer çiftlerinden oluşur. Bir değer bir metin, bir sayı, bir tarih, bir doğru/yanlış olabilir; ya da iç içe iki yapıdan biri: <dfn>embedded document</dfn>, bir document'ın içindeki küçük document (adı yoktur, sahibi onu içeren document'tır) ve <dfn>array</dfn>, sıralı bir değer listesi. A3 ikisini ayrıntılı tanımlar. Aynı türden document'lar bir <b>collection</b>'da durur. Bir collection'ın önceden tanımlanmış bir şeması yoktur: iki document farklı field'lara sahip olabilir.",
+   "<code>products</code> collection'ındaki <code>P0001</code> document'ı: <code>name</code>, <code>price</code>, <code>rating</code> gibi field'lar, <code>attributes</code> embedded document'ı ve <code>tags</code> array'i.",
+   "Bir klasör (document), içindeki her etiketli kâğıt (field) ve klasörlerin durduğu raf (collection). Rafta her klasörün içi farklı olabilir.") }}
+{{ k.concept("_id",
+   "Her document'ın zorunlu field'ı ve collection içindeki <b>benzersiz adı</b>; collection'ın primary key'idir. Değeri uygulama verebilir (<code>\"P0001\"</code>) ya da uygulama vermezse database kendisi üretir (12 byte'lık, zamana göre artan bir <dfn>ObjectId</dfn>). İki document aynı <code>_id</code>'ye sahip olamaz ve bir document'ın <code>_id</code>'si sonradan değişmez.",
+   "<code>P0001</code>: Alpen Kablosuz Kulaklık 1. Lale Market ürün id'sini <code>_id</code> olarak kullanır; sepet, sipariş satırı ve arama kopyası bu değeri ödünç alır.",
+   "Klasörün sırtındaki dosya numarası. Rafta aynı numaralı iki klasör olamaz; numara klasör ömrü boyunca aynı kalır.") }}
+<p>Bu, Lale Market'in gerçek ürün document'ının bir parçasıdır. Document anatomilerinde renkler bütün sayfada aynı kalır: <code>_id</code> için <b>sarı</b>, embedded document için <b>mavi</b>, array için <b>yeşil</b>, sıradan field'lar için <b>gri</b>.</p>
+<figure class="docanat">
+  <div class="dbox">
+    <div class="dhead">{ &nbsp;&nbsp;<span class="dlab fld">bir document = bir ürün</span></div>
+    <div class="drow"><span class="dk">_id</span><span class="dv id">"P0001"</span><span class="dlab id">_id: benzersiz ad</span></div>
+    <div class="drow"><span class="dk">name</span><span class="dv">"Alpen Kablosuz Kulaklık 1"</span><span class="dlab fld">field: metin</span></div>
+    <div class="drow"><span class="dk">category</span><span class="dv">"Elektronik"</span><span class="dlab fld">field: metin</span></div>
+    <div class="drow"><span class="dk">price</span><span class="dv">3373.84</span><span class="dlab fld">field: sayı</span></div>
+    <div class="drow"><span class="dk">rating</span><span class="dv">4.8</span><span class="dlab fld">field: sayı</span></div>
+    <div class="drow"><span class="dk">attributes</span><span class="dv emb"><span class="sub">{ renk: "siyah",</span><span class="sub">&nbsp;&nbsp;garanti_ay: 12,</span><span class="sub">&nbsp;&nbsp;agirlik_kg: 2.45 }</span></span><span class="dlab emb">embedded document</span></div>
+    <div class="drow"><span class="dk">tags</span><span class="dv arr">[ <span class="el">"hızlı kargo"</span><span class="el">"çevreci"</span> ]</span><span class="dlab arr">array: 2 eleman</span></div>
+    <div class="dhead">}</div>
+  </div>
+  <figcaption>Bir document'ın anatomisi. Sarı <code>_id</code> document'ı collection içinde tek başına adlandırır. Gri satırlar sıradan field'lardır. Mavi kutu document'ın içindeki küçük bir document'tır; kendi <code>_id</code>'si yoktur. Yeşil kutu sıralı bir listedir; her eleman bir değerdir.</figcaption>
+</figure>
+<p>Şemayı satır satır oku:</p>
+<ul>
+  <li><code>_id</code> <code>"P0001"</code>'dir. Collection'daki başka hiçbir document bu değere sahip olamaz; "P0001'i getir" sorusu doğrudan bu değerle sorulur.</li>
+  <li><code>name</code>, <code>category</code>, <code>price</code> ve <code>rating</code> sıradan field'lardır: her biri bir ad ve bir değer. Değerin tipi document'ın içinde yazılıdır; <code>3373.84</code> bir sayıdır, <code>"Elektronik"</code> bir metindir.</li>
+  <li><code>attributes</code> bir embedded document'tır. İçindeki <code>renk</code> field'ına <code>attributes.renk</code> yoluyla ulaşılır; bu yazım biçimine <b>dot notation</b> denir.</li>
+  <li><code>tags</code> bir array'dir: iki metinlik sıralı bir liste. Bir sorgu "etiketlerinden biri çevreci olan ürünler" diye sorabilir.</li>
+</ul>
+<p>Bu sayfanın simülasyonları yedi gerçek Lale Market ürününün küçük bir kopyasını kullanır. Okunması kolay olsun diye iç içe field'lar düzleştirilmiştir: <code>attributes.renk</code> bir kolon, <code>tags</code> virgülle ayrılmış bir liste olarak görünür. Canlı collection'da 200 ürün vardır (B1'deki canlı sayım).</p>
+{{ k.sample("products_docs", "products: öğretici kopya (200 document'ın 7'si, okumak için düzleştirilmiş)", key=["_id"], pk="_id") }}
+<p>Bir collection'daki document'ların şekli için bütün durumlar şöyledir. Son iki satır document database'in sınırlarıdır:</p>
+<table class="data">
+  <caption>bütün durumlar: bir collection'daki document'ların şekli</caption>
+  <thead><tr><th>Durum</th><th>Database ne yapar</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Bütün document'lar aynı field'lara sahip</td><td>Kabul eder. Field listesini bir yerde tutmaz; her document kendi field'larını taşır.</td><td>Öğretici kopyadaki yedi ürünün hepsinde <code>name</code> ve <code>price</code> var</td></tr>
+    <tr><td>Document'lar farklı field'lara sahip</td><td>Kabul eder. Bir document'a field eklemek diğerlerini değiştirmez.</td><td>Kitapta <code>sayfa</code>, kulaklıkta <code>garanti_ay</code></td></tr>
+    <tr><td>Bir field bir document'ta yok</td><td>Kabul eder. O field'a göre soru o document'ı "eşleşmedi" sayar; "field var mı" ayrıca sorulabilir.</td><td>Eski ürünlerde <code>enerji_sinifi</code> yok</td></tr>
+    <tr><td>Field var ama değeri <code>null</code></td><td>Kabul eder. Dikkat: <code>{ enerji_sinifi: null }</code> filtresi hem değeri null olan hem de field'ı hiç olmayan document'ları bulur; sadece field'ı olmayanlar için <code>{ enerji_sinifi: { $exists: false } }</code> sorulur.</td><td><code>enerji_sinifi: null</code></td></tr>
+    <tr><td>Aynı field iki document'ta farklı tipte</td><td>Kabul eder. Karşılaştırma tipe göre yapılır; <code>"12"</code> metni <code>12</code> sayısına eşit değildir. Bu, en sık yapılan veri hatasıdır.</td><td>Bir üründe <code>garanti_ay: 12</code>, diğerinde <code>garanti_ay: "12"</code></td></tr>
+    <tr><td>Bir kural tanımlandı (örneğin "price zorunlu ve sayı")</td><td>Bazı ürünlerde mümkündür: collection'a bir doğrulama şeması (JSON Schema) eklenir ve kuralı bozan yazma reddedilir. Varsayılan durumda hiçbir kural yoktur.</td><td><code>price</code> olmadan yazılan ürün reddedilir</td></tr>
+    <tr><td>Başka bir collection'daki bir document'ın var olduğunu kontrol etmek</td><td><b>Yapamaz.</b> Relational database'teki foreign key'in karşılığı yoktur; ödünç alınan değerin varlığını uygulama kontrol eder.</td><td>Bir yorum document'ındaki <code>product_id: "P9999"</code> yok olan bir ürünü gösterebilir</td></tr>
+    <tr><td>Document'ın boyutu</td><td>Bir üst sınır vardır: MongoDB'de ve DocumentDB'de bir document en fazla <b>16 MiB</b>'tır; iç içe yapı DocumentDB'de en fazla 200, MongoDB'de 100 seviyedir. Daha büyüğü <b>yazılamaz</b>. Büyük dosya document olmaz; dosya object storage'a gider, document'ta sadece adı durur.</td><td>Ürün görseli S3'te, document'ta görselin key'i</td></tr>
+  </tbody>
+</table>
+<p>İkinci kavram <code>_id</code>'dir. Bütün durumları şöyledir:</p>
+<table class="data">
+  <caption>bütün durumlar: _id</caption>
+  <thead><tr><th>Durum</th><th>Ne olur</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Uygulama <code>_id</code> verir</td><td>Database o değeri kullanır. İş anlamı olan bir id (ürün kodu, seri no) seçilebilir.</td><td><code>_id: "P0001"</code></td></tr>
+    <tr><td>Uygulama <code>_id</code> vermez</td><td>Database bir ObjectId üretir: 12 byte, zamana göre artan, dünya çapında benzersiz olmaya yakın.</td><td><code>_id: ObjectId("6710bc96f2612d11c720ce01")</code></td></tr>
+    <tr><td>Var olan bir <code>_id</code> ile ikinci bir ekleme</td><td><b>Reddeder</b> (duplicate key hatası). Eskisinin yerine geçmesi için ekleme değil "değiştir" ya da "yoksa ekle" komutu kullanılır (A6).</td><td>İkinci bir <code>P0001</code> eklenemez</td></tr>
+    <tr><td>Bir document'ta <code>_id: 1</code> (sayı), diğerinde <code>_id: "1"</code> (metin)</td><td>İkisi de kabul edilir: tipleri farklı olduğu için iki ayrı değerdir. Bu yüzden bir collection'da <code>_id</code> tek bir tipte tutulur.</td><td><code>1</code> ve <code>"1"</code> iki ayrı document</td></tr>
+    <tr><td><code>_id</code> bir embedded document</td><td>Mümkündür; birkaç parçalı bir ad gerekiyorsa kullanılır.</td><td><code>_id: { magaza: "S001", gun: "2026-10-28" }</code></td></tr>
+    <tr><td><code>_id</code> bir array</td><td><b>Yapamaz.</b> Bir array birden fazla değerdir; benzersiz tek bir ad olamaz.</td><td><code>_id: ["P0001", "P0002"]</code> reddedilir</td></tr>
+    <tr><td>Var olan bir document'ın <code>_id</code>'sini değiştirmek</td><td><b>Yapamaz.</b> Document silinir ve yeni <code>_id</code> ile yeniden eklenir.</td><td><code>P0001</code>'i <code>P1001</code> yapmak</td></tr>
+  </tbody>
+</table>
+<h3>Öğretici verinin identifier'ları</h3>
+<p>Her identifier'ın sahipliğini bir cümle olarak oku:</p>
+<table class="data">
+  <thead><tr><th>Identifier</th><th>Sahibi kim</th><th>Kim ödünç alır</th></tr></thead>
+  <tbody>
+    <tr><td>Bir ürünün <code>_id</code>'si (örneğin <code>P0001</code>)</td><td>Sahibi <code>products</code> collection'ıdır. Database aynı <code>_id</code>'li ikinci bir document'ı reddeder.</td><td>DynamoDB'deki sepet, Aurora'daki sipariş satırları, OpenSearch'teki arama kopyası ve Neptune'daki graph onu ödünç alır. Document database bu ödünç alanları bilmez ve kontrol etmez.</td></tr>
+    <tr><td>Bir embedded document (<code>attributes</code>)</td><td>Kendi adı yoktur; onu içeren document'a aittir.</td><td>Kimse ödünç alamaz. Ona başvurmak için sahibinin <code>_id</code>'si verilir.</td></tr>
+    <tr><td>Bir array elemanı (<code>tags</code> içindeki <code>"çevreci"</code>)</td><td>Kendi adı yoktur; sırası değişebilir.</td><td>Kimse ödünç alamaz. A6 bir elemanı sırasıyla değil değeriyle bulmayı gösterir.</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Şemasız ise database bir field'ın adını yanlış yazdığımı anlar mı?") %}
+<p>Anlamaz. <code>price</code> yerine <code>prcie</code> yazarsan database yeni bir field kabul eder ve "fiyatı 1.000'in altında olan ürünler" sorusu o document'ı bulamaz. Korunmanın iki yolu vardır: uygulamada tek bir veri katmanı (her yazma aynı koddan geçer) ve collection'a bir doğrulama şeması. M1'deki Ö2 bloğu bunu "sınır" olarak yazar.</p>
+{% endcall %}
+{% call k.ask("_id ile primary key aynı şey mi?") %}
+<p>Evet. <code>_id</code>, document database'te primary key'in adıdır: zorunludur, benzersizdir ve database onu her zaman hızlı bulunacak şekilde saklar. Relational database'ten farkı şudur: başka bir collection'daki değer ona foreign key ile bağlanamaz; bağ sadece bir değer kopyasıdır.</p>
+{% endcall %}
+{% call k.ask("16 MiB çok büyük; bu sınıra gerçekten çarpılır mı?") %}
+<p>Normal bir ürün ya da profil birkaç KB'tır; canlı P0001 document'ı 406 byte'tır (B1). Sınıra çarpan tasarımlar hep aynı hatayı yapar: zamanla büyüyen bir listeyi document'ın içine koymak, örneğin bir ürünün bütün yorumlarını ya da bir kullanıcının bütün sayfa görüntülemelerini. A3'teki tablo bu durumu "yapamaz" satırıyla gösterir.</p>
+{% endcall %}
+{{ k.quiz("doc-q1", "Öğretici kopyaya bak. Hangi istek tam olarak tek bir document döndürür?",
+   ["_id değeri P0044 olan document'ı okumak", "category değeri Kitap olan document'ları okumak", "tags içinde yeni olan document'ları okumak", "attributes.renk değeri lacivert olan document'ları okumak"],
+   0, "_id collection içinde benzersizdir. Kitap kategorisinde iki, yeni etiketinde dört, lacivert renkte üç document var.") }}
+
+<h2 id="nesting" data-short="Embedded document, array"><span class="sec">A3</span>Embedded document ve array: göm mü, ayrı tut mu?</h2>
+<p>Bir sipariş tek bir değer değildir: satırları, teslimat adresi ve durum geçmişi vardır. Relational database bunları dört table'a böler ve sorgu anında birleştirir. Document database onları tek bir document'ın içine koyabilir. Bu bölüm iç içe yapının iki biçimini tanımlar ve document database'in ana tasarım sorusunu cevaplar: bir veri ne zaman document'ın içine gömülür, ne zaman ayrı tutulur.</p>
+{{ k.concept("Embedded document",
+   "Bir document'ın içinde, bir field'ın değeri olarak duran küçük bir document. Kendi <code>_id</code>'si yoktur; sahibi onu içeren document'tır. Onu içeren document'la birlikte okunur, yazılır ve silinir.",
+   "Ürünün <code>attributes</code> field'ı: <code>{ renk: \"siyah\", garanti_ay: 12 }</code>. Bir siparişin <code>address</code> field'ı: sipariş günündeki adresin kopyası.",
+   "Klasörün içindeki zımbalı bir form. Klasörden ayrı dolaşmaz; klasörü atarsan form da gider.") }}
+{{ k.concept("Array",
+   "Bir field'ın değeri olan sıralı liste. Elemanları metin, sayı ya da embedded document olabilir. Bir sorgu \"elemanlarından biri şu olan\" diye sorabilir; database her elemana ayrı ayrı bakar.",
+   "Ürünün <code>tags</code> field'ı: <code>[\"hızlı kargo\", \"çevreci\"]</code>. Bir siparişin <code>lines</code> field'ı: her satır bir embedded document.",
+   "Bir alışveriş listesi: sıralı satırlar, her satır tek bir şey. Satır eklenir, silinir, işaretlenir.") }}
+{{ k.concept("Reference",
+   "Başka bir document'ın <code>_id</code>'sini bir field'ın değeri olarak tutmak. İki document ayrı yaşar; birleştirmek için ya uygulama ikinci bir okuma yapar ya da sorgu bir birleştirme aşaması kullanır (A7). Database referansın gösterdiği document'ın var olduğunu kontrol etmez.",
+   "Bir yorum document'ında <code>product_id: \"P0001\"</code>. Yorumlar <code>reviews</code> collection'ında, ürün <code>products</code>'ta yaşar.",
+   "Klasörde \"acente bilgisi için 17 numaralı klasöre bak\" yazan bir not. Bilgi tek yerde durur; okumak için ikinci klasörü çekersin.") }}
+<p>Bir sipariş, gömülü ve ayrı tutulan parçalarıyla. Satırlar ve adres gömülüdür; müşteri ve ürünler referans olarak tutulur:</p>
+<figure class="docanat">
+  <div class="dbox">
+    <div class="dhead">{ &nbsp;&nbsp;<span class="dlab fld">bir document = bir sipariş</span></div>
+    <div class="drow"><span class="dk">_id</span><span class="dv id">"O000001"</span><span class="dlab id">_id: benzersiz ad</span></div>
+    <div class="drow"><span class="dk">customer_id</span><span class="dv">"C00001"</span><span class="dlab fld">field: reference (customers)</span></div>
+    <div class="drow"><span class="dk">address</span><span class="dv emb"><span class="sub">{ city: "İstanbul",</span><span class="sub">&nbsp;&nbsp;line: "Moda Cd. 12" }</span></span><span class="dlab emb">embedded document: o günkü adres</span></div>
+    <div class="drow"><span class="dk">lines</span><span class="dv arr"><span class="sub">[ <span class="el">{ product_id: "P0001", qty: 2, price: 3373.84 }</span></span><span class="sub">&nbsp;&nbsp;<span class="el">{ product_id: "P0044", qty: 1, price: 2651.39 }</span> ]</span></span><span class="dlab arr">array: embedded document'lar</span></div>
+    <div class="drow"><span class="dk">status</span><span class="dv">"kargoda"</span><span class="dlab fld">field: metin</span></div>
+    <div class="drow"><span class="dk">history</span><span class="dv arr">[ <span class="el">"alındı"</span><span class="el">"hazırlanıyor"</span><span class="el">"kargoda"</span> ]</span><span class="dlab arr">array: sınırlı büyür</span></div>
+    <div class="dhead">}</div>
+  </div>
+  <figcaption>Bir sipariş document'ı. Satırların her biri bir embedded document'tır ve hepsi bir array'in içindedir; <code>product_id</code> değerleri products collection'ına reference'tır. Adres sipariş günündeki hâliyle gömülüdür: müşteri adresini değiştirince bu sipariş değişmez. Durum geçmişi en fazla birkaç eleman büyür, bu yüzden gömülebilir.</figcaption>
+</figure>
+<p>Bir array'in elemanları ve bir sorgunun onlara nasıl baktığı için bütün durumlar:</p>
+<table class="data">
+  <caption>bütün durumlar: array'in elemanları</caption>
+  <thead><tr><th>Durum</th><th>Ne olur</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Elemanlar basit değerler</td><td>"Elemanlarından biri şu" sorusu her elemana bakar.</td><td><code>tags: ["yeni", "indirim"]</code>; <code>{ tags: "indirim" }</code> eşleşir</td></tr>
+    <tr><td>Elemanlar embedded document</td><td>Dot notation elemanların içine gider; iki koşulun <b>aynı elemanda</b> doğru olması ayrıca istenir (A4).</td><td><code>lines.product_id</code></td></tr>
+    <tr><td>Boş array</td><td>Geçerlidir; "elemanlarından biri" sorusu eşleşmez, "array boş mu" ayrıca sorulur.</td><td><code>tags: []</code></td></tr>
+    <tr><td>Array'in içinde array</td><td>Geçerlidir ama sorgu ve güncelleme zorlaşır; çoğu tasarım bunu embedded document'la çözer.</td><td><code>matris: [[1, 2], [3, 4]]</code></td></tr>
+    <tr><td>Bir elemanı değiştirmek</td><td>Elemanı sırasıyla ya da değeriyle bulup sadece onu değiştirmek mümkündür (A6).</td><td>"label'ı iş olan adresi değiştir"</td></tr>
+    <tr><td>Sınırsız büyüyen array</td><td><b>Yapamaz</b>, en azından uzun süre: document 16 MiB'ı geçemez ve her okuma bütün listeyi taşır. Liste kendi collection'ına alınır.</td><td>Bir ürünün bütün yorumları, bir kullanıcının bütün sayfa görüntülemeleri</td></tr>
+  </tbody>
+</table>
+<p>Ana tasarım sorusu: göm mü, ayrı mı tut? MongoDB'nin veri modelleme kılavuzu iki listeyi şöyle ayırır: gömme, "your application queries pieces of information together" (uygulama parçaları birlikte soruyor) ve "has-a" ilişkisi için; ayrı tutma, "your embedded data grows without bounds" (gömülü veri sınırsız büyüyor), paylaşılan ve kendi başına yaşayan veri için (<a href="https://www.mongodb.com/docs/manual/data-modeling/concepts/embedding-vs-references/">MongoDB: Embedded data versus references</a>). Bütün durumlar:</p>
+<table class="data">
+  <caption>bütün durumlar: göm mü, reference mı?</caption>
+  <thead><tr><th>Verinin özelliği</th><th>Seçim</th><th>Neden</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Tek bir sahibe ait, küçük, sahibiyle birlikte okunuyor</td><td>Göm</td><td>Tek okuma; birlikte silinir</td><td>Ürünün <code>attributes</code>'ı, siparişin satırları</td></tr>
+    <tr><td>Belirli bir andaki hâli saklanmalı</td><td>Kopyasını göm</td><td>Kaynak değişse de kopya değişmemeli</td><td>Siparişteki adres ve satır fiyatı</td></tr>
+    <tr><td>Birçok document paylaşıyor ve sık değişiyor</td><td>Reference</td><td>Bir değişiklik tek yerde; kopyalar eskimez</td><td>Marka profili, acente adresi</td></tr>
+    <tr><td>Birçok document paylaşıyor ama hiç değişmiyor</td><td>Göm (kopya)</td><td>Kopya hiç eskimez; okuma tek adım</td><td>Ülke adı, para birimi kodu</td></tr>
+    <tr><td>Sayısı sınırlı ama büyük (yüzler)</td><td>Ayrı collection, en yeni birkaçını göm</td><td>Sayfa birkaçını gösterir; document küçük kalır</td><td>Ürünün yorumları: en yeni 5 gömülü, hepsi <code>reviews</code>'ta</td></tr>
+    <tr><td>Sınırsız büyüyor</td><td><b>Gömülemez</b>: reference ya da başka bir database</td><td>16 MiB sınırı ve büyüyen okuma</td><td>Sayfa görüntülemeleri: kendi collection'ı ya da bir zaman sıralı store</td></tr>
+    <tr><td>İki taraf da kendi başına yaşıyor (çoktan çoğa)</td><td>Reference, iki taraftan biri</td><td>İkisini birden gömmek iki yerde kopya demektir</td><td>Öğrenci ve ders</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Gömmek veri tekrarı demek değil mi? Relational dünyada bu bir hataydı.") %}
+<p>Bazen tekrar, bazen tam istenen şeydir. Siparişteki adres kopyası bir tekrar değil bir kayıttır: sipariş o adrese gitti, müşteri sonra taşınsa da öyle kalmalıdır. Hata, sık değişen ve paylaşılan bir bilgiyi kopyalamaktır (marka adı yüz bin üründe): o zaman bir değişiklik yüz bin yazmadır (bir <code>updateMany</code>; A6'ya göre her document ayrı ayrı atomiktir, bütün işlem değil) ve biri kaçarsa veri tutarsız olur. Tablodaki üçüncü satır budur. Kopya şart ise kaynak değişince kopyaları bir değişiklik akışı tüketicisi (A8) günceller.</p>
+{% endcall %}
+{% call k.ask("Reference'ın gösterdiği document silinirse ne olur?") %}
+<p>Hiçbir şey olmaz: database referansı kontrol etmez, silme kabul edilir ve referans artık var olmayan bir document'ı gösterir. Relational database'teki "ON DELETE" kurallarının karşılığı yoktur. Uygulama ya silmeden önce kontrol eder ya da okumada "bulunamadı" durumunu yönetir. Bu, M3'teki "birçok ilişkili kayıt arasında kurallar" satırının nedenidir.</p>
+{% endcall %}
+{{ k.quiz("doc-q2", "Bir blog platformu her yazının bütün yorumlarını yazının document'ına bir array olarak gömmek istiyor. Popüler yazılar on binlerce yorum alıyor. Ne önerirsin?",
+   ["Hepsini gömmek, çünkü tek okuma hızlıdır", "Yorumları ayrı bir collection'da tutup en yeni birkaçını gömmek", "Her yorumu yazı document'ının yeni bir field'ı yapmak", "Yorumları silip sadece sayılarını tutmak"],
+   1, "Yorum sayısı sınırsız büyür ve document 16 MiB'ı geçemez. Ayrı collection ve gömülü küçük bir önizleme tablodaki beşinci ve altıncı satırdır.") }}
+
+<h2 id="query" data-short="Filtre, dot notation"><span class="sec">A4</span>Her field'a göre soru: filtre, dot notation ve projection</h2>
+<p>Bir key-value database bir kaydı sadece adıyla bulur. Document database ise kaydın içine bakar: "kategorisi Elektronik ve rengi siyah olan ürünler" bir sorudur ve yeniden tasarım istemez. Soru bir <b>filtre</b> ile sorulur; dönen field'lar bir <b>projection</b> ile seçilir.</p>
+{{ k.concept("Filtre ve projection",
+   "<b>Filtre</b>, bir document'ın sonuca girmesi için doğru olması gereken koşulların listesidir: <code>{ category: \"Elektronik\", \"attributes.renk\": \"siyah\" }</code>. Aynı nesnedeki iki koşul VE demektir. Koşullar operator'larla yazılır: <code>$gt</code> (büyüktür), <code>$in</code> (listeden biri), <code>$exists</code> (field var mı). <b>Projection</b>, eşleşen document'ların hangi field'larının döneceğini seçer; filtreyi değiştirmez.",
+   "\"Elektronik ve siyah ürünlerin adı ve fiyatı\": filtre iki koşul, projection iki field. Öğretici kopyada tek bir document eşleşir: P0001.",
+   "Bir emlak sitesinde \"3 oda, bahçeli, 5 milyonun altında\" kutucukları filtredir; ilan listesinde sadece fotoğrafı ve fiyatı görmek projection'dır.") }}
+<div class="flow">
+  <div class="box">7 document<small>öğretici kopya</small></div><span class="arrow">→</span>
+  <div class="box pk">filtre<small>category = Elektronik VE attributes.renk = siyah</small></div><span class="arrow">→</span>
+  <div class="box hit">1 document<small>P0001</small></div><span class="arrow">→</span>
+  <div class="box sk">projection<small>sadece name, price</small></div>
+</div>
+<p class="flow-cap">Bir sorunun iki adımı. Filtre hangi document'ların döneceğini seçer, projection her document'ın hangi field'larının döneceğini. Hızlı bir arama yapısı yoksa database filtre adımında her document'ı okur; B2'deki simülasyon bunu adım adım oynatır.</p>
+<p>Bir filtrenin bütün durumları şöyledir. Son üç satır document database'in sınırlarıdır:</p>
+<table class="data">
+  <caption>bütün durumlar: bir filtre neyi sorabilir</caption>
+  <thead><tr><th>Soru</th><th>Filtre</th><th>Mümkün mü</th><th>Öğretici kopyada sonuç</th></tr></thead>
+  <tbody>
+    <tr><td>Üst seviye bir field eşittir</td><td><code>{ category: "Kitap" }</code></td><td>Evet</td><td>P0044, P0179</td></tr>
+    <tr><td>Embedded document'ın içindeki bir field</td><td><code>{ "attributes.renk": "lacivert" }</code></td><td>Evet (dot notation)</td><td>P0005, P0095, P0179</td></tr>
+    <tr><td>Array'in elemanlarından biri</td><td><code>{ tags: "indirim" }</code></td><td>Evet; her elemana bakılır</td><td>P0026</td></tr>
+    <tr><td>Aralık</td><td><code>{ price: { $lt: 1000 } }</code></td><td>Evet</td><td>P0026, P0179</td></tr>
+    <tr><td>Listeden biri</td><td><code>{ category: { $in: ["Moda", "Kitap"] } }</code></td><td>Evet</td><td>P0005, P0044, P0095, P0179</td></tr>
+    <tr><td>VEYA: iki koşuldan biri</td><td><code>{ $or: [ { category: "Kitap" }, { price: { $lt: 100 } } ] }</code></td><td>Evet</td><td>P0026, P0044, P0179</td></tr>
+    <tr><td>Sıralama ve sayfalama</td><td><code>.sort({ rating: -1 }).skip(20).limit(20)</code></td><td>Evet; ama <code>skip</code> atladığı document'ları da okur, büyük sayfa numaralarında yavaşlar. Büyük listelerde "son görülen değerden sonrası" diye filtrelenir.</td><td>—</td></tr>
+    <tr><td>Field var mı</td><td><code>{ "attributes.sayfa": { $exists: true } }</code></td><td>Evet</td><td>Hiçbiri (öğretici kopyada sayfa field'ı yok)</td></tr>
+    <tr><td>İki koşul array'in <b>aynı elemanında</b></td><td><code>{ lines: { $elemMatch: { product_id: "P0001", qty: { $gte: 2 } } } }</code></td><td>Evet; <code>$elemMatch</code> olmadan iki koşul farklı elemanlarda doğru olabilir</td><td>(siparişler; A3'teki O000001 eşleşir)</td></tr>
+    <tr><td>Yazım hatalı ve relevance sıralı metin araması</td><td>"kablosz kulaklk"</td><td><b>Hayır</b>, en azından iyi değil: filtre değerleri karşılaştırır, metni sıralamaz. Basit bir metin arama yapısı vardır ama yazım hatası toleransı ve relevance search engine'in işidir.</td><td>—</td></tr>
+    <tr><td>İki collection'ı birleştiren soru</td><td>"P0001'in yorumlarıyla birlikte"</td><td><b>Filtreyle hayır.</b> Birleştirme bir aggregation aşamasıdır (A7) ve relational JOIN kadar geniş değildir.</td><td>—</td></tr>
+    <tr><td>Hızlı arama yapısı olmayan bir field</td><td><code>{ brand: "Alpen" }</code></td><td>Evet, ama her document okunur; cevap doğru, maliyet yüksek (A5)</td><td>7 document okunur</td></tr>
+  </tbody>
+</table>
+{% call k.predict("Öğretici kopyaya bak. { \"attributes.renk\": \"siyah\", rating: { $gte: 3.5 } } filtresi kaç document döndürür? Hangileri?") %}
+<p>İki document: P0001 (siyah, 4.8) ve P0044 (siyah, 3.7). P0026 yeşildir, diğer siyah ürün yoktur. Hızlı arama yapısı yoksa database yedi document'ın hepsini okuyup bu iki koşulu test eder.</p>
+{% endcall %}
+{% call k.ask("Projection okumayı ucuzlatır mı?") %}
+<p>Ağ üzerinden dönen veriyi küçültür, ama database yine de eşleşen document'ı okur. 16 KB'lık bir document'tan iki field istemek ağda 16 KB yerine birkaç yüz byte taşır; diskte ise document'ın tamamı okunur. Okumayı ucuzlatan şey, A5'teki arama yapısıdır.</p>
+{% endcall %}
+{% call k.ask("Field adı yanlışsa filtre hata verir mi?") %}
+<p>Vermez. <code>{ "attributes.rengi": "siyah" }</code> geçerli bir filtredir ve hiçbir document'ı bulmaz, çünkü hiçbir document'ta o field yoktur. Şemasız modelin bedeli budur; sonuç sıfırsa önce field adını kontrol et.</p>
+{% endcall %}
+{{ k.quiz("doc-q3", "Bir siparişler collection'ında \"P0001'den en az 2 adet içeren siparişler\" isteniyor. Satırlar lines array'inde embedded document. Hangi filtre doğru cevaplar?",
+   ["{ \"lines.product_id\": \"P0001\", \"lines.qty\": { $gte: 2 } }", "{ lines: { $elemMatch: { product_id: \"P0001\", qty: { $gte: 2 } } } }", "{ lines: \"P0001\" }", "{ product_id: \"P0001\", qty: 2 }"],
+   1, "İlk filtre iki koşulu farklı satırlarda doğru bulursa da eşleşir (P0001'den 1 adet ve başka bir üründen 3 adet). $elemMatch iki koşulun aynı satırda doğru olmasını ister.") }}
+
+<h2 id="index" data-short="Index: IXSCAN, COLLSCAN"><span class="sec">A5</span>Index: database bir soruyu her document'ı okumadan nasıl cevaplar</h2>
+<p>A4'teki filtre her field'da çalışır. Ama hızlı bir arama yapısı yoksa database cevabı bulmak için collection'daki her document'ı okur. 7 document'ta bu bir şey değildir; 200.000 document'ta bir kategori sayfası saniyeler sürer.</p>
+{{ k.concept("Index",
+   "Bir ya da birkaç field'ın değerlerini <b>sıralı</b> tutan ve her girişinden ilgili document'ı gösteren ayrı bir yapı. Yapı bir B-tree'dir: kökten yaprağa her seviyede bir düğüm okunur. Bir index kullanan okuma planda <b>IXSCAN</b> olarak görünür; index olmadan her document'ın okunduğu plan <b>COLLSCAN</b>'dir (collection scan). <code>_id</code>'nin index'i her collection'da kendiliğinden vardır.",
+   "<code>{ category: 1, rating: -1 }</code>: önce category'ye göre, sonra her category içinde rating'e göre yüksekten düşüğe sıralı. \"Kitaplar, en iyi puanlı önce\" sorusu iki girişi okur, sıralamaz.",
+   "Bir kitabın arkasındaki dizin: kelimeler alfabetik sıralı, her kelimenin yanında sayfa numarası. Kitabı baştan sona okumadan sayfaya gidersin.") }}
+{{ k.fig("docdb-btree.png", "bir B-tree. Kök düğüm (7, 16) üç yaprağı gösterir; 9'u bulmak için kökte '7 ile 16 arası' kararı verilir ve tek bir yaprak okunur. Bir index'in girişleri de böyle sıralıdır: category_1_rating_-1 index'inde 'Kitap' girişlerine gitmek için kökten bir yaprağa inilir.") }}
+<p>Index'in birkaç biçimi vardır. Her biri farklı bir soruyu hızlandırır:</p>
+<table class="data">
+  <caption>bütün durumlar: index biçimleri</caption>
+  <thead><tr><th>Biçim</th><th>Ne sıralar</th><th>Hangi soruyu hızlandırır</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Tek field</td><td>Bir field'ın değerleri</td><td>O field'a eşitlik, aralık, sıralama</td><td><code>{ rating: -1 }</code>: en yüksek puanlılar</td></tr>
+    <tr><td>Compound (birleşik)</td><td>Önce ilk field, sonra ikinci, ...</td><td>İlk field'larla başlayan sorular; sıralama da index sırasıysa ayrıca sıralanmaz</td><td><code>{ category: 1, rating: -1 }</code></td></tr>
+    <tr><td>Multikey</td><td>Bir array'in <b>her elemanı</b> için ayrı bir giriş</td><td>"Elemanlarından biri şu olan" soruları</td><td><code>{ tags: 1 }</code>: P0001 için iki giriş</td></tr>
+    <tr><td>Embedded field</td><td>Dot notation ile iç içe bir field</td><td>İç içe field'a göre filtre</td><td><code>{ "attributes.renk": 1 }</code></td></tr>
+    <tr><td>Unique</td><td>Tekrar eden değeri reddeden index</td><td>"Bu e-posta ikinci kez kayıt olmasın"</td><td><code>{ email: 1 }, { unique: true }</code></td></tr>
+    <tr><td>TTL</td><td>Bir tarih field'ı; süresi geçen document'ı arka planda siler</td><td>Kendiliğinden silinmesi gereken veri (B5)</td><td><code>{ expires_at: 1 }, { expireAfterSeconds: 0 }</code></td></tr>
+  </tbody>
+</table>
+<p>Bir soru ve var olan index'ler arasındaki bütün durumlar. Tabloyu öğretici kopyanın <code>{ category: 1, rating: -1 }</code> index'iyle oku:</p>
+<table class="data">
+  <caption>bütün durumlar: bir soru index'i kullanabilir mi?</caption>
+  <thead><tr><th>Soru</th><th>Index kullanılır mı</th><th>Plan</th><th>Okunan document</th></tr></thead>
+  <tbody>
+    <tr><td><code>{ category: "Kitap" }</code>, rating'e göre sıralı</td><td>Evet, tamamen</td><td>IXSCAN, sıralama yok</td><td>2</td></tr>
+    <tr><td><code>{ category: "Kitap", rating: { $gte: 3.65 } }</code></td><td>Evet, iki field da index'te</td><td>IXSCAN</td><td>1</td></tr>
+    <tr><td><code>{ rating: { $gte: 4.5 } }</code> (sadece ikinci field)</td><td><b>Hayır</b>, bu index ile: sıra önce category'dir, rating'e göre atlanamaz. Ayrı bir <code>{ rating: -1 }</code> index'i gerekir.</td><td>COLLSCAN ya da diğer index</td><td>7 (index yoksa)</td></tr>
+    <tr><td><code>{ brand: "Alpen" }</code></td><td><b>Hayır</b>, brand için index yok</td><td>COLLSCAN</td><td>7</td></tr>
+    <tr><td><code>{ name: /Kulaklık/ }</code> (ortasında geçen metin)</td><td><b>Hayır</b>, sıralı yapı ortadan arayamaz; sadece öneki olan arama index kullanabilir</td><td>COLLSCAN</td><td>7</td></tr>
+    <tr><td>Çok küçük collection</td><td>Planner COLLSCAN'i seçebilir; birkaç document'ı okumak index'ten ucuzdur</td><td>COLLSCAN</td><td>7</td></tr>
+  </tbody>
+</table>
+{% call k.predict("Öğretici kopyada { category: 1, rating: -1 } index'i var. \"Kitaplar, en iyi puanlı önce\" sorusu için database kaç index girişi okur ve ayrıca sıralama yapar mı?") %}
+<p>Üç giriş okur: iki Kitap girişi (P0044 3.7, P0179 3.6) ve Kitap aralığının bittiğini gösteren bir sonraki giriş (Moda). Sıralama yapmaz, çünkü index Kitap girişlerini zaten rating sırasıyla tutar. B2'deki simülasyon bu üç adımı oynatır.</p>
+{% endcall %}
+{% call k.ask("Her field'a index koysam her soru hızlı olmaz mı?") %}
+<p>Her index her yazmada güncellenir: <code>_id</code> dahil beş index'li bir collection'a yapılan her ekleme document'ın kendisine ve beş index'e, yani altı yapıya yazar. Var olan büyük bir collection'a index eklemek de bir iştir: DocumentDB bir collection'da aynı anda tek bir index kurar ve kurulum primary'nin CPU'sunu ve I/O'sunu kullanır; büyük collection'da yoğun olmayan bir saatte yapılır. 64 index sınırına yaklaşılıyorsa sorular gözden geçirilir ya da filtreler bir search engine'e taşınır. Index'ler bellek ve disk tutar ve bir collection'da sınırlı sayıda index olabilir (DocumentDB'de 64). Bu yüzden sadece sık sorulan sorulara index kurulur; nadir bir rapor için COLLSCAN kabul edilir ya da rapor bir kopyada çalışır.</p>
+{% endcall %}
+{% call k.ask("Index'i kim seçer?") %}
+<p>Database'in planner'ı: soruyu, var olan index'leri ve tahmini maliyeti karşılaştırır. Planı görmek için sorguya <code>explain</code> eklenir (B2). Planner yanlış seçerse uygulama <code>hint</code> ile bir index'i zorlayabilir. Lale Market'in kategori sayfasındaki "Collection scan" deneyi tam tersini yapar: aynı listeyi <code>$natural</code> ipucuyla ("document'ları diskteki doğal sırasıyla oku") index'siz getirir ve iki plandaki incelenen document sayısını yan yana gösterir (B2'deki canlı plan).</p>
+{% endcall %}
+{{ k.quiz("doc-q4", "Bir collection'da sadece { category: 1, rating: -1 } index'i var. Hangi soru COLLSCAN olur?",
+   ["Moda ürünleri, rating'e göre sıralı", "Elektronik ürünler, rating 4'ün üstünde", "Rating 4,5'in üstündeki bütün ürünler", "Kitap kategorisindeki bütün ürünler"],
+   2, "Index önce category'ye göre sıralıdır. Category vermeyen bir soru index'in başından başlayamaz, bu yüzden her document okunur.") }}
+
+<h2 id="writes" data-short="Kısmi güncelleme, atomik"><span class="sec">A6</span>Yazma yolları: bir document'ın bir parçasını tek adımda değiştirmek</h2>
+<p>Bir document büyük olabilir: bir profil, bir alışveriş listesi, bir makale. Bir tercihi değiştirmek için bütün document'ı okuyup yeniden yazmak iki sorun yaratır: ağda gereksiz veri taşınır ve aynı anda başka bir cihazdan gelen değişiklik ezilir. Document database bunun için güncelleme operator'ları sunar: sadece belirtilen parçayı değiştir.</p>
+{{ k.concept("Atomik document yazması",
+   "Bir document'a yapılan tek bir yazma, document'ın içindeki kaç field'ı değiştirirse değiştirsin <b>ya tamamen olur ya hiç olmaz</b>; arada başka bir istek yarım bir document göremez. MongoDB belgeleri bunu şöyle yazar: \"write operations are atomic on the single-document level, even if modifying multiple values\". Güncelleme operator'ları: <code>$set</code> (field'ı yaz), <code>$inc</code> (sayıyı artır), <code>$push</code> (array'e ekle), <code>$pull</code> (array'den çıkar) ve <code>arrayFilters</code> ile bir array elemanını değeriyle bulmak.",
+   "Bir listenin <code>version</code>'ını 7'den 8'e artırmak ve <code>items</code> array'indeki \"ekmek\" elemanını işaretlemek tek bir yazmadır.",
+   "Klasördeki tek bir formu değiştirip klasöre geri koymak. Klasörü kimse yarım değiştirilmiş hâliyle göremez.") }}
+{{ k.concept("Transaction",
+   "Birkaç document'a (aynı ya da farklı collection'larda) yapılan birkaç yazmayı <b>ya hep ya hiç</b> yapan birim. Document database'lerde vardır ama normal yazmadan pahalıdır ve sürelidir; iyi bir document tasarımı ona nadiren ihtiyaç duyar, çünkü birlikte değişen veri zaten tek document'tadır.",
+   "Bir siparişi yazıp ürünün stoğunu düşürmek iki collection'dır; ikisi birlikte olmalıysa transaction gerekir. Lale Market bunu Aurora'da yapar.",
+   "İki klasörü aynı anda değiştirmek: biri değişip diğeri değişmezse ikisi de eski hâline döner.") }}
+<p>Bütün yazma yolları şöyledir:</p>
+<table class="data">
+  <caption>bütün durumlar: yazma yolları</caption>
+  <thead><tr><th>Durum</th><th>Ne verirsin</th><th>Database ne yapar</th><th>Komut (B3)</th></tr></thead>
+  <tbody>
+    <tr><td>Yeni bir document</td><td>Document (<code>_id</code> ile ya da onsuz)</td><td>Ekler; aynı <code>_id</code> varsa reddeder</td><td>insertOne</td></tr>
+    <tr><td>Document'ın tamamını değiştirmek</td><td>Filtre + yeni document</td><td>Eski field'ların hepsini atar, yenisini yazar</td><td>replaceOne</td></tr>
+    <tr><td>Bir ya da birkaç field</td><td>Filtre + <code>$set</code></td><td>Sadece o field'ları değiştirir; diğerleri kalır</td><td>updateOne + $set</td></tr>
+    <tr><td>Sayaç</td><td>Filtre + <code>$inc</code></td><td>Okumadan, tek adımda artırır; iki istek +1 derse sonuç +2</td><td>updateOne + $inc</td></tr>
+    <tr><td>Array'e eleman eklemek ya da çıkarmak</td><td>Filtre + <code>$push</code> / <code>$pull</code></td><td>Sadece array'i değiştirir</td><td>updateOne + $push</td></tr>
+    <tr><td>Array'deki bir elemanı değeriyle bulup değiştirmek</td><td>Filtre + <code>$set: { "items.$[i].done": true }</code> + <code>arrayFilters: [{ "i.name": "ekmek" }]</code></td><td>Eşleşen elemanı değiştirir; sırasını bilmek gerekmez</td><td>updateOne + arrayFilters</td></tr>
+    <tr><td>Koşullu yazma: "hâlâ okuduğum gibiyse yaz"</td><td>Filtrede koşul: <code>{ _id: "L1", version: 7 }</code></td><td>Document artık version 8 ise filtre eşleşmez ve hiçbir şey yazılmaz (matchedCount 0)</td><td>updateOne</td></tr>
+    <tr><td>Yoksa ekle, varsa değiştir</td><td>Filtre + güncelleme + <code>upsert: true</code></td><td>Eşleşen yoksa yeni bir document oluşturur</td><td>updateOne + upsert</td></tr>
+    <tr><td>Bir filtreye uyan birçok document</td><td>Filtre + güncelleme</td><td>Her document ayrı ayrı atomik değişir; <b>bütün işlem tek bir atomik birim değildir</b>: yarıda hata olursa bir kısmı değişmiş kalır. Güncelleme tekrar edilebilir yazılır (örneğin filtre "henüz değişmemiş olanlar" der), böylece yeniden çalıştırmak güvenlidir</td><td>updateMany</td></tr>
+    <tr><td>Birkaç document'ı ya hep ya hiç</td><td>Transaction içinde birkaç yazma</td><td>Hepsi ya da hiçbiri; süresi sınırlıdır: DocumentDB'de 1 dakikayı aşan transaction iptal edilir, değişiklikler geri alınır ve uygulama bir hata alıp baştan dener</td><td>startTransaction / commit</td></tr>
+    <tr><td>Başka bir collection'daki kurala göre reddetmek</td><td>"Ürün varsa sipariş satırını yaz"</td><td><b>Yapamaz</b> tek bir yazmayla: koşul sadece yazılan document'ın kendi field'larına bakar. Transaction içinde önce oku, sonra yaz; ya da kural uygulamada.</td><td>—</td></tr>
+  </tbody>
+</table>
+<p>Koşullu yazma, document database'in kilit yerine kullandığı araçtır. İki cihaz aynı listeyi değiştirmek istiyor; her istek okuduğu sürüm numarasını filtreye koyar:</p>
+<div class="flow">
+  <div class="box pk">telefon A<small>filtre: _id L1, version 7 · ekmek'i işaretle, version +1</small></div><span class="arrow">→</span>
+  <div class="box">mevcut document<small>version 7</small></div><span class="arrow">→</span>
+  <div class="box">filtre testi<small>7 = 7 doğru</small></div><span class="arrow">→</span>
+  <div class="box hit">yazıldı<small>ekmek işaretli, version 8</small></div>
+</div>
+<div class="flow">
+  <div class="box pk">tablet B, bir an sonra<small>filtre: _id L1, version 7 · elma'yı işaretle</small></div><span class="arrow">→</span>
+  <div class="box">mevcut document<small>version 8</small></div><span class="arrow">→</span>
+  <div class="box">filtre testi<small>8 = 7 yanlış</small></div><span class="arrow">→</span>
+  <div class="box miss">yazılmadı<small>matchedCount 0, B listeyi yeniden okur</small></div>
+</div>
+<p class="flow-cap">Aynı sürüme dayanan iki isteğin iki sonucu. İlk istek yazılır ve sürüm 8 olur; ikincisinin filtresi artık eşleşmez ve hiçbir şey ezilmez. B listeyi yeniden okur ve sürüm 8 ile tekrar dener. B3'teki simülasyon bu yarışı adım adım oynatır.</p>
+{% call k.ask("Bir siparişi ve stoğu birlikte değiştirmem gerekiyorsa document database olmaz mı?") %}
+<p>Olur: transaction ile iki collection birlikte değişir. Ama iki şeye bak. Birincisi, transaction'ın süresi ve boyutu sınırlıdır ve normal yazmadan pahalıdır. İkincisi, "ürün var mı", "stok sıfırın altına inmesin" gibi kuralları database'in kendisi korumaz; transaction içindeki kod korur. Kurallar birçok collection arasındaysa ve her programa uygulanmalıysa relational database daha doğrudur. M2'de bu sınır sipariş kartında görünür.</p>
+{% endcall %}
+{% call k.ask("Kilit yoksa iki istek aynı document'a aynı anda yazarsa ne olur?") %}
+<p>Database onları sıraya koyar; biri önce, diğeri sonra uygulanır. <code>$inc</code> gibi operator'larda ikisi de sayılır. İkisi de <code>$set</code> ile aynı field'ı yazıyorsa sonuncusu kazanır. Sonuncunun öncekini ezmemesi isteniyorsa yukarıdaki sürüm koşulu kullanılır.</p>
+{% endcall %}
+{{ k.quiz("doc-q5", "Bir profil document'ında addresses array'i var. Uygulama \"label'ı iş olan adresin şehrini değiştir\" istiyor ve adresin array'deki sırasını bilmiyor. En doğru yol hangisi?",
+   ["Profili oku, uygulamada değiştir, bütün document'ı replaceOne ile yaz", "updateOne ile $set ve arrayFilters kullanarak elemanı label değeriyle bul", "Array'i silip yeniden ekle", "Her adres için ayrı bir collection aç"],
+   1, "arrayFilters elemanı değeriyle bulur ve sadece onu değiştirir; tek bir atomik yazmadır. İlk seçenek çalışır ama aynı anda gelen bir değişikliği ezebilir.") }}
+
+<h2 id="pipeline" data-short="Aggregation pipeline"><span class="sec">A7</span>Sunucuda özet: aggregation pipeline</h2>
+<p>"Her kategoride kaç ürün var?" ya da "her etiketin ortalama fiyatı ne?" sorularının cevabı tek bir document değildir; birçok document'tan hesaplanan bir özettir. Uygulama bütün document'ları çekip kendisi hesaplayabilir, ama 200.000 ürünü ağdan taşımak gerekir. Document database bu hesabı sunucuda yapar.</p>
+{{ k.concept("Aggregation pipeline",
+   "Sırayla çalışan <b>aşamalar</b> (stage) listesi. Her aşama document'ları alır, değiştirir ve bir sonrakine verir. Sık aşamalar: <code>$match</code> (filtre), <code>$unwind</code> (array'in her elemanı için bir kopya), <code>$group</code> (gruplayıp topla), <code>$sort</code>, <code>$project</code> (field seç ya da hesapla), <code>$lookup</code> (başka bir collection'dan eşleşenleri getir).",
+   "Lale Market'in ana sayfası kategori menüsünü tek bir <code>$group</code> ile hesaplar: her kategori, ürün sayısı ve en düşük fiyat.",
+   "Bir üretim bandı: her istasyon parçayı bir adım işler ve bir sonrakine verir. Bandın sonunda paketlenmiş özet çıkar.") }}
+<div class="flow">
+  <div class="box">7 document<small>products</small></div><span class="arrow">→</span>
+  <div class="box pk">$unwind tags<small>her etiket için bir kopya: 14 document</small></div><span class="arrow">→</span>
+  <div class="box sk">$group by tag<small>sayı ve ortalama fiyat</small></div><span class="arrow">→</span>
+  <div class="box hit">$sort<small>en yaygın etiket önce: 6 sonuç</small></div>
+</div>
+<p class="flow-cap">Öğretici kopyada "her etiketin ürün sayısı" pipeline'ı. Yedi ürünün her birinde iki etiket var, bu yüzden <code>$unwind</code>'dan 14 document çıkar; altı farklı etiket altı grup yapar. B4'teki simülasyon aynı hesabı adım adım yapar.</p>
+<table class="data">
+  <caption>bütün durumlar: pipeline aşamaları ve sınırları</caption>
+  <thead><tr><th>Aşama ya da durum</th><th>Ne yapar</th><th>Not</th></tr></thead>
+  <tbody>
+    <tr><td><code>$match</code> başta</td><td>Filtre; index kullanabilir</td><td>Pipeline'ın başına konur, sonraki aşamalara daha az document gider</td></tr>
+    <tr><td><code>$unwind</code></td><td>Array'in her elemanı için document'ın bir kopyası</td><td>Boş array'li document varsayılan olarak düşer</td></tr>
+    <tr><td><code>$group</code></td><td>Aynı anahtarlı document'ları bir sonuca indirger: <code>$sum</code>, <code>$avg</code>, <code>$min</code>, <code>$max</code></td><td>Grup anahtarı <code>_id</code> adını alır</td></tr>
+    <tr><td><code>$sort</code>, <code>$limit</code>, <code>$project</code></td><td>Sırala, kes, field seç ya da hesapla</td><td>—</td></tr>
+    <tr><td><code>$lookup</code></td><td>Başka bir collection'dan eşleşen document'ları bir array olarak ekler (left outer join)</td><td>MongoDB'nin ve DocumentDB'nin her sürümünde aynı biçimler desteklenmez; büyük collection'larda maliyeti yüksektir</td></tr>
+    <tr><td>Bir aşamanın ürünün sürümünde olmaması</td><td><b>Çalışmaz</b>: komut hata döner</td><td>A10'daki API uyumluluğu tablosu bu durumu ayrıca gösterir</td></tr>
+    <tr><td>Yılların verisini tarayan rapor</td><td>Çalışır ama uygulamayla aynı sunucuyu kullanır</td><td>Büyük raporlar bir kopyaya ya da data warehouse'a taşınır (M3)</td></tr>
+  </tbody>
+</table>
+{% call k.predict("Öğretici kopyada en yaygın etiket hangisi ve kaç ürün? Pipeline'dan kaç grup çıkar?") %}
+<p>"yeni" ve "çevreci" dörder üründe; "çok satan" üç üründe; "hızlı kargo", "indirim" ve "sınırlı" birer üründe. Toplam altı grup. <code>$sort: { products: -1 }</code> sadece sayıya bakar; eşit sayılı gruplar arasındaki sıra garanti değildir. Sıra önemliyse ikinci bir anahtar eklenir: <code>{ products: -1, _id: 1 }</code>. Canlı collection'da 200 ürün ve 400 etiket ataması (altı farklı etiket) vardır (B4).</p>
+{% endcall %}
+{% call k.ask("Pipeline ile relational database'in GROUP BY'ı aynı şey mi?") %}
+<p>Fikir aynıdır: grupla ve topla. Fark yazım biçimindedir: SQL tek bir cümle yazar ve sırayı database seçer; pipeline aşamaları senin yazdığın sırayla çalışır. Pipeline array'lerle doğal çalışır (<code>$unwind</code>); SQL birçok table'ı birleştirmede daha güçlüdür. Büyük raporlarda ikisinin de yeri data warehouse'tur.</p>
+{% endcall %}
+{% call k.ask("$lookup varsa her şeyi ayrı collection'larda tutup birleştiremez miyim?") %}
+<p>Tutabilirsin ama document modelinin kazancını kaybedersin: her ekran bir birleştirme olur ve <code>$lookup</code> relational JOIN kadar geniş ve hızlı değildir. <code>$lookup</code> nadir ihtiyaçlar içindir (bir rapor, bir yönetim ekranı). Her ekranda birleştirme gerekiyorsa veri ya gömülmelidir (A3) ya da relational database'te durmalıdır.</p>
+{% endcall %}
+
+<h2 id="changes" data-short="Change stream"><span class="sec">A8</span>Change stream: her yazma bir olaydır</h2>
+{{ k.concept("Change stream",
+   "Bir collection'daki her yazmanın (ekleme, güncelleme, değiştirme, silme) sırayla kaydedildiği ve dışarıdan okunabilen bir akış. Başka bir program akışı okur ve her değişikliğe tepki verir. Okuyan program kaldığı yeri bir <b>resume token</b> ile hatırlar ve yeniden bağlanınca oradan devam eder. Akış sınırlı bir süre tutulur.",
+   "P0001'in fiyatı değişince akışa bir kayıt düşer: işlem update, değişen field <code>price</code>. Bir tüketici bu kaydı okuyup arama kopyasını günceller.",
+   "Bir apartman yöneticisinin duyuru panosu: her değişiklik sırayla asılır, sakinler okudukları son duyuruyu hatırlar. Eski duyurular bir süre sonra kaldırılır.") }}
+<div class="flow">
+  <div class="box pk">updateOne<small>P0001: price 3373.84, şimdi 3199.00</small></div><span class="arrow">→</span>
+  <div class="box">change stream kaydı<small>operationType update, updatedFields price</small></div><span class="arrow">→</span>
+  <div class="box">tüketici program<small>kaydı okur, resume token'ı saklar</small></div><span class="arrow">→</span>
+  <div class="box hit">tepki<small>arama kopyası, cache temizliği, bildirim</small></div>
+</div>
+<p class="flow-cap">Bir değişikliğin yolu. Ürünü yazan kod arama kopyasını bilmez; akış ikisini ayırır. Tüketici durursa kayıtlar tutulma süresi boyunca bekler; tüketici geri gelince resume token'dan devam eder.</p>
+<table class="data">
+  <caption>bütün durumlar: change stream'e ne düşer</caption>
+  <thead><tr><th>Collection'daki olay</th><th>Akıştaki kayıt</th><th>Kayıtta ne var</th></tr></thead>
+  <tbody>
+    <tr><td>Yeni document</td><td>insert</td><td>Document'ın tamamı</td></tr>
+    <tr><td>Bir ya da birkaç field değişti</td><td>update</td><td>Değişen field'lar; istenirse document'ın son hâli</td></tr>
+    <tr><td>Document'ın tamamı değiştirildi</td><td>replace</td><td>Yeni document</td></tr>
+    <tr><td>Document silindi (uygulama ya da TTL)</td><td>delete</td><td>Silinen document'ın <code>_id</code>'si</td></tr>
+    <tr><td>Bir okuma</td><td>Kayıt yok</td><td>Akış sadece yazmaları taşır</td></tr>
+    <tr><td>Tüketici bir süre durdu</td><td>Kayıtlar bekler</td><td>Resume token ile kaldığı yerden devam eder</td></tr>
+    <tr><td>Tüketici bir kaydı işledi ama token'ı kaydetmeden çöktü</td><td>Aynı kayıt yeniden gelir</td><td>Akış "tam bir kez" teslim etmez; tüketici aynı kaydı iki kez işlemeyi zararsız yazar (örneğin kopyayı <code>_id</code> ile üzerine yazar)</td></tr>
+    <tr><td>Tüketici tutulma süresinden uzun durdu</td><td><b>Kayıp</b>: eski kayıtlar silinmiştir, resume token geçersizdir</td><td>DocumentDB'de varsayılan üç saat, en fazla yedi gün (B5); kopya baştan kurulur</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Change stream yerine collection'ı her dakika sorgulasam olmaz mı?") %}
+<p>Olur, ama "son bir dakikada değişenler" sorusu için bir zaman field'ına ve onun index'ine ihtiyaç vardır; silinen document'lar bu soruda hiç görünmez, çünkü artık yoktur. Akış silmeleri de verir ve sadece değişenleri taşır.</p>
+{% endcall %}
+{% call k.ask("Change stream bir sorgu gibi geçmişe dönebilir mi?") %}
+<p>Sadece tutulma süresi kadar. Akış bir kayıt sistemi değil, bir bildirim kanalıdır. "Dünkü bütün değişiklikler" yedi günden eskiyse akıştan değil, saklanan bir kopyadan ya da yedekten cevaplanır. Olayların günlerce saklanması ve birçok tüketici tarafından baştan okunması gerekiyorsa bir akış platformu (Kinesis, MSK) kullanılır.</p>
+{% endcall %}
+
+<h2 id="replicas" data-short="Primary, replica, shard"><span class="sec">A9</span>Primary ve replica: tek yazma noktası, birçok okuma kopyası</h2>
+{{ k.concept("Primary ve replica",
+   "Bir document database genellikle birkaç sunucuda çalışır. Bunlardan tam olarak biri <b>primary</b>'dir: bütün yazmalar ona gider. Diğerleri <b>replica</b>'dır: primary'nin verisinin kopyasını tutar ve sadece okuma alır. Replica'nın kopyası primary'nin kısa bir süre gerisinde olabilir (replica lag). MongoDB bu düzene <i>replica set</i> der ve replica'lara <i>secondary</i> der.",
+   "Lale Market'in cluster'ında iki sunucu var: <code>dbws-docdb-1</code> primary, <code>dbws-docdb-2</code> replica. Katalog okumaları replica'ya, yazmalar primary'ye gider (C3).",
+   "Bir restoranda tek bir şef yemeği pişirir (primary); garsonlar menüyü ve tabakları müşteriye taşır (replica'lar). Garson sayısı artırılabilir; şef tektir.") }}
+{{ k.concept("Failover",
+   "Primary çöktüğünde bir replica'nın yeni primary olması. Bu sırada kısa bir kesinti olur; yazma istekleri hata alır ve uygulama yeniden bağlanır. Uygulama sunucuların adlarını değil, her zaman güncel primary'yi gösteren bir adresi kullanır.",
+   "dbws-docdb-1 düşerse dbws-docdb-2 primary olur; uygulamanın bağlandığı cluster adresi yeni primary'yi gösterir.",
+   "Şef hastalanınca ikinci şefin mutfağa geçmesi. Birkaç dakika sipariş alınmaz, sonra mutfak devam eder.") }}
+{{ k.concept("Read preference",
+   "Bir okumanın hangi sunucuya gideceğini seçen driver ayarı: <code>primary</code> (her zaman primary, en güncel veri), <code>secondaryPreferred</code> (varsa replica, yoksa primary), <code>nearest</code> (en yakın). Replica'dan okumak primary'yi yazmaya ayırır ama az önce yazılanı göremeyebilir.",
+   "Lale Market <code>secondaryPreferred</code> kullanır: katalog okumaları replica'ya gider. Bir ürünü değiştiren yönetim ekranı ise değişikliği primary'den okumalıdır.",
+   "Müşteri menüyü garsona sorar; ama \"az önce verdiğim sipariş hazır mı\" sorusunu şefe sorar.") }}
+<div class="parts">
+  <div class="on"><h4>primary (AZ b)</h4><span class="chip">bütün yazmalar</span><span class="chip">okumalar (read preference primary)</span></div>
+  <div><h4>replica (AZ c)</h4><span class="chip">okumalar (secondaryPreferred)</span><span class="chip">failover adayı</span></div>
+  <div><h4>replica (eklenebilir)</h4><span class="chip">okumalar</span><span class="chip">okuma kapasitesi büyür, yazma büyümez</span></div>
+</div>
+<p class="flow-cap">Bir cluster'ın rolleri. Yeşil çerçeveli "primary" kutusu tek yazma noktasıdır (bu diyagramdaki yeşil, A2'deki array rengi değil, "etkin" anlamındadır). Replica eklemek okumayı büyütür ama yazmayı büyütmez: her yazma yine primary'den geçer. Yazmayı büyütmek için veri <b>shard</b>'lara bölünür (aşağıdaki görsel).</p>
+<table class="data">
+  <caption>bütün durumlar: arıza, kopyalar ve yazma</caption>
+  <thead><tr><th>Durum</th><th>Ne olur</th><th>Uygulama ne görür</th></tr></thead>
+  <tbody>
+    <tr><td>Bir replica çöker</td><td>Okumalar diğer replica'lara ya da primary'ye gider</td><td>Hiçbir şey ya da kısa bir yavaşlama</td></tr>
+    <tr><td>Primary çöker, replica var</td><td>Failover: bir replica primary olur</td><td>Kısa bir kesinti; DocumentDB'de AWS "up to 30 seconds", çoğu zaman daha kısa der</td></tr>
+    <tr><td>Primary çöker, replica yok</td><td>Primary yeniden kurulur</td><td>Dakikalar süren kesinti</td></tr>
+    <tr><td>Failover anında yarıda kalan bir yazma</td><td>Yazma ya primary'ye ulaşmıştır ya ulaşmamıştır; onaylanmamış bir yazma kayıp sayılır</td><td>Uygulama hata görür ve yazmayı tekrar eder. Tekrar zararsız olmalıdır: <code>_id</code>'yi uygulama üretir ya da yazma bir koşul taşır (A6). Driver'ın kendi tekrar etmesi (retryable writes) DocumentDB'de 8.0.2'den itibaren vardır (B3)</td></tr>
+    <tr><td>Bir Availability Zone çöker</td><td>Başka AZ'deki replica primary olur</td><td>Kısa kesinti, veri kaybı yok (kopyalar başka AZ'de)</td></tr>
+    <tr><td>Replica'dan okuma, az önceki yazma</td><td>Replica lag kadar geride olabilir</td><td>"Kaydettim ama göremiyorum"; çözüm o okuma için primary</td></tr>
+    <tr><td>İkinci bir yazma noktası (iki primary)</td><td><b>Yapamaz</b>: bir replica set'te tek primary vardır; replica'ya yazma reddedilir</td><td>Yazma hacmi tek sunucuyu aşarsa sharding ya da başka bir model</td></tr>
+    <tr><td>Veri shard'lara bölünür</td><td>Her shard'ın kendi primary'si vardır; bir <dfn>shard key</dfn> (her document'ta bulunan ve hangi shard'a gideceğini hash ile seçen field) yazmaları dağıtır</td><td>Yazma büyür; ama shard key'i olmayan sorular bütün shard'lara gider</td></tr>
+    <tr><td>Yanlış bir silme commit edildi</td><td>Kopyalar da sildi: replica bir yedek değildir</td><td>Geri dönüş sadece yedekten (point-in-time restore)</td></tr>
+  </tbody>
+</table>
+{{ k.fig("docdb-shard-key.png", "sharding: üstte document'lar ve yeşil yazılmış shard key user_id; altta shard'lar. Her document user_id'nin hash'ine göre bir shard'a gider; görsel hash değerlerini göstermez ve shard'lardaki adlar örnektir (bazıları üstteki listede yok). Görsel basitleştirilmiştir: gerçekte isteği bir yönlendirici doğru shard'a verir (C2'deki elastic cluster görseli). Bakılacak şey şudur: her shard yazmaları ayrı karşılar; replica okumayı çoğaltır, shard yazmayı böler.") }}
+{% call k.ask("Replica eklersem yazma hızım artar mı?") %}
+<p>Hayır. Her yazma tek primary'den geçer; replica'lar sadece okumayı paylaşır. Bu, document database'in en sık gözden kaçan sınırıdır. M2'deki event log kartı tam olarak bu yüzden kaybedilir: saniyede 80.000 ekleme tek bir primary'nin sınırını aşar.</p>
+{% endcall %}
+{% call k.ask("Tek bir primary saniyede kaç yazma taşır?") %}
+<p>AWS bir instance sınıfı için sabit bir "yazma/saniye" sayısı vermez: sınır document boyutuna, index sayısına, instance sınıfına ve yazmanın türüne bağlıdır. Doğru yol bir yük testidir: kendi document'ların ve index'lerinle yazma hızını artırıp primary'nin CPU'sunu ve yazma gecikmesini CloudWatch'ta izlemek. Bu sayfanın kartları kaba bir ölçek kullanır (AWS'in değil, bu sayfanın kabulüdür): saniyede birkaç yüz ile 1.500 yazma orta bir instance için rahattır (kart 6, 7), birkaç bin yazma büyük bir instance ister (kart 9), on binlerce yazma tek primary'nin ötesindedir ve elastic cluster ya da key-value ister (kart 4).</p>
+{% endcall %}
+{% call k.ask("Replica bir yedek yerine geçer mi?") %}
+<p>Geçmez. Replica her yazmayı, yanlış olanları da, kopyalar. Biri yanlışlıkla bir collection'ı silerse replica'lar da siler. Yedek ayrı bir şeydir: belirli bir ana geri dönmeyi sağlar (C2'deki point-in-time restore).</p>
+{% endcall %}
+{{ k.quiz("doc-q6", "Bir uygulama ürünü günceller ve hemen ardından aynı ürünü okuyup ekranda gösterir. Read preference secondaryPreferred. Kullanıcı bazen eski fiyatı görüyor. Neden ve çözüm ne?",
+   ["Güncelleme kayboldu, transaction gerekir", "Okuma replica'ya gitti ve replica lag var, bu okuma primary'den yapılmalı", "Index eksik, fiyat field'ına index eklenmeli", "Document 16 MiB sınırını aştı"],
+   1, "Replica'lar primary'nin kısa bir süre gerisindedir. Kendi yazmasını hemen görmesi gereken okuma primary'den yapılır.") }}
+
+<h2 id="summary" data-short="Ö1–Ö8 özeti ve matris"><span class="sec">A10</span>Özet: document database'in sekiz özelliği ve hangi üründe olduğu</h2>
+<p>Bölüm A'nın her kavramı bir özelliğe karşılık gelir. Bu sekiz özellik sayfanın geri kalanının ortak dilidir: Mimar gözüyle bölümü her use case'i bu numaralarla anlatır ve M1 bu listeyi sinyaller ve sınırlarıyla genişletir.</p>
+<table class="data">
+  <caption>Ö1–Ö8: document database'in özellikleri</caption>
+  <thead><tr><th>No</th><th>Özellik</th><th>Tek cümleyle</th><th>Tanım</th></tr></thead>
+  <tbody>
+    <tr><td><b>Ö1</b></td><td>_id ile document</td><td>Her document benzersiz <code>_id</code>'siyle tek okumada, bütün parçalarıyla gelir.</td><td>A2</td></tr>
+    <tr><td><b>Ö2</b></td><td>İç içe field'lar ve array'ler tek kayıtta</td><td>Embedded document ve array ile bir nesne bütün parçalarıyla tek document'tır; her document kendi field'larını taşır.</td><td>A2, A3</td></tr>
+    <tr><td><b>Ö3</b></td><td>Her field'a göre sorgu (filtre)</td><td>Üst seviye, iç içe ve array içi her field'a göre soru, yeniden tasarım olmadan.</td><td>A4</td></tr>
+    <tr><td><b>Ö4</b></td><td>Field'lara ve array'lere index (multikey)</td><td>Sık sorulara sıralı arama yapısı; compound, iç içe field ve array elemanı index'leri.</td><td>A5</td></tr>
+    <tr><td><b>Ö5</b></td><td>Kısmi güncelleme ($set, arrayFilters)</td><td>Bir document'ın tek parçası tek atomik yazmada değişir; filtredeki koşul kilit yerine geçer.</td><td>A6</td></tr>
+    <tr><td><b>Ö6</b></td><td>Aggregation pipeline</td><td>Sunucuda aşama aşama filtre, açma, gruplama, sıralama ve birleştirme.</td><td>A7</td></tr>
+    <tr><td><b>Ö7</b></td><td>Change stream</td><td>Her yazma sırayla dışarı verilir; başka programlar tepki verir.</td><td>A8</td></tr>
+    <tr><td><b>Ö8</b></td><td>Okuma için replica'lar</td><td>Tek primary yazar, replica'lar okumayı taşır; primary çökünce bir replica devralır.</td><td>A9</td></tr>
+  </tbody>
+</table>
+<p>Bu sekiz özellik her üründe aynı biçimde yoktur. Matris üç ürünü karşılaştırır: MongoDB (kategorinin açık kaynak kökü, kendin işletirsin), Amazon DocumentDB (MongoDB API'sini konuşan, AWS'in kendi motoru ve paylaşılan storage'ı olan yönetilen servis) ve DynamoDB (aynı JSON değerleri saklayabilen ama key-value modelinde çalışan servis; A4'teki "her field'a göre soru" farkını göstermek için). Mimar bu matrisi "hangi document store" sorusunda kullanır (M5).</p>
+<table class="data fmatrix">
+  <caption>özellik × ürün matrisi: ✓ var · ½ kısmen ya da farklı biçimde · ✗ yok</caption>
+  <thead><tr><th>Özellik</th><th>MongoDB</th><th>Amazon DocumentDB</th><th>DynamoDB</th></tr></thead>
+  <tbody>
+    <tr><td><b>Ö1</b> _id ile document</td><td class="y">✓ _id zorunlu, ObjectId üretir</td><td class="y">✓ Aynı API; _id her zaman index'li</td><td class="y">✓ Primary key ile GetItem; item 400 KB'a kadar</td></tr>
+    <tr><td><b>Ö2</b> İç içe field'lar ve array'ler</td><td class="y">✓ 16 MiB document, 100 seviye iç içe, zengin tipler (tarih, ondalık)</td><td class="y">✓ 16 MiB, 200 seviye iç içe</td><td class="p">½ Map ve list tipleri var; sınır 400 KB</td></tr>
+    <tr><td><b>Ö3</b> Her field'a göre sorgu</td><td class="y">✓ Zengin sorgu dili, dot notation</td><td class="y">✓ Aynı sorgu dili; bazı operator'lar sürüme göre (aşağıdaki tablo)</td><td class="n">✗ Key dışı soru Scan ve filtre ya da bir GSI ister</td></tr>
+    <tr><td><b>Ö4</b> Field ve array index'leri</td><td class="y">✓ Compound, multikey, text, geo, wildcard</td><td class="y">✓ Compound, multikey, sparse, partial, TTL, text, vector; collection başına 64</td><td class="p">½ GSI ve LSI: sadece key olarak seçilen attribute'lar; array elemanına index yok</td></tr>
+    <tr><td><b>Ö5</b> Kısmi güncelleme</td><td class="y">✓ $set, $inc, $push, arrayFilters</td><td class="y">✓ Aynı operator'lar</td><td class="p">½ UpdateItem document yolu ile; liste elemanı numarayla, değerle değil</td></tr>
+    <tr><td><b>Ö6</b> Aggregation pipeline</td><td class="y">✓ Geniş aşama listesi</td><td class="p">½ Çoğu aşama var; bazıları sadece 8.0'da, bazıları hiç yok ($densify, $fill)</td><td class="n">✗ Yok; özet uygulamada ya da analitik kopyada</td></tr>
+    <tr><td><b>Ö7</b> Change stream</td><td class="y">✓ Change streams (oplog'dan)</td><td class="y">✓ Change streams; collection başına açılır, tutulma 1 saat ile 7 gün</td><td class="y">✓ DynamoDB Streams, 24 saat</td></tr>
+    <tr><td><b>Ö8</b> Okuma için replica'lar</td><td class="p">½ Replica set; her secondary tam bir kopya, kurulumu ve failover'ı sen yönetirsin</td><td class="y">✓ En fazla 15 replica aynı cluster volume'u okur; otomatik failover</td><td class="p">½ Replica yok; okuma partition'larla kendiliğinden ölçeklenir</td></tr>
+  </tbody>
+</table>
+<p>Matris bir ürünün "iyi" ya da "kötü" olduğunu söylemez. DynamoDB'de Ö3 ve Ö6'nın olmaması onun her ölçekte aynı hızda kalmasının nedenidir. MongoDB ile DocumentDB'nin aynı API'yi konuşması kodun aynı kalmasını sağlar, ama "aynı API" her operator'ın her sürümde aynı olduğu anlamına gelmez. Bu, kategorinin en sık atlanan tuzağıdır:</p>
+<table class="data">
+  <caption>bütün durumlar: MongoDB kodu DocumentDB'de çalışır mı?</caption>
+  <thead><tr><th>Durum</th><th>Ne olur</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Standart CRUD ve sık sorgu operator'ları</td><td>Aynı driver ve kodla çalışır</td><td>find, updateOne, $set, $in, $elemMatch</td></tr>
+    <tr><td>Operator, DocumentDB'nin bu sürümünde var</td><td>Çalışır</td><td><code>$lookup</code> eşitlikle: 3.6, 4.0, 5.0, 8.0'da</td></tr>
+    <tr><td>Operator sadece yeni sürümde var</td><td>Eski sürümde <b>çalışmaz</b>, hata döner; sürüm yükseltmesi gerekir</td><td><code>$graphLookup</code> ve <code>$facet</code> sadece 8.0.2 ve sonrası</td></tr>
+    <tr><td>Operator DocumentDB'de hiç yok</td><td><b>Çalışmaz</b>; kod değişir</td><td><code>$densify</code>, <code>$fill</code></td></tr>
+    <tr><td>Driver'ın varsayılan bir ayarı</td><td>Eski sürümde hata verebilir</td><td>Retryable writes sadece 8.0.2 ve sonrasında; öncesinde <code>retryWrites=false</code></td></tr>
+    <tr><td>explain çıktısı</td><td>Biçim farklı olabilir; aşama adları benzer</td><td>DocumentDB'nin planı kendi motorundan gelir</td></tr>
+  </tbody>
+</table>
+<p class="flow-cap">Kaynak: <a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/mongo-apis.html">Supported MongoDB APIs, operations, and data types</a> ve <a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/functional-differences.html">Functional differences: Amazon DocumentDB and MongoDB</a>. Bir geçişten önce uygulamanın kullandığı operator listesi bu iki sayfayla karşılaştırılır.</p>
+<div class="flow">
+  <div class="box">uygulama kodu<small>MongoDB driver'ı (pymongo)</small></div><span class="arrow">→</span>
+  <div class="box pk">MongoDB API<small>aynı komutlar, sürüme göre liste</small></div><span class="arrow">→</span>
+  <div class="box sk">motor<small>MongoDB'nin kendisi ya da DocumentDB'nin motoru</small></div><span class="arrow">→</span>
+  <div class="box hit">storage<small>kendi diskin ya da paylaşılan cluster volume</small></div>
+</div>
+<p class="flow-cap">Uyumluluk API katmanındadır. Kod ve driver aynı kalır; motor ve storage farklıdır. Bu yüzden desteklenen operator listesi ve explain çıktısı sürüme ve ürüne göre değişir.</p>
+{% call k.ask("DocumentDB, MongoDB'nin kendisi mi?") %}
+<p>Hayır. DocumentDB, MongoDB API'sini (sürüm 3.6, 4.0, 5.0 ve 8.0 uyumluluğu) uygulayan, AWS'in kendi motoru ve paylaşılan, dağıtık storage'ı üzerinde çalışan bir servistir. Çoğu driver ve araç değişmeden çalışır; ama her operator ve her davranış aynı değildir. Bu yüzden matriste Ö6 "½"dir.</p>
+{% endcall %}
+{% call k.ask("Uygulamam bir gün desteklenmeyen bir operator kullanırsa nasıl anlarım?") %}
+<p>Komut hata döner; sessizce yanlış sonuç vermez. Güvenli yol, geçişten önce kodun kullandığı operator'ları listelemek ve desteklenen API listesiyle karşılaştırmaktır. Sürüm seçimi de buna göre yapılır: yeni projelerde en yeni major sürüm (bugün 8.0) ve onun en yeni minor sürümü. Lale Market 8.0.0 ile kuruldu; <code>$facet</code>, <code>$graphLookup</code> ve retryable writes için aynı major içinde 8.0.2'ye minor yükseltme gerekir (C3).</p>
+{% endcall %}
+{{ k.quiz("doc-q7", "Bir ekip ürünlerin içine göre sık değişen sorular soruyor ve rengi siyah olanları bir index ile bulmak istiyor. Matrise göre hangi özellik şart ve hangi üründe çekirdekte yok?",
+   ["Ö7, MongoDB", "Ö3 ve Ö4, DynamoDB", "Ö8, DocumentDB", "Ö1, DynamoDB"],
+   1, "Document'ın içine göre soru Ö3, iç içe field'a index Ö4'tür. DynamoDB'de key dışı soru Scan ya da GSI ister ve iç içe bir field'a doğrudan index kurulamaz.") }}
+
+<div class="part"><b>Mimar gözüyle</b><h2 id="architect" data-short="Mimar gözüyle">Mimar gözüyle: ne zaman document, ne zaman Amazon DocumentDB</h2>
+<p>Önce kategori: bir document database ne zaman doğru seçimdir, alternatifleri neyi daha iyi yapar ve yine de document seçersek ne kazanıp ne kaybederiz. Sonra AWS'teki seçenekler ve DocumentDB'nin ne zaman seçileceği.</p></div>
+
+<p><b>Kısaca:</b> bir document database, kendi içinde bütün olan nesneleri (ürün, profil, makale, cihaz kaydı) tek bir JSON kaydında tutar ve o kaydın içine göre esnek sorular cevaplar. Bunu, nesneler arasında az ilişki olduğu ve yazmaların tek bir primary'nin sınırında kaldığı sürece iyi yapar.</p>
+<p>Önemli kelime {{ k.term("access pattern") }}'dir: uygulamanın sorduğu bir soru, o anda bildiği değerlerle birlikte. Key-value database'te access pattern'ler önceden listelenir ve key onlara göre tasarlanır; document database'te access pattern'ler document'ın <b>şeklini</b> belirler (neyi gömersin, A3) ama içine göre yeni bir soru yarın bir filtre ve bir index'tir (Ö3, Ö4). Bedeli, bütün yazmaların tek primary'den geçmesi (Ö8) ve collection'lar arası kuralların uygulamada yaşamasıdır.</p>
+<p>Bu bölümdeki her karar aynı beş gereksinimle anlatılır. M2'deki kartlar ve M7'deki simülasyonlar aynı beş başlığı kullanır:</p>
+<table class="data">
+  <caption>R1–R5: her iş yükünün beş gereksinimi</caption>
+  <thead><tr><th>No</th><th>Gereksinim</th><th>Sorusu</th></tr></thead>
+  <tbody>
+    <tr><td><b>R1</b></td><td>Access pattern</td><td>Uygulama hangi soruları, elinde hangi değerlerle soruyor? Hangi kurallar yazma anında korunmalı?</td></tr>
+    <tr><td><b>R2</b></td><td>Ölçek ve trafik şekli</td><td>Saniyede kaç istek, ne kadar veri, trafik düz mü dalgalı mı, tepe anında ne kadar gecikme kabul edilir?</td></tr>
+    <tr><td><b>R3</b></td><td>Dayanıklılık</td><td>Bir arızada bu verinin kaybı ne demek: yeni bir login mi, çift çekilen bir kart mı?</td></tr>
+    <tr><td><b>R4</b></td><td>Operasyon ve ekip</td><td>Kim işletecek, ekip hangi API'ı biliyor, sunucu boyutlandırmak isteniyor mu?</td></tr>
+    <tr><td><b>R5</b></td><td>Maliyet modeli</td><td>İstek başına mı, saat başına mı, GB başına mı ödenir ve bu trafik şekline uyar mı?</td></tr>
+  </tbody>
+</table>
+<p>Kartlarda geçen birkaç DocumentDB adı burada kısaca: <b>instance</b>, cluster'daki bir sunucu (primary ya da replica) ve saat başına ödenir; <b>serverless</b> ve <b>DCU</b> (DocumentDB Capacity Unit, yaklaşık 2 GiB bellek ve ona karşılık gelen CPU), sunucu sınıfı yerine 0,5 ile 256 DCU arası kendiliğinden değişen kapasite; <b>elastic cluster</b>, veriyi shard'lara bölen ve yazmayı büyüten biçim; <b>I/O</b>, storage'a yapılan okuma ve yazma istekleri, Standard modelde milyon başına ödenir. M5 hepsini kaynaklarıyla açar. Alternatiflerin kartlarda geçen adları aşağıdaki tabloda tek cümleyle açıklanır; ayrıntıları kendi tutorial'larındadır.</p>
+<table class="data">
+  <caption>kartlarda geçen alternatif adları: tek cümleyle</caption>
+  <thead><tr><th>Servis</th><th>Ad</th><th>Ne demek</th></tr></thead>
+  <tbody>
+    <tr><td><a href="/e2etutorial/dynamodb?lang=tr">DynamoDB</a></td><td>item, attribute; partition key, sort key; GetItem, Query, Scan</td><td>Kayıt, field; kaydın tek ya da iki parçalı key'i; key ile tek okuma, bir grubun okunması, bütün table'ın okunması.</td></tr>
+    <tr><td>DynamoDB</td><td>GSI</td><td>Aynı item'ların farklı bir key ile ikinci kopyası; key dışı bilinen bir soruyu hızlandırır, her soru için ayrı kurulur.</td></tr>
+    <tr><td>DynamoDB</td><td>ConditionExpression, list_append, UpdateItem</td><td>Yazmaya eklenen koşul ("version = 7 ise"); listeye ekleme; item'ın bir parçasını değiştirme.</td></tr>
+    <tr><td>DynamoDB</td><td>on-demand, provisioned; okuma ve yazma birimi</td><td>İstek başına ödeme ya da önceden ayrılan kapasite; 4 KB'a kadar okuma ve 1 KB'a kadar yazma başına sayılan birim.</td></tr>
+    <tr><td>DynamoDB</td><td>TTL, Streams, DAX</td><td>Item'ın süre sonu (birkaç gün içinde silinir); değişiklik akışı (24 saat); önündeki bellek içi cache.</td></tr>
+    <tr><td><a href="/e2etutorial/aurora?lang=tr">Aurora</a></td><td>JSONB, GIN index, jsonb_set</td><td>PostgreSQL'in JSON kolonu; JSON'un içine göre soruyu hızlandıran index türü; JSON içindeki bir field'ı değiştiren fonksiyon.</td></tr>
+    <tr><td>Aurora</td><td>MVCC, migration, CHECK, foreign key</td><td>Her UPDATE'in row'un yeni bir versiyonunu yazması (tek field için de bütün row); schema değişikliğinin sürümlü uygulanması; database'in her yazmada test ettiği kurallar.</td></tr>
+    <tr><td>Aurora</td><td>ACU, reader instance</td><td>Aurora Serverless v2'nin kapasite birimi (yaklaşık 2 GiB bellek), en az 0,5; salt okuma kopyası.</td></tr>
+    <tr><td><a href="/e2etutorial/opensearch?lang=tr">OpenSearch</a></td><td>mapping, reindex, refresh, facet, shard, node, domain</td><td>Field'ların tipi ve analizi; mapping değişince index'in baştan kurulması; yeni document'ın aranabilir olma aralığı (genellikle saniyeler); seçenek sayıları; index'in parçası; sunucu; cluster.</td></tr>
+    <tr><td><a href="/e2etutorial/elasticache?lang=tr">ElastiCache</a></td><td>Valkey, hash, GET, HSET, EXPIRE, ECPU</td><td>Bellek içi key-value motoru; field'lı value; okuma; bir field'ı yazma; tam anında süre sonu; serverless'ın istek birimi.</td></tr>
   </tbody>
 </table>
 
-<h3>Kullanım alanları: sebebi ve özelliğiyle</h3>
+<h2 id="signals" data-short="Ö1–Ö8: sinyal ve sınır"><span class="sec">M1</span>Document database'in sekiz özelliği: hangi sinyal çağırır, sınırı nedir</h2>
+<p>Bu tablo M2'deki kartların referansıdır. Bir kart "Ö5 ile çözer" dediğinde buraya dönersin. Her satır A10'daki özelliği iş yükündeki sinyaliyle ve sınırıyla, yani yapamadığı şeyle birleştirir. Sınırlar, alternatiflerin neden bazen daha iyi olduğunu da açıklar.</p>
 <table class="data">
-  <thead><tr><th>Kullanım alanı</th><th>Veri</th><th>Neden bir document database</th><th>İşi yapan özellik</th></tr></thead>
+  <thead><tr><th>Özellik</th><th>Ne sağlar</th><th>İş yükünde onu çağıran sinyal</th><th>Sınırı: ne yapamaz</th><th>Tanım</th></tr></thead>
   <tbody>
-    <tr><td>Ürün kataloğu (Lale Market)</td><td>Attribute'ları ve tag'leriyle ürün başına bir doküman.</td><td>Her ürün türünün başka attribute'ları var. Ürün sayfası her şeyi tek okumada ister.</td><td>Serbest alanlar, iç içe <code>attributes</code>, compound index'ler</td></tr>
-    <tr><td>İçerik yönetimi (makaleler, sayfalar)</td><td>Bir başlık, bölümler, yazarlar, görseller, yorumlar.</td><td>Bir makale derin bir yapısı olan tek bir birimdir.</td><td>İç içe diziler, tag'ler ve tarihler üzerinde index'ler</td></tr>
-    <tr><td>Kullanıcı profilleri ve tercihleri</td><td>Ayarlar, adresler, cihazlar, onaylar.</td><td>Her kullanıcının başka ayarları var ve uygulama profilin tamamını okur.</td><td><code>_id</code> ile okuma, <code>$set</code> ile kısmi güncellemeler</td></tr>
-    <tr><td>Mobil ve web back end'leri</td><td>Uygulamanın gönderdiği ve aldığı JSON.</td><td>API formatı ve storage formatı aynıdır.</td><td>JSON benzeri dokümanlar, MongoDB driver'ları</td></tr>
-    <tr><td>Cihaz kaydı ve konfigürasyonu (IoT)</td><td>Her cihazın modeli, firmware'i, ayarları, konumu.</td><td>Cihaz modelleri farklıdır ve destek ekibi her alanda arar.</td><td>Her alanda query'ler, index'ler</td></tr>
-    <tr><td>Sigorta poliçeleri ve talepleri</td><td>Seçenekleri, kişileri, araçları ve belgeleriyle bir poliçe.</td><td>Her ürün hattının kendi yapısı var ve bir talep bütün olarak okunur.</td><td>Dokümanlar, gerektiğinde çok-dokümanlı transaction'lar</td></tr>
-    <tr><td>Emlak ya da iş ilanları</td><td>Her ilan türünün başka alanları var.</td><td>Arama sayfaları birçok isteğe bağlı alanda filtreler.</td><td>Compound ve sparse index'ler</td></tr>
-    <tr><td>Oyun metadata'sı ve oyuncu profilleri</td><td>Oyuncu başına eşyalar, seviyeler, başarımlar.</td><td>Yapı oyunun her sürümüyle değişir.</td><td>Schema migration yok, iç içe diziler</td></tr>
-    <tr><td>Restoran uygulamalarında tarifler, menüler ve ürünler</td><td>Malzemeler, adımlar, alerjenler, varyantlar.</td><td>Listelerin içinde listeler, birlikte okunur.</td><td>Gömülü doküman dizileri, raporlar için <code>$unwind</code></td></tr>
+    <tr><td><b>Ö1</b> _id ile document</td><td>Bir nesne bütün parçalarıyla tek okumada</td><td>Ekran bir nesneyi bütünüyle gösteriyor: ürün sayfası, profil, makale</td><td>Nesne birçok parçadan toplanıyorsa ve parçalar paylaşılıyorsa kazanç kaybolur.</td><td>A2</td></tr>
+    <tr><td><b>Ö2</b> İç içe field'lar ve array'ler</td><td>Türe göre farklı şekil; yeni field migration'sız</td><td>Aynı türün öğeleri farklı field'lar taşıyor; şekil her ay değişiyor</td><td>16 MiB; sınırsız büyüyen array gömülemez. Database içini doğrulamaz.</td><td>A2, A3</td></tr>
+    <tr><td><b>Ö3</b> Her field'a göre sorgu</td><td>Önceden bilinmeyen soru bir filtredir</td><td>Destek ve pazarlama ekipleri içe göre değişen sorular soruyor</td><td>Yazım hatalı ve relevance sıralı arama yok; collection'lar arası birleştirme sınırlı.</td><td>A4</td></tr>
+    <tr><td><b>Ö4</b> Field ve array index'leri</td><td>Sık sorular her document'ı okumadan</td><td>Kategori sayfası, "etiketi şu olanlar", "firmware'i eski olanlar"</td><td>Her index her yazmaya maliyet; compound index field sırasına bağlı; collection başına 64.</td><td>A5</td></tr>
+    <tr><td><b>Ö5</b> Kısmi güncelleme</td><td>Tek parça tek atomik yazmada; kilit yerine koşul</td><td>Birkaç cihaz aynı document'ı değiştiriyor; array içinde tek eleman</td><td>Atomiklik tek document'tadır; birkaç document için transaction (sınırlı, pahalı).</td><td>A6</td></tr>
+    <tr><td><b>Ö6</b> Aggregation pipeline</td><td>Sunucuda özet: sayılar, ortalamalar, facet'ler</td><td>Kategori menüsü, etiket sayıları, panel özetleri</td><td>Büyük raporlar uygulamayla aynı sunucuyu kullanır; bazı aşamalar sürüme bağlı.</td><td>A7</td></tr>
+    <tr><td><b>Ö7</b> Change stream</td><td>Her yazma bir olay; kopyalar ve tepkiler yazan koddan ayrı</td><td>Arama kopyası, cihazlara yayın, cache temizliği</td><td>Tutulma süresi sınırlı (DocumentDB'de en fazla 7 gün); tüketici ekibin parçasıdır.</td><td>A8</td></tr>
+    <tr><td><b>Ö8</b> Okuma için replica'lar</td><td>Okuma replica'larla büyür; failover otomatik</td><td>Okuma yazmanın onlarca katı</td><td>Bütün yazmalar tek primary'den geçer; replica okuması kısa süre geride olabilir.</td><td>A9</td></tr>
   </tbody>
 </table>
 
-<h3>DocumentDB'den uzağı işaret eden sinyaller</h3>
-<table class="data">
-  <thead><tr><th>İş yükündeki sinyal</th><th>DocumentDB neden zayıf kalır</th><th>Daha iyi seçim</th></tr></thead>
+<p>Tablo özettir. Aşağıdaki sekiz blok her özelliği dört başlıkla açar: ne sağlar, hangi sinyal çağırır, sınırı nedir ve alternatif ne zaman daha iyidir.</p>
+
+<table class="data feat"><caption>Ö1 · _id ile document</caption>
   <tbody>
-    <tr><td>Birçok ilişkili kayıt arasında kurallar (stok, siparişler, satırlar)</td><td>DocumentDB'de transaction'lar var, ama koleksiyonlar arasında foreign key ve CHECK constraint yok.</td><td><a href="/e2etutorial/aurora">Aurora PostgreSQL</a></td></tr>
-    <tr><td>Tek bir key ile saniyede milyonlarca basit yazma</td><td>Standart bir cluster'ın tek bir writer instance'ı vardır.</td><td><a href="/e2etutorial/dynamodb">DynamoDB</a> (ya da shard'layan DocumentDB elastic cluster'ları)</td></tr>
-    <tr><td>Kelimeler, kökler, yazım hataları ve relevance ile arama</td><td>Filtreler değerleri karşılaştırır. Metni sıralamaz.</td><td><a href="/e2etutorial/opensearch">OpenSearch</a></td></tr>
-    <tr><td>Yılların geçmişi üzerinde raporlar</td><td>Büyük aggregation'lar aynı instance'lar için uygulamayla yarışır.</td><td><a href="/e2etutorial/redshift">Redshift</a></td></tr>
-    <tr><td>Derin ilişkiler ("arkadaşlarımın aldıklarını alan müşteriler")</td><td>Her adım uygulamanın yaptığı bir arama daha demektir.</td><td><a href="/e2etutorial/neptune">Neptune</a></td></tr>
-    <tr><td>Sonu olmadan büyüyen bir liste (bütün sayfa görüntülemeleri)</td><td>Bir doküman en fazla 16 MiB olabilir. Büyüyen bir dizi her okumayı ve yazmayı büyütür.</td><td>Event başına bir row ile <a href="/e2etutorial/keyspaces">Keyspaces</a> ya da <a href="/e2etutorial/dynamodb">DynamoDB</a></td></tr>
-    <tr><td>Dosyalar (görseller, PDF'ler)</td><td>Büyük binary değerler database'i büyütür.</td><td>Key'i dokümanda tutularak <a href="/e2etutorial/s3">S3</a></td></tr>
+    <tr><td><b>Ne sağlar</b></td><td>Uygulama <code>_id</code>'yi verir ve nesnenin bütün parçaları tek bir okumada gelir: ürünün özellikleri ve etiketleri, siparişin satırları ve adresi, makalenin blokları. Ekranın şekli ile verinin diskteki şekli aynıdır; sorgu anında birleştirme yoktur. <code>_id</code>'nin index'i her zaman vardır, bu yüzden bu okuma collection'ın boyutundan neredeyse bağımsızdır.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Ekran bir nesneyi bütünüyle gösteriyor ve nesnenin parçaları başka nesnelerle paylaşılmıyor: "P0001 ürün sayfası", "bu kullanıcının profili", "slug'ı şu olan makale", "seri nosu şu olan cihaz".</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Nesnenin parçaları birçok nesne arasında paylaşılıyorsa (marka, acente, kategori ağacı) ya kopyalanır ya da referansla ikinci bir okuma gerekir. Ekran birkaç nesneyi birleştiriyorsa (müşteri, siparişleri ve ödemeleri) tek okuma kazancı kaybolur.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Tek soru "id ile bütün nesne" ise ve ölçek çok büyükse key-value database (DynamoDB) aynı okumayı boyutlandırmasız verir. Ekranlar birçok ilişkili nesneyi birleştiriyorsa relational database (Aurora).</td></tr>
   </tbody>
 </table>
 
-<h3>Bir mimarın sorduğu sorular, bu sırayla</h3>
+<table class="data feat"><caption>Ö2 · İç içe field'lar ve array'ler tek kayıtta</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Her document kendi field'larını taşır; aynı collection'da bir kulaklık garanti ayıyla, bir kitap sayfa sayısıyla durur. Embedded document'lar ve array'ler bir nesnenin iç yapısını olduğu gibi saklar. Yeni bir field sadece yeni document'lara yazılır; migration penceresi yoktur.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Aynı türün öğeleri türe göre farklı field'lar taşıyor ("her ürün türünün özellikleri farklı", "her cihaz modelinin ayarları farklı") ya da şekil sık değişiyor ("her ay yeni bir özellik", "her hafta yeni bir event türü", "her sürümde yeni ayar").</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Document en fazla 16 MiB'tır; zamanla büyüyen bir liste gömülemez. Database field adlarını ve tiplerini doğrulamaz (doğrulama şeması kurulmadıkça); iki farklı kod sürümünün yazdığı document'lar aynı collection'da karışır. Collection'lar arası foreign key yoktur.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Field'lar sabit ve kurallar sıkıysa (fatura, muhasebe) relational database'in schema'sı bir yük değil güvencedir; birkaç serbest field için JSONB yeter. Şekil serbest ama tek soru "id ile" ise key-value database.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö3 · Her field'a göre sorgu (filtre)</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Üst seviye, iç içe (dot notation) ve array içi her field'a göre soru, yeni bir key tasarımı olmadan: "Elektronik ve siyah", "firmware'i 2.3'ten eski ve İzmir'de", "nem sensörü olan cihazlar". Operator'lar aralık, liste, varlık ve aynı array elemanında iki koşul sorar.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Sorular önceden tam bilinmiyor ya da sık değişiyor ve hepsi document'ın içine göre: destek ekibinin soruları, pazarlamanın haftalık segmentleri, kategori sayfasının filtreleri.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Index'siz her soru COLLSCAN'dir: cevap doğru, maliyet collection boyutunda. Yazım hatası toleransı ve relevance sıralı metin araması yoktur. Birkaç collection'ı birleştiren sorular sınırlıdır.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Metin araması, facet ve relevance ana işse search engine (OpenSearch). Sorular birçok ilişkili table'ı birleştiriyorsa relational database. Sorular sabit üç soruysa key-value database ve üç GSI.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö4 · Field'lara ve array'lere index (multikey)</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Sık soruların cevabı index'ten gelir: compound index'ler sıralamayı da verir, multikey index array'in her elemanını ayrı bir giriş yapar, iç içe field'lar dot notation ile index'lenir. Plan IXSCAN olur ve okunan document sayısı dönen document sayısına iner (canlı plan: 40 okundu, 40 döndü; index'siz 200 okundu).</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Sık ve seçici sorular: "Kitaplar, en iyi puanlı önce", "etiketi indirim olanlar", "müşterinin siparişleri, yeniye göre", "kargoda ve üç günden eski".</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Her index her yazmada güncellenir ve bellek tutar; collection başına 64 index. Compound index field sırasına bağlıdır: ikinci field ile başlayan soru onu kullanamaz. Her filtre birleşimine index kurulamaz.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Onlarca filtre field'ının her birleşimi ve facet sayıları gerekiyorsa search engine her field'ı index'ler. Relational database'in planner'ı birkaç index'i bir soruda birleştirmede daha esnektir.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö5 · Kısmi güncelleme ($set, arrayFilters)</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Document'ın tek bir parçası tek atomik yazmada değişir: bir tercih (<code>$set</code>), bir sayaç (<code>$inc</code>), bir geçmiş kaydı (<code>$push</code>), değeriyle bulunan bir array elemanı (<code>arrayFilters</code>). Filtredeki bir koşul (<code>version: 7</code>) okuma ile yazma arasında değişen document'ı yakalar; kilit tutulmaz.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Birkaç cihaz ya da kullanıcı aynı document'ı değiştiriyor; değişiklik array'in içinde: "listede ekmek'i işaretle", "label'ı iş olan adresi değiştir", "siparişin durum geçmişine ekle", "flag'i sürüm 12 ise değiştir".</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Atomiklik tek document'tadır. Birkaç document birlikte değişmeliyse transaction gerekir; DocumentDB'de süresi 1 dakika ile sınırlıdır ve normal yazmadan pahalıdır. Başka bir collection'daki bir kurala göre yazmayı reddetmek tek bir yazmayla yapılamaz.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Kural birçok table'ı kapsıyorsa (stok, sipariş, ödeme birlikte) relational database'in transaction'ı ve constraint'leri. Tek bir key'de sayaç ve koşul yeterliyse ve ölçek büyükse key-value database'in koşullu yazması.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö6 · Aggregation pipeline</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Özet sunucuda hesaplanır: <code>$match</code>, <code>$unwind</code>, <code>$group</code>, <code>$sort</code>. Lale Market'in kategori menüsü tek bir <code>$group</code>'tur; etiket sayıları bir <code>$unwind</code> ve bir <code>$group</code>'tur. Veri ağdan taşınmaz.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Ekranda küçük özetler: "her kategoride kaç ürün", "her rengin sayısı (facet)", "bu müşterinin aylık toplamı", "üçüncü adımda bırakılan oturum sayısı".</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Büyük taramalar uygulamayla aynı instance'ı kullanır; replica'ya yönlendirilse bile o replica'yı yorar. Bazı aşamalar sadece yeni sürümlerde vardır. <code>$lookup</code> relational JOIN kadar geniş değildir.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Yılların verisi üzerinde gruplayan raporlar data warehouse'a (Redshift). Facet sayıları her sayfada ve kampanyada binlerce kez gerekiyorsa search engine'in aggregation'ı.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö7 · Change stream</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Her yazma sırayla bir olay olarak dışarı verilir; tüketici resume token ile kaldığı yerden devam eder. Arama kopyası, cache temizliği ve cihazlara yayın yazan koddan ayrılır; tepkiler eklenir ve çıkarılır, yazma yolu değişmez.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"Katalog değişince arama kopyasını güncelle", "liste değişince diğer cihazlara 10 saniyede haber ver", "flag değişince servislere yay".</td></tr>
+    <tr><td><b>Sınırı</b></td><td>DocumentDB'de tutulma varsayılan üç saat, en fazla yedi gündür; tüketici daha uzun durursa kayıtlar kaybolur ve kopya baştan kurulur. Tüketici ekibin işlettiği bir parçadır. Akış bir sorgu değildir.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Olaylar günlerce saklanmalı ve birçok tüketici baştan okumalıysa akış platformu (Kinesis, MSK). Kaynak DynamoDB ise Streams ve Lambda daha az parçayla aynı işi yapar.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö8 · Okuma için replica'lar</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Okumalar replica'lara dağılır (DocumentDB'de en fazla 15), primary yazmaya kalır. Primary çökünce bir replica otomatik olarak primary olur. DocumentDB'de replica'lar aynı cluster volume'u okur, bu yüzden yeni bir replica veri kopyalamadan dakikalar içinde eklenir.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Okuma yazmanın onlarca katı: katalog (2.000 okuma, 20 yazma), profil (12.000 okuma, 150 yazma), kampanya günü beş kat okuma.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Bütün yazmalar tek primary'den geçer; replica eklemek yazmayı büyütmez. Replica okuması kısa süre geride olabilir ("usually less than 100 milliseconds"). Yazma hacmi tek primary'yi aşarsa elastic cluster (shard) gerekir ve shard key tasarımı ekibin işidir.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Yazma hacmi saniyede on binlerse ve sorular key ile ise key-value database (DynamoDB) yazmayı partition'lara kendiliğinden dağıtır. Okuma bir milisaniyenin altında olmalıysa bellek içi store (ElastiCache).</td></tr>
+  </tbody>
+</table>
+
+<h2 id="usecases" data-short="Use case'ler, alternatifleriyle"><span class="sec">M2</span>Use case'ler: neden document, en yakın alternatif neyi karşılar, yine de seçersek ne olur</h2>
+<p>Her kart bir iş yükünü anlatır ve beş parçadan oluşur. (1) <b>Gerçek projede:</b> iş yükü kim için, hangi ekranda, hangi sayılarla. (2) <b>Gereksinimler R1–R5:</b> her biri için "ne istiyoruz" (sayılı) ve "neden önemli, karşılanmazsa ne olur". (3) <b>Puan tablosu:</b> seçilen servis (DocumentDB) ve en yakın iki alternatif, her gereksinimde 10 üzerinden. (4) <b>Her adayın gerekçesi:</b> gereksinim gereksinim nasıl karşıladığı (A10'daki Ö-numarasıyla), kaç puan aldığı ve puanın neden kırıldığı; her alternatif için uzun bir <b>kafa kafaya</b> paragrafı: nerede ayrışır, bu iş yükünde neden seçilmedi, hangi koşul değişseydi o seçilirdi. (5) <b>Karar:</b> toplamın okunuşu ve "yine de document seçersek" artı ve eksilerimiz. Kart 4 ve 9'da DocumentDB kaybeder. "İkisi birlikte" cevabı kart 1'de (katalog DocumentDB'de, arama kopyası OpenSearch'te), 5'te (cihaz kaydı DocumentDB'de, telemetri time series database'inde), 7'de (sipariş kaydı Aurora'da, okuma modeli DocumentDB'de), 8'de (metin araması istendiği gün) ve 9'da (oturum ElastiCache'te, tamamlanan teklif DocumentDB'de) yazılıdır. Kartta "seçilen servis" etiketi bu sayfanın değerlendirdiği servisi gösterir; DocumentDB kaybettiği kartlarda da ilk satırdadır. "Hangi koşul değişseydi" cümlelerinde "ve" ile bağlanan koşullar birlikte gerekir; kararın son cümlesi en etkili tek koşulu söyler. Simülasyonu olan beş kart M7'de aynı puanlarla adım adım oynar. Başlığa tıklayarak kartı aç.</p>
+<table class="data">
+  <caption>puan ölçeği: her kartta aynı</caption>
+  <thead><tr><th>Puan</th><th>Anlamı</th></tr></thead>
+  <tbody>
+    <tr><td class="y">10</td><td>Gereksinimi doğrudan, ek iş olmadan ve sayıları aşarak karşılar.</td></tr>
+    <tr><td class="y">8–9</td><td>Karşılar; küçük bir ek iş ya da küçük bir maliyet vardır.</td></tr>
+    <tr><td class="p">5–7</td><td>Karşılar, ama uygulama tarafında belirgin ek iş, boyutlandırma ya da bir sınırla.</td></tr>
+    <tr><td class="p">2–4</td><td>Kısmen: gereksinimin bir parçası karşılanmaz ya da ciddi bir bedelle karşılanır.</td></tr>
+    <tr><td class="n">0–1</td><td>Karşılamaz. Zorunlu bir gereksinimde 0 ya da 1 alan aday diskalifiye olur ama tabloda kalır.</td></tr>
+  </tbody>
+</table>
+{% for uc in usecases %}{{ k.usecase(uc) }}
+{% endfor %}
+
+<h2 id="away" data-short="Uzaklaştıran sinyaller"><span class="sec">M3</span>Document database'ten uzaklaştıran sinyaller</h2>
+<table class="data">
+  <thead><tr><th>İş yükündeki sinyal</th><th>Document neden zayıf bir seçim</th><th>Daha iyi seçim</th></tr></thead>
+  <tbody>
+    <tr><td>Saniyede on binlerce yazma, hep bilinen bir key ile (event, cihaz durumu, oturum)</td><td>Bütün yazmalar tek primary'den geçer (Ö8'in sınırı); shard'lamak ekibin operasyonudur.</td><td><a href="/e2etutorial/dynamodb?lang=tr">Key-value (DynamoDB)</a> ya da DocumentDB elastic cluster</td></tr>
+    <tr><td>Birçok ilişkili kayıt arasında kurallar (stok, sipariş, ödeme)</td><td>Transaction vardır ama foreign key ve CHECK yoktur; kurallar kodda yaşar (Ö5'in sınırı).</td><td><a href="/e2etutorial/aurora?lang=tr">İlişkisel database (Aurora)</a></td></tr>
+    <tr><td>Kelimelerle, yazım hatalarıyla ve relevance ile arama; her sayfada facet</td><td>Filtreler değer karşılaştırır, metni sıralamaz (Ö3'ün sınırı).</td><td><a href="/e2etutorial/opensearch?lang=tr">Search engine (OpenSearch)</a>, change stream ile beslenir</td></tr>
+    <tr><td>Yılların geçmişini tarayan raporlar</td><td>Büyük pipeline'lar uygulamayla aynı instance'ları kullanır (Ö6'nın sınırı).</td><td><a href="/e2etutorial/redshift?lang=tr">Data warehouse (Redshift)</a></td></tr>
+    <tr><td>İlişkilerin birçok adımı ("arkadaşlarımın aldıklarını alanlar")</td><td>Her adım bir okuma daha; <code>$graphLookup</code> sadece yeni sürümde ve sınırlı.</td><td><a href="/e2etutorial/neptune?lang=tr">Graph database (Neptune)</a></td></tr>
+    <tr><td>Sınırsız büyüyen liste (bütün sayfa görüntülemeleri, sensör ölçümleri)</td><td>Document 16 MiB'tır ve büyüyen array her okumayı büyütür (Ö2'nin sınırı).</td><td><a href="/e2etutorial/keyspaces?lang=tr">Keyspaces</a>, <a href="/e2etutorial/dynamodb?lang=tr">DynamoDB</a> ya da <a href="/e2etutorial/influxdb?lang=tr">Timestream for InfluxDB</a>, olay başına bir kayıt</td></tr>
+    <tr><td>Bir milisaniyenin altında okumalar ve tam anında süre sonu (oturum, sayaç)</td><td>Disk tabanlı motor; TTL silmesi "best effort".</td><td><a href="/e2etutorial/elasticache?lang=tr">Bellek içi key-value (ElastiCache)</a></td></tr>
+    <tr><td>Dosyalar (görseller, PDF'ler)</td><td>Büyük binary değerler database'i büyütür; 16 MiB sınırı.</td><td>Dosya için <a href="/e2etutorial/s3?lang=tr">object storage (S3)</a>, document'ta sadece key'i</td></tr>
+  </tbody>
+</table>
+
+<h2 id="questions" data-short="Mimarın soruları"><span class="sec">M4</span>Bir mimarın sorduğu sorular, bu sırayla</h2>
 <ol>
-  <li><b>Uygulama neyi birlikte okuyor?</b> Böyle her grup tek bir doküman adayıdır.</li>
-  <li><b>Aynı türdeki öğelerin farklı alanları var mı?</b> Evetse document modeli birçok isteğe bağlı column'dan ya da table'dan kurtarır.</li>
-  <li><b>Kullanıcılar hangi alanlarda filtreleyip sıralıyor?</b> Sık kullanılan her filtre bir index ister. Compound bir index'te alanların sırası önemlidir.</li>
-  <li><b>Kayıtlar arasında hangi kurallar geçerli olmalı?</b> Tek bir dokümanın içindeki kurallar kolaydır. Koleksiyonlar arası kurallar uygulamaya ya da relational bir database'e aittir.</li>
-  <li><b>Sonu olmadan büyüyen bir dizi var mı?</b> Böyle bir liste kendi koleksiyonuna ya da başka bir database'e aittir.</li>
-  <li><b>Saniyede kaç yazma?</b> Standart bir cluster'ın yazmalarını tek bir writer instance taşır. Bunun ötesinde elastic cluster'ları ya da DynamoDB'yi kullan.</li>
-  <li><b>Ekip şu an MongoDB API'sini kullanıyor mu?</b> O zaman DocumentDB kodu ve becerileri korur.</li>
+  <li><b>Uygulama hangi parçaları birlikte okuyor?</b> Birlikte okunan her grup bir document adayıdır (Ö1, Ö2).</li>
+  <li><b>Bir parça başka nesnelerle paylaşılıyor mu, zamanla büyüyor mu?</b> Paylaşılan ve sık değişen ya da sınırsız büyüyen parça ayrı tutulur (A3).</li>
+  <li><b>Aynı türün öğeleri farklı field'lar taşıyor mu?</b> Evetse document modeli migration'ları ve boş kolonları ortadan kaldırır (Ö2).</li>
+  <li><b>Hangi field'lara göre soruluyor ve ne sıklıkla?</b> Her sık soru bir index; compound index'te field sırası soruya göre (Ö3, Ö4).</li>
+  <li><b>Hangi kurallar kayıtlar arasında korunmalı?</b> Document içi kurallar kolaydır; collection'lar arası kurallar uygulamada ya da relational database'te (Ö5).</li>
+  <li><b>Saniyede kaç yazma?</b> Tek primary'nin sınırındaysa elastic cluster ya da key-value (Ö8).</li>
+  <li><b>Değişikliklere kim tepki verecek?</b> Arama kopyası, cache, yayın: change stream ve onun tutulma süresi (Ö7).</li>
+  <li><b>Okuma yazmanın kaç katı ve ne kadar güncel olmalı?</b> Replica sayısı ve read preference; kendi yazmasını görmesi gereken okuma primary'den (Ö8).</li>
+  <li><b>Ekip MongoDB API'sini kullanıyor mu ve hangi operator'ları?</b> Desteklenen API listesiyle karşılaştır ve engine sürümünü seç (A10).</li>
 </ol>
 
-<h3>AWS'de DocumentDB ve akrabaları</h3>
+<h2 id="aws" data-short="AWS'te document"><span class="sec">M5</span>AWS'te document ve ne zaman Amazon DocumentDB</h2>
+<p>AWS'te JSON document'ları saklayan birkaç seçenek var. Sorgu dilinde, yazma ölçeğinde ve operasyonda farklılaşırlar:</p>
 <table class="data">
-  <thead><tr><th>Seçenek</th><th>Nedir</th><th>Ne zaman seçilir</th></tr></thead>
+  <thead><tr><th>Seçenek</th><th>Nedir</th><th>Ne zaman seç</th></tr></thead>
   <tbody>
-    <tr><td>DocumentDB instance-based cluster</td><td>Bir primary instance, en fazla 15 replica, paylaşılan tek bir cluster volume (Bölüm 2).</td><td>Normal durum: bir katalog, profiller, içerik.</td></tr>
-    <tr><td>DocumentDB elastic cluster</td><td>Shard'lanmış bir cluster. AWS, elastic cluster'ların "saniyede milyonlarca okuma/yazma ve petabyte'larca storage kapasitesi olan iş yüklerini desteklediğini" söyler
-        (<a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/what-is.html">What is Amazon DocumentDB</a>).</td><td>Yazmalar ya da boyut tek bir primary instance'ın ötesindeyse.</td></tr>
-    <tr><td><a href="/e2etutorial/dynamodb">DynamoDB</a></td><td>Serverless bir key-value ve document database'i.</td><td>Bütün erişim, çok yüksek ölçekte, bilinen bir key ile ve sunucusuz olacaksa.</td></tr>
-    <tr><td>JSONB ile <a href="/e2etutorial/aurora">Aurora PostgreSQL</a></td><td>JSON column type'ı olan relational bir database.</td><td>Verinin çoğu relational ise ve sadece bazı alanlar serbestse.</td></tr>
+    <tr><td><b>DocumentDB instance-based cluster</b></td><td>Bir primary, en fazla 15 replica, tek bir cluster volume. "Cluster volume—Uses a cloud-native storage service to replicate data six ways across three Availability Zones" (<a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/how-it-works.html">How it works</a>).</td><td>Normal durum: katalog, profil, içerik, cihaz kaydı; ekip MongoDB API'sini kullanıyor.</td></tr>
+    <tr><td>DocumentDB serverless</td><td>Instance sınıfı yerine bir DCU aralığı; "a capacity range of 0.5 - 256 DCUs", her DCU "approximately 2 gibibytes (GiB) of memory"; 5.0 ve 8.0'da (<a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/docdb-serverless-how-it-works.html">How serverless works</a>).</td><td>Yük gün içinde dalgalı; geliştirme ve test ortamları.</td></tr>
+    <tr><td>DocumentDB elastic cluster</td><td>Veriyi hash ile shard'lara bölen biçim; "support workloads with millions of reads/writes per second and petabytes of storage capacity", en fazla 32 shard (<a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/elastic-how-it-works.html">Elastic clusters</a>). Bazı özellikler (change stream, $jsonSchema) elastic cluster'da yoktur.</td><td>Yazma hacmi ya da boyut tek primary'nin ötesinde ve model document kalacak.</td></tr>
+    <tr><td>DocumentDB global clusters</td><td>Başka bölgelerde okuma kopyaları; "typical lag of less than one second", ikincil bölge bir dakikadan kısa sürede yazmaya açılabilir (<a href="https://aws.amazon.com/documentdb/features/">DocumentDB features</a>).</td><td>Birkaç bölgede okuyan kullanıcılar ya da bölgeler arası felaket kurtarma.</td></tr>
+    <tr><td><a href="/e2etutorial/dynamodb?lang=tr">DynamoDB</a></td><td>Serverless key-value database; value'lar JSON olabilir (map ve list), item 400 KB.</td><td>Bütün erişim bilinen bir key ile, ölçek çok büyük ya da yazma ağırlıklı, sunucu istenmiyor.</td></tr>
+    <tr><td><a href="/e2etutorial/aurora?lang=tr">Aurora PostgreSQL</a> ile JSONB</td><td>JSON kolonu olan relational database.</td><td>Verinin çoğu ilişkili, sadece birkaç field serbest.</td></tr>
+    <tr><td><a href="/e2etutorial/opensearch?lang=tr">OpenSearch</a></td><td>JSON document'ları index'leyen search engine.</td><td>Metin araması, facet ve log analizi; kaynak veri başka bir yerde.</td></tr>
+  </tbody>
+</table>
+<p>DocumentDB'nin içinde birkaç seçenek bir tasarımı değiştirir:</p>
+<table class="data">
+  <thead><tr><th>Seçenek</th><th>Ne yapar</th><th>Ne zaman seç</th></tr></thead>
+  <tbody>
+    <tr><td>Instance sınıfı ve replica sayısı</td><td>Primary'nin CPU ve belleğini, okuma kapasitesini belirler; instance'lar farklı sınıflarda olabilir. Replica'lar "regardless of the storage volume size" dakikalar içinde eklenir.</td><td>Okuma artıyorsa replica, yazma ve working set büyüyorsa daha büyük primary.</td></tr>
+    <tr><td>Standard ve I/O-Optimized</td><td>Standard: instance saati, storage ve milyon I/O isteği başına ödeme. I/O-Optimized: I/O ücreti yok, instance ve storage fiyatı daha yüksek (<a href="https://aws.amazon.com/documentdb/pricing/">DocumentDB pricing</a>).</td><td>Yazma ve tarama yoğun iş yüklerinde I/O-Optimized; düşük I/O'da Standard.</td></tr>
+    <tr><td>Read preference</td><td><code>secondaryPreferred</code> okumayı replica'lara verir; "Reads from Amazon DocumentDB replicas are eventually consistent with minimal replica lag—usually less than 100 milliseconds".</td><td>Katalog gibi okuma ağırlıklı ekranlar; kendi yazmasını görmesi gereken okuma için primary.</td></tr>
+    <tr><td>Change stream tutulma süresi</td><td>Cluster parameter group'taki <code>change_stream_log_retention_duration</code>: varsayılan üç saat, 1 saat ile 7 gün arası (<a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/change_streams.html">Change streams</a>).</td><td>Tüketici uzun kesintilerden sonra devam etmeliyse daha uzun; bedeli storage ve I/O.</td></tr>
+    <tr><td>Engine sürümü (3.6, 4.0, 5.0, 8.0)</td><td>Hangi MongoDB API'sinin ve hangi operator'ların destekleneceğini belirler; major sürüm yükseltmesi ayrı bir işlemdir.</td><td>Yeni projelerde en yeni sürüm; geçişte uygulamanın operator listesine göre.</td></tr>
   </tbody>
 </table>
 
-<h3>Lale Market'te DocumentDB'nin yeri</h3>
-<p>DocumentDB kataloğun kaynak verisidir (source of truth). Ana sayfa, kategori sayfaları ve ürün sayfası ondan okur.
-   Arama motoru (OpenSearch), Seed'in oluşturduğu adların ve açıklamaların bir kopyasını tutar. Aurora ürün id'sinin, adın, fiyatın ve stoğun bir kopyasını tutar, çünkü checkout bunlara kendi transaction'larının içinde ihtiyaç duyar.
-   Bir production mağazasında DocumentDB'deki bir ürün değişikliği kopyalara bir event olarak, örneğin bir change stream'den ulaşırdı.</p>
+<h2 id="lalemarket-arch" data-short="Lale Market'teki yeri"><span class="sec">M6</span>Lale Market'te DocumentDB'nin yeri</h2>
+<p>Lale Market on engine kullanır ve her engine tek bir iş yapar. DocumentDB kataloğun kayıt sistemidir: ana sayfa (kategori menüsü bir <code>$group</code>), kategori sayfaları (index'li filtreler ve "Collection scan" deneyi) ve ürün sayfası (projection deneyi) ondan okur. Ürün türüne göre değişen özellikler <code>attributes</code> embedded document'ındadır (kart 1). Diğer engine'ler ürünün <code>_id</code>'sini ödünç alır: DynamoDB'deki sepet, Aurora'daki sipariş satırları (checkout transaction'ı için ürün id'si, ad, fiyat ve stok Aurora'da da tutulur), OpenSearch'teki arama kopyası, Neptune'daki satın alma graph'ı. Bu kopyaları Lale Market'te Seed bir kez yazar; bir production sisteminde katalogdaki bir değişiklik kopyalara change stream ile bir event olarak ulaşır (Ö7, kart 8'in "ikisi birlikte" cevabı).</p>
+<div class="flow">
+  <div class="box pk">DocumentDB<small>products: kayıt sistemi</small></div><span class="arrow">→</span>
+  <div class="box">change stream<small>production deseni</small></div><span class="arrow">→</span>
+  <div class="box sk">OpenSearch<small>arama kopyası</small></div>
+  <div class="box sk">Aurora<small>ad, fiyat, stok kopyası</small></div>
+</div>
+<p class="flow-cap">Kataloğun yeri. Ürün bir yerde yazılır; kopyalar onu izler. Lale Market'te kopyaları Seed bir kez yazdığı için change stream açık değildir.</p>
 
-<h3>Simülasyon: bırak gereksinimler seçsin</h3>
-<p>Her iş yükünde beş aday başlar. Her gereksinim, onu karşılayamayan adayları eler. Oynat'a basmadan önce kazananı tahmin et.</p>
-{{ k.sim("decide_catalog", "İş yükü 1: bir ürün kataloğu") }}
-{{ k.sim("decide_checkout", "İş yükü 2: checkout") }}
-{{ k.sim("decide_devices", "İş yükü 3: 5 milyon cihazın durumu") }}
-<p>İş yükü 1 için bir not: JSONB'li Aurora da serbest alanlar saklayabilir. Simülasyon onu sadece son gereksinimde (MongoDB API'si) eler.
-   MongoDB kodu olmayan yeni bir ekip için ikisi de geçerli seçimlerdir. O zaman ekranların ihtiyaç duyduğu query'lerin zahmetini karşılaştır.</p>
+<h2 id="decide" data-short="Karar simülasyonları"><span class="sec">M7</span>Karar simülasyonları: M2'nin beş kartı adım adım</h2>
+<p>Her simülasyon M2'deki bir kartın verisini kullanır: aynı iş yükü, aynı R1–R5, aynı üç aday, aynı 10'luk puanlar ve aynı gerekçeler. Fark şudur: simülasyon gereksinimleri teker teker açar ve puan tablosu adım adım dolar; sonunda kazananı, ikinciyi ve kartın karar paragrafını görürsün. Başlık kazananı söyler; tahmin edilecek şey hangi gereksinimin kararı verdiğidir: Oynat'a basmadan önce kartı okuyup "hangi R'de ayrışacak" diye tahmin et. Puan tablosunda ✓ işareti 8 ve üzeri puanı gösterir; yeşil satır önde olan adaydır. Simülasyonların altındaki ortak renk açıklamasındaki "kilitli" ve "okundu ve atlandı" bu beş simülasyonda kullanılmaz.</p>
+<p>Beş simülasyonun biri net bir kazanma (katalog), biri net bir kaybetme (event log'ları: DynamoDB kazanır), üçü yakın yarıştır (profiller, sipariş document'ları, katalog araması). Gerçek mimari kararların çoğu yakın yarışlar gibi görünür: iki güçlü aday ve karar veren bir ya da iki gereksinim.</p>
+{{ k.sim("win_catalog", "Kart 1: değişken özellikli ürün kataloğu (net bir kazanma)") }}
+{{ k.sim("lose_events", "Kart 4: esnek şemalı event log'ları (net bir kaybetme: DynamoDB kazanır)") }}
+{{ k.sim("race_profiles", "Kart 2: kullanıcı profilleri, DocumentDB mi DynamoDB mi? (yakın yarış)") }}
+{{ k.sim("race_orders", "Kart 7: sipariş document'ları, DocumentDB mi Aurora mı? (yakın yarış)") }}
+{{ k.sim("race_search", "Kart 8: katalog araması, DocumentDB mi OpenSearch mü? (yakın yarış)") }}
+<p>Her kararın son cümlesine bak: "Bir koşul değişseydi". İyi bir mimar bu cümleyi karar kaydına yazar. Koşul daha sonra değişirse ekip kararın yeniden kontrol edilmesi gerektiğini bilir: kart 8'de metin araması istendiği gün OpenSearch eklenir.</p>
 
-{{ k.quiz("doc-a1", "Bir emlak sitesinde evler, ofisler ve arsalar var. Her türün 10 ile 40 arası başka alanı var. Kullanıcılar bunların birçoğunda filtreliyor. En iyi ne uyar?",
-   ["Sık filtrelerde index'leri olan bir document database", "Her alan için bir item'lı bir key-value table'ı", "İlanları her gece yükleyen bir data warehouse", "İlan başına bir hash'li bellek içi bir cache"],
-   0, "Tür başına farklı alanlar, birçok alanda filtreler ve ilan başına tek okuma, bir document modelinin sinyalleridir.") }}
-{{ k.quiz("doc-a2", "Bir ekip her kullanıcının bütün sayfa görüntülemelerini kullanıcı dokümanının içinde, bir dizide saklamak istiyor. Problem nedir?",
-   ["Dizi sonu olmadan büyür, her okuma ve yazma büyür", "Dokümanlar hiç nesne dizisi tutamaz", "DocumentDB ondan fazla elemanlı dizileri siler", "Kullanıcı dokümanının o zaman _id alanı olamaz"],
-   0, "Bir doküman en fazla 16 MiB olabilir ve büyüyen bir dizi profilin her okumasını büyütür. Sayfa görüntülemeleri kendi koleksiyonlarına ya da zaman sıralı bir store'a aittir.") }}
-{{ k.quiz("doc-a3", "Bir ürün değişikliği arama index'ini de değiştirmeli. Hangi tasarım kataloğu kaynak veri olarak tutar?",
-   ["Değişikliği DocumentDB'ye yaz, sonra event olarak OpenSearch'e gönder", "Değişikliği OpenSearch'e yaz, her gece geri kopyala", "Değişikliği sadece OpenSearch'e yaz, kataloğu durdur", "Değişikliği tarayıcıda ikisine de herhangi bir sırayla yaz"],
-   0, "Bilginin sahibi tek bir sistemdir (DocumentDB). Kopyalar onu event'lerle takip eder. Böylece başarısız bir kopya tekrarlanabilir ve kaynak doğru kalır.") }}
+{{ k.quiz("doc-a1", "Bir emlak sitesinde konut, ofis ve arsa ilanları var. Her türün 10 ile 40 arası farklı field'ı var ve kullanıcılar bunların çoğuna göre filtreliyor. Saniyede 50 yeni ilan. En iyi ne oturur?",
+   ["Sık filtrelere index kurulmuş bir document database", "Her field için bir item olan key-value table", "İlanları her gece yükleyen bir data warehouse", "Her ilan için bir hash tutan bellek içi cache"],
+   0, "Türe göre farklı field'lar (Ö2), birçok field'a göre filtre (Ö3, Ö4) ve küçük yazma hacmi document modelinin sinyalleridir. Metin araması da istenirse bir arama kopyası eklenir.") }}
+{{ k.quiz("doc-a2", "Bir oyun her oyuncu eyleminde bir event yazıyor: saniyede 60.000, 14 gün saklanıyor, sorular hep oyuncu id'si ve zamanla. Ekip MongoDB biliyor. Hangi servis ve hangi koşul cevabı değiştirir?",
+   ["DynamoDB. Yazma saniyede birkaç bine inseydi ve event içine göre sorgu ana iş olsaydı DocumentDB yarışa girerdi.", "DocumentDB. Ekip MongoDB bilmeseydi DynamoDB kazanırdı.", "Aurora. Event'ler daha küçük olsaydı DocumentDB kazanırdı.", "Neptune. Oyuncular arkadaş olsaydı DocumentDB kazanırdı."],
+   0, "Yazma hacmi tek primary'nin sınırını aşar ve sorular key iledir; kart 4'ün aynısı. Ekip bilgisi tercihli bir gereksinimdir, zorunlu yazma ölçeğini değiştirmez.") }}
+{{ k.quiz("doc-a3", "Katalog DocumentDB'de. Ürün ekibi bu çeyrek yazım hatası toleranslı ve relevance sıralı arama istiyor. En iyi mimari hangisi?",
+   ["Katalog DocumentDB'de kalır, arama kopyası change stream ile OpenSearch'e akar", "Katalog tamamen OpenSearch'e taşınır ve DocumentDB kapatılır", "Her arama bir COLLSCAN ile DocumentDB'de çalışır", "Arama için her ürün DynamoDB'ye ikinci kez yazılır"],
+   0, "Kayıt sistemi bir yerde, arama kopyası search engine'de: kart 8'in 'bir koşul değişseydi' cümlesi ve kart 1'in kafa kafaya paragrafı. Arama index'i kayıt sistemi değildir.") }}
 
-<div class="part"><b>Bölüm 1</b><h2 id="part1" data-short="BÖLÜM 1: Document modeli">MongoDB API'sinin document modeli</h2>
-<p>Dokümanlar, koleksiyonlar, query'ler, index'ler ve aggregation.</p></div>
+<div class="part"><b>Bölüm B</b><h2 id="partB" data-short="Bölüm B: İleri">İleri: pratikte Amazon DocumentDB</h2>
+<p>Bölüm A'daki fikirlerin DocumentDB'deki isimleri, canlı Lale Market document'ı, find ve explain, update operator'ları, aggregation, değişiklik akışı ve süre sonu, maliyet.</p></div>
 
-<h2 id="why" data-short="Neden doküman?"><span class="sec">02</span>Neden dokümanlar? Dosya klasörü</h2>
-<p>Bir sigorta ofisi her müşteri için bir kâğıt klasör tutar. Klasörde poliçe, sigortalı araçların listesi, adresler ve imzalı formlar vardır.
-   Bir müşteri aradığında memur raftan tek bir klasör alır ve her şeyi görür. Kimsenin beş defter açıp numaraları eşleştirmesi gerekmez.</p>
-{% call k.callout("analogy", "Analoji") %}
-<p>Relational bir database bir defter takımıdır: biri müşteriler, biri araçlar, biri adresler için. Bir müşteriyi görmek için her defteri açar ve müşteri numarasını eşleştirirsin.
-   Bir document database bir klasör rafıdır: bir şeyle ilgili her şey onun klasöründedir. Klasör dokümandır. Raf koleksiyondur.</p>
-{% endcall %}
-<p>Klasörün bir bedeli var. Bazen aynı bilgi birçok klasörde olmak zorundadır, örneğin bir sigorta acentesinin adresi. O zaman her klasörde bir kopya olur ve bir değişiklik bütün kopyaları güncellemek zorundadır.
-   Bu yüzden document modeli en iyi, her bilginin tek bir klasöre ait olduğu ya da bir kopyanın kabul edilebilir olduğu durumda çalışır.</p>
-
-<h2 id="model" data-short="Doküman ve identifier'lar"><span class="sec">03</span>Model: dokümanlar, koleksiyonlar ve identifier'lar</h2>
-<p>{{ k.term("document") }}, bir JSON nesnesi gibi alan ve değer çiftlerinden oluşan bir kümedir. Bir değer bir sayı, bir metin, bir tarih, bir dizi ya da başka bir doküman (iç içe bir nesne) olabilir.
-   Aynı türdeki dokümanlar bir {{ k.term("collection") }}'a girer. Bir koleksiyonun sabit bir schema'sı yoktur.
-   Bu, Engine App'in <code>db.products.find_one({ _id: 'P0001' })</code> ile okuduğu şekliyle, Lale Market'in gerçek bir ürün dokümanıdır:</p>
+<h2 id="names" data-short="Canlı document ve isimler"><span class="sec">B1</span>DocumentDB'de isimler, canlı bir document ve gerçek index'ler</h2>
+<p>A2'deki document, field, collection ve <code>_id</code> ile A3'teki embedded document ve array DocumentDB'de aynı adlarla geçerlidir; bu bölüm onları canlı Lale Market collection'ından gerçek bir document'ın üzerine koyar. Bölüm A'nın terimleri değişmez. Yeni adlar veri formatı ve kimlik üretimindedir: <b>BSON</b> ve <b>ObjectId</b>. Diğer ürünlerdeki karşılıklar:</p>
+<table class="data">
+  <thead><tr><th>Genel fikir</th><th>MongoDB</th><th>DynamoDB</th><th>Amazon DocumentDB</th></tr></thead>
+  <tbody>
+    <tr><td>Document (A2)</td><td>document (BSON)</td><td>item</td><td>document (BSON)</td></tr>
+    <tr><td>Field (A2)</td><td>field</td><td>attribute</td><td>field</td></tr>
+    <tr><td>Collection (A2)</td><td>collection</td><td>table</td><td>collection, bir database'in içinde, database bir cluster'ın içinde</td></tr>
+    <tr><td class="c-pk"><code>_id</code> (A2)</td><td><code>_id</code></td><td>primary key</td><td><code>_id</code></td></tr>
+    <tr><td>Embedded document, array (A3)</td><td>embedded document, array</td><td>map, list</td><td>embedded document, array</td></tr>
+    <tr><td>Index (A5)</td><td>index</td><td>GSI, LSI</td><td>index; collection başına en fazla 64</td></tr>
+    <tr><td>Primary ve replica (A9)</td><td>replica set: primary, secondary</td><td>(replica yok, partition'lar)</td><td>cluster: primary instance, replica instance</td></tr>
+  </tbody>
+</table>
+{{ k.concept("BSON",
+   "Binary JSON: document'ların diskte ve ağda taşındığı ikili format. JSON'a tipler ekler: tam sayı ve ondalık sayı ayrımı, tarih, ObjectId, ikili veri. Driver uygulamanın nesnesini BSON'a çevirir; uygulama JSON görür.",
+   "P0001'in <code>price</code>'ı bir double, <code>stock</code>'u bir int32, <code>_id</code>'si bir string'dir. JSON'da üçü de sadece \"değer\"dir.",
+   "Bir mektubun zarfındaki posta kodu ve barkod: içerik aynı, ama makinenin okuyacağı ek bilgiler eklenmiş.") }}
+{{ k.concept("ObjectId",
+   "Uygulama <code>_id</code> vermediğinde database'in ürettiği 12 byte'lık değer: zaman damgası ve benzersizliği sağlayan parçalar. Zamana göre artar, bu yüzden ObjectId'ye göre sıralamak yaklaşık ekleme sırasıdır.",
+   "Lale Market ürünlerinde ObjectId yoktur, çünkü <code>_id</code>'yi uygulama verir (<code>P0001</code>). Bir yorum collection'ı kursaydı her yoruma ObjectId üretilirdi.",
+   "Bir kuyruk makinesinin verdiği numaralı fiş: makine numarayı verir, sen seçmezsin.") }}
+<p>Bu gerçek bir document'tır. Workshop'un Engine App'i (Lale Market'in DocumentDB'ye bağlanan küçük web uygulaması, C3) canlı DocumentDB'ye bir <code>find_one</code> gönderdi; cevap cluster'ın yazma adresinden geldi. Çıktıdaki İngilizce satırlar Engine App'in kendi notlarıdır:</p>
+{% call k.live("products collection'ının bir document'ı, canlı DocumentDB'nin döndürdüğü hâliyle (db.products.find_one({ _id: 'P0001' }))") %}
 <pre><code>{
   "_id": "P0001",
   "name": "Alpen Kablosuz Kulaklık 1",
   "category": "Elektronik",
   "brand": "Alpen",
+  "type": "Kablosuz Kulaklık",
   "price": 3373.84,
   "stock": 128,
+  "color": "siyah",
   "rating": 4.8,
   "attributes": { "renk": "siyah", "garanti_ay": 12, "agirlik_kg": 2.45 },
   "tags": [ "hızlı kargo", "çevreci" ],
   "description": "Alpen markalı siyah kablosuz kulaklık. Elektronik kategorisinde, şık bir ürün."
-}</code></pre>
-<table class="clause">
-  <tr><td>"_id": "P0001"</td><td>Dokümanın identifier'ı. Koleksiyon onun sahibidir: her dokümanın tam olarak bir tane vardır ve koleksiyondaki iki dokümanın aynı değeri olamaz. DocumentDB onu her zaman index'ler.</td></tr>
-  <tr><td>"name", "category", "brand"</td><td>En üst seviyedeki metin alanları.</td></tr>
-  <tr><td>"price", "stock", "rating"</td><td>Sayı alanları. <code>{ price: { $lt: 1000 } }</code> gibi bir filtre onları sayı olarak karşılaştırır.</td></tr>
-  <tr><td>"attributes": { ... }</td><td>İç içe bir doküman. Alanlarının kendi identifier'ı yoktur. Sadece bu ürüne aittirler. Bir query onlara dot notation ile ulaşır: <code>'attributes.renk'</code>.</td></tr>
-  <tr><td>"tags": [ ... ]</td><td>Metinlerden oluşan bir dizi. Bir dizi üzerindeki filtre, bir eleman eşleştiğinde eşleşir.</td></tr>
-</table>
-<p>Bu sayfanın öğretim koleksiyonu Lale Market'in yedi gerçek ürününü tutar (alanlarının bir alt kümesi):</p>
-{{ k.sample("products_docs", "products (200 dokümandan 7'si, okumak için düzleştirilmiş)", key=["_id"]) }}
-
-<h3>Hangi identifier'ın sahibi kim</h3>
+}
+// One document, 12 top-level fields, 406 bytes.</code></pre>
+{% endcall %}
+<p>Document'ı satır satır oku. <code>_id</code> uygulamanın verdiği ürün id'sidir. On bir üst seviye field daha vardır; <code>attributes</code> üç field'lı bir embedded document, <code>tags</code> iki elemanlı bir array'dir. <code>color</code> ile <code>attributes.renk</code> aynı bilgiyi iki yerde taşır: Seed'in eski sürümünden kalan bir kopya, A3'teki "kopya eskiyebilir" uyarısının canlı bir örneği. Boyut 406 byte'tır: 16 MiB sınırının yaklaşık kırk binde biri.</p>
 <table class="data">
-  <thead><tr><th>Identifier</th><th>Sahibi kim</th><th>Kim ödünç alıyor</th></tr></thead>
+  <caption>BSON tipleri: canlı document'ta ve sık kullanılanlar</caption>
+  <thead><tr><th>Tip</th><th>Ne saklar</th><th>Örnek</th></tr></thead>
   <tbody>
-    <tr><td>Bir ürünün <code>_id</code>'si (örneğin <code>P0001</code>)</td><td>products koleksiyonu onun sahibidir. DocumentDB aynı <code>_id</code>'li ikinci bir dokümanı reddeder.</td>
-        <td>DynamoDB'deki sepet, Aurora'daki order line'lar, OpenSearch'teki arama index'i ve Neptune'deki graph onu ödünç alır. DocumentDB bu ödünç alanları bilmez ve onları kontrol etmez.</td></tr>
-    <tr><td>İç içe bir doküman (<code>attributes</code>)</td><td>Identifier'ı yoktur. Onu içeren dokümana aittir.</td><td>Kimse onu ödünç alamaz. Ona atıfta bulunmak için üst dokümanına atıfta bulunursun.</td></tr>
-    <tr><td>Bir dizinin elemanı (<code>tags</code> içindeki <code>"çevreci"</code>)</td><td>Identifier'ı yoktur. Konumu değişebilir.</td><td>Kimse onu ödünç alamaz.</td></tr>
-    <tr><td>Başka bir koleksiyona referans (Lale Market'te yok)</td><td>Örnek: <code>product_id: "P0001"</code> içeren bir yorum dokümanı. Değerin sahibi products koleksiyonudur.</td><td>Yorum koleksiyonu onu ödünç alır. PostgreSQL'deki bir foreign key'in aksine DocumentDB ürünün var olduğunu kontrol etmez.</td></tr>
+    <tr><td>String</td><td>UTF-8 metin</td><td><code>"name": "Alpen Kablosuz Kulaklık 1"</code></td></tr>
+    <tr><td>Double</td><td>Ondalık sayı (64 bit)</td><td><code>"price": 3373.84</code>, <code>"rating": 4.8</code></td></tr>
+    <tr><td>Int32 / Int64</td><td>Tam sayı</td><td><code>"stock": 128</code>, <code>"garanti_ay": 12</code></td></tr>
+    <tr><td>Decimal128</td><td>Yuvarlama hatası olmayan ondalık; para için</td><td><code>NumberDecimal("3373.84")</code></td></tr>
+    <tr><td>Object</td><td>Embedded document</td><td><code>"attributes": { ... }</code></td></tr>
+    <tr><td>Array</td><td>Sıralı liste</td><td><code>"tags": [ ... ]</code></td></tr>
+    <tr><td>ObjectId</td><td>12 byte'lık üretilmiş id</td><td><code>ObjectId("6710bc96f2612d11c720ce01")</code></td></tr>
+    <tr><td>Date</td><td>Zaman noktası (milisaniye); TTL index bunu ister</td><td><code>ISODate("2026-10-28T14:30:00Z")</code></td></tr>
+    <tr><td>Boolean, Null</td><td>Doğru/yanlış, boş</td><td><code>"done": true</code></td></tr>
   </tbody>
 </table>
-{{ k.quiz("doc-q0", "Yukarıdaki products table'ına bak. Bir dokümanda tags: ['yeni', 'indirim'] var. Hangi filtre onunla eşleşir?",
-   ["{ tags: 'indirim' }", "{ tags: 'indirim, yeni' }", "{ 'tags.indirim': true }", "{ tags: { $size: 1 } }"],
-   0, "Tek değerli bir dizi alanı filtresi, bir eleman değere eşit olduğunda eşleşir. Dizinin iki elemanı var, bu yüzden $size: 1 eşleşmez. Bu doküman P0026'dır.") }}
+{% call k.live("canlı collection'ın sayıları (db.runCommand({ collStats: 'products' }))") %}
+<pre><code>count | avgObjSize (bytes) | size (bytes) | nindexes | totalIndexSize (bytes)
+------+--------------------+--------------+----------+-----------------------
+  200 |            502.865 |       100573 |        4 |                  81920</code></pre>
+{% endcall %}
+<p>200 document, ortalama 503 byte, toplam yaklaşık 100 KB; dört index'in toplamı 80 KB. Index'lerin veri kadar yer tutması küçük collection'larda normaldir ve A5'teki "her index bir maliyet" cümlesinin canlı karşılığıdır. Index'lerin kendisi:</p>
+{% call k.live("canlı collection'ın index'leri (db.products.getIndexes())") %}
+<pre><code>name                 | key
+---------------------+------------------------------
+_id_                 | {"_id": 1}
+category_1_rating_-1 | {"category": 1, "rating": -1}
+attributes.renk_1    | {"attributes.renk": 1}
+rating_-1            | {"rating": -1}</code></pre>
+{% endcall %}
+<table class="clause">
+  <tr><td>_id_</td><td>Her collection'da kendiliğinden vardır; <code>_id</code> ile okumayı (Ö1) karşılar.</td></tr>
+  <tr><td>category_1_rating_-1</td><td>Compound: önce category artan, sonra rating azalan. Kategori sayfası "Kitap, en iyi puanlı önce" bunu kullanır.</td></tr>
+  <tr><td>attributes.renk_1</td><td>Embedded field index'i: renk filtresi. Dot notation index adında da görünür.</td></tr>
+  <tr><td>rating_-1</td><td>Ana sayfanın "en yüksek puanlılar" listesi; compound index'in ikinci field'ı tek başına kullanılamadığı için ayrı kuruldu (A5'teki tablonun üçüncü satırı).</td></tr>
+</table>
+{% call k.ask("color ve attributes.renk aynı bilgiyse hangisi doğru?") %}
+<p>Şemasız modelde database bunu bilemez; doğru olan, uygulamanın okuduğu field'dır. Lale Market'in kategori sayfası <code>attributes.renk</code>'i filtreler ve onun index'i vardır. Böyle kopyalar zamanla birbirinden ayrılabilir; bir doğrulama şeması ya da tek bir veri katmanı bunu önler.</p>
+{% endcall %}
+{% call k.ask("Neden price Decimal128 değil de Double?") %}
+<p>Seed'in Python driver'ı Python'un float'ını Double olarak yazar. Görüntüleme için sorun değildir; ama para hesaplarında (toplam, indirim) Double yuvarlama hatası yapabilir. Para hesabı Lale Market'te Aurora'da <code>numeric</code> tipiyle yapılır; katalog sadece gösterir.</p>
+{% endcall %}
 
-<h2 id="find" data-short="find, filtre, projection"><span class="sec">04</span>find: filtreler, iç içe alanlar ve projection'lar</h2>
-<p>Bir find'ın iki parçası vardır. Filtre dokümanları seçer. {{ k.term("projection") }}, geri gelen alanları seçer.</p>
-{% call k.sql("Q1", "Siyah elektronikler, en ucuz önce, dört alan") %}
+<h2 id="reads" data-short="find ve explain"><span class="sec">B2</span>Okumalar: find, dot notation ve planı okumak</h2>
+<p>A4'teki filtre ve projection DocumentDB'de <code>find</code> komutudur; A5'teki IXSCAN ve COLLSCAN <code>explain</code> ile görünür olur. Önce iç içe bir field'a göre bir filtre:</p>
+{% call k.sql("Q1", "Siyah elektronikler, en ucuz önce, dört field") %}
 <pre><code>db.products.find(
   { category: 'Elektronik', 'attributes.renk': 'siyah' },
-  { name: 1, price: 1, 'attributes.renk': 1 }
+  { name: 1, price: 1, 'attributes.renk': 1, 'attributes.garanti_ay': 1 }
 ).sort({ price: 1 })</code></pre>
 <table class="clause">
-  <tr><td>db.products</td><td>Güncel database'deki <code>products</code> koleksiyonu (Lale Market'te <code>shop</code>).</td></tr>
-  <tr><td>{ category: 'Elektronik', ... }</td><td>Filtre. Her alan: değer çifti bir koşuldur. Tek nesnedeki iki çift AND demektir: ikisi de doğru olmalı.</td></tr>
-  <tr><td>'attributes.renk': 'siyah'</td><td>Dot notation, <code>attributes</code> iç içe dokümanının içindeki <code>renk</code> alanına ulaşır. Nokta yüzünden tırnaklar gereklidir.</td></tr>
-  <tr><td>{ name: 1, price: 1, 'attributes.renk': 1 }</td><td>Projection. <code>1</code> "bu alanı döndür" demektir. <code>_id</code> varsayılan olarak gelir. Projection cevabı küçültür, ama DocumentDB yine de dokümanın tamamını okur.</td></tr>
-  <tr><td>.sort({ price: 1 })</td><td>Sonuçları sırala. <code>1</code> artan (en ucuz önce), <code>-1</code> azalan sıradır.</td></tr>
+  <tr><td>db.products</td><td><code>shop</code> database'indeki <code>products</code> collection'ı.</td></tr>
+  <tr><td>{ category: 'Elektronik', ... }</td><td>Filtre. Bir nesnedeki iki koşul VE demektir.</td></tr>
+  <tr><td>'attributes.renk': 'siyah'</td><td>Dot notation: <code>attributes</code> embedded document'ının içindeki <code>renk</code>. Nokta yüzünden tırnak gerekir.</td></tr>
+  <tr><td>{ name: 1, price: 1, ... }</td><td>Projection: <code>1</code> "bu field dönsün" demektir. <code>_id</code> varsayılan olarak döner.</td></tr>
+  <tr><td>.sort({ price: 1 })</td><td>Fiyata göre artan sıralama; <code>-1</code> azalan.</td></tr>
 </table>
 {% endcall %}
-{% call k.predict("products table'ını kullan. Hangi dokümanlar { category: 'Elektronik', 'attributes.renk': 'siyah' } ile eşleşir? Hiçbir index yardım etmiyorsa DocumentDB kaç doküman incelemek zorunda?") %}
-<p>Tek bir doküman eşleşir: P0001. P0026 Elektronik ama yeşil, P0044 siyah ama bir kitap. Kullanılabilir bir index yoksa DocumentDB yedi dokümanın hepsini inceler. Her testi görmek için simülasyonu oynat.</p>
+{% call k.live("canlı collection'da aynı find (Engine App üzerinden)") %}
+<pre><code>_id   | name                              | price   | attributes.renk | attributes.garanti_ay
+------+-----------------------------------+---------+-----------------+----------------------
+P0091 | Kapadokya Mekanik Klavye 91       |  235.79 | siyah           | 24
+P0066 | Rhein Powerbank 66                |  951.92 | siyah           | 24
+P0021 | Bosphorus Akıllı Saat 21          | 1050.63 | siyah           | 36
+P0181 | Alpen Bluetooth Hoparlör 181      | 1312.95 | siyah           | 36
+P0186 | Kapadokya Bluetooth Hoparlör 186  | 1421.57 | siyah           | 24
+P0151 | Anadolu Powerbank 151             | 1947.82 | siyah           | 12
+P0136 | Bosphorus Kablosuz Kulaklık 136   | 2350.18 | siyah           | 12
+P0166 | Anadolu Akıllı Saat 166           | 3258.53 | siyah           | 24
+P0001 | Alpen Kablosuz Kulaklık 1         | 3373.84 | siyah           | 12
+// 9 documents match the filter. 4.6 ms</code></pre>
 {% endcall %}
-{{ k.sim("scan", "Kullanılabilir index'i olmayan bir filtre: COLLSCAN") }}
-<p>Operatörler bir dolar işaretiyle başlar, böylece DocumentDB onları alan adlarından ayırt edebilir. Örnekler: <code>$gt</code> ve <code>$gte</code> (büyüktür, büyük ya da eşittir),
-   <code>$in</code> (bir listeden biri), <code>$exists</code> (alan dokümanda var ya da yok). Bir filtre bunları birleştirebilir: <code>{ 'attributes.garanti_ay': { $gte: 24 }, rating: { $gte: 3.5 } }</code>.</p>
-
-<h2 id="index" data-short="Index ve explain"><span class="sec">05</span>Index'ler: DocumentDB cevaplamak için neyi okur</h2>
-<p>Index olmadan DocumentDB her dokümanı test etmek zorundadır. Buna {{ k.term("collection scan") }} (COLLSCAN) denir. Bir index, bir ya da daha fazla alanın değerlerini sıralı bir ağaçta tutar
-   ve her entry bir dokümanı gösterir. Bir index ile DocumentDB doğrudan eşleşen dokümanlara gider. Plan IXSCAN ve FETCH aşamalarını gösterir.</p>
-{{ k.fig("docdb-btree.png", "her node key'lerini sıralı tutar. Bir arama root'tan bir leaf'e gider ve her seviyede bir node okur. { category, rating } üzerindeki bir index önce category'ye, sonra her category'nin içinde rating'e göre sıralar.") }}
-<p>Lale Market'te <code>products</code> üzerinde dört index var (<code>engines/docdb.py</code> içindeki Seed'den):</p>
-<pre><code>db.products.create_index([("category", 1), ("rating", -1)])   # compound: önce category, sonra yüksekten düşüğe rating
-db.products.create_index([("attributes.renk", 1)])           # iç içe bir alan
-db.products.create_index([("rating", -1)])                   # ana sayfadaki en yüksek puanlı ürünler
-# ve _id üzerindeki otomatik index</code></pre>
-{% call k.predict("{ category: 1, rating: -1 } index'i var. Bir query kitapları (Kitap) en yüksek rating önce olacak şekilde istiyor. DocumentDB kaç index entry'si okur ve sıralaması gerekir mi?") %}
-<p>İki Kitap entry'sini ve Kitap aralığının bittiğini gösteren bir entry daha okur. Sıralamaz, çünkü index Kitap entry'lerini zaten rating sırasıyla tutar. İki doküman inceler.</p>
+<p>Canlı collection'da 200 üründen dokuzu siyah elektroniktir; öğretici kopyada (7 ürün) sadece P0001. Projection dört field döndürdü; <code>brand</code>, <code>tags</code> ve diğerleri cevapta yok. Aynı filtreyi öğretici kopyada, index'siz ve daha kısa bir projection ile oynatmak için:</p>
+{% call k.predict("Öğretici kopyada category ve attributes.renk için kullanılabilir bir index yokmuş gibi düşün. Database kaç document inceler, kaç döner?") %}
+<p>Yedi document'ı da inceler, bir tanesi döner: P0001. P0026 Elektronik ama yeşil, P0044 siyah ama Kitap. Simülasyonda "incelenen document" sayacı 7'ye, "dönen document" 1'e çıkar.</p>
 {% endcall %}
-{{ k.sim("index", "Compound index kitapları rating sırasıyla bulur") }}
-<p>Compound bir index'te alanların sırası önemlidir. <code>{ category: 1, rating: -1 }</code> "kitaplar, en iyisi önce" sorusuna yardım eder. "Rating'i 4,5'in üzerinde olan bütün ürünler" sorusuna yardım etmez,
-   çünkü ağaç önce category'ye göre sıralar. Bu soru için Lale Market'te ayrı bir <code>{ rating: -1 }</code> index'i vardır.
-   Her index'in ayrıca bir maliyeti vardır: her ekleme ve index'li bir alanın her değişikliği index'i güncellemek zorundadır.</p>
-<p>Bir query'nin planını görmek için <code>.explain('executionStats')</code> ekle. Lale Market kategori sayfası buradan iki sayı gösterir: "docs examined" ve "returned".
-   Index ile iki sayı eşittir. "Collection scan" deneyiyle "docs examined" koleksiyonun tamamıdır (200).</p>
-{{ k.quiz("doc-q1", "Bir query sadece brand üzerinde filtreliyor. Koleksiyonda { category: 1, rating: -1 } var ve brand üzerinde index yok. DocumentDB ne yapar?",
-   ["Brand için compound index'i kullanır", "Koleksiyonun her dokümanını inceler", "Brand üzerinde kendisi bir index oluşturur", "Eksik index yüzünden bir hata döndürür"],
-   1, "Hiçbir index brand ile başlamıyor, bu yüzden hiçbir index eşleşen dokümanları bulamaz. Plan bir COLLSCAN'dir.") }}
+{{ k.sim("scan", "Kullanılabilir index olmadan filtre: COLLSCAN") }}
+<p>Array'e göre filtre de aynı biçimdedir; database array'in her elemanına bakar:</p>
+{% call k.live("array'in bir elemanına göre filtre (db.products.find({ tags: 'indirim' }, { name: 1, tags: 1 }).limit(10))") %}
+<pre><code>_id   | name                         | tags
+------+------------------------------+---------------------------
+P0003 | Alpen Dambıl Seti 3          | ["indirim", "yeni"]
+P0009 | Nordwind Python ile Veri 9   | ["hızlı kargo", "indirim"]
+P0013 | Kapadokya Matara 13          | ["çevreci", "indirim"]
+...   (10 of 55)
+// { tags: 'indirim' } matches a document when one element of the tags array is 'indirim'.</code></pre>
+{% endcall %}
+<p>Şimdi planı okumak. Sorguya <code>.explain('executionStats')</code> eklenir. Aynı soru iki kez çalıştırıldı: biri planner'ın seçimiyle, biri <code>hint({ $natural: 1 })</code> ile index kapatılarak:</p>
+{% call k.live("iki plan, canlı DocumentDB (db.products.find({ category: 'Kitap' }).sort({ rating: -1 }).limit(48).explain('executionStats'))") %}
+<pre><code>run               | plan stages (outer → inner)                     | docs examined | returned | ms
+------------------+-------------------------------------------------+---------------+----------+------
+planner's choice  | LIMIT_SKIP → IXSCAN (category_1_rating_-1)      |            40 |       40 | 0.177
+COLLSCAN forced   | LIMIT_SKIP → SORT → COLLSCAN                    |           200 |       40 | 1.137</code></pre>
+{% endcall %}
+<table class="clause">
+  <tr><td>IXSCAN (category_1_rating_-1)</td><td>Planner compound index'i seçti; Kitap girişleri rating sırasıyla okundu.</td></tr>
+  <tr><td>docs examined 40, returned 40</td><td>İncelenen document sayısı dönen sayıya eşit: her okunan document sonuca girdi. Index'li bir sorunun işareti budur.</td></tr>
+  <tr><td>SORT → COLLSCAN</td><td>Index kapalıyken 200 document'ın hepsi incelendi, 40'ı eşleşti ve bellekte sıralandı. Sütun dıştan içe yazılmıştır: en soldaki aşama en dıştadır, ilk çalışan en sağdaki iç aşamadır (COLLSCAN, sonra SORT, sonra LIMIT_SKIP).</td></tr>
+  <tr><td>0.177 ms ve 1.137 ms</td><td>200 document'ta fark milisaniyenin altındadır. Index'li yolda incelenen document sayısı dönen sayıya (en fazla limit, 48) eşit kalır; COLLSCAN ise collection'ın tamamını inceler: 200.000 ürünlük bir katalogda 200.000.</td></tr>
+</table>
+<p>Simülasyondaki FETCH, bir index girişinin gösterdiği document'ı okuma adımıdır; canlı planda IXSCAN'in parçası olarak sayılır ve ayrı bir satırda görünmeyebilir.</p>
+{{ k.sim("index", "Compound index, kitapları rating sırasıyla bulur") }}
+{% call k.ask("Explain çıktısı MongoDB'deki gibi mi?") %}
+<p>Benzer ama aynı değil: DocumentDB kendi motorunun planını MongoDB biçimine benzeterek gösterir; aşama adları (IXSCAN, COLLSCAN, SORT) aynıdır, bazı ayrıntılar farklıdır. AWS bunu "query plans and the output of explain() may differ between Amazon DocumentDB and MongoDB" diye yazar (<a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/functional-differences.html">Functional differences</a>).</p>
+{% endcall %}
+{{ k.quiz("doc-b2", "Bir plan \"COLLSCAN\", \"docs examined 200\" ve \"returned 3\" gösteriyor. Ne anlıyorsun ve ne yaparsın?",
+   ["Index kullanıldı, bir şey yapmam", "Tam tarama: 3 sonuç için 200 document okundu, filtre field'ına index eklerim", "Replica geride kaldı, primary'den okurum", "Document çok büyük, projection eklerim"],
+   1, "İncelenen ile dönen arasındaki büyük fark eksik index'in işaretidir. Projection dönen veriyi küçültür ama okunan document sayısını değiştirmez.") }}
 
-<h2 id="aggregate" data-short="Aggregation pipeline"><span class="sec">06</span>Aggregation: aşamalardan oluşan bir pipeline</h2>
-<p>{{ k.term("aggregation pipeline") }} bir aşama listesidir. Her aşama dokümanları alır, değiştirir ve bir üretim hattındaki istasyonlar gibi bir sonraki aşamaya verir.
-   Lale Market'in ana sayfası, sunucuda her kategorinin ürünlerini saymak için <code>$group</code> kullanır.</p>
-{% call k.sql("Q2", "Her tag'de kaç ürün var ve ortalama fiyatları") %}
+<h2 id="updates" data-short="Update operator'ları"><span class="sec">B3</span>Yazmalar: update operator'ları, koşul ve transaction</h2>
+<p>A6'daki kısmi ve koşullu yazma DocumentDB'de <code>updateOne</code> ve operator'larıdır. Alışveriş listesi örneği (M2'deki kart 6) için gerçek komut:</p>
+{% call k.sql("Q2", "Listede ekmek'i işaretle, sadece liste hâlâ sürüm 7 ise") %}
+<pre><code>db.lists.updateOne(
+  { _id: 'L1', version: 7 },
+  { $set: { 'items.$[i].done': true }, $inc: { version: 1 } },
+  { arrayFilters: [ { 'i.name': 'ekmek' } ] }
+)
+// → { matchedCount: 1, modifiedCount: 1 }   ya da   { matchedCount: 0, modifiedCount: 0 }</code></pre>
+<table class="clause">
+  <tr><td>{ _id: 'L1', version: 7 }</td><td>Filtre ve koşul birlikte: document hâlâ sürüm 7 ise eşleşir. Arada başka bir cihaz yazdıysa eşleşmez.</td></tr>
+  <tr><td>$set: { 'items.$[i].done': true }</td><td><code>items</code> array'inde <code>i</code> adlı filtreye uyan elemanların <code>done</code> field'ını yaz.</td></tr>
+  <tr><td>$inc: { version: 1 }</td><td>Sürümü bir artır; aynı yazmanın parçası.</td></tr>
+  <tr><td>arrayFilters: [ { 'i.name': 'ekmek' } ]</td><td><code>i</code>'nin tanımı: adı ekmek olan eleman. Elemanın sırasını bilmek gerekmez.</td></tr>
+  <tr><td>matchedCount: 0</td><td>Koşul tutmadı, hiçbir şey yazılmadı. Uygulama listeyi yeniden okur ve yeni sürümle dener.</td></tr>
+</table>
+{% endcall %}
+{{ k.sim("update", "İki cihaz aynı listeye yazıyor: sürüm koşulu ve arrayFilters") }}
+<p>Birkaç document'ı birlikte değiştirmek için DocumentDB transaction'ları vardır: "Amazon DocumentDB (with MongoDB compatibility) supports transactions in Amazon DocumentDB 4.0 and later. You can perform transactions across multiple documents, statements, collections, and databases." Sınırları tasarımı etkiler: "Transactions have a one minute execution limit" ve document düzeyindeki yazma kilitleri 1 dakika sonra zaman aşımına uğrar (<a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/transactions.html">Transactions in Amazon DocumentDB</a>). Transaction'ın ek bir ücreti yoktur; içindeki okuma ve yazma I/O'su ödenir.</p>
+{% call k.ask("Driver bir yazmayı ağ hatasından sonra kendisi tekrar edebilir mi?") %}
+<p>Sürüme bağlıdır. MongoDB driver'ları varsayılan olarak "retryable writes" açar; DocumentDB bunu 8.0.2 ve sonrasında, tek document'ı etkileyen yazmalar için destekler. Daha eski sürümlerde bağlantı dizesine <code>retryWrites=false</code> yazılır, yoksa her yazma hata verir (<a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/retryable-writes.html">Retryable writes</a>). Lale Market'in cluster'ı 8.0.0'dır ve Engine App tam olarak bu yüzden <code>retryWrites=False</code> ile bağlanır (C3). A10'daki uyumluluk tablosunun canlı bir örneğidir.</p>
+{% endcall %}
+{{ k.quiz("doc-b3", "updateOne bir sürüm koşuluyla çağrıldı ve { matchedCount: 0 } döndü. Ne oldu?",
+   ["Database bir hata yaptı, yazma kayboldu", "Document arada değişti, koşul tutmadı ve hiçbir şey yazılmadı", "arrayFilters elemanı bulamadı ve document silindi", "Yazma replica'ya gitti ve reddedildi"],
+   1, "Filtre eşleşmediğinde hiçbir şey yazılmaz. Uygulama yeni sürümü okur ve yeniden dener. Simülasyondaki tablet B'nin ilk denemesi budur.") }}
+
+<h2 id="aggregate" data-short="Aggregation pratikte"><span class="sec">B4</span>Aggregation pratikte: etiket sayıları ve kategori menüsü</h2>
+<p>A7'deki pipeline DocumentDB'de <code>aggregate</code> komutudur. Etiket sayıları için:</p>
+{% call k.sql("Q3", "Her etikette kaç ürün var ve ortalama fiyatları ne?") %}
 <pre><code>db.products.aggregate([
   { $unwind: '$tags' },
   { $group: { _id: '$tags', products: { $sum: 1 }, avg_price: { $avg: '$price' } } },
   { $sort: { products: -1 } }
 ])</code></pre>
 <table class="clause">
-  <tr><td>{ $unwind: '$tags' }</td><td><code>tags</code> dizisinin her elemanı için dokümanın o tek tag'li bir kopyasını oluştur. İki tag'li bir ürün iki doküman olur. Dolar işaretli <code>'$tags'</code> "tags alanının değeri" demektir.</td></tr>
-  <tr><td>{ $group: { _id: '$tags', ... } }</td><td>Aynı tag'li dokümanları tek bir gruba koy. Çıktının <code>_id</code>'si tag'dir.</td></tr>
-  <tr><td>products: { $sum: 1 }</td><td>Gruptaki her doküman için 1 ekle: bu dokümanları sayar.</td></tr>
-  <tr><td>avg_price: { $avg: '$price' }</td><td>Grubun içindeki <code>price</code> alanının ortalaması.</td></tr>
-  <tr><td>{ $sort: { products: -1 } }</td><td>En çok ürünü olan grubu öne koy.</td></tr>
+  <tr><td>{ $unwind: '$tags' }</td><td><code>tags</code> array'inin her elemanı için document'ın bir kopyası. Dolar işaretli <code>'$tags'</code> "tags field'ının değeri" demektir.</td></tr>
+  <tr><td>{ $group: { _id: '$tags', ... } }</td><td>Aynı etiketli kopyalar bir grup; grup anahtarı sonucun <code>_id</code>'si olur.</td></tr>
+  <tr><td>products: { $sum: 1 }</td><td>Gruptaki her document için 1 ekle: sayım.</td></tr>
+  <tr><td>avg_price: { $avg: '$price' }</td><td>Gruptaki fiyatların ortalaması.</td></tr>
+  <tr><td>{ $sort: { products: -1 } }</td><td>En kalabalık grup önce.</td></tr>
 </table>
 {% endcall %}
-{% call k.predict("Table'daki yedi ürünün her birinin tam olarak iki tag'i var. $unwind aşamasından kaç doküman çıkar? En çok ürünü olan tag hangisi?") %}
-<p>14 doküman (7 × 2). Table'daki tag'leri say: "çevreci" P0001, P0044, P0095 ve P0179'da görünüyor, yani 4 kez. "yeni" de 4 kez görünüyor (P0005, P0026, P0095, P0142). Sonra "çok satan" 3 kez.</p>
+{% call k.live("canlı collection'da aynı pipeline (Engine App üzerinden)") %}
+<pre><code>tag         | products | avg_price
+------------+----------+----------
+hızlı kargo |       82 |  2583.02
+çevreci     |       72 |  2571.28
+çok satan   |       70 |  2670.00
+yeni        |       66 |  2693.73
+indirim     |       55 |  2426.92
+sınırlı     |       55 |  2638.28</code></pre>
 {% endcall %}
+<p>Sayıların toplamı 400'dür: 200 ürünün her birinde iki etiket, yani 400 etiket ataması ve altı farklı etiket. Öğretici kopyada ise "yeni" ve "çevreci" öndedir; canlı veride "hızlı kargo". Simülasyon öğretici kopyayı adım adım işler:</p>
 {{ k.sim("pipeline", "$unwind, sonra $group, sonra $sort") }}
-{{ k.quiz("doc-q2", "200 ürünün her birinin tam olarak 2 tag'i var. $unwind aşamasından kaç doküman çıkar?",
-   ["200 doküman", "2 doküman", "400 doküman", "6 doküman"],
-   2, "$unwind her dizi elemanı için bir çıktı dokümanı oluşturur: 200 × 2 = 400.") }}
+<p>Lale Market'in ana sayfası kategori menüsünü de tek bir pipeline ile hesaplar (<code>engines/docdb.py</code>): <code>{ $group: { _id: '$category', products: { $sum: 1 }, from_price: { $min: '$price' } } }</code>, sonra <code>$sort</code>. Menü her açılışta sunucuda hesaplanır; 200 ürün için birkaç milisaniyedir.</p>
+{% call k.ask("Bu pipeline index kullanır mı?") %}
+<p>Başında <code>$match</code> yoksa hayır: bütün collection okunur. Pipeline'ın başına <code>$match</code> konursa (örneğin sadece Elektronik) o aşama index kullanabilir ve sonraki aşamalara daha az document gider. Büyük collection'da facet sayıları gibi her sayfada çalışan pipeline'lar için bu sıra önemlidir (kart 8).</p>
+{% endcall %}
+{{ k.quiz("doc-b4", "Her ürünün tam olarak 2 etiketi olan 200 ürünlük bir collection'da $unwind aşamasından kaç document çıkar?",
+   ["200 document", "2 document", "400 document", "6 document"],
+   2, "$unwind her array elemanı için bir document üretir: 200 × 2 = 400. Canlı sayıların toplamı da 400'dür.") }}
 
-<h2 id="design" data-short="Göm ya da referans ver"><span class="sec">07</span>Tasarım: gömmek mi, referans vermek mi?</h2>
-<p>Bir document database'in ana tasarım sorusu, her veri parçasının nerede yaşadığıdır:</p>
-<ul>
-  <li><b>Göm (embed)</b>: veriyi üst dokümanın içine koy. Tek bir okuma hepsini döndürür. Veri tek bir üste aitse, küçükse ve üstüyle birlikte okunuyorsa kullan.</li>
-  <li><b>Referans ver (reference)</b>: veriyi kendi koleksiyonunda tut ve <code>_id</code>'sini üstte ya da altta sakla. Veri paylaşılıyorsa, büyükse ya da sonu olmadan büyüyorsa kullan.</li>
-</ul>
-<table class="data">
-  <thead><tr><th>Veri</th><th>Seçim</th><th>Neden</th></tr></thead>
-  <tbody>
-    <tr><td>Bir ürünün attribute'ları ve tag'leri</td><td>Göm</td><td>Küçük, her zaman ürünle okunur, sadece tek bir ürüne aittir.</td></tr>
-    <tr><td>Marka profili (logo, ülke, iletişim)</td><td>Referans ver</td><td>Birçok ürün tarafından paylaşılır. Her üründe bir kopya birçok güncelleme gerektirirdi.</td></tr>
-    <tr><td>Bir ürünün yorumları</td><td>Referans ver ve en yeni beşini göm</td><td>Binlerce yorum dokümanı büyütürdü. Sayfa sadece birkaçını gösterir.</td></tr>
-    <tr><td>Bir müşterinin siparişleri</td><td>DocumentDB'de değil (Lale Market Aurora kullanır)</td><td>Liste sonu olmadan büyür ve bir sipariş stokla kurallar ister.</td></tr>
-  </tbody>
+<h2 id="ttl" data-short="Change stream ve TTL"><span class="sec">B5</span>Change stream ve TTL pratikte</h2>
+<p>A8'deki change stream DocumentDB'de collection başına açılır; A5'teki TTL index'i burada pratik ayrıntılarıyla. Change stream varsayılan olarak kapalıdır ve bir komutla açılır:</p>
+{% call k.sql("Q4", "products collection'ı için change stream'i aç (shell) ve oku (Python, pymongo)") %}
+<pre><code>db.adminCommand({ modifyChangeStreams: 1, database: 'shop', collection: 'products', enable: true })
+
+cursor = db.products.watch(full_document='updateLookup')
+for change in cursor:
+    token = change['_id']            # resume token: kaldığın yer
+    send_to_search(change)           # örneğin OpenSearch kopyasını güncelle</code></pre>
+<table class="clause">
+  <tr><td>modifyChangeStreams ... enable: true</td><td>Bu collection'ın değişiklikleri akışa yazılmaya başlar. Açık olduğu sürece log storage ve I/O tüketir.</td></tr>
+  <tr><td>watch(full_document='updateLookup')</td><td>Update kayıtlarına document'ın son hâlini de ekle; yoksa sadece değişen field'lar gelir.</td></tr>
+  <tr><td>change['_id']</td><td>Resume token. Tüketici yeniden başlarken <code>watch(resume_after=token)</code> ile kaldığı yerden devam eder.</td></tr>
 </table>
-<p>Bir değişiklik birkaç dokümana birlikte dokunmak zorundaysa, DocumentDB 4.0 ve sonrası "birden fazla doküman, statement, koleksiyon ve database boyunca" transaction'ları destekler
-   (<a href="https://docs.aws.amazon.com/documentdb/latest/devguide/transactions.html">Transactions in Amazon DocumentDB</a>).
-   İyi bir doküman tasarımı onlara nadiren ihtiyaç duyar, çünkü değişikliklerin çoğu tek bir dokümana dokunur.</p>
-{% call k.callout("warn", "Sık yapılan hata") %}
-<p>Zamanla büyüyen bir listeyi, örneğin bütün siparişleri ya da bütün sayfa görüntülemelerini gömme. Doküman her yazmayla büyür ve her okuma sayfanın ihtiyaç duymadığı veriyi döndürür.
-   Lale Market sayfa görüntülemelerini event başına bir row ile <a href="/e2etutorial/keyspaces">Keyspaces</a>'te tutar.</p>
+{% endcall %}
+<p>Tutulma süresi cluster parameter group'taki <code>change_stream_log_retention_duration</code> ile ayarlanır: varsayılan üç saat, "between 1 hour and 7 days" (<a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/change_streams.html">Change streams</a>). Tüketici bu süreden uzun durursa resume token geçersizdir ve kopya baştan kurulur. Change stream elastic cluster'da desteklenmez.</p>
+<p>TTL index'i bir tarih field'ına kurulur ve süresi geçen document'ları arka planda siler: <code>db.sessions.createIndex({ expires_at: 1 }, { expireAfterSeconds: 0 })</code>. AWS iki uyarı yazar: silmeler "are best effort and are not guaranteed within a specific timeframe" ve "each deletion incurs IO costs" (<a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/how-it-works.html">How it works: TTL deletes</a>). Bu yüzden süresi dolmuş bir document bir süre daha okunabilir; uygulama <code>expires_at</code>'i okumada karşılaştırır. Zaman sıralı büyük veri için AWS başka bir yol önerir: veriyi zamana göre collection'lara bölmek (örneğin haftalık) ve eskisini bütünüyle silmek, "without incurring IO costs". M2'deki event log kartının R1 ve R5 puanları bu iki cümleden gelir.</p>
+<div class="flow">
+  <div class="box">yazma<small>expires_at = şimdi + 30 dk</small></div><span class="arrow">→</span>
+  <div class="box hit">normal document<small>okunur, süre yenilenebilir</small></div><span class="arrow">→</span>
+  <div class="box pk">süre doldu<small>arka plan silmesi "best effort"</small></div><span class="arrow">→</span>
+  <div class="box miss">silindi<small>her silme bir I/O</small></div>
+</div>
+<p class="flow-cap">TTL'li bir document'ın yaşamı. "Süre doldu" kutusu belirsiz bir süredir: bu aralıkta document hâlâ okunabilir. M2'deki oturum kartında (kart 9) DocumentDB'nin ElastiCache'e kaybetmesinin bir nedeni budur: ElastiCache'in EXPIRE'ı tam anındadır.</p>
+{% call k.ask("Lale Market change stream ya da TTL kullanıyor mu?") %}
+<p>Hayır. Katalog kopyalarını Seed bir kez yazar ve ürünler süresiz yaşar. Gerçek bir mağaza, ürün değişince arama kopyasını ve Aurora'daki fiyat kopyasını change stream ile güncellerdi (M6).</p>
 {% endcall %}
 
-<div class="part"><b>Bölüm 2</b><h2 id="part2" data-short="BÖLÜM 2: Amazon DocumentDB">Amazon DocumentDB: AWS servisi</h2>
-<p>Paylaşılan, dağıtık storage'lı yönetilen bir cluster üzerinde MongoDB API'si.</p></div>
-
-<h2 id="service" data-short="Kendin çalıştırmak ve DocumentDB"><span class="sec">08</span>Bir document database'i kendin çalıştırmak ve DocumentDB'nin değiştirdikleri</h2>
-<p>Kendin yönettiğin bir MongoDB kurulumu genellikle bir replica set'tir: bir primary sunucu ve iki ya da daha fazla secondary sunucu. Her sunucu verinin tam bir kopyasını kendi diskinde tutar
-   ve secondary'ler her değişikliği primary'den kopyalar. Sunucuları sen kurarsın, kopyaları izlersin, bozulan bir diski değiştirirsin, diskleri büyütürsün, backup alırsın ve güncellemeleri uygularsın.</p>
-<p>Amazon DocumentDB MongoDB API'sini korur ama Aurora gibi compute ile storage'ı ayırır. Bir cluster "0 ile 16 arası instance'tan ve bir cluster storage volume'dan oluşur".
-   "Bütün yazmalar primary instance üzerinden yapılır. Bütün instance'lar (primary ve replica'lar) okumayı destekler." Storage katmanı "verinin altı kopyasını üç AWS Availability Zone'una replike eder"
-   (<a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/what-is.html">What is Amazon DocumentDB</a>).</p>
-{{ k.fig("docdb-cluster.png", "primary instance, üç Availability Zone'un hepsinde veri kopyaları olan cluster volume'a yazar. Replica'lar aynı volume'dan okur. Primary'den veri kopyalamazlar.") }}
-{{ k.fig("docdb-endpoints.png", "cluster endpoint her zaman primary'ye gider. Reader endpoint bağlantıları replica'lara dağıtır. Her instance'ın ayrıca kendi endpoint'i vardır.") }}
+<h2 id="cost" data-short="Performans ve maliyet"><span class="sec">B6</span>Performans ve maliyet: incelenen document, I/O, instance ve DCU</h2>
+<p>A5'teki "okunan document" sayısı DocumentDB'de faturaya iki yoldan yansır: instance'ın CPU ve belleği, ve storage'dan okunan sayfaların I/O istekleri. DocumentDB'nin ücret kalemleri: "Instance hours (per hour)", "I/O requests (per 1 million requests per month)", storage (GB-ay), yedek storage ve veri transferi; ücret saniye başına, en az 10 dakika (<a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/what-is.html">What is Amazon DocumentDB: pricing</a>).</p>
 <table class="data">
-  <thead><tr><th>İş</th><th>Kendin yönettiğin MongoDB replica set'i</th><th>Amazon DocumentDB</th></tr></thead>
+  <caption>bütün durumlar: bir işlem neyi tüketir</caption>
+  <thead><tr><th>İşlem</th><th>Ne okur ya da yazar</th><th>Maliyete etkisi</th></tr></thead>
   <tbody>
-    <tr><td>Verinin kopyaları</td><td>Her sunucu tam bir kopyayı kendi diskinde tutar.</td><td>Üç AZ'de altı kopyalı tek bir cluster volume. Replica'lar onu paylaşır.</td></tr>
-    <tr><td>Yeni bir read replica</td><td>Bütün veri kümesini kopyalar. Büyük veride saatler.</td><td>Mevcut volume'a bağlanır. "Storage volume boyutundan bağımsız olarak replica'ları dakikalar içinde ekleyebilirsin."</td></tr>
-    <tr><td>Failover</td><td>Replica set yeni bir primary seçer.</td><td>DocumentDB en fazla 15 replica'dan birine failover yapar ve cluster endpoint onu takip eder.</td></tr>
-    <tr><td>Disk alanı</td><td>Diskleri sen izler ve büyütürsün.</td><td>Volume 10 GB'lık adımlarla, 128 TiB'a kadar, engine sürümü 8.0'dan itibaren 256 TiB'a kadar büyür.</td></tr>
-    <tr><td>Backup'lar</td><td>Sen planlar, saklar ve test edersin.</td><td>S3'te sürekli backup'lar, saklama süresinin (en fazla 35 gün) herhangi bir saniyesine geri yükleme.</td></tr>
-    <tr><td>API ve driver'lar</td><td colspan="2">MongoDB API'si. MongoDB driver'larının ve araçlarının çoğu çalışır. Desteklenen özellikler listesini kontrol et, çünkü DocumentDB her MongoDB özelliğini desteklemez.</td></tr>
+    <tr><td><code>_id</code> ile okuma, working set bellekte</td><td>Index ve document bellekten</td><td>CPU; I/O neredeyse yok</td></tr>
+    <tr><td>Index'li filtre (IXSCAN)</td><td>Dönen kadar document</td><td>Dönen sayıyla orantılı</td></tr>
+    <tr><td>COLLSCAN</td><td>Collection'ın tamamı; bellekte değilse storage'dan</td><td>Collection boyutuyla orantılı I/O; primary'de çalışırsa yazmalarla yarışır</td></tr>
+    <tr><td>Yazma</td><td>Document ve her index</td><td>Index sayısıyla artan I/O</td></tr>
+    <tr><td>TTL silmesi</td><td>Her süresi dolan document bir silme</td><td>I/O ("each deletion incurs IO costs")</td></tr>
+    <tr><td>Change stream açık</td><td>Her yazma bir log kaydı</td><td>Ek storage ve I/O</td></tr>
+    <tr><td>Boş gece</td><td>Hiçbir şey</td><td>Instance saati yine ödenir; serverless'ta minimum 0,5 DCU</td></tr>
   </tbody>
 </table>
-<p>Bazı sınırlar bir tasarımı değiştirir (<a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/limits.html">DocumentDB quotas</a>):</p>
-<ul><li>Bir doküman en fazla 16 MiB olabilir.</li><li>Bir doküman en fazla 200 seviye iç içe olabilir.</li><li>Bir koleksiyonun en fazla 64 index'i olabilir.</li></ul>
+<p>Serverless için AWS'in kendi örneği (US East, N. Virginia): 7 DCU'da 30 dakika, Standard modelde "7 DCUs * $0.0822 per DCU-hour * 30/60 hour" yani yaklaşık 0,29 dolar; aynı iş I/O-Optimized'da DCU-saat başına 0,0905 dolardan hesaplanır ve I/O ücreti alınmaz (<a href="https://aws.amazon.com/documentdb/pricing/">DocumentDB pricing</a>). Bu fiyatlar bölgeye ve tarihe göre değişir; bir karar için güncel fiyat sayfası okunur. Kartlardaki R5 puanları bu kalemlerin iş yüküne uyumunu puanlar: boş gecede ödenen minimum, yazma ağırlıklı iş yükünde I/O, TTL silmelerinin I/O'su.</p>
+{% call k.ask("Standard mı I/O-Optimized mı?") %}
+<p>I/O harcaması toplam faturanın büyük bir kısmıysa I/O-Optimized; az ise Standard. Sık yazan, sık tarayan, TTL ile çok silen ya da change stream'i açık iş yükleri I/O'yu artırır. Karar bir aylık gerçek faturaya bakılarak verilir ve cluster düzeyinde değiştirilebilir.</p>
+{% endcall %}
+{% call k.ask("Okumaları replica'ya yönlendirmek maliyeti düşürür mü?") %}
+<p>Doğrudan değil: replica da bir instance'tır ve saatlik ödenir. Kazanç kapasitededir: primary yazmaya kalır ve daha küçük bir sınıf yeterli olabilir. COLLSCAN'leri (raporlar, destek soruları) replica'ya göndermek primary'nin yazmalarını korur.</p>
+{% endcall %}
 
-<h2 id="lalemarket" data-short="Lale Market'te DocumentDB"><span class="sec">09</span>Lale Market'te DocumentDB</h2>
+<div class="part"><b>Bölüm C</b><h2 id="partC" data-short="Bölüm C: AWS servisi">AWS servisi: DocumentDB'nin senin için çalıştırdıkları</h2>
+<p>Bir document database'i kendin çalıştırdığında ne yapman gerekir ve bunun yerine AWS ne yapar.</p></div>
+
+<h2 id="selfrun" data-short="Kendin çalıştırırsan"><span class="sec">C1</span>Bir MongoDB replica set'ini kendin çalıştırdığında ne yapmalısın</h2>
+<p>Kendi işlettiğin bir MongoDB genellikle bir replica set'tir: bir primary ve iki ya da daha fazla secondary; her sunucu kendi diskinde verinin tam bir kopyasını tutar. Şu görevleri sen çözersin:</p>
+<ol>
+  <li><b>Sunucular ve kopyalar.</b> Üç ya da daha fazla sunucu kur, onları farklı veri merkezlerine yerleştir ve replica set'i yapılandır.</li>
+  <li><b>Failover'ı izlemek.</b> Seçim kendiliğinden olur, ama sağlıksız bir secondary'yi, geride kalan bir kopyayı ve bölünmüş ağı sen izlersin.</li>
+  <li><b>Yeni bir okuma kopyası.</b> Yeni secondary bütün veriyi baştan kopyalar; büyük veride saatler.</li>
+  <li><b>Disk.</b> Her sunucunun diskini izler ve dolmadan büyütürsün; üç sunucu, üç disk.</li>
+  <li><b>Yedekler.</b> Yedek alır, başka yerde saklar ve geri yüklemeyi test edersin; "dün 14:05'e dön" için oplog yedeği gerekir.</li>
+  <li><b>Yükseltmeler ve yamalar.</b> İşletim sistemini ve MongoDB'yi sunucu sunucu, kesintisiz güncellersin.</li>
+  <li><b>Şifreleme ve erişim.</b> TLS sertifikaları, kullanıcılar, roller ve ağ kuralları.</li>
+</ol>
+<p>Bu işlerin hiçbiri senin kataloğunla ilgili değildir. DocumentDB bunların çoğunu devralır; MongoDB API'si, document'lar, index'ler ve sorgular aynı kalır.</p>
+
+<h2 id="service" data-short="Servis olarak DocumentDB"><span class="sec">C2</span>DocumentDB'nin tasarımı: compute ve storage ayrıdır</h2>
+<p>Bir replica set'te her sunucu hem işlem yapar hem verinin kendi kopyasını taşır. DocumentDB bunları iki katmana ayırır. "A cluster consists of zero or more database instances and a cluster volume that manages the data for those instances." Cluster volume veriyi "six ways across three Availability Zones" kopyalar; bir cluster 0 ile 16 instance arası olabilir: bir primary ve en fazla 15 replica (<a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/how-it-works.html">Amazon DocumentDB: how it works</a>).</p>
 <ul>
-  <li>İki instance'lı tek bir instance-based cluster: bir primary ve bir replica.</li>
-  <li><code>shop</code> database'inde tek bir koleksiyon var: 200 dokümanlı ve dört index'li <code>products</code>.</li>
-  <li>DocumentDB Engine App, Python driver'ı <code>pymongo</code> ile, port 27017 üzerinden TLS ile ve AWS Secrets Manager'dan gelen bir parolayla bağlanır.</li>
-  <li>Driver <code>readPreference=secondaryPreferred</code> kullanır: katalog okumaları mümkün olduğunda replica'ya gider ve primary kapasitesini yazmalar için korur.
-      Bir replica primary'nin kısa bir süre gerisinde olabilir. Bir katalog için bu kabul edilebilir.</li>
-  <li>Kategori sayfasında "Collection scan" deneyi, ürün sayfasında projection deneyi var.</li>
+  <li><b>Primary instance</b> okuma ve yazma alır ve cluster volume'daki bütün değişiklikleri yapar (A9'daki tek yazma noktası). "Attempting to write to a reader results in an error."</li>
+  <li><b>Replica instance</b>'lar aynı cluster volume'u okur. Primary bir yazmadan sonra replica'lara verinin kendisini değil, yazmanın durumunu bildirir; replica gecikmesi "usually less than 100 milliseconds".</li>
+  <li><b>Dayanıklılık storage'dadır:</b> bir yazma kopyaların çoğunluğuna kalıcı yazılmadan onaylanmaz ve "can't be rolled back"; tek instance'lı bir cluster ile üç instance'lı bir cluster aynı dayanıklılıktadır. Instance sayısı kullanılabilirliği değiştirir.</li>
+  <li><b>Sürekli yedek</b> Amazon S3'e gider; point-in-time restore yanlış bir silmeyi belirli bir saniyeye geri alır (A9'daki "replica bir yedek değildir" satırının cevabı).</li>
+</ul>
+{{ k.fig("docdb-cluster.png", "resmî şema: primary instance (AZ 1) üç AZ'deki veri kopyalarına yazar (sarı oklar); replica'lar (AZ 2, AZ 3) aynı cluster volume'dan okur (mavi oklar). Her AZ'de iki 'Data copies' kutusu var: üç AZ × 2 = altı kopya. Üstteki iki etiket uygulamanın bağlandığı adreslerdir (aşağıda). Replica'lar veriyi primary'den kopyalamaz; primary onlara sadece yazmanın durumunu bildirir (görselde yok).") }}
+<p>Bunu C1'deki yedi işle karşılaştır:</p>
+<table class="data">
+  <thead><tr><th>İş</th><th>Kendi MongoDB replica set'in</th><th>Amazon DocumentDB</th></tr></thead>
+  <tbody>
+    <tr><td>Verinin kopyaları</td><td>Her sunucu kendi diskinde tam bir kopya</td><td>Bir cluster volume, üç AZ'de altı kopya; replica'lar paylaşır</td></tr>
+    <tr><td>Failover</td><td>Replica set seçim yapar; izlemek senin işin</td><td>Otomatik; AWS whitepaper'ı "up to 30 seconds of downtime for your cluster, but often less time than that" der ve "Failover happens with no data loss" (<a href="https://docs.aws.amazon.com/whitepapers/latest/get-started-documentdb/amazon-documentdb-architecture.html">DocumentDB architecture</a>)</td></tr>
+    <tr><td>Yeni okuma kopyası</td><td>Bütün veriyi kopyalar; saatler</td><td>Mevcut volume'a bağlanır; veri boyutundan bağımsız olarak dakikalar</td></tr>
+    <tr><td>Disk alanı</td><td>Her sunucuda sen izler ve büyütürsün</td><td>Volume 10 GiB adımlarla büyür; 8.0'da 256 TiB'a kadar (öncesinde 128 TiB)</td></tr>
+    <tr><td>Yedekler</td><td>Sen planlar, saklar ve test edersin</td><td>S3'e sürekli yedek, point-in-time restore</td></tr>
+    <tr><td>Yamalar</td><td>Sunucu sunucu sen</td><td>Bakım penceresinde AWS</td></tr>
+    <tr><td>Şifreleme ve erişim</td><td>TLS sertifikaları, kullanıcılar, roller ve ağ kurallarını sen kurarsın</td><td>TLS varsayılan açık, storage KMS ile şifrelenebilir, kullanıcılar ve yerleşik roller; ağ erişimi VPC ve security group ile</td></tr>
+    <tr><td>API ve driver'lar</td><td colspan="2">MongoDB API'si; çoğu driver ve araç aynı. Desteklenen operator listesi sürüme göredir (A10).</td></tr>
+  </tbody>
+</table>
+<h3>Endpoint'ler: uygulama nereye bağlanır</h3>
+<p>Uygulama bir sunucu adına değil, DocumentDB'nin güncel tuttuğu bir {{ k.term("endpoint") }}'e bağlanır: bir DNS adı ve port (27017). <b>Cluster endpoint</b> her zaman güncel primary'yi gösterir ve failover'dan sonra yenisini gösterir. <b>Reader endpoint</b> salt okuma bağlantılarını replica'lara dağıtır. Her instance'ın ayrıca kendi <b>instance endpoint</b>'i vardır. AWS'in önerisi cluster endpoint'e "replica set mode" ile bağlanmak ve okumayı read preference ile yönlendirmektir.</p>
+{{ k.fig("docdb-endpoints.png", "üç tür endpoint: cluster endpoint primary'ye gider (kalın ok), reader endpoint iki replica'yı kapsar, her instance'ın kendi endpoint'i vardır. Altta compute'tan ayrı, dağıtık storage volume: aynı renkli kareler aynı veri bloğunun üç bölümdeki kopyalarıdır. Primary'den inen turuncu ok yazma, mavi oklar okumadır.") }}
+<table class="data">
+  <caption>bütün durumlar: hangi iş hangi endpoint'e</caption>
+  <thead><tr><th>İş</th><th>Bağlantı</th><th>Neden</th></tr></thead>
+  <tbody>
+    <tr><td>Her yazma</td><td>Cluster endpoint, replica set mode</td><td>Yazma sadece primary'de olur; replica'ya doğrudan yazma <b>reddedilir</b></td></tr>
+    <tr><td>Katalog okumaları</td><td>Cluster endpoint + <code>secondaryPreferred</code></td><td>Okuma replica'lara gider; replica yoksa primary'ye</td></tr>
+    <tr><td>Az önce yazılanı göstermek</td><td>Aynı bağlantı, o sorgu için read preference <code>primary</code></td><td>Replica birkaç on milisaniye geride olabilir</td></tr>
+    <tr><td>Uzun bir rapor ya da destek sorusu</td><td>Bir replica'nın instance endpoint'i</td><td>COLLSCAN primary'yi ve diğer okumaları yormaz</td></tr>
+    <tr><td>Failover sırasında açık bağlantı</td><td>Cluster endpoint</td><td>Bağlantı kopar; driver yeniden bağlanır ve yeni primary'ye düşer</td></tr>
+  </tbody>
+</table>
+<p>Yazma hacmi tek primary'yi aşarsa DocumentDB'nin ikinci biçimi elastic cluster'dır: veri hash ile shard'lara bölünür, her shard'ın kendi compute'u ve storage'ı vardır ve bir istek yönlendiricisi her isteği shard key'e göre doğru shard'a gönderir.</p>
+{{ k.fig("docdb-elastic.png", "elastic cluster: uygulamanın find (order_id 1) ve insert (order_id 2) istekleri bir request router'a gider; bu örnekte shard key order_id'dir ve router her isteği o değerin hash'ine göre shard'lardan birine gönderir. Her shard'ın kendi compute kapasitesi (sarı ok yazma, mavi ok okuma) ve kendi storage volume'u vardır. A9'daki 'yazmayı büyütmek için shard' satırının AWS'teki karşılığı.") }}
+{{ k.quiz("doc-c1", "Bir DocumentDB replica'sı primary instance ile neyi paylaşır?",
+   ["Verinin bulunduğu cluster volume'u", "Tek bir sunucunun CPU ve belleğini", "Başlangıçta kendi kurduğu tam bir kopyayı", "Hiçbir şey, bir S3 yedeğinden okur"],
+   0, "Bir DocumentDB cluster'ının bütün instance'ları tek bir cluster volume kullanır. Yeni bir replica'nın veri kopyalamadan dakikalar içinde eklenmesinin nedeni budur.") }}
+
+<h2 id="lalemarket" data-short="Lale Market'te DocumentDB"><span class="sec">C3</span>Lale Market'te DocumentDB</h2>
+<p>Bu, workshop'un gerçek kurulumudur (<code>cloudformation/workshop.yaml</code> içinden ve canlı hesaptaki <code>aws docdb describe-db-clusters</code> çıktısından):</p>
+{% call k.sql("T1", "dbws-docdb cluster'ı") %}
+<pre><code>DocDbCluster:
+  Type: AWS::DocDB::DBCluster
+  Properties:
+    DBClusterIdentifier: dbws-docdb
+    EngineVersion: 8.0.0
+    MasterUsername: dbwsadmin
+    MasterUserPassword: '{{ "{{" }}resolve:secretsmanager:dbws/docdb:SecretString:password{{ "}}" }}'
+    StorageEncrypted: true
+    BackupRetentionPeriod: 1
+DocDbPrimary: { DBInstanceClass: db.r6g.large, AvailabilityZone: eu-central-1b }
+DocDbReplica: { DBInstanceClass: db.r6g.large, AvailabilityZone: eu-central-1c }</code></pre>
+<table class="clause">
+  <tr><td>EngineVersion: 8.0.0</td><td>MongoDB 8.0 API uyumluluğu. Retryable writes 8.0.2'den önce desteklenmediği için Engine App <code>retryWrites=False</code> ile bağlanır (B3).</td></tr>
+  <tr><td>db.r6g.large × 2</td><td>Bir primary (dbws-docdb-1, eu-central-1b) ve bir replica (dbws-docdb-2, eu-central-1c). Serverless değil, instance-based; iki instance saat başına ödenir.</td></tr>
+  <tr><td>MasterUserPassword: resolve:secretsmanager</td><td>Parola AWS Secrets Manager'dan gelir; Engine App onu oradan okur ve TLS ile 27017 portuna bağlanır.</td></tr>
+  <tr><td>StorageEncrypted: true</td><td>Cluster volume KMS ile şifrelidir.</td></tr>
+  <tr><td>BackupRetentionPeriod: 1</td><td>Bir günlük sürekli yedek: son 24 saat içinde herhangi bir ana point-in-time restore. Üretimde daha uzun seçilir.</td></tr>
+</table>
+{% endcall %}
+{% call k.live("canlı cluster'ın özeti (aws docdb describe-db-clusters --region eu-central-1, salt okuma)") %}
+<pre><code>DBClusterIdentifier : dbws-docdb
+Engine / Version    : docdb 8.0.0          ParameterGroup: default.docdb8.0
+AvailabilityZones   : eu-central-1a, eu-central-1b, eu-central-1c
+Members             : dbws-docdb-1 (writer)  dbws-docdb-2 (reader)
+Endpoint            : dbws-docdb.cluster-ccgs3qxfidad.eu-central-1.docdb.amazonaws.com
+ReaderEndpoint      : dbws-docdb.cluster-ro-ccgs3qxfidad.eu-central-1.docdb.amazonaws.com
+Port 27017 · StorageEncrypted true · BackupRetentionPeriod 1 · MultiAZ true</code></pre>
+{% endcall %}
+<p>Cluster volume üç AZ'ye yayılır (1a, 1b, 1c); instance'lar 1b ve 1c'dedir. Bir günlük yedek süresi bir workshop içindir: hafta sonu fark edilen bir silme bu ayarla geri alınamaz; üretimde süre uzatılır ve önemli değişikliklerden önce elle bir snapshot alınır.</p>
+<ul>
+  <li>Engine App bağlantıyı <code>pymongo</code> ile kurar: <code>replicaSet="rs0"</code> (DocumentDB, MongoDB driver'larının beklediği replica set adını <code>rs0</code> olarak bildirir; cluster endpoint'e "replica set mode" ile bağlanmak budur), <code>readPreference="secondaryPreferred"</code>, <code>retryWrites=False</code>, TLS ve AWS'in CA paketi (<code>engines/docdb.py</code>). Bu, C2'deki tablonun ilk iki satırıdır.</li>
+  <li><code>shop</code> database'inde tek collection: <code>products</code>, 200 document, dört index (B1'deki canlı çıktılar).</li>
+  <li>Database'e sadece DocumentDB Engine App'in security group'u ulaşabilir; Engine App private bir subnet'teki bir EC2 instance'ındadır.</li>
+  <li>Kategori sayfasında "Collection scan" deneyi (index'i <code>$natural</code> ipucuyla kapatır ve explain sayılarını gösterir), ürün sayfasında projection deneyi vardır.</li>
 </ul>
 
-<h2 id="recall" data-short="Recall test"><span class="sec">10</span>Recall test</h2>
+<h2 id="recall" data-short="Hatırlama testi" data-group="Sonunda">Hatırlama testi</h2>
 <p>Bölümlere geri bakmadan cevapla.</p>
 {{ k.quiz("doc-r1", "Bir projection neyi değiştirir?",
-   ["Hangi dokümanların filtreyle eşleştiğini", "Hangi alanların istemciye geri geldiğini", "Planner'ın hangi index'i seçtiğini", "Okumayı hangi instance'ın cevapladığını"],
-   1, "Filtre dokümanları seçer. Projection o dokümanların alanlarını seçer.") }}
-{{ k.quiz("doc-r2", "Explain planı COLLSCAN ve sonra SORT gösteriyor. En faydalı değişiklik nedir?",
-   ["Cluster için daha büyük bir instance class", "Daha az alan döndüren bir projection", "Filtre alanı ve sıralama alanı üzerinde bir index", "Yeni bir zone'da ikinci bir replica"],
-   2, "Filtre alanı, sonra sıralama alanı üzerindeki bir index DocumentDB'nin taramayı ve sıralamayı atlamasını sağlar.") }}
-{{ k.quiz("doc-r3", "Hangi veri ürün dokümanının içine GÖMÜLMEMELİ?",
-   ["Ürünün rengi ve garantisi", "Ürünün tag listesi", "Ürünün markası ve türü", "Ürünün sonsuza kadar her sayfa görüntülemesi"],
-   3, "Sayfa görüntülemeleri sonu olmadan büyür. Dokümanı her yazmayla büyütürler.") }}
-{{ k.quiz("doc-r4", "Bir DocumentDB replica'sı primary instance ile neyi paylaşır?",
-   ["Verinin bulunduğu cluster volume'u", "Tek bir sunucunun CPU'sunu ve belleğini", "Başta oluşturduğu tam bir kopyayı", "Hiçbir şey, bir S3 backup'ından okur"],
-   0, "Bir DocumentDB cluster'ının bütün instance'ları tek bir cluster volume kullanır, bu yüzden yeni bir replica veri kopyasına ihtiyaç duymaz.") }}
+   ["Filtreye hangi document'ların uyduğunu", "İstemciye hangi field'ların döndüğünü", "Planner'ın hangi index'i seçtiğini", "Okumayı hangi instance'ın cevapladığını"],
+   1, "Filtre document'ları seçer. Projection o document'ların field'larını seçer; okunan document sayısını değiştirmez.") }}
+{{ k.quiz("doc-r2", "Bir plan COLLSCAN ve ardından SORT gösteriyor. En faydalı değişiklik hangisi?",
+   ["Cluster için daha büyük bir instance sınıfı", "Daha az field döndüren bir projection", "Önce filtre field'ı, sonra sıralama field'ı olan bir compound index", "Yeni bir AZ'de ikinci bir replica"],
+   2, "Filtre field'ı ve sıralama field'ı sırasıyla index'lenince database taramayı ve sıralamayı atlar.") }}
+{{ k.quiz("doc-r3", "Hangi veri ürün document'ına GÖMÜLMEMELİDİR?",
+   ["Ürünün rengi ve garanti süresi", "Ürünün etiket listesi", "Ürünün markası ve türü", "Ürünün sonsuza kadar bütün sayfa görüntülemeleri"],
+   3, "Sayfa görüntülemeleri sınırsız büyür; document 16 MiB'ı geçemez ve her okuma büyür.") }}
+{{ k.quiz("doc-r4", "Bir ekip DocumentDB cluster'ına iki replica daha ekleyerek saniyedeki ekleme sayısını artırmak istiyor. Ne dersin?",
+   ["Doğru, her replica yazma kapasitesi ekler", "Yanlış, bütün yazmalar tek primary'den geçer; yazma için daha büyük primary ya da elastic cluster gerekir", "Doğru, ama sadece serverless'ta", "Yanlış, DocumentDB'de replica eklenemez"],
+   1, "Replica'lar okumayı paylaşır. Yazma hacmi tek primary'nin sınırındaysa elastic cluster ya da key-value database (kart 4).") }}
+{{ k.quiz("doc-r5", "İki aday arasındaki yakın bir yarışta karar kaydı neyi içermeli?",
+   ["Sadece kazananın adını", "Kazananı, karar veren gereksinimi ve cevabı değiştirecek koşulu", "İki servisin fiyat listesini", "Bütün AWS servislerinin listesini"],
+   1, "Karar veren gereksinim ve seçimi tersine çevirecek koşul, ekibe kararın ne zaman yeniden kontrol edileceğini söyler.") }}
 
 <section class="lesson-foot">
   <h2>Daha derine in</h2>
-  <p><b>Ana kaynak:</b> <a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/what-is-document-db.html">What is a document database?</a>, sonra
-     <a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/how-it-works.html">How Amazon DocumentDB works</a>.</p>
-  <p><b>Mağazada kullan:</b> <a href="/free-e-commerce-app/c/Kitap">Kitap kategori sayfasında</a> "Collection scan" deneyi var. Ürün sayfasında projection deneyi var.</p>
-  <p><b>Soru sor.</b> Bir kısım net değilse eğitmenine ya da AI asistanına sor. Kendi uygulamandan bir JSON nesnesi getir ve neyin gömüleceğine birlikte karar verin.</p>
+  <p><b>Ana kaynak:</b> Bölüm A için <a href="https://www.mongodb.com/docs/manual/data-modeling/">MongoDB: Data Modeling</a> ve <a href="https://www.mongodb.com/docs/manual/core/write-operations-atomicity/">Atomicity and Transactions</a>; Bölüm B ve C için <a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/how-it-works.html">Amazon DocumentDB: how it works</a>, <a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/functional-differences.html">Functional differences</a> ve <a href="https://docs.aws.amazon.com/documentdb/latest/developerguide/limits.html">DocumentDB quotas</a>.</p>
+  <p><b>Mağazada kullan:</b> <a href="/free-e-commerce-app/c/Kitap">Kitap kategori sayfasında</a> "Collection scan" deneyi var: index açıkken ve kapalıyken "docs examined" sayısını karşılaştır. Ürün sayfasında projection deneyi var.</p>
+  <p><b>Soru sor.</b> Bir kısım net değilse eğitmenine ya da AI asistanına sor. Kendi uygulamandan bir JSON nesnesi getir ve neyi gömüp neyi ayrı tutacağınıza birlikte karar verin.</p>
 </section>
 {% endblock %}

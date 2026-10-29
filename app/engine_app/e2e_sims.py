@@ -1208,7 +1208,7 @@ def doc_scan(lang):
     rows = [_flat(d) for d in DOCS]
     flt = lambda d: d["category"] == "Elektronik" and d["attributes"]["renk"] == "siyah"
     steps = [{"say": T(lang, "Filter: { category: 'Elektronik', 'attributes.renk': 'siyah' }. With no usable index, DocumentDB examines each document of the collection and tests both conditions.",
-                       "Filtre: { category: 'Elektronik', 'attributes.renk': 'siyah' }. Kullanılabilir bir index yoksa DocumentDB koleksiyondaki her dokümanı inceler ve iki koşulu da test eder."),
+                       "Filtre: { category: 'Elektronik', 'attributes.renk': 'siyah' }. Kullanılabilir bir index yoksa DocumentDB collection'daki her document'ı inceler ve iki koşulu da test eder."),
               "marks": {}, "out": [], "count": {"docs examined": 0, "docs returned": 0}}]
     out, m = [], {}
     for i, d in enumerate(DOCS):
@@ -1216,13 +1216,13 @@ def doc_scan(lang):
         m = {**{k: ("match" if flt(DOCS[k]) else "skip") for k in m}, i: "match" if hit else "read"}
         if hit:
             out.append([d["_id"], d["name"], d["price"], d["attributes"]["renk"]])
-        why = (T(lang, "Both conditions are true, so the document goes to the result.", "İki koşul da doğru, bu yüzden doküman sonuca gider.") if hit else
+        why = (T(lang, "Both conditions are true, so the document goes to the result.", "İki koşul da doğru, bu yüzden document sonuca gider.") if hit else
                T(lang, "category is '" + d["category"] + "' and attributes.renk is '" + d["attributes"]["renk"] + "'. At least one condition is false.",
                  "category '" + d["category"] + "', attributes.renk '" + d["attributes"]["renk"] + "'. En az bir koşul yanlış."))
-        steps.append({"say": T(lang, f"Document {d['_id']}: ", f"Doküman {d['_id']}: ") + why, "marks": {"d": dict(m)}, "out": deepcopy(out),
+        steps.append({"say": T(lang, f"Document {d['_id']}: ", f"Document {d['_id']}: ") + why, "marks": {"d": dict(m)}, "out": deepcopy(out),
                       "outmarks": {len(out) - 1: "new"} if hit else {}, "count": {"docs examined": i + 1, "docs returned": len(out)}})
     steps.append({"say": T(lang, f"COLLSCAN done: {len(DOCS)} documents examined, {len(out)} returned. The projection {{ name: 1, price: 1, 'attributes.renk': 1 }} then sends only these fields.",
-                           f"COLLSCAN bitti: {len(DOCS)} doküman incelendi, {len(out)} döndü. Sonra {{ name: 1, price: 1, 'attributes.renk': 1 }} projection'ı sadece bu alanları gönderir."),
+                           f"COLLSCAN bitti: {len(DOCS)} document incelendi, {len(out)} döndü. Sonra {{ name: 1, price: 1, 'attributes.renk': 1 }} projection'ı sadece bu alanları gönderir."),
                   "marks": {"d": {k: ("match" if flt(d) else "skip") for k, d in enumerate(DOCS)}}, "out": out, "count": {"docs examined": len(DOCS), "docs returned": len(out)}})
     return {"tables": [{"id": "d", "name": "products (collection)", "cols": DOC_COLS, "rows": rows, "key": [0], "ref": []}],
             "out": {"name": T(lang, "result (after the projection)", "sonuç (projection'dan sonra)"), "cols": ["_id", "name", "price", "attributes.renk"]}, "steps": steps}
@@ -1233,7 +1233,7 @@ def doc_index(lang):
     idx = [[c, -r, pid] for c, r, pid in entries]
     want = "Kitap"
     steps = [{"say": T(lang, "The compound index { category: 1, rating: -1 } keeps one entry per document: first sorted by category, then by rating from high to low. Each entry points to its document. Query: category 'Kitap', sorted by rating.",
-                       "{ category: 1, rating: -1 } compound index'i doküman başına bir entry tutar: önce category'ye göre, sonra rating'e göre yüksekten düşüğe sıralı. Her entry kendi dokümanını gösterir. Query: category 'Kitap', rating'e göre sıralı."),
+                       "{ category: 1, rating: -1 } compound index'i document başına bir entry tutar: önce category'ye göre, sonra rating'e göre yüksekten düşüğe sıralı. Her entry kendi document'ını gösterir. Query: category 'Kitap', rating'e göre sıralı."),
               "marks": {}, "out": [], "count": {"index entries read": 0, "docs examined": 0}}]
     first = next(i for i, e in enumerate(idx) if e[0] == want)
     steps.append({"say": T(lang, f"IXSCAN: the B-tree goes straight to the first entry with category 'Kitap' (entry {first + 1}). The entries before it are never read.",
@@ -1252,11 +1252,11 @@ def doc_index(lang):
         d = next(x for x in DOCS if x["_id"] == idx[i][2])
         out.append([d["_id"], d["name"], d["rating"]])
         steps.append({"say": T(lang, f"Entry {i + 1}: Kitap, rating {idx[i][1]}, points to {idx[i][2]}. FETCH reads that one document. The order is already right, so no SORT stage is necessary.",
-                               f"Entry {i + 1}: Kitap, rating {idx[i][1]}, {idx[i][2]}'yi gösterir. FETCH sadece o dokümanı okur. Sıra zaten doğru, bu yüzden SORT aşamasına gerek yok."),
+                               f"Entry {i + 1}: Kitap, rating {idx[i][1]}, {idx[i][2]}'yi gösterir. FETCH sadece o document'ı okur. Sıra zaten doğru, bu yüzden SORT aşamasına gerek yok."),
                       "marks": {"i": dict(m), "d": {DOCS.index(d): "match"}}, "out": deepcopy(out), "outmarks": {len(out) - 1: "new"},
                       "count": {"index entries read": reads, "docs examined": len(out)}})
     steps.append({"say": T(lang, f"Done: {len(out)} documents examined for {len(out)} results. A COLLSCAN would examine all {len(DOCS)} documents and then sort the matches in memory.",
-                           f"Bitti: {len(out)} sonuç için {len(out)} doküman incelendi. Bir COLLSCAN {len(DOCS)} dokümanın hepsini inceler ve sonra eşleşenleri bellekte sıralardı."),
+                           f"Bitti: {len(out)} sonuç için {len(out)} document incelendi. Bir COLLSCAN {len(DOCS)} document'ın hepsini inceler ve sonra eşleşenleri bellekte sıralardı."),
                   "marks": {"i": dict(m)}, "out": out, "count": {"index entries read": reads, "docs examined": len(out)}})
     return {"tables": [{"id": "i", "name": "index category_1_rating_-1", "cols": ["category", "rating", T(lang, "points to", "gösterdiği")], "rows": idx, "key": [0, 1], "ref": [2]},
                        {"id": "d", "name": "products", "cols": ["_id", "name", "category", "rating"], "rows": [[d["_id"], d["name"], d["category"], d["rating"]] for d in DOCS], "key": [0], "ref": []}],
@@ -1266,13 +1266,13 @@ def doc_index(lang):
 def doc_pipeline(lang):
     unwound, groups, steps = [], {}, []
     steps.append({"say": T(lang, "Pipeline: $unwind '$tags', then $group by tag with a count and an average price. Stage 1 turns each document with two tags into two documents.",
-                           "Pipeline: $unwind '$tags', sonra tag'e göre bir sayı ve ortalama fiyatla $group. Aşama 1, iki tag'li her dokümanı iki dokümana çevirir."),
+                           "Pipeline: $unwind '$tags', sonra tag'e göre bir sayı ve ortalama fiyatla $group. Aşama 1, iki tag'li her document'ı iki document'a çevirir."),
                   "marks": {}, "rows": {"u": []}, "out": [], "count": {"documents in": 0, "documents after $unwind": 0}})
     for i, d in enumerate(DOCS):
         for t in d["tags"]:
             unwound.append([d["_id"], t, d["price"]])
         steps.append({"say": T(lang, f"$unwind {d['_id']}: tags {d['tags']} becomes {len(d['tags'])} documents, one for each tag.",
-                               f"$unwind {d['_id']}: {d['tags']} tag'leri, her tag için bir tane olmak üzere {len(d['tags'])} doküman olur."),
+                               f"$unwind {d['_id']}: {d['tags']} tag'leri, her tag için bir tane olmak üzere {len(d['tags'])} document olur."),
                       "marks": {"d": {i: "read"}, "u": {len(unwound) - 1: "new", len(unwound) - 2: "new"}}, "rows": {"u": deepcopy(unwound)}, "out": [],
                       "count": {"documents in": i + 1, "documents after $unwind": len(unwound)}})
     for k, (pid, t, price) in enumerate(unwound):
@@ -1281,7 +1281,7 @@ def doc_pipeline(lang):
         g[1] += price
     out = sorted(([t, n, round(s / n, 2)] for t, (n, s) in groups.items()), key=lambda r: (-r[1], r[0]))
     steps.append({"say": T(lang, f"$group: the {len(unwound)} documents go into one group per tag. Each group gives one result: the count and the average price. $sort puts the most common tag first.",
-                           f"$group: {len(unwound)} doküman, tag başına bir gruba girer. Her grup bir sonuç verir: sayı ve ortalama fiyat. $sort en yaygın tag'i öne koyar."),
+                           f"$group: {len(unwound)} document, tag başına bir gruba girer. Her grup bir sonuç verir: sayı ve ortalama fiyat. $sort en yaygın tag'i öne koyar."),
                   "marks": {}, "rows": {"u": deepcopy(unwound)}, "out": out, "outmarks": {0: "match"},
                   "count": {"documents in": len(DOCS), "documents after $unwind": len(unwound)}})
     return {"tables": [{"id": "d", "name": "products", "cols": ["_id", "tags", "price"], "rows": [[d["_id"], ", ".join(d["tags"]), d["price"]] for d in DOCS], "key": [0], "ref": []},
@@ -1294,8 +1294,8 @@ DOC_CANDS = ["DocumentDB", "Aurora PostgreSQL", "DynamoDB", "OpenSearch", "Elast
 
 def docdb(lang):
     w1 = verdicts(DOC_CANDS, [
-        V((1, "each document has its own fields", "her dokümanın kendi alanları var"), (1, "JSONB column, or many tables", "JSONB column ya da birçok table"), (1, "items have free attributes", "item'ların serbest attribute'ları var"),
-          (1, "documents with free fields", "serbest alanlı dokümanlar"), (1, "hash fields", "hash alanları")),
+        V((1, "each document has its own fields", "her document'ın kendi alanları var"), (1, "JSONB column, or many tables", "JSONB column ya da birçok table"), (1, "items have free attributes", "item'ların serbest attribute'ları var"),
+          (1, "documents with free fields", "serbest alanlı document'lar"), (1, "hash fields", "hash alanları")),
         V((1, "find on any field, also nested", "her alanda find, iç içe olanlar da"), (1, "SQL and JSONB operators", "SQL ve JSONB operatörleri"), (0, "a new question needs a new index design", "yeni soru yeni bir index tasarımı ister"),
           (1, "queries on any field", "her alanda query"), (0, "access by key only", "sadece key ile erişim")),
         V((1, "durable cluster volume", "kalıcı cluster volume"), (1, "durable", "kalıcı"), (0, "removed earlier", "daha önce elendi"),
@@ -1304,9 +1304,9 @@ def docdb(lang):
           (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi")),
     ])
     w2 = verdicts(DOC_CANDS, [
-        V((1, "multi-document transactions", "çok-dokümanlı transaction'lar"), (1, "transactions", "transaction'lar"), (1, "TransactWriteItems", "TransactWriteItems"),
-          (0, "no multi-document transactions", "çok-dokümanlı transaction yok"), (0, "no rollback", "rollback yok")),
-        V((0, "no foreign keys or CHECK across collections", "koleksiyonlar arası foreign key ya da CHECK yok"), (1, "foreign keys, CHECK", "foreign key'ler, CHECK"),
+        V((1, "multi-document transactions", "çok-document'lı transaction'lar"), (1, "transactions", "transaction'lar"), (1, "TransactWriteItems", "TransactWriteItems"),
+          (0, "no multi-document transactions", "çok-document'lı transaction yok"), (0, "no rollback", "rollback yok")),
+        V((0, "no foreign keys or CHECK across collections", "collection'lar arası foreign key ya da CHECK yok"), (1, "foreign keys, CHECK", "foreign key'ler, CHECK"),
           (0, "no foreign keys", "foreign key yok"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi")),
     ])
     w3 = verdicts(DOC_CANDS, [
@@ -1323,16 +1323,57 @@ def docdb(lang):
                                           ("The team already writes code for the MongoDB API", "Ekip zaten MongoDB API'si için kod yazıyor")], DOC_CANDS, w1),
         "decide_checkout": decide_generic(lang, ("Checkout: stock, order and order lines change together, with rules between them", "Checkout: stok, sipariş ve order line'lar birlikte değişir, aralarında kurallar var"),
                                           [("Several records change as one all-or-nothing unit", "Birkaç kayıt ya-hep-ya-hiç tek bir birim olarak değişir"),
-                                           ("The database enforces rules between collections or tables", "Database koleksiyonlar ya da table'lar arası kuralları uygular")], DOC_CANDS, w2),
+                                           ("The database enforces rules between collections or tables", "Database collection'lar ya da table'lar arası kuralları uygular")], DOC_CANDS, w2),
         "decide_devices": decide_generic(lang, ("The last state of 5 million IoT devices, one write per device every second", "5 milyon IoT cihazının son durumu, her cihazdan her saniye bir yazma"),
                                          [("About 5 million writes per second, each to its own key", "Saniyede yaklaşık 5 milyon yazma, her biri kendi key'ine"),
                                           ("Each write is durable", "Her yazma kalıcıdır")], DOC_CANDS, w3),
         "scan": doc_scan(lang), "index": doc_index(lang), "pipeline": doc_pipeline(lang),
+        "update": doc_update(lang),
+        # the Turkish page (templates/e2e/docdb.tr.html): five scorecard simulations built from the M2 cards (e2e_usecases.DOCDB_USECASES)
+        **{uc["sim"]: usecase_scorecard(lang, uc) for uc in _uc.DOCDB_USECASES if uc["sim"]},
     }
     return {k: _localize(v, lang) for k, v in spec.items()}
 
 
-COUNT_TR.update({"docs examined": "incelenen doküman", "docs returned": "dönen doküman", "documents in": "giren doküman", "documents after $unwind": "$unwind sonrası doküman"})
+def doc_update(lang):
+    """Two devices change the same shopping list document. The filter carries the version (optimistic locking) and
+    arrayFilters selects the array element by its value, not by its position."""
+    items = [["i1", "süt", False], ["i2", "ekmek", False], ["i3", "elma", False]]
+    doc = {"version": 7}
+    rows = lambda: [[it[0], it[1], "true" if it[2] else "false", doc["version"]] for it in items]  # noqa: E731
+    log = []
+    steps = [{"say": T(lang, "The list L1 has three items and version 7. Phone A and tablet B both read version 7. A wants to mark 'ekmek' done, and B wants to mark 'elma' done. Each request sends: filter { _id: 'L1', version: 7 }, update { $set: { 'items.$[i].done': true }, $inc: { version: 1 } }, arrayFilters [ { 'i.name': ... } ].",
+                       "L1 listesinin üç öğesi ve version 7 değeri var. Telefon A ve tablet B ikisi de version 7'yi okudu. A 'ekmek' öğesini, B 'elma' öğesini işaretlemek istiyor. Her istek şunu gönderir: filtre { _id: 'L1', version: 7 }, güncelleme { $set: { 'items.$[i].done': true }, $inc: { version: 1 } }, arrayFilters [ { 'i.name': ... } ]."),
+              "marks": {}, "out": [], "count": {"writes applied": 0, "writes refused": 0}}]
+    # A arrives first
+    steps.append({"say": T(lang, "Request A arrives first. The filter tests the document: _id is L1 and version is 7. Both are true, so the document matches.",
+                           "Önce A'nın isteği gelir. Filtre document'ı test eder: _id L1 ve version 7. İkisi de doğru, document eşleşti."),
+                  "marks": {"l": {0: "read", 1: "read", 2: "read"}}, "rows": {"l": rows()}, "out": [], "count": {"writes applied": 0, "writes refused": 0}})
+    items[1][2] = True
+    doc["version"] = 8
+    log.append(["A", "ekmek", T(lang, "applied, version 7 → 8", "uygulandı, version önce 7, şimdi 8")])
+    steps.append({"say": T(lang, "arrayFilters finds the element whose name is 'ekmek' (position 2), without the client knowing the position. $set marks it done and $inc makes the version 8. Both changes are one atomic write of one document.",
+                           "arrayFilters adı 'ekmek' olan elemanı bulur (2. sıra); istemci sırayı bilmez. $set onu işaretler, $inc version'ı 8 yapar. İki değişiklik tek document'ın tek atomik yazmasıdır."),
+                  "marks": {"l": {1: "new"}}, "rows": {"l": rows()}, "out": deepcopy(log), "outmarks": {0: "new"}, "count": {"writes applied": 1, "writes refused": 0}})
+    steps.append({"say": T(lang, "Request B arrives. Its filter still says version: 7. The document now has version 8, so the filter matches no document. matchedCount is 0 and nothing is written.",
+                           "B'nin isteği gelir. Filtresi hâlâ version: 7 diyor. Document'ın version değeri artık 8, bu yüzden filtre hiçbir document ile eşleşmez. matchedCount 0 döner ve hiçbir şey yazılmaz."),
+                  "marks": {"l": {0: "skip", 1: "skip", 2: "skip"}}, "rows": {"l": rows()},
+                  "out": deepcopy(log) + [["B", "elma", T(lang, "refused: matchedCount 0", "reddedildi: matchedCount 0")]], "outmarks": {1: "bad"},
+                  "count": {"writes applied": 1, "writes refused": 1}})
+    log.append(["B", "elma", T(lang, "refused: matchedCount 0", "reddedildi: matchedCount 0")])
+    items[2][2] = True
+    doc["version"] = 9
+    log.append(["B", "elma", T(lang, "re-read version 8, applied, version 8 → 9", "version 8'i yeniden okudu, uygulandı, version önce 8, şimdi 9")])
+    steps.append({"say": T(lang, "Tablet B reads the list again (version 8, 'ekmek' already done), and sends the same change with version: 8. Now it matches, and 'elma' is marked. No change was lost, and no lock was held between the read and the write.",
+                           "Tablet B listeyi yeniden okur (version 8, 'ekmek' zaten işaretli) ve aynı değişikliği version: 8 ile gönderir. Şimdi eşleşir ve 'elma' işaretlenir. Hiçbir değişiklik kaybolmadı ve okuma ile yazma arasında kilit tutulmadı."),
+                  "marks": {"l": {1: "match", 2: "new"}}, "rows": {"l": rows()}, "out": deepcopy(log), "outmarks": {2: "new"}, "count": {"writes applied": 2, "writes refused": 1}})
+    return {"tables": [{"id": "l", "name": T(lang, "lists: document L1, array items", "lists: L1 document'ı, items array'i"), "cols": ["items[].id", "items[].name", "items[].done", "version"],
+                        "rows": [[it[0], it[1], "false", 7] for it in [["i1", "süt"], ["i2", "ekmek"], ["i3", "elma"]]], "key": [0], "ref": []}],
+            "out": {"name": T(lang, "requests", "istekler"), "cols": [T(lang, "device", "cihaz"), T(lang, "item", "öğe"), T(lang, "result", "sonuç")]}, "steps": steps}
+
+
+COUNT_TR.update({"docs examined": "incelenen document", "docs returned": "dönen document", "documents in": "giren document", "documents after $unwind": "$unwind sonrası document"})
+COUNT_TR.update({"writes applied": "uygulanan yazma"})
 SIMS["docdb"] = docdb
 
 
