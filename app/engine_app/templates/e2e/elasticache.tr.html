@@ -1,271 +1,1175 @@
 {% extends "e2e/_base.html" %}
 {% import "e2e/_macros.html" as k with context %}
-{# Turkish version of elasticache.html. Terms stay in English; the explanations are Turkish. Keep both files in step. #}
+{# Turkish page of the ElastiCache (Valkey) tutorial. The old English page elasticache.html is a separate, older page. Terms stay in English; the explanations are Turkish.
+   Cards: e2e_usecases.EC_USECASES. Simulations: e2e_sims.elasticache(). Scope: docs/elasticache.scope.md. #}
 {% block body %}
 
-<h2 id="goal" data-short="Ne öğreneceksin"><span class="sec">00</span>Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
-<p>Bölüm 01 mimarın kararını verir: Amazon ElastiCache nereye oturur, nereye oturmaz. Sonra tutorial iki bölümden oluşur.
-   Bölüm 1, ElastiCache'in çalıştırdığı açık kaynak bellek içi veri deposu Valkey'i öğretir: key'ler, data type'lar, atomik komutlar ve son kullanma. Bölüm 2 ElastiCache Serverless'ı ve Lale Market'in onu nasıl kullandığını gösterir.</p>
-<p>Örnekler Lale Market'in flash deal'inden, session'larından ve canlı leaderboard'undan gelir. Başka bir örnek bir fikri daha kolay gösteriyorsa tutorial onu kullanır.
-   Örnekler bir dükkânın tezgâhı, bir bilet gişesi ve bir stadyumdaki skor tabelasıdır.</p>
+<h2 id="goal" data-short="Ne öğreneceksin" data-group="Başlarken">Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
+<p>Bu sayfa genel fikirden AWS servisine dört adımda gider:</p>
+<ol>
+  <li><b>Bölüm A, Temel.</b> Bellek içi bir key-value store nedir: verinin neden bellekte durduğu, key'in tek parçalı olması, value'nun tipleri, key'lerin makinelere dağılması, tek adımlık komutlar, kendini silen veri ve bellek dolunca ne olduğu, bir database'in önünde kopya tutmak, mesajlaşma ve bir arızada neyin kaybolabileceği. Her kavram bütün durumlarıyla bir tabloda verilir ve bölüm sekiz özelliğin (Ö1–Ö8) listesi ve Redis/Valkey / Memcached / MemoryDB matrisiyle biter.</li>
+  <li><b>Mimar gözüyle.</b> Bellek içi store ne zaman doğru seçimdir, ne zaman değildir: on use case, her birinde seçimin nedeni, en yakın iki alternatifin (DynamoDB, MemoryDB, Aurora ve diğerleri) aynı gereksinimlere cevabı ve yine de ElastiCache seçersek artı ve eksilerimiz. Sonra AWS'teki seçenekler ve hangi durumda ElastiCache'in seçileceği. Biri net kazanma, biri net kaybetme, üçü yakın yarış olan beş karar simülasyonu.</li>
+  <li><b>Bölüm B, İleri.</b> Pratikte Valkey: canlı Lale Market key'leri, komutlar ve cevapları, yarış ve düzeltmesi, sıralama, key'lerin yeri, süre ve bellek ayarları, cache kodu, mesajlaşma, bir arızanın adım adım resmi ve maliyet.</li>
+  <li><b>Bölüm C, AWS servisi.</b> Valkey'i kendin çalıştırdığında ne yapman gerekir ve ElastiCache Serverless senin için neyi yapar.</li>
+</ol>
+<p>Örnekler Lale Market'in kampanya ürününden, ziyaretçi oturumlarından ve canlı müşteri sıralamasından gelir. Başka bir örnek bir fikri daha kolay gösteriyorsa tutorial onu kullanır: bir pastanenin tezgâhı, bir bilet gişesi, bir stadyumun skor tabelası.</p>
 <p>Bu tutorial'ın sonunda şunları yapabilirsin:</p>
 <ol>
-  <li>Hangi verinin bellekte durabileceğini ve hangisinin kalıcı bir database istediğini söylemek.</li>
-  <li>Bir iş için Valkey data type'ını seçmek: string, sayaç, hash ya da sorted set.</li>
-  <li>"Oku, sonra yaz"ın neden fazla sattığını ve DECR'ın neden satmadığını adım adım göstermek.</li>
-  <li>Cache-aside pattern'ini ve bedelini açıklamak.</li>
-  <li>Verinin kendini silmesi için bir TTL kullanmak.</li>
-  <li>ElastiCache Serverless'ın senin için neyi çalıştırdığını açıklamak.</li>
+  <li>Hangi verinin sadece bellekte yaşayabileceğini, hangisinin kalıcı bir database'e ihtiyaç duyduğunu söylemek ve bunu "bu veri kaybolursa ne olur?" sorusuyla savunmak.</li>
+  <li>Bir soruya uygun value tipini seçmek: sayaç, nesne, sıralı liste, kuyruk ya da konum.</li>
+  <li>"Önce oku, sonra yaz" yönteminin neden fazla sattığını ve tek bir atomik komutun neden satmadığını adım adım göstermek.</li>
+  <li>Bir database'in önüne bellekte kopya koymanın kazancını ve bedelini (eski veri, soğuk başlangıç) hesaplamak.</li>
+  <li>ElastiCache'i DynamoDB, MemoryDB ve Aurora ile gereksinim gereksinim karşılaştırmak ve bir yakın yarışta seçimi savunmak.</li>
+  <li>ElastiCache Serverless'ın senin için neyi çalıştırdığını ve neyi senin kararına bıraktığını açıklamak.</li>
 </ol>
 <p>Dört tür kutu sana yardım eder. <b>Simülasyon</b>: Oynat'a ya da Sonraki adım'a bas. <b>Önce tahmin et</b>: cevabı açmadan önce kendi cevabını yaz.
    <b>Checkpoint</b>: tek doğru cevabı olan bir soru. <b>Analoji</b>: günlük hayattan bir resim.</p>
 
-<h2 id="architect" data-short="Mimar gözüyle: ne zaman"><span class="sec">01</span>Mimar gözüyle: ElastiCache nereye oturur</h2>
-<p><b>Önce bu bölümü oku.</b> Kararı bu bölüm verir. Sonraki bölümler Valkey'in nasıl çalıştığını öğretir.</p>
-<p><b>Kısaca:</b> Amazon ElastiCache küçük ve sıcak veriyi bellekte tutar ve mikrosaniyelerde cevap verir. Valkey, Redis OSS ya da Memcached engine'ini çalıştırır.
-   Onu birçok isteğin saniyede okuduğu ya da değiştirdiği veri için, yeniden kurabileceğin ya da kaybedebileceğin veri için kullan. İşinin resmî kaydını kalıcı bir database'de tut.</p>
-<p>Bellek hızlıdır ama GB başına pahalıdır ve bir arızada veriyi ilk kaybeden katmandır. Bu yüzden bir mimarın ana sorusu "hızlı mı?" değil,
-   "bu veri giderse ne olur?" sorusudur. Cevap "yeniden kurarız" ya da "bir saat sonra kimsenin umurunda olmaz" ise veri ElastiCache'te yaşayabilir.</p>
+<div class="part"><b>Bölüm A</b><h2 id="partA" data-short="Bölüm A: Temel">Temel: bellek içi key-value fikri, bütün durumlarıyla</h2>
+<p>Verinin tamamını bellekte tutan bir store'un neden mikrosaniyelerde cevap verdiği ve bunun karşılığında nelerden vazgeçtiği. Bu bölüm her kavramı önce tanımlar, sonra o kavramın <b>bütün durumlarını</b> bir tabloda gösterir; yapılamayan durum da tablodadır. Fikirler Redis, Valkey ve Memcached'de aynıdır; isimler standarttır ve sayfanın sonuna kadar değişmez.</p></div>
 
-<h3>Bir iş yükünde ElastiCache'i işaret eden sinyaller</h3>
-<table class="data">
-  <thead><tr><th>Sinyal</th><th>Gerçek bir projede neye benzer</th><th>Ona cevap veren Valkey özelliği</th></tr></thead>
-  <tbody>
-    <tr><td>Aynı veri tekrar tekrar okunur</td><td>Çok satan bir ürünün sayfası dakikada 2.000 kez okunur.</td><td>Database'in önünde bir cache (cache-aside, bölüm 06)</td></tr>
-    <tr><td>Her okuma bir milisaniyeden kısa sürmeli</td><td>Bir reklam sunucusu katı bir süre bütçesi içinde cevap vermeli.</td><td>Bütün veri RAM'de (bölüm 02)</td></tr>
-    <tr><td>Birçok istemci küçük tek bir değeri değiştirir</td><td>Bir flash deal'in stoğu, bir beğeni sayacı, bir hız sınırı.</td><td>Atomik komutlar: INCR, DECR (bölüm 04)</td></tr>
-    <tr><td>Her zaman güncel bir sıralama</td><td>Bir leaderboard, saatin en çok görüntülenen ürünleri.</td><td>Sorted set'ler (bölüm 05)</td></tr>
-    <tr><td>Kısa ömürlü veri</td><td>Session'lar, tek kullanımlık kodlar, geçici kilitler.</td><td>Her key'de TTL (bölüm 07)</td></tr>
-    <tr><td>Süreçler arasında gerçek zamanlı mesajlar</td><td>Bir sohbet, canlı bildirimler.</td><td>Valkey'in pub/sub'ı ve stream'leri</td></tr>
-  </tbody>
-</table>
-
-<h3>Kullanım alanları: sebebi ve özelliğiyle</h3>
-<table class="data">
-  <thead><tr><th>Kullanım alanı</th><th>Veri</th><th>Neden bellekte</th><th>İşi yapan özellik</th></tr></thead>
-  <tbody>
-    <tr><td>Flash sale stoğu (Lale Market)</td><td>Deal başına bir sayaç.</td><td>Yüzlerce alıcı aynı saniyede tek bir değeri değiştirir.</td><td>DECR, sonra bir adedi geri vermek için INCR</td></tr>
-    <tr><td>Canlı leaderboard (Lale Market)</td><td>Müşteri başına bir üye, skor = gelir.</td><td>İlk 10 her an hazır olmalı.</td><td>Sorted set, ZINCRBY, ZREVRANGE</td></tr>
-    <tr><td>Web session'ları (Lale Market)</td><td>Ziyaretçi başına bir hash.</td><td>Her sayfada okunur. Terk edilen session'lar gitmeli.</td><td>Hash, EXPIRE</td></tr>
-    <tr><td>Database cache'i</td><td>Ürün sayfalarının, profillerin, query sonuçlarının kopyaları.</td><td>Okumaların çoğu aynı birkaç öğeyi ister.</td><td>EX ile GET, SET (cache-aside)</td></tr>
-    <tr><td>API hız sınırlama</td><td>Kullanıcı ve dakika başına bir sayaç.</td><td>Her istekte kontrol edilir, neredeyse hiç süre eklememeli.</td><td>EXPIRE ile INCR</td></tr>
-    <tr><td>Oyun: eşleştirme ve canlı skorlar</td><td>Bekleyen oyuncular, süren bir maçın skorları.</td><td>Saniyede birçok kez değişir, maçtan sonra değersizdir.</td><td>Sorted set'ler, listeler, TTL</td></tr>
-    <tr><td>Gerçek zamanlı analitik sayaçlar</td><td>Ürün başına saatlik görüntülemeler.</td><td>Milyonlarca küçük artış.</td><td>INCR, HINCRBY, benzersiz sayımlar için HyperLogLog</td></tr>
-    <tr><td>Dağıtık kilitler ve iş koordinasyonu</td><td>Çalışan iş başına bir key.</td><td>Birkaç sunucu aynı işi aynı anda çalıştırmamalı.</td><td>NX ve EX ile SET</td></tr>
-    <tr><td>Sohbet ve canlı bildirimler</td><td>Kanallar ve son mesajlar.</td><td>Mesajlar hemen ulaşmalı, geçmiş kısadır.</td><td>Pub/sub, stream'ler, listeler</td></tr>
-  </tbody>
-</table>
-
-<h3>ElastiCache'ten uzağı işaret eden sinyaller</h3>
-<table class="data">
-  <thead><tr><th>İş yükündeki sinyal</th><th>ElastiCache neden zayıf kalır</th><th>Daha iyi seçim</th></tr></thead>
-  <tbody>
-    <tr><td>Veri resmî kayıttır (siparişler, ödemeler)</td><td>Bellek ilk kopyadır. Bir kayıt database'i kalıcı yazmalar ve kurallar ister.</td><td><a href="/e2etutorial/aurora">Aurora</a> ya da <a href="/e2etutorial/dynamodb">DynamoDB</a></td></tr>
-    <tr><td>Nadiren okunan büyük veri</td><td>RAM, GB başına diskten çok daha pahalıdır.</td><td><a href="/e2etutorial/s3">S3</a> ya da disk tabanlı bir database</td></tr>
-    <tr><td>Her alanda sorular ("Ankara'dan bütün session'lar")</td><td>Valkey veriyi key ile bulur. Genel bir query dili yoktur.</td><td><a href="/e2etutorial/aurora">Aurora</a>, <a href="/e2etutorial/opensearch">OpenSearch</a></td></tr>
-    <tr><td>Birçok kayıt arasında kurallar</td><td>Bir MULTI bloğunda rollback yoktur.</td><td><a href="/e2etutorial/aurora">Aurora</a></td></tr>
-    <tr><td>Kalıcı olması gereken, çok yüksek ölçekte key ile okumalar</td><td>Kalıcı bir key-value database milisaniyelerde cevap verir ve veriyi tutar.</td><td>Mikrosaniye gerekiyorsa DAX ile <a href="/e2etutorial/dynamodb">DynamoDB</a></td></tr>
-    <tr><td>Raporlar için aylarca geçmiş</td><td>Bellek geçmişi değil, şimdiyi tutar.</td><td><a href="/e2etutorial/redshift">Redshift</a>, <a href="/e2etutorial/influxdb">Timestream for InfluxDB</a></td></tr>
-  </tbody>
-</table>
-
-<h3>Bir mimarın sorduğu sorular, bu sırayla</h3>
-<ol>
-  <li><b>Bu veri kaybolursa ne olur?</b> İş para ya da güven kaybediyorsa kaydı başka yerde tut ve ElastiCache'i sadece kopya olarak kullan.</li>
-  <li><b>Veri ne kadar eski olabilir?</b> Bu sayı bir cache kaydının TTL'idir.</li>
-  <li><b>Veriyi nasıl buluyorsun?</b> Her zaman bir key ile: iyi. Herhangi bir alanla: başka bir engine.</li>
-  <li><b>Hangi data type soruya uyar?</b> Bir sayaç, bir hash, bir sorted set ya da bir liste. Doğru type soruyu tek bir komuta çevirir.</li>
-  <li><b>Aynı değeri kaç istemci değiştiriyor?</b> Çok sayıdaysa tek bir atomik komut kullan, asla bir okuma ve sonraki bir yazma değil.</li>
-  <li><b>Sıcak veri ne kadar büyük?</b> Çalışma kümesi belleğe sığmalı. ElastiCache Serverless belleği senin için büyütür ve bunun parasını ödersin.</li>
-  <li><b>Kalıcı bir log'a ihtiyacın var mı?</b> Node-based Valkey cluster'ları (sürüm 9.0 ve üzeri) Multi-AZ bir transactional log tutabilir. Bu, bazı veriler için kararı değiştirir.</li>
-</ol>
-
-<h3>AWS'de ElastiCache ve akrabaları</h3>
-<table class="data">
-  <thead><tr><th>Seçenek</th><th>Nedir</th><th>Ne zaman seçilir</th></tr></thead>
-  <tbody>
-    <tr><td>ElastiCache Serverless (Valkey)</td><td>Seçilecek node yok. Tek bir endpoint. AWS belleği ve compute'u ölçekler ve Availability Zone'lar arasında replike eder.</td><td>Yeni bir cache için varsayılan seçim. Lale Market bunu kullanır.</td></tr>
-    <tr><td>ElastiCache node-based cluster</td><td>Node türünü, shard ve replica sayısını sen seçersin.</td><td>Konfigürasyon ya da maliyet üzerinde ince kontrol gerekiyorsa.</td></tr>
-    <tr><td>Durability'li node-based Valkey</td><td>Sürüm 9.0 ve üzeri için Multi-AZ bir transactional log, veriyi "bütün cache node'ları çökse bile" kurtarılabilir tutar
-        (<a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.corecomponents.html">How ElastiCache works</a>).</td><td>Bellek hızı gerekiyorsa ve veri bütün node'ların arızasından sağ çıkmalıysa.</td></tr>
-    <tr><td>DynamoDB Accelerator (DAX)</td><td>Sadece DynamoDB için, DynamoDB API'li bir cache.</td><td>Uygulama zaten DynamoDB okuyorsa ve mikrosaniye okumalar gerekiyorsa.</td></tr>
-  </tbody>
-</table>
-
-<h3>Lale Market'te ElastiCache'in yeri</h3>
-<p>Lale Market, Valkey engine'li tek bir ElastiCache Serverless cache'ini dört iş için kullanır:</p>
-<ul><li>flash deal: bir hash ve bir stok sayacı,</li><li>her ziyaretçinin session'ı: TTL'li bir hash,</li><li>canlı leaderboard: bir sorted set,</li><li>iki sayaç: bugünkü siparişler ve aktif ziyaretçiler.</li></ul>
-<p>Her parça yeniden kurulabilir. Admin Console'un Seed'i leaderboard'u Aurora'daki siparişlerden yeniden kurar.
-   Siparişlerin kendisi asla sadece bellekte yaşamaz.</p>
-
-<h3>Simülasyon: bırak gereksinimler seçsin</h3>
-{{ k.sim("decide_board", "İş yükü 1: canlı bir leaderboard") }}
-{{ k.sim("decide_orders", "İş yükü 2: commit edilmiş siparişler") }}
-{{ k.sim("decide_ratelimit", "İş yükü 3: bir API hız sınırı") }}
-<p>İş yükü 3 için bir not: atomik bir ADD ve bir TTL'li DynamoDB de çağrıları sayabilir ve birçok ekip bunu yapar. Simülasyon onu bir milisaniyelik süre bütçesi yüzünden eler.
-   Bütçe on milisaniyeyse ikisi de geçerli seçimlerdir.</p>
-
-{{ k.quiz("ec-a1", "Bir online mağaza ana sayfasında son bir saatin en çok satan 20 ürününü göstermek istiyor. Sayfa dakikada 3.000 kez görüntüleniyor. En iyi ne uyar?",
-   ["ZINCRBY ile güncellenen, ElastiCache'te bir sorted set", "Her sayfa görüntülemesinde siparişler üzerinde bir GROUP BY query'si", "Her gece bir kez çalışan bir Redshift raporu", "Her sayfa görüntülemesinde sipariş table'ının bir Scan'i"],
-   0, "Sıralama sürekli değişiyor ve her görüntüleme ona hemen ihtiyaç duyuyor. Bir sorted set sırayı her yazmada tutar. Her görüntülemede bir query sipariş database'ine yük bindirirdi.") }}
-{{ k.quiz("ec-a2", "Bir ekip alışveriş sepetini sadece ElastiCache'te tutmak istiyor. Mimar önce ne sormalı?",
-   ["Bir sepet satırını hangi data type saklar", "Bir sepet kaybolursa işe ne olur", "Bir shard'a kaç key sığar", "Cache endpoint'i hangi portu kullanır"],
-   1, "Bellekle ilgili ilk soru kayıp sorusudur. Kaybolan bir sepet bazı mağazalar için kabul edilebilir, bazıları için değil. Data type ondan sonra gelir.") }}
-{{ k.quiz("ec-a3", "Bir bankanın hangi verisi sadece ElastiCache'te YAŞAMAMALI?",
-   ["Hesap bakiyeleri ve havaleler", "API'nin hız sınırı sayaçları", "Son dakikanın cache'lenmiş döviz kurları", "Giriş yapmış kullanıcıların session'ları"],
-   0, "Bakiyeler ve havaleler bankanın kaydıdır. Transaction'lı kalıcı bir database isterler. Diğer üçü yeniden kurulabilir ya da kısa ömürlüdür.") }}
-
-<div class="part"><b>Bölüm 1</b><h2 id="part1" data-short="BÖLÜM 1: Valkey">Valkey: bellek içi veri deposu</h2>
-<p>Key'ler, data type'lar, atomik komutlar, cache'leme ve son kullanma.</p></div>
-
-<h2 id="memory" data-short="Neden bellek"><span class="sec">02</span>Bellek neden hızlıdır ve bedeli nedir</h2>
-<p>Bir bilgisayar veriyi storage katmanlarında tutar. İşlemciye yakın katmanlar hızlı, küçük ve pahalıdır. Uzak katmanlar yavaş, büyük ve ucuzdur.
-   Disk tabanlı bir database verisini SSD'lerde tutar ve yoğun kısmı bellekte bekletir. {{ k.term("in-memory database") }} ise bütün verisini RAM'de tutar.</p>
-{{ k.fig("elasticache-memory-hierarchy.png", "rastgele erişimli bellek (RAM) piramidin ortasında: \"hızlı, uygun fiyatlı\" ve \"güç açık, çok kısa süreli\". Diskler daha aşağıda: daha büyük ve daha yavaş. Valkey veri kümesinin tamamını RAM'de tutar.") }}
+<h2 id="why" data-short="Neden bellek içi?"><span class="sec">A1</span>Neden bellek içi bir store? Pastanenin tezgâhı</h2>
+<p>Bir pastanenin arkasında büyük bir depo, önünde küçük bir tezgâh var. Müşterilerin yüzde 80'i aynı on ürünü ister: simit, poğaça, açma. Satıcı bunları tezgâha koyar ve bir saniyede uzatır. Depodaki bir ürün için arkaya yürümek bir dakika sürer.
+   Tezgâh küçüktür ve pahalıdır: her raf metrekaresi vitrin kirasıdır. Ve akşam tezgâh boşaltılır; ürünlerin kalıcı yeri depodur.</p>
 {% call k.callout("analogy", "Analoji") %}
-<p>Bellek bir dükkânın tezgâhıdır. Kasiyer tezgâhtakine bir saniyede uzanır. Depo (disk) çok daha fazlasını tutar, ama her gidiş zaman alır.
-   Bir dükkân tezgâha sadece müşterilerin her dakika istediğini koyar. Tezgâh devrilirse malların hâlâ depoda olması gerekir. Bir cache'in arkasında bu yüzden bir database olmalıdır.</p>
+<p>Tezgâh bellektir (RAM), depo disktir. Bellek içi bir store bütün verisini tezgâhta tutar: her istek bir uzanma kadar kısadır. Ama tezgâh devrilirse üzerindekiler gider; depoda bir kopya yoksa geri gelmez. Bu sayfanın en önemli sorusu buradan gelir: "bu veri kaybolursa ne olur?"</p>
 {% endcall %}
-
-<h2 id="model" data-short="Key ve type'lar"><span class="sec">03</span>Model: key'ler ve type'lı değerler</h2>
-<p>Valkey bir {{ k.term("key-value store") }}'dur. Her kaydın bir key'i (bir metin) ve bir değeri vardır. DynamoDB'den farklı olarak her değerin bir data type'ı vardır ve her type'ın kendi komutları vardır.
-   Bunlar Lale Market'in gerçek key'leridir (değerler örnektir):</p>
-{{ k.sample("valkey_keys", "Lale Market cache'indeki key'ler (değerler örnektir)", key=["key"]) }}
+{{ k.concept("Bellek içi key-value store",
+   "Bütün verisini bilgisayarın ana belleğinde (RAM) tutan ve her veriye bir <b>key</b> ile ulaşan bir store. Disk tabanlı bir database verisini diskte tutar ve sadece sık okunan kısmı bellekte saklar; bellek içi store'da diske hiç gidilmez. Bu yüzden bir istek mikrosaniyeler sürer.",
+   "Lale Market'in kampanya stoğu <code>lm:deal:stock</code> key'inde, bellekte bir sayı olarak durur: canlı sistemde 46. Her \"Satın al\" bu sayıyı düşürür ve Engine App'in ölçümünde cevap 1–2 milisaniyede gelir; bu sürenin çoğu ağ, TLS ve Python istemcisidir, komutun kendisi mikrosaniyedir. AWS'in ölçümünde ElastiCache Serverless'ta p50 okuma gecikmesi (okumaların yarısının bittiği süre) 1 milisaniyenin altındadır.",
+   "Pastanenin tezgâhı: küçük, pahalı, çok hızlı. Depo (disk) büyük, ucuz, yavaş.") }}
+{{ k.fig("elasticache-memory-hierarchy.png", "piramidin ortasındaki \"random access memory\" katı: sağda \"fast, affordable\", ortada \"power on, very short term\" yazıyor. Yani bellek hızlıdır ama elektrik gidince içindekini tutmaz. Hemen altındaki katlar (flash, hard drives) büyük ve ucuzdur ama yavaştır. Bellek içi store verinin tamamını o orta katta tutar. Tepedeki \"processor cache\" işlemcinin kendi küçük önbelleğidir; ElastiCache'in adındaki cache ile ilgisi yoktur.") }}
+<p>Bu sayfadaki store'un adı <b>Valkey</b>'dir: Redis OSS'tan çatallanan (fork), aynı komutları kullanan açık kaynak bir bellek içi store. Amazon ElastiCache, Valkey'i (istersen Redis OSS'u ya da Memcached'i) senin için çalıştıran AWS servisidir. Sayfada "Redis / Valkey" yazan yerlerde ikisi aynı davranır.</p>
+<p>İlişkisel bir database (bkz. <a href="/e2etutorial/aurora?lang=tr">Aurora tutorial'ı</a>) ya da disk tabanlı bir key-value database (bkz. <a href="/e2etutorial/dynamodb?lang=tr">DynamoDB tutorial'ı</a>) her onaylanan yazmayı diske ve birkaç kopyaya yazar; bu milisaniyeler sürer. Bellek içi store farklı bir takas yapar:</p>
 <table class="data">
-  <thead><tr><th>Type</th><th>Ne tutar</th><th>Komutlar</th><th>Lale Market key'i</th></tr></thead>
+  <caption>takas: bellek içi store neyi verir, neyi alır</caption>
+  <thead><tr><th>Bellek içi store'un verdiği</th><th>Karşılığında aldığı</th><th>Bu sayfada nerede</th></tr></thead>
   <tbody>
-    <tr><td>string</td><td>Tek bir değer. Değer bir tam sayıysa INCR ve DECR onu değiştirir.</td><td>GET, SET, INCR, DECR</td><td><code>lm:deal:stock</code>, <code>lm:orders:today</code></td></tr>
-    <tr><td>hash</td><td>Küçük bir nesne gibi, tek key altında birkaç alan.</td><td>HSET, HGETALL, HINCRBY</td><td><code>lm:deal</code>, <code>lm:session:&lt;visitor&gt;</code></td></tr>
-    <tr><td>sorted set</td><td>Her birinin bir skoru olan, her zaman skor sırasında benzersiz üyeler.</td><td>ZADD, ZINCRBY, ZREVRANGE, ZCOUNT</td><td><code>lm:leaderboard</code>, <code>lm:active</code></td></tr>
-    <tr><td>list, set, stream</td><td>Kuyruklar, benzersiz üyeler, sadece eklenen log'lar.</td><td>LPUSH, SADD, XADD</td><td>Lale Market'te kullanılmıyor</td></tr>
+    <tr><td>Her istek mikrosaniyeler; disk yok</td><td>Bellek GB başına diskten çok daha pahalıdır: veri belleğe sığmalı ve her GB her saat ödenir</td><td>A1, B9</td></tr>
+    <tr><td>Value bir veri yapısı olabilir: sayaç, nesne, sıralı liste, kuyruk</td><td>Key tek parçadır; value'nun içine göre arama ve SQL yoktur</td><td>A2, A3</td></tr>
+    <tr><td>Tek bir komut atomiktir: sayaç ve "yoksa yaz" kilitsiz çalışır</td><td>Birkaç komut arasında geri alma (rollback) yoktur</td><td>A5</td></tr>
+    <tr><td>Süresi dolan veri tam anında kaybolur; bellek dolunca store bir kural ile yer açar</td><td>Bellek dolarsa store ya veri siler ya da yazmayı reddeder; ikisi de senin seçimindir</td><td>A6</td></tr>
+    <tr><td>Yüksek hız ve basit bir model</td><td>Bir arızada son yazmalar kaybolabilir; ElastiCache Serverless'ta her yazmayı diske yazan kalıcı bir log yoktur</td><td>A9</td></tr>
   </tbody>
 </table>
-<p>Hangi identifier'ın sahibi kim: key adlarının sahibi uygulamadır. Valkey'in table'ları yoktur, bu yüzden <code>lm:deal:stock</code> içindeki iki nokta sadece bir adlandırma geleneğidir.
-   <code>lm:</code> Lale Market'in key'lerini işaretler. Session key'i ziyaretçi id'sini mağazanın cookie'sinden ödünç alır: <code>lm:session:7f3a</code>.
-   Leaderboard müşteri id'lerini Aurora'nın customers table'ından ödünç alır. Valkey ikisini de kontrol etmez.</p>
-{{ k.fig("elasticache-hash-table.png", "bir hash fonksiyonu her key'i bir slot'a çevirir ve slot değeri tutar. Valkey bir key'i aynı şekilde bulur, bu yüzden bir GET 100 key'de de 100 milyon key'de de yaklaşık aynı süreyi alır.") }}
-{% call k.sql("Q1", "Flash deal'i oku: bir hash ve bir sayaç") %}
-<pre><code>HGETALL lm:deal
-GET lm:deal:stock</code></pre>
-<table class="clause">
-  <tr><td>HGETALL lm:deal</td><td><code>lm:deal</code> hash'inin bütün alanlarını ve değerlerini döndür: ürün id'si, ad, fiyat ve bitiş zamanı.</td></tr>
-  <tr><td>GET lm:deal:stock</td><td>Sayacın string değerini döndür, örneğin "10". Valkey onu metin olarak saklar ve INCR ile DECR'da sayı olarak ele alır.</td></tr>
-</table>
-{% endcall %}
-
-<h2 id="atomic" data-short="Atomik komutlar"><span class="sec">04</span>Atomik komutlar: son adet</h2>
-<p>Valkey "komut çalıştırma için çoğunlukla tek thread'li bir tasarım" kullanır (<a href="https://valkey.io/topics/latency/">Valkey: latency</a>).
-   Bütün istemcilerin komutları tek bir sıraya girer ve Valkey onları birbiri ardına çalıştırır. Bu yüzden tek bir komut {{ k.term("atomic") }}'tir: başka hiçbir komut onun ortasında çalışamaz.
-   Bir istemcinin iki komutu birlikte atomik değildir: aralarında başka istemcilerin komutları çalışabilir.</p>
-{% call k.callout("analogy", "Analoji") %}
-<p>Bir bilet gişesinde bir memur ve bir kuyruk var. Her müşteri bir seferde bir soru sorar. "Kaç koltuk kaldı?" diye sorup "bir tane alıyorum" demek için kuyruğun sonuna dönersen,
-   aradaki başka müşteriler son koltuğu alabilir. "Varsa bana bir koltuk ver" dersen memur tek cevapta kontrol eder ve satar. DECR o ikinci cümledir.</p>
-{% endcall %}
-{% call k.predict("Bir adet kaldı. İki alıcı GET, sonra SET (değer - 1) çalıştırıyor. Komutlarının en kötü sırasında mağaza kaç adet satar?") %}
-<p>İki. İki GET de ilk SET'ten önce çalışırsa iki alıcı da 1 görür ve ikisi de 0 yazar. İlk simülasyonu oynat. Sonra her alıcının tek bir DECR gönderdiği ikincisini oynat.</p>
-{% endcall %}
-{{ k.sim("race_naive", "Oku, sonra yaz: iki alıcı, bir adet") }}
-{{ k.sim("race_atomic", "DECR: iki alıcı, bir adet") }}
-<p>Lale Market'in gerçek flash deal sayfasında 300 alıcılı ve 10 adetli bir Load Simulation var. "Oku, sonra yaz" modunda genellikle 10'dan fazla satar.
-   Sayı çalıştırmadan çalıştırmaya değişir, çünkü zamanlamaya bağlıdır. Bir {{ k.term("race condition") }}'ın doğası budur: bir test geçebilir ve production başarısız olabilir.</p>
-{{ k.quiz("ec-q1", "DECR deal stoğu için neden güvenlidir de GET sonra SET değildir?",
-   ["DECR iki komuttan daha hızlıdır", "DECR değeri bir diskte saklar", "DECR tek komutta okur ve yazar", "DECR key'i bir saniyeliğine kilitler"],
-   2, "Valkey bir seferde bir komut çalıştırır. Bir istemcinin iki ayrı komutu arasında başka istemciler kendi komutlarını çalıştırabilir.") }}
-
-<h2 id="zset" data-short="Sorted set'ler"><span class="sec">05</span>Sorted set'ler: her zaman hazır bir sıralama</h2>
-<p>{{ k.term("sorted set") }} benzersiz üyeler tutar ve her üyenin bir sayısı, skoru vardır. Valkey üyeleri her yazmada skor sırasında tutar.
-   Bir üye eklemek ya da değiştirmek O(log N)'dir; N üye sayısıdır (<a href="https://valkey.io/topics/sorted-sets/">Valkey: sorted sets</a>).
-   Bu yüzden "ilk 10" okuma anında sıralama istemez.</p>
-{% call k.sql("Q2", "Bir siparişin toplamını bir müşteriye ekle, sonra ilk üçü oku") %}
-<pre><code>ZINCRBY lm:leaderboard 20000 C00003
-ZREVRANGE lm:leaderboard 0 2 WITHSCORES</code></pre>
-<table class="clause">
-  <tr><td>ZINCRBY lm:leaderboard 20000 C00003</td><td>C00003 üyesinin skoruna 20000 ekle. Üye yoksa Valkey onu bu skorla oluşturur. Lale Market'in checkout'u bu komutu sipariş toplamıyla gönderir.</td></tr>
-  <tr><td>ZREVRANGE lm:leaderboard 0 2</td><td>0 ile 2 arasındaki pozisyonlardaki üyeleri en yüksek skordan aşağıya döndür. <code>REV</code> ters demektir: en yüksek önce.</td></tr>
-  <tr><td>WITHSCORES</td><td>Her üyeden sonra skorunu döndür.</td></tr>
-</table>
-{% endcall %}
-{{ k.sim("zset", "Her yazmada kendini sıralayan bir leaderboard") }}
-{{ k.quiz("ec-q2", "Simülasyonu kullan. Değişikliklerden önce C00003'ün skoru 1.599,41'di. ZINCRBY 20000'den sonra kaçıncı sırada?",
-   ["İkinci sırada", "Üçüncü sırada", "Dördüncü sırada", "Beşinci sırada"],
-   2, "21.599,41; o anda C00002'nin (98.210,10), C00004'ün (45.120,00) ve C00001'in (36.708,47) altında, C00005'in (27.300,55) üstündedir. Bu yüzden dördüncüdür. Sonra Zeynep'in ZINCRBY'ı Zeynep'i yukarı taşır.") }}
-
-<h2 id="cache" data-short="Cache-aside"><span class="sec">06</span>Cache-aside: bir database'in önünde bellek</h2>
-<p>ElastiCache'in en yaygın kullanımı, daha yavaş bir database'in önünde bir cache'tir. Genel pattern {{ k.term("cache-aside") }}'dır:</p>
-<ol class="walk">
-  <li>Uygulama key'i cache'te arar.</li>
-  <li>Bir hit'te değeri döndürür. Database hiç iş yapmaz.</li>
-  <li>Bir miss'te database'i okur, değeri bir TTL ile cache'e yazar ve döndürür.</li>
-</ol>
-{% call k.predict("Altı sayfa görüntülemesi sırasıyla P0001, P0044, P0001, P0001, P0095, P0044 istiyor. Başta cache boş. Kaç görüntüleme database'e gider?") %}
-<p>Üç: her ürünün ilk görüntülemesi. Diğer üç görüntüleme hit'tir. Kontrol etmek için simülasyonu oynat.</p>
-{% endcall %}
-{{ k.sim("cache", "Altı sayfa görüntülemesiyle cache-aside") }}
-<p>Bir cache'in bedeli eski veridir. Database'de bir fiyat değiştiğinde cache, TTL bitene kadar eski fiyatı gösterebilir.
-   Uygulama database'i değiştirdiğinde cache key'ini de silebilir. Her iki durumda da verinin ne kadar eski olabileceğine mimar karar verir ve bunu yazar.</p>
-
-<h2 id="ttl" data-short="TTL"><span class="sec">07</span>TTL: kendini silen veri</h2>
-<p>Her key'in saniye cinsinden bir {{ k.term("TTL") }}'i (time to live) olabilir. Sıfıra ulaştığında Valkey key'i siler. Her Lale Market ziyaretçisinin session'ı 1.800 saniyelik (30 dakika) TTL'i olan bir hash'tir.
-   Her sayfa görüntülemesi EXPIRE'ı tekrar gönderir; böylece aktif bir session kalır ve terk edilen bir session temizlik işi olmadan gider.</p>
-{% call k.sql("Q3", "Bir session yaz ve ona 30 dakikalık ömür ver") %}
-<pre><code>HSET lm:session:7f3a persona C00001 last_page /cart
-EXPIRE lm:session:7f3a 1800
-TTL lm:session:7f3a</code></pre>
-<table class="clause">
-  <tr><td>HSET lm:session:7f3a persona C00001 last_page /cart</td><td>Bu ziyaretçinin hash'ine iki alan yaz. HSET, hash yoksa onu oluşturur.</td></tr>
-  <tr><td>EXPIRE lm:session:7f3a 1800</td><td>Time to live'ı 1.800 saniyeye ayarla. Yeni bir EXPIRE geri sayımı yeniden başlatır.</td></tr>
-  <tr><td>TTL lm:session:7f3a</td><td>Kalan saniyeleri döndür. -2, key'in var olmadığı anlamına gelir.</td></tr>
-</table>
-{% endcall %}
-{{ k.quiz("ec-q3", "Lale Market'te terk edilen bir session'ı ne yok eder?",
-   ["Gecelik bir temizlik işi", "Tarayıcı key'i siler", "Bir Lambda fonksiyonu key'leri tarar", "Session key'i üzerindeki TTL"],
-   3, "Her sayfa görüntülemesi EXPIRE'ı yeniden ayarlar. Sayfa görüntülemesi olmazsa TTL sıfıra ulaşır ve Valkey key'i siler.") }}
-
-<div class="part"><b>Bölüm 2</b><h2 id="part2" data-short="BÖLÜM 2: ElastiCache">Amazon ElastiCache: AWS servisi</h2>
-<p>İşletilecek node'u olmayan Valkey.</p></div>
-
-<h2 id="service" data-short="Kendin çalıştırmak ve Serverless"><span class="sec">08</span>Valkey'i kendin çalıştırmak ve ElastiCache Serverless</h2>
-<p>Valkey'i kendin çalıştırdığında yeterli belleği olan sunucular seçmek ve başka veri merkezlerinde replica'lar kurmak zorundasın.
-   Veri büyüdüğünde key'leri shard'lara bölmek zorundasın. Ayrıca belleği izler, failover'ı planlar ve yazılımı güncellersin. Dolu bir bellek Valkey'in yazmaları reddetmesine ya da key silmesine yol açar, bu yüzden boyut planlaması önemlidir.</p>
-<p>ElastiCache Serverless ile "cache'ine bir ad verirsin ve tek bir endpoint alırsın". Cache'inin "bellek, compute ve ağ bant genişliği kullanımını sürekli izler ve hem dikey hem yatay olarak ölçekler".
-   "Verini birden fazla Availability Zone'a otomatik olarak replike eder" (<a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.corecomponents.html">How ElastiCache works</a>).</p>
-{{ k.fig("elasticache-serverless.png", "her Availability Zone'daki uygulama bir VPC endpoint'e bağlanır. Service VPC'deki proxy node'ları her isteği cache node'larına gönderir. Uygulama kaç cache node'u olduğunu bilmez.") }}
 <table class="data">
-  <thead><tr><th>İş</th><th>Kendi sunucularında Valkey</th><th>ElastiCache Serverless</th></tr></thead>
+  <caption>bütün durumlar: bu veri sadece bellekte yaşayabilir mi?</caption>
+  <thead><tr><th>Verinin türü</th><th>Kaybolursa ne olur</th><th>Sadece bellekte?</th><th>Örnek</th></tr></thead>
   <tbody>
-    <tr><td>Bellek boyutu</td><td>Sen seçer ve dolmadan önce shard eklersin.</td><td>ElastiCache onu büyütür ve küçültür. Saklanan veri için GB-saat ödersin.</td></tr>
-    <tr><td>Birkaç veri merkezinde kopyalar</td><td>Replica'ları ve failover'ı sen kurarsın.</td><td>Availability Zone'lar arası replication otomatiktir.</td></tr>
-    <tr><td>İstemci konfigürasyonu</td><td>İstemci shard'ları bilmek ve değişiklikleri takip etmek zorundadır.</td><td>Tek bir endpoint. Bir proxy katmanı shard'ları gizler.</td></tr>
-    <tr><td>Yükseltmeler</td><td>Sen planlar ve çalıştırırsın.</td><td>Kullanılabilirliği etkilemeden minor ve patch sürümleri.</td></tr>
-    <tr><td>Maliyet modeli</td><td>Saat başına sunucular.</td><td>Saklanan veri (GB-saat) ve ElastiCache Processing Units (ECPU). 1 KB'a kadar basit bir GET ya da SET 1 ECPU kullanır.</td></tr>
+    <tr><td>Başka bir yerden kopyalanan veri</td><td>Kaynaktan yeniden okunur; bir süre yavaşlık</td><td>Evet</td><td>Aurora'daki ürün sayfasının bir kopyası</td></tr>
+    <tr><td>Başka bir veriden hesaplanan veri</td><td>Yeniden hesaplanır; bir süre eksik görünür</td><td>Evet</td><td>Siparişlerden hesaplanan müşteri sıralaması</td></tr>
+    <tr><td>Kısa ömürlü ve kaybı zararsız veri</td><td>Kullanıcı yeniden login olur, sayaç sıfırlanır</td><td>Evet</td><td>Oturum, dakikalık istek sayacı</td></tr>
+    <tr><td>Kısa ömürlü ama kaybı zararlı veri</td><td>Çift ödeme, çift satış</td><td>Kalıcı log'lu bir store gerekir (A9)</td><td>Gece ödeme işinin kilidi</td></tr>
+    <tr><td>Resmi kayıt: başka hiçbir yerde olmayan veri</td><td>Geri gelmez</td><td><b>Hayır.</b> Bellek içi bir store tek kopya olarak kullanılamaz; kalıcı bir database şarttır.</td><td>Siparişler, ödemeler, faturalar</td></tr>
   </tbody>
 </table>
-<p>ElastiCache Serverless Valkey'i cluster mode'da çalıştırır ve sadece TLS'li istemciler bağlanabilir. Cluster mode'da key'ler, key adının bir hash'ine göre shard'lara dağılır.
-   Birkaç key kullanan bir komut, sadece bütün key'leri tek bir shard'daysa çalışır. Bu yüzden her Lale Market komutu tek bir key kullanır.</p>
+{% call k.ask("Bellek bu kadar hızlıysa neden her şeyi bellekte tutmuyoruz?") %}
+<p>İki neden var. Birincisi fiyat: bellek GB başına diskten çok daha pahalıdır ve her GB her saat ödenir; 2 TB'lık bir sipariş geçmişini bellekte tutmak, onu diskte tutmanın katlarca fiyatıdır. İkincisi kalıcılık: elektrik gidince bellek boşalır. Bu yüzden bellek içi store, kaybı kabul edilen ya da başka yerden yeniden kurulabilen sıcak veri içindir. Kalıcı log'lu bellek içi store'lar da vardır (MemoryDB, A9); onların bedeli yazma gecikmesi ve fiyattır.</p>
+{% endcall %}
+{% call k.ask("Disk tabanlı bir database de sık okunan veriyi bellekte tutmuyor mu? Fark ne?") %}
+<p>Tutar, ama sadece okumayı hızlandırır: her yazma yine diske ve kopyalara gider ve onay ondan sonra gelir. Bellek içi store'da yazma da bellektedir; onay hemen gelir. Bir de model farkı vardır: disk tabanlı bir key-value database'te (DynamoDB) atomik sayaç ve koşullu yazma vardır, ama Bölüm A'nın geri kalanında göreceğin sıralı küme, kuyruk, konum index'i ve tekil sayım gibi value tipleri yoktur.</p>
+{% endcall %}
+{{ k.quiz("ec-q0", "Hangi veri, kalıcı bir database olmadan sadece bellek içi bir store'da tutulamaz?",
+   ["Ürün sayfasının beş dakikalık kopyası", "Ziyaretçinin 30 dakikalık oturumu", "Müşterinin ödediği siparişler", "Bir API'ın dakikalık istek sayacı"],
+   2, "Sipariş resmi kayıttır ve başka bir yerde yoktur. Diğer üçü ya bir kopyadır ya kısa ömürlüdür ya da kaybı zararsızdır.") }}
 
-<h2 id="lalemarket" data-short="Lale Market'te ElastiCache"><span class="sec">09</span>Lale Market'te ElastiCache</h2>
+<h2 id="model" data-short="Key ve value"><span class="sec">A2</span>Key ve value: key her zaman tek parçadır</h2>
+{{ k.concept("Key ve value",
+   "Bir key-value store <b>çiftler</b> saklar. <b>Key</b> (anahtar) benzersiz bir isimdir: bir metin. <b>Value</b> (değer) o isme ait veridir. Bir value'yu okumak ya da değiştirmek için key'ini verirsin. Bellek içi store'da key <b>her zaman tek parçadır</b>: grup ve sıra veren ikinci bir parça yoktur.",
+   "<code>lm:deal:stock</code> key'inin value'su <code>46</code>'dır. <code>lm:session:7f3a</code> key'inin value'su 7f3a ziyaretçisinin oturumudur.",
+   "Bir vestiyer fişi (key) ve askıdaki palto (value). Fiş numarası tek bir sayıdır; \"3. sıra, 12. askı\" gibi iki parçası yoktur.") }}
+<p>Bu tek parça kuralı, DynamoDB sayfasından gelen okuyucuyu en çok şaşırtan noktadır. Orada key bir ya da iki parçalı olabilir; burada sadece tek parçalıdır:</p>
+<table class="data">
+  <caption>bütün durumlar: key'in biçimleri</caption>
+  <thead><tr><th>Biçim</th><th>Bellek içi store'da</th><th>Örnek</th><th>Hangi store'da var</th></tr></thead>
+  <tbody>
+    <tr><td>Tek parçalı key (bir metin)</td><td>Evet, tek biçim budur. Key bir metindir; her key bellekte yer kapladığı için kısa tutulur.</td><td class="mono">lm:deal:stock</td><td>Redis / Valkey, Memcached, MemoryDB, DynamoDB (simple primary key)</td></tr>
+    <tr><td>İki parçalı key (grup + grubun içindeki sıra)</td><td><b>Yok.</b> Key'in ikinci bir parçası yoktur. Bir grup için key'in value'su bir veri yapısı olur (A3): bir hash'in field'ları ya da sıralı bir yapının üyeleri.</td><td class="mono">lm:session:7f3a → {persona, last_page}</td><td>DynamoDB, Cassandra. Redis / Valkey'de yoktur.</td></tr>
+    <tr><td>İki nokta üst üste ile bölünmüş isim</td><td>Store için hâlâ tek bir metindir. <code>lm:</code>, <code>session:</code> gibi önekler tasarımcının geleneğidir; store onları gruplamaz.</td><td class="mono">lm:session:7f3a</td><td>Hepsi (bir gelenek, kural değil)</td></tr>
+    <tr><td>Key'in bir kısmıyla okuma ("lm:session: ile başlayanlar")</td><td><b>Ucuz yolu yoktur.</b> Bütün key'ler taranır (SCAN). Sık sorulan bir soruysa ikinci bir key tutulur (örneğin aktif oturumların bir listesi).</td><td>Lale Market'in aktif ziyaretçi sayısı bu yüzden ayrı bir key'dedir: <code>lm:active</code></td><td>—</td></tr>
+  </tbody>
+</table>
+<p>Key'i verdiğinde store value'yu doğrudan bulur, çünkü key'in yerini bir hash fonksiyonuyla hesaplar: aynı key her zaman aynı yeri verir. Bu yüzden bir GET 100 key'de de 100 milyon key'de de aynı sürededir. Value'nun şekli ise serbesttir, ama her value'nun bir tipi vardır:</p>
+{{ k.fig("elasticache-hash-table.png", "soldaki her isim (key) bir hash fonksiyonundan geçer ve sağdaki tek bir numaralı yere (slot) düşer; o yerde telefon numarası (value) durur. John Smith'i tekrar bulmak için aynı hesap yapılır ve doğrudan 873'e gidilir. Bellek içi store bir key'in value'sunu aynı fikirle bulur. Bu resimdeki \"slot\" bir sunucunun belleğindeki tek bir yerdir; A4'te göreceğin, key'leri makinelere dağıtan 16.384 parçalık slot başka bir kavramdır.") }}
+<table class="data">
+  <caption>bütün durumlar: value'nun şekli</caption>
+  <thead><tr><th>Durum</th><th>Store ne yapar</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Value bir metin ya da sayı</td><td>Saklar. Sayı gibi görünen metin üzerinde artırma komutları çalışır.</td><td><code>lm:deal:stock → "46"</code></td></tr>
+    <tr><td>Value bir nesne (alanlar ve değerleri)</td><td>Saklar; bir alanı diğerlerine dokunmadan okur ya da değiştirir (A3).</td><td><code>lm:deal → product_id, name, price, …</code></td></tr>
+    <tr><td>Value sıralı bir liste ya da küme</td><td>Saklar; sırayı her yazmada korur (A3).</td><td><code>lm:leaderboard</code>: müşteriler gelirlerine göre</td></tr>
+    <tr><td>Bir value'yu başka bir tipin komutuyla okumak</td><td><b>Reddeder</b> ve <code>WRONGTYPE</code> hatası döndürür: bir sayaç key'i üzerinde liste komutu çalışmaz.</td><td>Bir nesne key'ine artırma komutu</td></tr>
+    <tr><td>Value'nun içindeki bir alana göre arama ("fiyatı 2.000'den küçük kampanyalar")</td><td><b>Yapamaz</b> (temel komutlarla); bütün key'leri okumak zorundadır. Sık soruluyorsa ikinci bir key tutulur ya da arama için başka bir araç kullanılır.</td><td>—</td></tr>
+    <tr><td>Value'nun boyutu</td><td>Valkey'in belgesine göre "A value can't be bigger than 512 MB": bir metin value en fazla 512 MB olabilir. Pratikte büyük value her okumada ağdan bütünüyle geçer ve pahalıdır; dosya S3'e, metadata'sı key-value'ya konur.</td><td>Bir ürün görseli S3'te, adı bellekte</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Zaten var olan bir key'e ikinci bir value yazarsam ne olur?") %}
+<p>Yeni value eskisinin yerine geçer; bir key tam olarak tek bir value'yu adlandırır. Bir ayrıntıya dikkat: üzerine yazma, eski key'in süre sonunu da siler (A6). <code>SET</code> komutu "var olan key'in eski süresini" ancak özel bir seçenekle (<code>KEEPTTL</code>) korur. Eski value'yu tutmak istiyorsan farklı bir key kullanırsın.</p>
+{% endcall %}
+{% call k.ask("Key neden \"lm:\" ile başlıyor? Bu store'un bir kuralı mı?") %}
+<p>Hayır, tasarımcının geleneğidir. Bellek içi store'da table yoktur: bütün key'ler tek bir düz alanda durur. <code>lm:</code> öneki "bu Lale Market'in key'i" der, <code>session:</code> "bu bir oturum" der. Store sadece bir metin görür; önek gruplama, izin ya da sorgu sağlamaz. Bu yüzden önekler tutarlı tutulur ve bir yerde yazılı olur.</p>
+{% endcall %}
+{{ k.quiz("ec-q1", "Bir ekip \"bir müşterinin bütün sepet satırlarını\" tek bir okumayla almak istiyor. Bellek içi store'da doğru tasarım hangisi?",
+   ["İki parçalı key: müşteri + ürün", "Müşteri başına bir key ve value'su alanları ürünler olan bir nesne", "Her satır ayrı key, okumada önekle arama", "Bütün sepetler tek bir key'de, tek bir metin"],
+   1, "Key tek parçadır, iki parçalı key yoktur. Grup, key'in value'sunun bir veri yapısı olmasıyla kurulur: müşteri başına bir nesne (hash) ve her ürün bir alan. Önekle arama bütün key'leri tarar.") }}
+
+<h2 id="types" data-short="Value tipleri"><span class="sec">A3</span>Value'nun tipleri: sayaç, nesne, liste, küme, sıralı küme</h2>
+<p>Disk tabanlı bir key-value database value'nun alanlarını okur ve yazar, ama value'yu bir veri yapısı olarak işlemez: sıralı küme, kuyruk ya da konum index'i yoktur. Bellek içi store'da her value'nun bir tipi vardır ve her tipin kendi komutları vardır. Doğru tip, bir soruyu tek bir komut yapar.</p>
+{{ k.concept("Data type",
+   "Bir value'nun yapısı: <b>string</b> (metin ya da sayı), <b>hash</b> (alan–değer çiftleri, küçük bir nesne), <b>list</b> (eklenme sırasıyla elemanlar), <b>set</b> (tekrarsız elemanlar), <b>sorted set</b> (her elemanın bir puanı var ve elemanlar puan sırasıyla durur). Bunlara ek olarak <dfn>stream</dfn> (saklanan mesajlar, A8), konum index'i ve HyperLogLog vardır. Tip key ilk yazıldığında belirlenir; o key'e sadece o tipin komutları çalışır.",
+   "<code>lm:deal:stock</code> bir string, <code>lm:deal</code> ve <code>lm:session:7f3a</code> birer hash, <code>lm:leaderboard</code> bir sorted set'tir.",
+   "Bir mutfağın kapları: tuzluk (tek değer), baharat kutusu (bölmeli), sıra numaratörü (sıralı), sınıf listesi (tekrarsız), maç tabelası (puana göre sıralı).") }}
+{{ k.concept("Field ve member",
+   "Bir veri yapısının içindeki tek bir parça. Bir hash'in içindeki parçaya <b>field</b> denir ve her field'ın bir değeri vardır. Bir set ya da sorted set'in içindeki parçaya <b>member</b> denir; sorted set'te her member'ın bir <b>score</b>'u (puanı) vardır. Key bütün yapıyı, field ya da member yapının içindeki tek parçayı adlandırır.",
+   "<code>lm:deal</code> hash'inin <code>price</code> field'ı 2024.3'tür. <code>lm:leaderboard</code> sorted set'inin <code>C00002</code> member'ının score'u 1.168.114,91'dir (Mert Doğan'ın geliri).",
+   "Bir apartmanın adı (key) ve dairelerin kapı numaraları (field). Bir maç tabelasında takımın adı (member) ve puanı (score).") }}
+<p>Aynı key'ler, bu sayfanın renkleriyle: key <b>sarı</b>, field ya da member <b>mavi</b>, değer ya da score <b>gri</b>. Bu renkler bütün sayfada aynı kalır.</p>
+{{ k.anatomy([
+   {"pk": "lm:deal:stock", "sk": "—", "attrs": [["string", "46"]]},
+   {"pk": "lm:deal", "sk": "product_id", "attrs": [["değer", "P0001"]]},
+   {"pk": "lm:deal", "sk": "price", "attrs": [["değer", "2024.3"]]},
+   {"pk": "lm:session:7f3a", "sk": "last_page", "attrs": [["değer", "/cart"]]},
+   {"pk": "lm:leaderboard", "sk": "C00002", "attrs": [["score", "1168114.91"]]},
+   {"pk": "lm:leaderboard", "sk": "C00001", "attrs": [["score", "455065.99"]]}],
+   "Lale Market'in key'leri, value tipleriyle. İlk satır bir string'dir: field'ı yoktur, value tek bir sayıdır. lm:deal ve lm:session:7f3a birer hash'tir: key bir nesneyi, field nesnenin bir alanını adlandırır. lm:leaderboard bir sorted set'tir: member bir müşteri id'si, score o müşterinin geliridir. Değerler canlı sistemden (B1).",
+   pk_name="key", sk_name="field / member",
+   labels={"primary": "Key + yapının içindeki parça", "pk": "Key", "sk": "Field ya da member", "attrs": "Değer ya da score", "note": "tip key'e göre değişir", "items": "Key'ler"}) }}
+<p>Şemayı satır satır oku:</p>
 <ul>
-  <li>Valkey engine'li tek bir ElastiCache Serverless cache'i.</li>
-  <li>ElastiCache Engine App, port 6379 üzerinden TLS ile bağlanır. Bir ACL kullanıcısı, AWS Secrets Manager'dan gelen bir parola ve Python cluster istemcisi <code>RedisCluster</code> kullanır.</li>
-  <li>Flash deal sayfasında atomik ve oku-sonra-yaz yarışı ile session TTL deneyi var. Live leaderboard sayfası sorted set'i her 5 saniyede okur.</li>
+  <li>1. satır: <code>lm:deal:stock</code> key'inin value'su tek bir sayıdır. Field yoktur (—). Satın alma bu sayıyı düşürür.</li>
+  <li>2. ve 3. satır: aynı key, <code>lm:deal</code>. Bir hash'tir; <code>product_id</code> ve <code>price</code> onun iki field'ıdır. Fiyatı değiştirmek için sadece <code>price</code> field'ı yazılır; diğer field'lar değişmez.</li>
+  <li>4. satır: oturum da bir hash'tir; <code>last_page</code> field'ı ziyaretçinin son sayfasıdır.</li>
+  <li>5. ve 6. satır: <code>lm:leaderboard</code> sorted set'inin iki member'ı. Store onları score sırasıyla tutar: C00002 önce, C00001 sonra. Sıra okuma anında hesaplanmaz, yazma anında korunur.</li>
+</ul>
+<table class="data">
+  <caption>bütün durumlar: bir soru ve onu tek komut yapan tip</caption>
+  <thead><tr><th>Soru</th><th>Tip</th><th>Komut</th><th>Maliyet</th></tr></thead>
+  <tbody>
+    <tr><td>Tek bir değeri oku, yaz, artır</td><td>string</td><td><code>GET</code>, <code>SET</code>, <code>INCR</code></td><td>Sabit (key sayısından bağımsız)</td></tr>
+    <tr><td>Bir nesnenin bir alanını oku ya da değiştir</td><td>hash</td><td><code>HGET</code>, <code>HSET</code>, <code>HINCRBY</code></td><td>Sabit</td></tr>
+    <tr><td>Sona ekle, baştan al (kuyruk)</td><td>list</td><td><code>LPUSH</code> (başa ekle), <code>RPOP</code> (sondan al), <code>BLMOVE</code> (iş gelene kadar bekleyerek al ve başka listeye taşı; B7)</td><td>Sabit; listenin ortasına erişim liste boyuyla artar</td></tr>
+    <tr><td>Bir eleman bu grupta var mı? (tekrarsız)</td><td>set</td><td><code>SADD</code>, <code>SISMEMBER</code></td><td>Sabit</td></tr>
+    <tr><td>İlk 10 ve bir elemanın sırası</td><td>sorted set</td><td><code>ZINCRBY</code>, <code>ZREVRANGE</code>, <code>ZREVRANK</code></td><td>Yazma O(log N): N üye sayısıdır, 2 milyon üyede bile birkaç adım</td></tr>
+    <tr><td>Bir noktaya 3 km içindekiler</td><td>konum index'i (sorted set üzerinde)</td><td><code>GEOADD</code>, <code>GEOSEARCH</code></td><td>Aranan alandaki üye sayısıyla artar</td></tr>
+    <tr><td>Kaç farklı ziyaretçi? (yaklaşık)</td><td>HyperLogLog</td><td><code>PFADD</code>, <code>PFCOUNT</code></td><td>En fazla 12 KB, standart hata yüzde 0,81</td></tr>
+    <tr><td>Bir alana göre sıralı birkaç farklı sıra ("fiyata göre", "tarihe göre", "puana göre") aynı veride</td><td><b>Tek bir tiple yapılamaz.</b> Her sıra ayrı bir sorted set'tir ve uygulama hepsini birlikte günceller.</td><td>—</td><td>Her sıra bir yazma daha</td></tr>
+  </tbody>
+</table>
+<p>Son satır önemli bir sınırı gösterir: bir sorted set tek bir score'a göre sıralar. İlişkisel bir database aynı veriyi her column'a göre sıralayabilir; bellek içi store'da her sıra bir tasarım kararıdır.</p>
+{% call k.ask("DynamoDB'deki sort key ile sorted set'in score'u aynı şey mi?") %}
+<p>Benzerdir ama aynı değildir. Sort key bir grubun içindeki value'ların sırasını verir ve key'in parçasıdır. Score ise bir member'ın sayısal puanıdır ve key'in parçası değildir: aynı member'ın score'u ZINCRBY ile değişir ve member yeni yerine taşınır. Bu yüzden "en çok harcayan müşteriler" gibi sürekli değişen bir sıra sorted set'in tam işidir; DynamoDB'de sort key'i değiştirmek, value'yu silip yeniden yazmak demektir.</p>
+{% endcall %}
+{% call k.ask("Bir hash'in içinde bir hash olabilir mi?") %}
+<p>Hayır. Field'ın değeri her zaman bir metindir; iç içe yapı yoktur. İç içe bir nesne gerekiyorsa ya JSON metni olarak tek bir field'a yazılır (o zaman içindeki bir alan tek başına değiştirilemez) ya da ikinci bir key kullanılır (<code>lm:session:7f3a:cart</code>). İç içe belgeler ana işse document database daha doğru araçtır.</p>
+{% endcall %}
+{% call k.predict("Lale Market her siparişte müşterinin gelirine sipariş tutarını ekliyor ve ana sayfa \"ilk 10\"u her 5 saniyede okuyor. Hangi tip, hangi iki komut?") %}
+<p>Sorted set: <code>ZINCRBY lm:leaderboard &lt;tutar&gt; &lt;müşteri id'si&gt;</code> skoru artırır ve member'ı yeni yerine taşır; <code>ZREVRANGE lm:leaderboard 0 9 WITHSCORES</code> ilk 10'u hazır sırayla okur. Okuma anında sıralama yoktur. B3'teki simülasyon bunu adım adım oynatır.</p>
+{% endcall %}
+
+<h2 id="slots" data-short="Hash slot ve shard"><span class="sec">A4</span>Key'ler makinelere nasıl dağılır: hash slot ve shard</h2>
+<p>Bir makinenin belleği sınırlıdır. Veri ya da trafik bir makineyi aşınca key'ler birkaç makineye bölünür. Bölme kuralı her key'in hangi makinede olduğunu, makinelere sormadan hesaplamaya izin vermelidir.</p>
+{{ k.concept("Hash slot",
+   "Key uzayının 16.384 numaralı parçasından biri. Her key tam olarak bir slot'a düşer: <code>slot = CRC16(key) mod 16384</code>. CRC16 bir hash fonksiyonudur: aynı key her zaman aynı sayıyı verir. Key'in içinde süslü parantez varsa (<b>hash tag</b>) sadece parantezin içi hash'lenir: <code>{lm:deal}:stock</code> ve <code>{lm:deal}:info</code> aynı slot'a düşer.",
+   "<code>lm:deal:stock</code> slot 1725'e, <code>lm:leaderboard</code> slot 10162'ye düşer. Bu sayılar gerçek CRC16 hesabıdır; B4'teki simülasyon aynı hesabı yapar.",
+   "Bir kargo şirketinin 16.384 numaralı rafı. Paketin numarasından raf numarası hesaplanır; hangi raf hangi depoda, ayrı bir listede yazar.") }}
+{{ k.concept("Shard",
+   "Slot'ların bir kısmının sahibi olan makine grubu. Grubun her makinesine <b>node</b> denir: store'u çalıştıran tek bir sunucu. Her shard'ın yazmaları alan bir <b>primary</b> node'u ve isteğe bağlı olarak <dfn>replica</dfn>, yani o shard'ın verisinin başka bir node'daki kopyası vardır (A9). Üç shard'lı bir cluster'da her shard yaklaşık 5.461 slot'un sahibidir. Bu düzene <b>cluster mode</b> denir.",
+   "Öğretici üç shard: shard 1 slot 0–5460, shard 2 slot 5461–10922, shard 3 slot 10923–16383. <code>lm:deal:stock</code> (1725) shard 1'de, <code>lm:leaderboard</code> (10162) shard 2'de, <code>lm:orders:today</code> (15337) shard 3'tedir.",
+   "Kargo şirketinin üç deposu: raf 0–5460 birinci depoda, 5461–10922 ikinci depoda, gerisi üçüncüde.") }}
+<div class="flow">
+  <div class="box pk"><code>lm:deal:stock</code><small>key</small></div><span class="arrow">→</span>
+  <div class="box">CRC16( )<small>aynı key her zaman aynı sayıyı verir</small></div><span class="arrow">→</span>
+  <div class="box">mod 16384 = 1725<small>hash slot</small></div><span class="arrow">→</span>
+  <div class="box hit">shard 1<small>slot 0–5460'ın sahibi</small></div>
+</div>
+<p class="flow-cap">Bir key'in yolu. Okuma ve yazma aynı yolu kullanır: istemci slot'u hesaplar ve komutu doğrudan o shard'a gönderir.</p>
+<div class="parts">
+  <div class="on"><h4>shard 1 · slot 0–5460</h4><span class="chip">lm:deal (3299)</span><span class="chip">lm:deal:stock (1725)</span><span class="chip">lm:session:3c8d (2435)</span></div>
+  <div><h4>shard 2 · slot 5461–10922</h4><span class="chip">lm:session:7f3a (9437)</span><span class="chip">lm:leaderboard (10162)</span></div>
+  <div><h4>shard 3 · slot 10923–16383</h4><span class="chip">lm:orders:today (15337)</span></div>
+</div>
+<p class="flow-cap">Altı gerçek Lale Market key'inin gerçek slot'ları ve öğretici üç shard'daki yerleri. B4'teki simülasyon aynı yerleşimi adım adım hesaplar.</p>
+{{ k.fig("elasticache-node-groups.png", "sağdaki \"Redis OSS Cluster\": iki node group (shard), birincinin altında \"Slots 0-8191\", ikincinin altında \"Slots 8192-16383\" yazıyor. 16.384 slot iki shard'a bölünmüş. Soldaki tek node group'ta bütün slot'lar (0-16383) tek yerde. Resim iki shard gösterir, metin üç shard kullanır: shard sayısı bir seçimdir, kural aynıdır. Soldaki tek shard'lı düzen <b>cluster mode disabled</b>'dır (bütün slot'lar tek yerde; sadece node'lu cluster'larda seçilebilir); ElastiCache Serverless her zaman sağdaki gibi cluster mode'dadır. Resimdeki \"Redis OSS\" Valkey'in çatallandığı projedir; kural Valkey'de aynıdır. Kutulardaki Primary Node ve Replica Node'lar A9'un konusudur.") }}
+<table class="data">
+  <caption>bütün durumlar: key'ler ve slot'lar</caption>
+  <thead><tr><th>Durum</th><th>Ne olur</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Tek key'li bir komut</td><td>Key'in slot'unun shard'ına gider. Her zaman çalışır.</td><td><code>GET lm:deal:stock</code> shard 1'e</td></tr>
+    <tr><td>Birkaç key'li komut, key'ler aynı slot'ta</td><td>Çalışır.</td><td><code>MGET {lm:deal}:info {lm:deal}:stock</code> (ikisi de slot 3299)</td></tr>
+    <tr><td>Birkaç key'li komut, key'ler farklı slot'larda</td><td><b>Yapılamaz.</b> Cluster komutu <code>CROSSSLOT</code> hatasıyla reddeder, key'ler aynı shard'da olsa bile. Adları benzeyen key'lerin slot'ları benzemez.</td><td><code>MGET lm:deal lm:deal:stock</code> (3299 ve 1725)</td></tr>
+    <tr><td>Shard eklenir</td><td>Bazı slot'lar yeni shard'a taşınır; key'lerin adı ve slot'u değişmez, sadece slot'un sahibi değişir.</td><td>Üç shard'dan dörde: her shard'ın payı küçülür</td></tr>
+    <tr><td>Bir key çok sık kullanılır (sıcak key)</td><td>Bütün trafiği tek bir slot'un shard'ı taşır; daha fazla shard yardım etmez. Çözüm, key'i bölmek ya da okumayı kopyalara dağıtmaktır.</td><td>Kampanya stoğu <code>lm:deal:stock</code></td></tr>
+    <tr><td>Hash tag'i çok geniş kullanmak</td><td>Aynı tag'li bütün key'ler tek slot'a, yani tek shard'a düşer; o shard'ın belleği diğerlerinden önce dolar.</td><td>Bütün oturumlara <code>{lm}</code> tag'i vermek</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Kaç shard olacağına ve hangi slot'un nerede durduğuna kim karar verir?") %}
+<p>Kendi çalıştırdığın bir Valkey'de ya da ElastiCache'in node'lu cluster'ında (node tipini ve sayısını senin seçtiğin biçim; Serverless'ın karşıtı) sen karar verirsin: shard sayısını seçer, gerekince shard ekler ve slot'ları taşırsın. ElastiCache Serverless'ta servis karar verir: belleği ve trafiği izler, shard'ları kendisi ekler ve araya koyduğu bir proxy katmanı yüzünden uygulama shard'ları görmez bile (C2). Slot hesabı (CRC16 mod 16384) ise her yerde aynıdır; sen sadece key'i seçersin.</p>
+{% endcall %}
+{% call k.ask("Slot'u neden doğrudan key'in hash'inden değil de 16.384'lük bir aradan geçiriyoruz?") %}
+<p>Shard sayısı değişince sadece slot'ların sahibi değişsin diye. Key doğrudan "hash mod shard sayısı" ile yerleşseydi, üç shard'dan dörde geçince key'lerin çoğu başka bir shard'a giderdi. Slot ara katmanıyla key'in slot'u hiç değişmez; dördüncü shard'a sadece bazı slot'lar, onların key'leriyle birlikte taşınır.</p>
+{% endcall %}
+{{ k.quiz("ec-q2", "MGET lm:deal lm:deal:stock komutu CROSSSLOT hatası veriyor. İki key'i tek komutla okumanın doğru yolu hangisi?",
+   ["Daha fazla shard eklemek", "Key'lere aynı hash tag'i vermek: {lm:deal}:info ve {lm:deal}:stock", "Key'leri daha kısa yazmak", "Komutu replica'ya göndermek"],
+   1, "Birkaç key'li bir komut sadece key'ler aynı slot'taysa çalışır. Hash tag'de sadece süslü parantezin içi hash'lenir, bu yüzden iki key aynı slot'a düşer.") }}
+
+<h2 id="atomic" data-short="Atomik komutlar"><span class="sec">A5</span>Yazma ve okuma: tek komut atomiktir, iki komut değildir</h2>
+<p>Bellek içi store bütün istemcilerin komutlarını tek bir sırada, birbiri ardına çalıştırır (Valkey'in belgesi bunu "a mostly single threaded design for command execution" diye anlatır). Bu basit kural, store'un en güçlü aracını ve en sık yapılan hatayı birlikte verir.</p>
+{{ k.concept("Atomik komut",
+   "Okuma, karar ve yazmayı tek adımda yapan ve ortasında başka hiçbir komutun çalışamadığı komut. <code>INCR</code> değeri okur, bir artırır, yazar ve yeni değeri döndürür; iki istemci aynı anda INCR gönderirse ikisi de sayılır. <code>SET key value NX</code> \"key yoksa yaz\" demektir: test ve yazma tek adımdır.",
+   "<code>DECR lm:deal:stock</code>: kampanya stoğunu tek adımda bir düşürür ve kalan sayıyı döndürür. Sonuç sıfırın altındaysa uygulama satmaz.",
+   "Bilet gişesinde \"boş koltuk varsa bana bir tane ver\" demek. Gişe görevlisi bakar ve satar; arada başka kimse giremez.") }}
+<p>İki komut ise atomik değildir. Bir istemci <code>GET</code> ile okur, kendi programında karar verir ve sonra <code>SET</code> ile yazarsa, iki komutun arasında başka istemcilerin komutları çalışabilir:</p>
+<div class="flow">
+  <div class="box pk">A: GET stock<small>cevap 1</small></div><span class="arrow">→</span>
+  <div class="box pk">B: GET stock<small>cevap 1</small></div><span class="arrow">→</span>
+  <div class="box">A: SET stock 0<small>A satar</small></div><span class="arrow">→</span>
+  <div class="box miss">B: SET stock 0<small>B de satar: bir adet iki kez satıldı</small></div>
+</div>
+<div class="flow">
+  <div class="box pk">A: DECR stock<small>cevap 0, A satar</small></div><span class="arrow">→</span>
+  <div class="box pk">B: DECR stock<small>cevap -1</small></div><span class="arrow">→</span>
+  <div class="box">B: INCR stock<small>adedi geri verir</small></div><span class="arrow">→</span>
+  <div class="box hit">bir adet bir kez satıldı<small>kilit yok</small></div>
+</div>
+<p class="flow-cap">Aynı yarışın iki yolu. Üstte "önce oku, sonra yaz": her komut tek başına doğru, hata iki komutun arasındaki boşlukta. Altta tek bir atomik komut: boşluk yoktur. B2'deki iki simülasyon bunu adım adım oynatır ve canlı sistemde 10 adet için 60 alıcı ile yapılan denemeyi gösterir.</p>
+<table class="data">
+  <caption>bütün durumlar: yazma yolları</caption>
+  <thead><tr><th>Yol</th><th>Ne verir</th><th>Atomik mi</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Yaz ya da üzerine yaz</td><td>Key + value</td><td>Evet</td><td><code>SET lm:tut:greeting merhaba</code></td></tr>
+    <tr><td>Sayaç artırma ya da azaltma</td><td>Key + miktar</td><td>Evet; yeni değeri döndürür</td><td><code>INCR</code>, <code>DECR</code>, <code>HINCRBY</code>, <code>ZINCRBY</code></td></tr>
+    <tr><td>Key yoksa yaz / key varsa yaz</td><td>Key + value + NX ya da XX</td><td>Evet; test ve yazma tek adım</td><td><code>SET lock:payout worker-A NX PX 900000</code> (PX: süre milisaniye cinsinden, 900.000 ms = 15 dakika)</td></tr>
+    <tr><td>Oku, programda karar ver, sonra yaz</td><td>İki ayrı komut</td><td><b>Hayır.</b> Arada başka komutlar çalışır; yukarıdaki üst yarış.</td><td><code>GET</code> sonra <code>SET</code></td></tr>
+    <tr><td>Birkaç komutu sıraya koy, birlikte çalıştır</td><td>MULTI … EXEC</td><td>Evet, araya komut girmez; ama geri alma yoktur</td><td>Aşağıdaki kart</td></tr>
+    <tr><td>Okuduğum değer değişmediyse yaz (iyimser kilit)</td><td>WATCH + MULTI … EXEC</td><td>Evet; değer değiştiyse EXEC hiçbir şey yapmaz ve uygulama yeniden dener</td><td>Bir sepetin toplamını kontrol edip yazmak</td></tr>
+    <tr><td>Karar mantığını store'un içinde çalıştır</td><td>Lua script'i (EVAL): Lua dilinde birkaç satırlık bir program; istemci onu metin olarak gönderir, store çalıştırır ve sonucu döndürür</td><td>Evet; script çalışırken başka komut çalışmaz</td><td>"Değer benimse sil" (kilit bırakma)</td></tr>
+    <tr><td>Bir komut yarıda hata verdi, öncekileri geri al</td><td>—</td><td><b>Yapılamaz.</b> Store transaction'ları geri almaz; hata veren komut atlanır, diğerleri çalışır.</td><td>—</td></tr>
+  </tbody>
+</table>
+{{ k.concept("Transaction (MULTI ve EXEC)",
+   "Birkaç komutu <code>MULTI</code> ile sıraya koyup <code>EXEC</code> ile birlikte çalıştırmak. Valkey'in belgesine göre \"All the commands in a transaction are serialized and executed sequentially\": araya başka bir istemcinin komutu girmez. Ama \"Valkey does not support rollbacks of transactions\": bir komut çalışırken hata verirse diğerleri yine çalışır ve geri alma yoktur. <code>WATCH</code> ile izlenen bir key EXEC'ten önce değişirse bütün transaction iptal olur.",
+   "Kampanya bitince <code>MULTI; HSET {lm:deal}:info active 0; SET {lm:deal}:stock 0; EXEC</code>: iki değişiklik birlikte görünür, araya bir satın alma girmez. Key'lerde aynı hash tag var, çünkü cluster mode'da (A4) bir transaction'ın ve bir Lua script'inin bütün key'leri aynı slot'ta olmalıdır; <code>lm:deal</code> ile <code>lm:deal:stock</code> farklı slot'larda olduğu için onlarla bu transaction CROSSSLOT hatası verirdi.",
+   "Bir kasiyere bütün sepeti birden vermek: kasiyer ürünleri sırayla okutur ve arada başka müşteriye bakmaz. Ama bir ürünün barkodu okunmazsa diğerleri yine satılır.") }}
+{% call k.ask("İlişkisel database'teki transaction ile MULTI/EXEC aynı şey mi?") %}
+<p>Hayır. İkisi de "araya başka bir şey girmesin" sözü verir, ama ilişkisel database bir hata olursa bütün değişiklikleri geri alır (ROLLBACK) ve commit edilen değişikliği diske yazar. MULTI/EXEC geri almaz ve diske yazmayı garanti etmez. Bu yüzden "stok düşsün, sipariş yazılsın, ödeme açılsın; biri olmazsa hiçbiri olmasın" gibi bir kural bellek içi store'un işi değildir (bkz. <a href="/e2etutorial/aurora?lang=tr">Aurora tutorial'ı</a>).</p>
+{% endcall %}
+{% call k.ask("Komutlar tek sırada çalışıyorsa yavaş bir komut herkesi bekletmez mi?") %}
+<p>Bekletir. Bu yüzden komutların çoğu sabit sürelidir ve bütün key'leri gezen bir komut (örneğin <code>KEYS *</code>) üretimde kullanılmaz; yerine sayfa sayfa ilerleyen <code>SCAN</code> kullanılır. Büyük bir sorted set'in tamamını okumak ya da uzun bir Lua script'i de diğer istemcileri bekletir. Kural: her komut küçük bir iş yapsın.</p>
+{% endcall %}
+{{ k.quiz("ec-q3", "Kampanya stoğu için DECR neden güvenlidir, ama GET ve sonra SET değildir?",
+   ["DECR iki komuttan daha hızlıdır", "DECR değeri diske yazar", "DECR okuma ve yazmayı tek komutta yapar", "DECR key'i bir saniye kilitler"],
+   2, "Store komutları tek sırada çalıştırır. Bir istemcinin iki ayrı komutu arasında başka istemcilerin komutları çalışabilir; tek bir komutun ortasına hiçbir şey giremez.") }}
+
+<h2 id="expiry" data-short="TTL ve eviction"><span class="sec">A6</span>Kendini silen veri ve bellek dolunca ne olur: TTL ve eviction</h2>
+<p>Bellek pahalı ve sınırlıdır. Bu yüzden bellek içi store'da iki silme yolu vardır: biri senin verdiğin süre, diğeri bellek dolunca store'un uyguladığı kural, yani <dfn>eviction</dfn> (aşağıdaki kart).</p>
+{{ k.concept("TTL (time to live)",
+   "Bir key'e verilen yaşam süresi. Süre bitince store key'i siler ve key artık okunamaz. Valkey süre sonunu milisaniye olarak saklar ve belgesine göre \"The expire error is from 0 to 1 milliseconds\": süre en fazla 1 milisaniye geç uygulanır. Bir okuma geldiğinde store key'in süresine bakar ve süresi dolduysa key'i yok sayar; bu yüzden süresi dolmuş bir key bir okumada görünmez. Silme iki yolla olur: biri key'e dokunulduğu anda süresinin dolduğunu görür, diğeri arka planda key uzayını yavaşça tarar. Süre <code>EXPIRE</code> ile verilir ya da yazmayla birlikte (<code>SET … EX 300</code>).",
+   "Her ziyaretçi oturumunun TTL'i 1.800 saniyedir (30 dakika). Her sayfa görüntülemesi <code>EXPIRE lm:session:7f3a 1800</code> ile süreyi baştan başlatır; terk edilen oturum 30 dakika sonra kendiliğinden gider.",
+   "Bir otoparkın saatli bileti. Süre bitince yer boşalır; görevli her arabaya tek tek bakmaz.") }}
+<table class="data">
+  <caption>bütün durumlar: süre sonu</caption>
+  <thead><tr><th>Durum</th><th>Ne olur</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Key'in süresi yok</td><td>Key biri silene kadar ya da bellek dolup store onu seçene kadar kalır.</td><td><code>lm:leaderboard</code></td></tr>
+    <tr><td>Süre var, zaman gelmedi</td><td>Normal bir key'dir; <code>TTL key</code> kalan saniyeyi döndürür.</td><td>Canlı ölçüm: 0. saniyede 5, 2. saniyede 3 (B5)</td></tr>
+    <tr><td>Süre yenilenir</td><td>Yeni süre eskisinin yerine geçer; yenileme bir komuttur.</td><td>Her sayfada <code>EXPIRE lm:session:7f3a 1800</code></td></tr>
+    <tr><td>Zaman geldi</td><td>Key o milisaniyede okunamaz; <code>TTL</code> -2, <code>EXISTS</code> 0 döndürür.</td><td>Canlı ölçüm: 6. saniyede key yok</td></tr>
+    <tr><td>Key süreli, sonra <code>SET</code> ile üzerine yazıldı</td><td>Süre <b>silinir</b>: key artık süresizdir. Belgeye göre "Any previous time to live associated with the key is discarded on successful SET operation". Süreyi korumak için <code>KEEPTTL</code> ya da yeniden <code>EX</code> verilir.</td><td>Oturumu SET ile yeniden yazıp süresini kaybetmek: oturum hiç düşmez</td></tr>
+    <tr><td>Key süreli, bir hash field'ı değişti (<code>HSET</code>)</td><td>Süre korunur; sadece içerik değişti.</td><td>Oturumun <code>last_page</code> field'ı</td></tr>
+    <tr><td>Bir hash'in sadece bir field'ına süre vermek</td><td>Süre key başınadır. Field başına süre ancak yeni sürümlerde vardır (ElastiCache'te Valkey 9.0); Lale Market'in Valkey 8.1 cache'inde <b>yoktur</b>.</td><td>—</td></tr>
+    <tr><td>Süresi dolan key'in silinmesi</td><td>Store kendisi yapar; uygulama bir silme komutu göndermez. Kopyalar süreyi kendileri uygulamaz, ana node'un silmesini bekler (A9).</td><td>—</td></tr>
+  </tbody>
+</table>
+<div class="flow">
+  <div class="box">SET … EX 1800<small>key yazılır, süre başlar</small></div><span class="arrow">→</span>
+  <div class="box hit">her sayfada EXPIRE 1800<small>süre baştan başlar</small></div><span class="arrow">→</span>
+  <div class="box pk">30 dakika sayfa yok<small>süre doldu</small></div><span class="arrow">→</span>
+  <div class="box miss">key yok<small>bir sonraki istek login'e gider</small></div>
+</div>
+<p class="flow-cap">Bir oturumun yaşamı. Süre dolduğu anda key okunamaz; DynamoDB'deki gibi "birkaç gün içinde" silinmeyi beklemek ve süreyi her okumada kontrol etmek gerekmez. Oturum ve rate limit kartlarında ElastiCache'i öne geçiren fark budur.</p>
+{{ k.concept("Eviction",
+   "Bellek sınırına ulaşıldığında store'un yeni veriye yer açmak için kendi seçtiği key'leri silmesi. Hangi key'lerin seçileceğini <b>maxmemory-policy</b> ayarı söyler. Eviction bir hata değil bir kuraldır: bir kopya için doğrudur, tek kopya olan veri için bir kayıptır.",
+   "Lale Market'in cache'i dolsaydı eski oturumlar ve ürün sayfası kopyaları silinebilirdi; ama yanlış bir politika süresiz <code>lm:leaderboard</code>'u da seçebilirdi. Hangi key'in korunacağı politika ile belirlenir.",
+   "Pastanenin tezgâhı doldu: satıcı en az satan ürünü arkaya kaldırır ve yerine yenisini koyar.") }}
+<table class="data">
+  <caption>bütün durumlar: bellek dolunca (maxmemory-policy)</caption>
+  <thead><tr><th>Politika</th><th>Ne siler</th><th>Ne zaman doğru</th></tr></thead>
+  <tbody>
+    <tr><td><code>volatile-lru</code></td><td>Sadece süresi olan key'lerden en uzun süredir kullanılmayanı. AWS'e göre ElastiCache'in node'lu cluster'larında varsayılan budur.</td><td>Süreli kopyalar ile süresiz önemli key'ler aynı yerdeyse</td></tr>
+    <tr><td><code>allkeys-lru</code></td><td>Bütün key'lerden en uzun süredir kullanılmayanı</td><td>Bütün veri bir kopyaysa (en yaygın ayar)</td></tr>
+    <tr><td><code>allkeys-lfu</code>, <code>volatile-lfu</code></td><td>En az sıklıkla kullanılanı (bütün key'lerden ya da süreli key'lerden)</td><td>Az sayıda key çok sık okunuyorsa</td></tr>
+    <tr><td><code>volatile-ttl</code></td><td>Süresi en yakın dolacak key'i</td><td>Süre zaten önemi gösteriyorsa</td></tr>
+    <tr><td><code>allkeys-random</code>, <code>volatile-random</code></td><td>Rastgele bir key'i</td><td>Erişim deseni düzse</td></tr>
+    <tr><td><code>noeviction</code></td><td>Hiçbir şey. Belgeye göre "New values aren't saved when memory limit is reached": yeni yazmalar hata alır, okumalar çalışır.</td><td>Veri silinmemeli ve uygulama bellek hatasını yönetebiliyorsa</td></tr>
+    <tr><td>"Önemli key'leri hiçbir koşulda silme, ama yazmayı da reddetme"</td><td><b>Yapılamaz.</b> Bellek doluysa ya bir şey silinir ya da yazma reddedilir; üçüncü bir yol yoktur. Çözüm daha fazla bellektir (Serverless'ta servis büyür) ya da önemli veriyi ayrı bir yerde tutmaktır.</td><td>—</td></tr>
+  </tbody>
+</table>
+{% call k.ask("ElastiCache Serverless'ta bellek dolar mı?") %}
+<p>Servis bellek kullanımını izler ve cache'i kendisi büyütür; varsayılan üst sınır 5 TB'tır. Ama sen bir üst sınır koyarsan ve cache o sınıra ulaşırsa AWS'in belgesine göre ElastiCache Serverless "will begin to evict data, to reject new writes with an Out of Memory error, or both": veri silmeye, yeni yazmaları reddetmeye ya da ikisine başlar. Yani üst sınır bir maliyet güvencesidir ve aynı zamanda bir kayıp riskidir. AWS'in Serverless belgesi node'lu cluster'lardaki gibi seçilebilir bir <code>maxmemory-policy</code> listelemez; Serverless'ta önemli key'leri korumanın yolu bir üst sınır koymamak (ya da yüksek koymak) ve kaybı kabul edilmeyen veriyi bellek içi store'da tek kopya olarak tutmamaktır. Lale Market'in cache'inde üst sınır yoktur.</p>
+{% endcall %}
+{% call k.ask("Süreli key'ler bellekten hemen mi çıkar, yoksa bir süre yer kaplar mı?") %}
+<p>Okunamazlar ama bir süre yer kaplayabilirler: dokunulmayan, süresi dolmuş bir key'i arka plandaki tarama bulana kadar bellekte durur. Okuma açısından fark yoktur (key görünmez), bellek açısından küçük bir gecikme vardır.</p>
+{% endcall %}
+{{ k.quiz("ec-q4", "Bir oturum key'i EX 1800 ile yazıldı. Sonra uygulama oturumu SET ile (EX vermeden) baştan yazdı. Ne olur?",
+   ["Süre 1800'den devam eder", "Key artık süresizdir ve kendiliğinden düşmez", "SET hata verir", "Süre sıfırlanır ve key hemen silinir"],
+   1, "Başarılı bir SET key'in önceki süresini atar. Süre ya KEEPTTL ile korunur ya da SET'e yeniden EX verilir.") }}
+
+<h2 id="caching" data-short="Cache desenleri"><span class="sec">A7</span>Bir database'in önünde kopya: cache desenleri</h2>
+<p>Bellek içi store'un en yaygın işi, yavaş ve kalıcı bir database'in önünde sık okunan cevapların bir kopyasını tutmaktır. Kopya hızlıdır ama eskiyebilir; bir desen bu iki gerçeği yönetmenin yoludur.</p>
+{{ k.concept("Cache hit ve miss",
+   "Uygulama bir cevabı önce kopyada arar. Kopya oradaysa buna <b>hit</b>, yoksa <b>miss</b> denir. Hit'te database hiç çalışmaz; miss'te database okunur. <b>Hit oranı</b> (hit sayısı bölü bütün okumalar) kopyanın ne kadar işe yaradığını söyler.",
+   "Altı ürün sayfası görüntülemesi P0001, P0044, P0001, P0001, P0095, P0044 sırasıyla gelir ve kopya boştur: 3 miss (her ürünün ilki), 3 hit. Hit oranı yüzde 50'dir; sıcak ürünler tekrarlandıkça oran yükselir.",
+   "Pastane tezgâhında simit varsa (hit) hemen verilir; yoksa (miss) depodan getirilir ve bir sonraki müşteri için tezgâha konur.") }}
+{{ k.concept("Cache-aside",
+   "En yaygın cache deseni: kopyayı <b>uygulama</b> yönetir. (1) Uygulama key'i kopyada arar. (2) Hit'te cevabı döndürür. (3) Miss'te database'i okur, cevabı bir TTL ile kopyaya yazar ve döndürür. Veri değişince uygulama kopyayı siler (<code>DEL</code>) ya da TTL'in bitmesini bekler. Adı buradan gelir: kopya database'e giden yolun üzerinde değil, kenarındadır.",
+   "<code>GET product:P0001</code>; miss'te Aurora'dan okuma ve <code>SET product:P0001 … EX 300</code>. Fiyat değişince <code>DEL product:P0001</code>.",
+   "Bir öğrencinin defteri: soruyu önce defterde arar, yoksa kütüphaneye gider ve cevabı deftere yazar. Kitap değişirse defterdeki sayfayı yırtar.") }}
+<div class="flow">
+  <div class="box">istek: P0001<small>uygulama</small></div><span class="arrow">→</span>
+  <div class="box pk">GET product:P0001<small>kopyada var</small></div><span class="arrow">→</span>
+  <div class="box hit">hit<small>cevap bellekten, database çalışmadı</small></div>
+</div>
+<div class="flow">
+  <div class="box">istek: P0095<small>uygulama</small></div><span class="arrow">→</span>
+  <div class="box pk">GET product:P0095<small>kopyada yok</small></div><span class="arrow">→</span>
+  <div class="box miss">miss<small>Aurora okunur (yaklaşık 8 ms)</small></div><span class="arrow">→</span>
+  <div class="box">SET product:P0095 … EX 300<small>sonraki 5 dakika hit</small></div>
+</div>
+<p class="flow-cap">Cache-aside'ın iki yolu. Miss bir kez ödenir, sonraki okumalar TTL bitene kadar hit'tir. B6'daki simülasyon altı görüntülemeyi adım adım oynatır ve hit ile database okumalarını sayar.</p>
+<table class="data">
+  <caption>bütün durumlar: bir okuma ve kopya</caption>
+  <thead><tr><th>Durum</th><th>Ne olur</th><th>Bedeli ya da çözümü</th></tr></thead>
+  <tbody>
+    <tr><td>Hit</td><td>Cevap bellekten gelir.</td><td>Yok; kopyanın amacı budur.</td></tr>
+    <tr><td>Miss</td><td>Database okunur, kopya yazılır.</td><td>Bir database okuması ve bir yazma.</td></tr>
+    <tr><td>Veri database'te değişti, kopya hâlâ eski</td><td>TTL bitene kadar eski cevap döner.</td><td>Ya kabul edilir (TTL eski verinin üst sınırıdır) ya da yazan kod <code>DEL</code> ile kopyayı siler.</td></tr>
+    <tr><td>Database'e yazarken kopyayı da yazmak (write-through)</td><td>Kopya her zaman yenidir; hiç okunmayan veri de kopyalanır.</td><td>Her yazma iki yere; biri başarısız olursa ikisi ayrışır.</td></tr>
+    <tr><td>Aynı sıcak key'in süresi doldu ve yüzlerce istek aynı anda miss aldı</td><td>Hepsi aynı anda database'e gider (stampede).</td><td>İlk istek <code>SET … NX</code> ile kısa bir kilit alır ve database'i o okur; diğerleri kısa bir an bekler ya da eski cevabı kullanır.</td></tr>
+    <tr><td>Kopya boş: yeni cache, yeniden başlatma ya da veri kaybıyla biten bir arıza (soğuk cache)</td><td>Bir süre bütün okumalar miss'tir ve bütün yük database'e biner.</td><td>Database bu yükü kısa süre taşıyabilmeli; sıcak key'ler önceden doldurulabilir (warm-up).</td></tr>
+    <tr><td>Kopyayı tek kayıt olarak kullanmak (database'e hiç yazmamak)</td><td><b>Bu artık bir cache değildir.</b> Kayıp, verinin kendisidir. A1'deki tablo: resmi kayıt bellek içi store'da tek kopya olamaz.</td><td>Kalıcı bir database ya da kalıcı log'lu bir bellek içi store (A9).</td></tr>
+  </tbody>
+</table>
+{% call k.ask("TTL'i ne kadar seçmeliyim?") %}
+<p>TTL, iş biriminin kabul ettiği "en eski cevap" süresidir; teknik değil bir iş kararıdır. "Fiyat değişince en geç 5 dakikada görünsün" diyorsan TTL 300 saniyedir. Daha kısa TTL daha fazla miss ve database okuması, daha uzun TTL daha eski cevap demektir. Değişiklik anında görünmeliyse TTL yetmez; yazan kod kopyayı siler.</p>
+{% endcall %}
+{% call k.ask("Kopyayı database'in kendi belleğinde de tutabilirim, neden ayrı bir store?") %}
+<p>Database'in kendi belleği sık okunan page'leri zaten tutar, ama her okuma yine planlanan, birleştirilen ve hesaplanan bir sorgudur. Bellek içi store hazır cevabı (birleştirilmiş sayfa verisini) tutar: hesap bir kez yapılır, binlerce kez okunur. Ayrıca okuma yükü database'in writer'ından alınır; kampanya akşamı checkout yavaşlamaz.</p>
+{% endcall %}
+{% call k.predict("Kopya boş başlıyor. Altı görüntüleme P0001, P0044, P0001, P0001, P0095, P0044 sırasıyla geliyor ve TTL 300 saniye. Kaç görüntüleme database'e gider?") %}
+<p>Üç: her ürünün ilk görüntülemesi (P0001, P0044, P0095). Diğer üçü hit'tir. B6'daki simülasyon aynı sırayı oynatır.</p>
+{% endcall %}
+
+<h2 id="messaging" data-short="Pub/Sub ve stream"><span class="sec">A8</span>Mesajlaşma: Pub/Sub, stream ve list kuyruğu</h2>
+<p>Bellek içi store veriyi saklamanın yanında programlar arasında mesaj da taşır. Üç yol vardır ve teslim sözleri çok farklıdır.</p>
+{{ k.concept("Pub/Sub",
+   "Bir mesajın bir <b>channel</b>'a yayınlanması (<code>PUBLISH</code>) ve o channel'a abone olan (<code>SUBSCRIBE</code>) her bağlı istemciye iletilmesi. Yayınlayan aboneleri bilmez. Mesaj saklanmaz: Valkey'in belgesine göre teslim at-most-once'tır; o anda abone yoksa \"the message is lost\", bağlantısı kopan abone de mesajı bir daha alamaz.",
+   "<code>PUBLISH stock:P0001 \"3 adet kaldı\"</code>: kampanya sayfasındaki tarayıcılara bağlı 20 WebSocket sunucusunun (tarayıcıyla açık kalan bir bağlantı üzerinden mesaj gönderebilen sunucu) hepsi mesajı alır ve tarayıcılara iletir.",
+   "Bir radyo yayını: o anda radyosu açık olan herkes duyar; kapalı olan kaçırır ve kaydı yoktur.") }}
+{{ k.concept("Stream",
+   "Sadece sonuna eklenen bir mesaj kaydı (append-only log). Her mesaj <code>XADD</code> ile eklenir ve zamana dayalı bir id alır (<code>1692632086370-0</code>). Mesajlar silinene ya da kırpılana kadar kalır; bir okuyucu kaçırdığı mesajları sonradan okuyabilir. Bir <b>consumer group</b>'ta her mesaj gruptaki tek bir okuyucuya gider ve okuyucu işi bitince <code>XACK</code> ile onaylar; onaylanmayan mesaj bekleyenler listesinde kalır.",
+   "Sipariş olayları <code>XADD lm:events * type shipped order O000001</code> ile yazılsaydı, e-posta servisi yeniden başladığında kaldığı yerden okurdu.",
+   "Bir şirketin numaralı gelen evrak defteri: her evrak bir sıra numarası alır, alan kişi imzalar; imzasız evrak bekler.") }}
+<div class="flow">
+  <div class="box pk">PUBLISH stock:P0001<small>bir kez</small></div><span class="arrow">→</span>
+  <div class="box hit">WebSocket sunucusu 1<small>bağlı: alır</small></div><span class="arrow">→</span>
+  <div class="box hit">sunucu 2 … 19<small>bağlı: alır</small></div><span class="arrow">→</span>
+  <div class="box miss">sunucu 20<small>o an yeniden bağlanıyor: kaçırır</small></div>
+</div>
+<p class="flow-cap">Pub/Sub'da bir yayın bağlı her aboneye gider; bağlı olmayan kaçırır ve mesaj bir yerde beklemez.</p>
+<table class="data">
+  <caption>bütün durumlar: mesajlaşmanın üç yolu</caption>
+  <thead><tr><th>Durum</th><th>Pub/Sub</th><th>Stream (consumer group)</th><th>List kuyruğu</th></tr></thead>
+  <tbody>
+    <tr><td>Bir mesaj kime gider?</td><td>Bağlı her aboneye (fan-out)</td><td>Her gruptaki tek bir okuyucuya; birkaç grup varsa her gruba</td><td>Kuyruktan alan tek bir worker'a</td></tr>
+    <tr><td>O an kimse dinlemiyor</td><td><b>Mesaj kaybolur</b></td><td>Mesaj stream'de bekler</td><td>Mesaj listede bekler</td></tr>
+    <tr><td>Okuyucu işi yaparken çöktü</td><td>Mesaj gitti; yeniden teslim yok</td><td>Onaylanmamış mesaj bekleyenler listesinde kalır; başka okuyucu sahiplenebilir</td><td><code>BLMOVE</code> ile "işleniyor" listesine taşındıysa orada kalır; geri koymak uygulamanın işidir</td></tr>
+    <tr><td>Dünkü mesajları baştan okumak</td><td><b>Yapılamaz</b>; saklanmaz</td><td>Evet, id ile; kırpılana kadar</td><td>Hayır; alınan mesaj listeden çıkar</td></tr>
+    <tr><td>Mesajlar sürekli birikirse</td><td>Birikmez</td><td>Bellek dolar; <code>XADD … MAXLEN</code> ya da <code>XTRIM</code> ile kırpılır</td><td>Bellek dolar; worker sayısı artırılır</td></tr>
+    <tr><td>Store'un kendisi arızalandı (kalıcı log yok)</td><td>Zaten saklanmıyordu</td><td>Son mesajlar kaybolabilir (A9)</td><td>Son mesajlar kaybolabilir (A9)</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Pub/Sub ile stream arasında nasıl seçerim?") %}
+<p>Tek soru: "kaçan bir mesaj zarar verir mi?" Vermiyorsa (canlı bildirim, ekran güncellemesi; sayfa yeniden bağlanınca son durumu okuyabilir) Pub/Sub en basit ve en hızlısıdır. Veriyorsa (mesajdan bir e-posta, bir kayıt, bir ödeme doğuyorsa) stream: mesaj bekler ve onaylanana kadar takip edilir. Kaybı hiç kabul edilmeyen bir iş akışı ise bellek içi store'un değil, yönetilen bir kuyruk servisinin (Amazon SQS) ya da akış servisinin (Kinesis, MSK) işidir.</p>
+{% endcall %}
+{% call k.ask("Pub/Sub mesajı bir key'e mi yazılır? Bellekte yer kaplar mı?") %}
+<p>Hayır. Bir channel bir key değildir; mesaj abonelere iletilir ve hiçbir yerde kalmaz. Bu yüzden Pub/Sub belleği doldurmaz, ama aynı sebeple kalıcı log'lu bir store'da bile (MemoryDB, A9) kaçan mesaj geri gelmez: log key'lerdeki veriyi korur, Pub/Sub mesajlarını değil.</p>
+{% endcall %}
+{{ k.quiz("ec-q5", "Bir e-posta servisi \"sipariş kargoya verildi\" olaylarını işliyor ve yeniden başlatıldığında kaçırdığı olayları da işlemeli. Hangisi?",
+   ["Pub/Sub, çünkü en hızlısı", "Consumer group'lu bir stream", "Bir string key'e son olayı yazmak", "Bir sorted set"],
+   1, "Pub/Sub'da bağlı olmayan abone mesajı kaybeder. Stream'de mesaj bekler, consumer group okuyucuyu takip eder ve XACK ile onaylanmayan mesaj yeniden işlenebilir.") }}
+
+<h2 id="replicas" data-short="Replica, failover, kalıcılık"><span class="sec">A9</span>Replica, failover ve kalıcılık: bir arızada ne kaybolur?</h2>
+<p>A1'deki soruyu şimdi teknik olarak cevaplayabiliriz. "Bu veri kaybolursa ne olur?" sorusunun yanında ikinci bir soru var: "hangi arızada, ne kadarı kaybolur?"</p>
+{{ k.concept("Replica",
+   "Bir shard'ın verisinin başka bir node'daki, tercihen başka bir Availability Zone'daki (AZ, ayrı bir veri merkezi) kopyası. Primary her yazmayı replica'ya gönderir. Valkey'de bu kopyalama <b>asenkrondur</b>: primary yazmayı yapar, istemciye hemen \"OK\" der ve kopyayı biraz sonra gönderir. Replica'lar okuma da alabilir; okudukları değer primary'nin biraz gerisinde olabilir.",
+   "Lale Market'in cache'i ElastiCache Serverless'tadır: servis veriyi kendisi birkaç AZ'de replica olarak tutar. Ayrı bir port (6380) okumaları replica'lardan yapar.",
+   "Bir muhasebecinin akşamları evine götürdüğü defter fotokopisi. Gün içindeki son kayıtlar fotokopide henüz yoktur.") }}
+{{ k.concept("Failover",
+   "Primary node düştüğünde bir replica'nın yeni primary yapılması. Servis arızayı fark eder, en güncel replica'yı seçer ve adresi yeni primary'ye yönlendirir; istemciler aynı adrese yeniden bağlanır. Failover kesintiyi kısaltır ama asenkron kopyalamada <b>kaybı önlemez</b>: eski primary'nin \"OK\" deyip replica'ya henüz göndermediği yazmalar yeni primary'de yoktur.",
+   "Ödeme kilidi primary'ye yazılır, worker \"OK\" alır, primary kopyalamadan düşer: yeni primary'de kilit yoktur ve ikinci worker onu alır. B8'deki simülasyon bunu adım adım oynatır.",
+   "Kaptan düşünce ikinci kaptanın dümene geçmesi. Gemi yoluna devam eder, ama kaptanın son verdiği ve ikinci kaptanın duymadığı emir kaybolmuştur.") }}
+{{ k.fig("elasticache-shards-replicas.png", "soldaki \"cluster mode disabled\": tek bir shard, içinde bir Primary Node ve ona oklarla bağlı Replica Node'lar. Sağdaki \"cluster mode enabled\": Shard-1'den Shard-n'e kadar shard'lar ve her birinin kendi primary'si ve replica'ları. Okların yönü kopyalamanın yönüdür: primary'den replica'ya. Resim kopyalamanın zamanlamasını göstermez; asenkron olduğunu Valkey'in belgesi söyler (aşağıdaki akış). Lale Market'in Serverless cache'i sağdaki düzendedir.") }}
+<div class="flow">
+  <div class="box pk">SET lock … NX<small>primary'ye yazıldı</small></div><span class="arrow">→</span>
+  <div class="box hit">"OK"<small>istemci devam eder</small></div><span class="arrow">→</span>
+  <div class="box">kopya yolda<small>replica'ya henüz ulaşmadı</small></div><span class="arrow">→</span>
+  <div class="box miss">primary düştü<small>yeni primary'de key yok</small></div>
+</div>
+<p class="flow-cap">Asenkron kopyalamanın kayıp penceresi: "OK" ile kopyanın replica'ya ulaşması arasındaki an. Valkey'in cluster belgesi bunu açıkça yazar: "There is always a window of time when it is possible to lose writes during partitions".</p>
+{{ k.concept("Kalıcı log (transaction log)",
+   "Her yazmanın, birkaç AZ'ye kopyalanan bir log'a eklenmesi. Bir node düşerse yerine gelen node veriyi bu log'dan kurar. Senkron yazmada \"OK\" log'a yazıldıktan sonra gelir ve onaylanan yazma kaybolmaz; bedeli yazma gecikmesidir (mikrosaniye yerine tek haneli milisaniye). Asenkron yazmada \"OK\" hemen gelir ve log'a sonra yazılır; AWS'e göre arızada en fazla 10 saniyelik yazma kaybolabilir.",
+   "Amazon MemoryDB her yazmayı bir Multi-AZ transaction log'una yazar. ElastiCache'te node'lu Valkey 9.0 cluster'larında bu özellik açılabilir. Lale Market'in ElastiCache <b>Serverless</b> cache'inde böyle bir log <b>yoktur</b>.",
+   "Bir bankanın her işlemi iki ayrı şubedeki deftere yazdırdıktan sonra \"tamam\" demesi. Yavaştır ama bir şube yansa da kayıt durur.") }}
+<table class="data">
+  <caption>bütün durumlar: hangi arızada ne kaybolur?</caption>
+  <thead><tr><th>Arıza</th><th>Replica'sız tek node</th><th>Replica'lı (ElastiCache Serverless, Multi-AZ)</th><th>Kalıcı log'lu (MemoryDB, ElastiCache Valkey 9.0 senkron)</th></tr></thead>
+  <tbody>
+    <tr><td>Bir replica node düştü</td><td>—</td><td>Kayıp yok; servis node'u değiştirir</td><td>Kayıp yok</td></tr>
+    <tr><td>Primary düştü, son yazmalar kopyalanmıştı</td><td><b>Bütün veri gider</b> (AWS: "If you have no replicas and the node fails, you experience total data loss")</td><td>Failover; kayıp yok</td><td>Failover; kayıp yok</td></tr>
+    <tr><td>Primary düştü, son yazmalar henüz kopyalanmamıştı</td><td>Bütün veri gider</td><td><b>"OK" alınmış son yazmalar kaybolabilir</b></td><td>Senkron: kayıp yok. Asenkron (ElastiCache Valkey 9.0): AWS'e göre "up to 10 seconds of uncommitted data" kaybolabilir</td></tr>
+    <tr><td>Bir AZ tamamen gitti</td><td>Node o AZ'deyse bütün veri</td><td>Diğer AZ'lerdeki replica'lar devralır; kopyalanmamış son yazmalar kaybolabilir</td><td>Log en az iki AZ'de; senkronda kayıp yok</td></tr>
+    <tr><td>Bir shard'ın bütün node'ları gitti</td><td>—</td><td>O shard'ın verisi gider; varsa son snapshot'tan (yedek) yeni bir cache kurulur</td><td>Node'lar log'dan yeniden kurulur</td></tr>
+    <tr><td>Yanlışlıkla silinen bir key'i "dün 14:05" hâline döndürmek</td><td colspan="3"><b>Yapılamaz</b>: saniye düzeyinde geri dönüş yoktur. Sadece alınmış snapshot'lardan yeni bir cache kurulur; Lale Market'in cache'inde otomatik snapshot kapalıdır (SnapshotRetentionLimit 0, C3).</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Failover'dan sonra cache neden \"soğuk\" olabilir?") %}
+<p>Önce süre: AWS node'lu cluster'lar için failover'ın "usually takes just a few seconds" sürdüğünü, MemoryDB için planlanmamış failover'ın "typically happens in under 20 seconds" olduğunu yazar; Serverless için ayrı bir süre yayınlamaz, proxy katmanı yeniden bağlanmayı uygulamadan gizler. Replica'lı bir düzende failover'da veri replica'dadır ve cache sıcak kalır; sadece son yazmalar kaybolabilir. Ama replica'sız bir node düşerse, bir shard'ın bütün node'ları giderse ya da cache yeniden kurulursa bellek boş başlar: bu <b>soğuk cache</b>'tir. O andan itibaren bütün okumalar miss'tir ve bütün yük arkadaki database'e biner (A7). Bu yüzden bir cache tasarımında "cache boşken database bu yükü kaç dakika taşır?" sorusu sorulur.</p>
+{% endcall %}
+{% call k.ask("Replica'dan okumak neden \"eventually consistent\"tır?") %}
+<p>Çünkü replica primary'nin biraz gerisindedir: az önce yazılan bir değer replica'da henüz olmayabilir. ElastiCache Serverless'ta 6379 portu primary'den okur ve yazar; 6380 portu replica'lardan okur, daha düşük gecikme verir ama son yazmayı görmeyebilir. Kendi yazmasını hemen görmesi gereken okuma ve süresi saniyesinde önemli olan okuma (oturum, kilit) 6379'dan yapılır; replica'lar süresi dolan key'i primary'nin silmesini bekleyerek kaldırır (A6).</p>
+{% endcall %}
+{{ k.quiz("ec-q6", "Bir ekip ödeme kilidini ElastiCache Serverless'ta tutmak istiyor. Bir failover'da ne olabilir?",
+   ["Hiçbir şey, failover her yazmayı korur", "\"OK\" alınmış kilit yeni primary'de olmayabilir ve ikinci bir worker onu alabilir", "Kilit iki kez yazılır ve iki kez silinir", "Cache okumaları reddeder ama yazmalar devam eder"],
+   1, "Kopyalama asenkrondur: primary \"OK\" der, kopya yoldayken düşerse yeni primary'de kilit yoktur. Kaybı kabul edilmeyen bir kilit kalıcı bir store ister (M2 kart 7).") }}
+
+<h2 id="summary" data-short="Ö1–Ö8 özeti ve matris"><span class="sec">A10</span>Özet: bellek içi key-value'nun sekiz özelliği ve hangi üründe olduğu</h2>
+<p>Bölüm A'nın her kavramı bir özelliğe karşılık gelir. Bu sekiz özellik sayfanın geri kalanının ortak dilidir: Mimar gözüyle bölümü her use case'i bu numaralarla anlatır ve M1 bu listeyi sinyaller ve sınırlarıyla genişletir.</p>
+<table class="data">
+  <caption>Ö1–Ö8: bellek içi key-value store'un özellikleri</caption>
+  <thead><tr><th>No</th><th>Özellik</th><th>Tek cümleyle</th><th>Tanım</th></tr></thead>
+  <tbody>
+    <tr><td><b>Ö1</b></td><td>Bellekten GET / SET, mikrosaniyeler</td><td>Veri bellektedir ve tek parçalı key ile bulunur; her istek key sayısından bağımsız olarak mikrosaniyeler sürer.</td><td>A1, A2</td></tr>
+    <tr><td><b>Ö2</b></td><td>Value tipleri (hash, list, set, sorted set, konum, HyperLogLog)</td><td>Value bir veri yapısıdır ve her tipin komutları bir soruyu tek komut yapar.</td><td>A3</td></tr>
+    <tr><td><b>Ö3</b></td><td>Atomik komutlar (INCR, SET NX) ve Lua</td><td>Tek bir komut kilitsiz ve yarışsız çalışır; birkaç komut MULTI/EXEC ya da Lua ile birlikte çalışır ama geri alınmaz.</td><td>A5</td></tr>
+    <tr><td><b>Ö4</b></td><td>Tam anında süre sonu (EXPIRE) ve eviction</td><td>Key süresi dolduğu milisaniyede okunamaz; bellek dolunca bir politika yer açar.</td><td>A6</td></tr>
+    <tr><td><b>Ö5</b></td><td>Pub/Sub ve stream</td><td>Bir yayın bağlı her aboneye gider (saklanmadan); stream mesajları saklar ve onaylatır.</td><td>A8</td></tr>
+    <tr><td><b>Ö6</b></td><td>Cluster mode: hash slot'lar ve shard'lar</td><td>Key'ler 16.384 slot'a, slot'lar shard'lara dağılır; birkaç key'li bir komut tek slot'ta kalmalıdır.</td><td>A4</td></tr>
+    <tr><td><b>Ö7</b></td><td>Replica ve failover</td><td>Veri başka AZ'lerde kopyalanır ve primary düşünce replica devralır; kopyalama asenkron olduğu için son yazmalar kaybolabilir.</td><td>A9</td></tr>
+    <tr><td><b>Ö8</b></td><td>Cache desenleri (cache-aside, write-through)</td><td>Kalıcı bir database'in önünde sık okunan cevapların süreli kopyası.</td><td>A7</td></tr>
+  </tbody>
+</table>
+<p>Bu sekiz özellik her bellek içi store'da aynı biçimde yoktur. ElastiCache iki engine ailesi çalıştırır: Valkey (Redis OSS ile uyumlu; Redis OSS de seçilebilir) ve Memcached. MemoryDB aynı Valkey'i kalıcı log'la çalıştırır. Matris, A2'deki "hangi store'da var" sütununu genelleştirir:</p>
+<table class="data fmatrix">
+  <caption>özellik × ürün matrisi: ✓ var · ½ kısmen ya da farklı biçimde · ✗ yok</caption>
+  <thead><tr><th>Özellik</th><th>Redis / Valkey (ElastiCache'in Valkey engine'i)</th><th>Memcached</th><th>Amazon MemoryDB</th></tr></thead>
+  <tbody>
+    <tr><td><b>Ö1</b> Bellekten GET / SET</td><td class="y">✓ Mikrosaniye okuma ve yazma</td><td class="y">✓ Mikrosaniye; çok çekirdekli node'larda paralel çalışır</td><td class="p">½ Okuma mikrosaniye, yazma tek haneli milisaniye (log'a yazılır)</td></tr>
+    <tr><td><b>Ö2</b> Value tipleri</td><td class="y">✓ string, hash, list, set, sorted set, stream, konum, HyperLogLog</td><td class="n">✗ Sadece basit value (metin ya da serileştirilmiş nesne)</td><td class="y">✓ Valkey ile aynı</td></tr>
+    <tr><td><b>Ö3</b> Atomik komutlar ve Lua</td><td class="y">✓ INCR, SET NX, MULTI/EXEC, Lua</td><td class="p">½ Artırma ve "yoksa ekle" var; script ve çok komutlu transaction yok</td><td class="y">✓ Valkey ile aynı</td></tr>
+    <tr><td><b>Ö4</b> Süre sonu ve eviction</td><td class="y">✓ EXPIRE milisaniye hassasiyetle, sekiz eviction politikası</td><td class="p">½ Öğe başına süre ve LRU silme; politika seçimi yok</td><td class="p">½ Süre sonu var; ama veri bir database kaydıdır, eviction istenmez</td></tr>
+    <tr><td><b>Ö5</b> Pub/Sub ve stream</td><td class="y">✓ İkisi de</td><td class="n">✗ Yok</td><td class="y">✓ İkisi de; stream key'leri log ile korunur, Pub/Sub mesajları saklanmaz</td></tr>
+    <tr><td><b>Ö6</b> Cluster mode, hash slot</td><td class="y">✓ 16.384 slot, shard ekleme ve slot taşıma</td><td class="p">½ Key'leri node'lara istemci dağıtır; slot ve yeniden dağıtım yok</td><td class="y">✓ Valkey ile aynı</td></tr>
+    <tr><td><b>Ö7</b> Replica ve failover</td><td class="p">½ Replica ve otomatik failover var; kopyalama asenkron, son yazmalar kaybolabilir (Valkey 9.0 node'lu cluster'da kalıcı log seçilebilir)</td><td class="n">✗ AWS'e göre "Memcached does not support replication or failover natively"; düşen node'un verisi gider</td><td class="y">✓ Multi-AZ transaction log'u; onaylanan yazma kaybolmaz</td></tr>
+    <tr><td><b>Ö8</b> Cache desenleri</td><td class="y">✓ En yaygın kullanımı</td><td class="y">✓ Klasik cache; başka işi yok</td><td class="p">½ Yapılabilir, ama kalıcı log'un bedeli bir cache için gereksizdir; MemoryDB birincil database olarak tasarlanmıştır</td></tr>
+  </tbody>
+</table>
+<p>Matris bir ürünün "iyi" ya da "kötü" olduğunu söylemez. Memcached'de Ö2, Ö5 ve Ö7 yoktur ve bu onu en basit cache yapar. MemoryDB'de Ö7 tamdır ve bunun bedeli yazma gecikmesi ve fiyattır. Soru her zaman şudur: iş yükü hangi özelliği istiyor ve veri kaybolursa ne olur?</p>
+{% call k.ask("MemoryDB her şeyi daha kalıcı yapıyorsa neden her zaman MemoryDB seçmiyoruz?") %}
+<p>Çünkü kalıcılığın bir bedeli var ve çoğu bellek içi iş yükü o bedeli geri almaz. MemoryDB'de her yazma log'a yazıldığı için tek haneli milisaniye sürer (ElastiCache'te mikrosaniye) ve MemoryDB node'lu bir cluster'dır: node tipini sen seçersin ve node'lar gece gündüz ödenir. Oturum, sayaç ve kopya gibi kaybı kabul edilen verilerde bu bedel bir şey kazandırmaz; M2'deki kartların çoğunda MemoryDB bu yüzden ikinci ya da üçüncüdür.</p>
+{% endcall %}
+{% call k.ask("ElastiCache'te Memcached'i ne zaman seçerim?") %}
+<p>Sadece basit nesneleri (bir sayfanın HTML'i, bir sorgu sonucu) kopya olarak tutacaksan, çok çekirdekli büyük node'larda dikey ölçek istiyorsan ve sayaç, sıralama, kuyruk ya da replica gerekmiyorsa. Matrisin Memcached sütunundaki ✗'ler (Ö2, Ö5, Ö7) bu sayfanın kartlarının çoğunu dışarıda bırakır; bu yüzden kartlarda Memcached aday değildir.</p>
+{% endcall %}
+{{ k.quiz("ec-q7", "Bir oyun maç puanlarını sadece canlı liderlik tablosunda tutuyor ve ödülü doğrudan tablodan veriyor. Matrise göre hangi özellik belirleyici ve hangi ürün onu tam veriyor?",
+   ["Ö8, Memcached", "Ö7, MemoryDB", "Ö6, Memcached", "Ö5, Redis / Valkey"],
+   1, "Tablo tek kayıt olduğu için kaybı kabul edilmez. Ö7'nin iki biçimi vardır: asenkron replica'lar (Valkey, son yazmalar kaybolabilir) ve kalıcı log (A9). İkincisini tam veren MemoryDB'dir. Sorted set (Ö2) ikisinde de vardır.") }}
+
+<div class="part"><b>Mimar gözüyle</b><h2 id="architect" data-short="Mimar gözüyle">Mimar gözüyle: ne zaman bellek içi store, ne zaman ElastiCache</h2>
+<p>Önce kategori: bellek içi bir key-value store ne zaman doğru seçimdir, alternatifleri neyi daha iyi yapar ve yine de bellek içi store seçersek ne kazanıp ne kaybederiz. Sonra AWS'teki seçenekler ve ElastiCache'in ne zaman seçileceği.</p></div>
+
+<p><b>Kısaca:</b> bellek içi store, aynı küçük veriyi saniyede binlerce kez okuyan ya da değiştiren iş yükleri içindir ve her isteği mikrosaniyelerde cevaplar. Bu hızı sadece verinin kaybını kabul edebiliyorsan ya da veriyi başka bir yerden yeniden kurabiliyorsan bedelsiz alırsın.</p>
+<p>Önemli kelime yine {{ k.term("access pattern") }}'dir: uygulamanın sorduğu bir soru, o anda bildiği değerlerle birlikte. Bellek içi store'da ikinci bir kelime de aynı ağırlıktadır: kaybın anlamı. "Bu kullanıcının oturumu" bir access pattern'dir ve kaybı yeni bir login'dir; "bu gecenin ödeme kilidi" de bir access pattern'dir ve kaybı çift ödemedir. İkisi aynı komutla (SET NX) yazılır, ama ikincisi bellek içi store'a ait değildir.</p>
+<p>Bu bölümdeki her karar aynı beş gereksinimle anlatılır. M2'deki kartlar ve M7'deki simülasyonlar aynı beş başlığı kullanır:</p>
+<table class="data">
+  <caption>R1–R5: her iş yükünün beş gereksinimi</caption>
+  <thead><tr><th>No</th><th>Gereksinim</th><th>Sorusu</th></tr></thead>
+  <tbody>
+    <tr><td><b>R1</b></td><td>Access pattern</td><td>Uygulama hangi soruları, elinde hangi değerlerle soruyor? Hangi kurallar yazma anında korunmalı?</td></tr>
+    <tr><td><b>R2</b></td><td>Ölçek ve trafik şekli</td><td>Saniyede kaç istek, ne kadar veri, trafik düz mü dalgalı mı, tepe anında ne kadar gecikme kabul edilir?</td></tr>
+    <tr><td><b>R3</b></td><td>Dayanıklılık</td><td>Bir arızada bu verinin kaybı ne demek: yeni bir login mi, çift çekilen bir kart mı?</td></tr>
+    <tr><td><b>R4</b></td><td>Operasyon ve ekip</td><td>Kim işletecek, ekip hangi API'ı biliyor, sunucu boyutlandırmak isteniyor mu?</td></tr>
+    <tr><td><b>R5</b></td><td>Maliyet modeli</td><td>İstek başına mı, saat başına mı, GB başına mı ödenir ve bu trafik şekline uyar mı?</td></tr>
+  </tbody>
+</table>
+
+<h2 id="signals" data-short="Ö1–Ö8: sinyal ve sınır"><span class="sec">M1</span>Bellek içi store'un sekiz özelliği: hangi sinyal çağırır, sınırı nedir</h2>
+<p>Bu tablo M2'deki kartların referansıdır. Bir kart "Ö3 ile çözer" dediğinde buraya dönersin. Her satır A10'daki özelliği iş yükündeki sinyaliyle ve sınırıyla, yani yapamadığı şeyle birleştirir. Sınırlar, alternatiflerin neden bazen daha iyi olduğunu da açıklar.</p>
+<table class="data">
+  <thead><tr><th>Özellik</th><th>Ne sağlar</th><th>İş yükünde onu çağıran sinyal</th><th>Sınırı: ne yapamaz</th><th>Tanım</th></tr></thead>
+  <tbody>
+    <tr><td><b>Ö1</b> Bellekten GET / SET</td><td>Her istek mikrosaniyeler; key sayısından bağımsız</td><td>Katı gecikme sınırı (1 ms, 2 ms) ya da her isteğin önünde duran bir okuma</td><td>Veri belleğe sığmalı ve GB başına pahalıdır; value'nun içine göre arama yoktur.</td><td>A1, A2</td></tr>
+    <tr><td><b>Ö2</b> Value tipleri</td><td>Sayaç, nesne, kuyruk, sıralama, konum ve tekil sayım tek komutla</td><td>"İlk 10 ve benim sıram", "3 km içindekiler", "kaç farklı ziyaretçi"</td><td>Tek bir sıra ölçütü (score); iç içe yapı yok; birkaç farklı sıra birkaç yapı demektir.</td><td>A3</td></tr>
+    <tr><td><b>Ö3</b> Atomik komutlar ve Lua</td><td>Sayaç ve "yoksa yaz" kilitsiz ve yarışsız</td><td>Aynı değeri aynı anda değiştiren çok istemci: kampanya stoğu, rate limit, kilit</td><td>Geri alma yok; birkaç key'li kural tek slot'ta kalmalı; kural kalıcı değil.</td><td>A5</td></tr>
+    <tr><td><b>Ö4</b> Tam anında süre sonu ve eviction</td><td>Kısa ömürlü veri tam zamanında gider; dolu bellek bir kuralla boşalır</td><td>Oturum, dakikalık sayaç, kısa kilit, süreli kopya</td><td>Bellek dolarsa ya veri silinir ya yazma reddedilir; süre key başınadır.</td><td>A6</td></tr>
+    <tr><td><b>Ö5</b> Pub/Sub ve stream</td><td>Bir yayın bütün bağlı abonelere; stream ile saklanan ve onaylanan mesajlar</td><td>Canlı bildirim birçok sunucuya; kısa bir iş kuyruğu</td><td>Pub/Sub at-most-once; stream ve list kalıcı log olmadan arızada kaybolabilir.</td><td>A8</td></tr>
+    <tr><td><b>Ö6</b> Hash slot ve shard</td><td>Veri ve trafik birçok shard'a dağılır</td><td>Tek bir makinenin belleğini ya da işlemcisini aşan veri ve trafik</td><td>Birkaç key'li komut tek slot'ta kalmalı; tek bir sıcak key tek shard'a yüklenir.</td><td>A4</td></tr>
+    <tr><td><b>Ö7</b> Replica ve failover</td><td>Bir node ya da AZ arızasında kısa kesinti</td><td>Kesintisiz çalışması gereken ama kaybı kabul edilen veri</td><td>Kopyalama asenkron: "OK" alınmış son yazmalar kaybolabilir; saniye düzeyinde geri dönüş yok.</td><td>A9</td></tr>
+    <tr><td><b>Ö8</b> Cache desenleri</td><td>Yavaş bir database'in önünde hazır cevaplar</td><td>Aynı cevabın tekrar tekrar okunması; okumanın writer'ı yorması</td><td>Eski veri (TTL kadar); soğuk cache'te bütün yük database'e biner.</td><td>A7</td></tr>
+  </tbody>
+</table>
+
+<p>Tablo özettir. Aşağıdaki sekiz blok her özelliği dört başlıkla açar: ne sağlar, hangi sinyal çağırır, sınırı nedir ve alternatif ne zaman daha iyidir.</p>
+
+<table class="data feat"><caption>Ö1 · Bellekten GET / SET, mikrosaniyeler</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Veri bellekte durur ve tek parçalı key'in hash'iyle doğrudan bulunur. Diske gidiş, sorgu planı ve kilit bekleme yoktur; komutun kendisi mikrosaniyeler sürer ve uygulamanın gördüğü süre çoğunlukla ağ gidiş-dönüşüdür (Lale Market'in Engine App ölçümünde 1–2 milisaniye, istemci süresiyle birlikte; AWS'in Valkey 8.0 ölçümünde p50 okuma gecikmesi "remains under 1 millisecond", <a href="https://aws.amazon.com/blogs/database/amazon-elasticache-version-8-0-for-valkey-brings-faster-scaling-and-improved-memory-efficiency/">AWS Database Blog</a>). Bu süre key sayısıyla büyümez.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Her isteğin önünde duran bir okuma: "her sayfada oturum", "her API çağrısında rate limit", "her ana sayfada öneri listesi". Gecikme sınırı katıdır: "1 ms'nin altı", "2 ms", "5 ms içinde gelmezse sayfa beklemez". Aynı veri saniyede on binlerce kez okunuyorsa sinyal buradadır.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Veri belleğe sığmalıdır ve bellek GB başına diskten çok daha pahalıdır; 40 GB'lık bir öneri tablosu her saat 40 GB bellek olarak ödenir. Key'i bilmeyen soru pahalıdır: value'nun içine göre arama ve SQL yoktur. Büyük value her okumada ağdan bütünüyle geçer.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Tek haneli milisaniye yetiyorsa ve veri kalıcı olmalıysa disk tabanlı key-value database (DynamoDB); DynamoDB'nin önünde aynı API ile mikrosaniye okuma için DAX (DynamoDB Accelerator, M5). Veri büyük ve nadiren okunuyorsa disk tabanlı bir database ya da S3. Sorular her column'da ve değişkense ilişkisel database.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö2 · Value tipleri</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Value bir veri yapısıdır ve store onun içini bilir: bir hash'in tek field'ı değişir, bir sorted set her yazmada sırasını korur, bir list iki uçtan beslenir, bir konum index'i yarıçapla aranır, HyperLogLog 12 KB ile milyonlarca farklı ziyaretçiyi yüzde 0,81 standart hatayla sayar. Bir soru tek komut olur ve sıralama gibi pahalı işler yazma anında küçük parçalara bölünür.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"İlk 10 ve benim sıram" (sorted set), "bu saatin ürün sayaçları" (hash), "sıradaki iş" (list), "3 km içindeki 5 kurye" (konum), "kaç farklı ziyaretçi" (HyperLogLog), "bu kullanıcı bu kampanyaya katıldı mı" (set). Sorunun kendisi bir veri yapısının adı gibi geliyorsa sinyal buradadır.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Bir sorted set tek bir score'a göre sıralar; aynı veri birkaç sıraya göre isteniyorsa her sıra ayrı bir yapıdır ve uygulama hepsini birlikte günceller. İç içe yapı yoktur. Tipler arası sorgu (JOIN) yoktur. Konum index'i sadece noktaları tutar; çokgen bölge soruları ElastiCache'te ancak Valkey 9.0 ile gelir.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Aynı veri birçok column'a göre sıralanıp filtreleniyorsa ilişkisel database. Coğrafi sorular bölgeler, çokgenler ve siparişle birlikte soruluyorsa PostGIS'li Aurora. Arama metinle, filtreyle ve relevance ile birleşiyorsa search engine (OpenSearch).</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö3 · Atomik komutlar ve Lua</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Bütün komutlar tek sırada çalıştığı için tek bir komut atomiktir: <code>INCR</code> iki eşzamanlı artırmayı da sayar, <code>DECR</code> son adedi bir kez satar, <code>SET … NX</code> "yoksa yaz" testini ve yazmayı tek adımda yapar. Daha karmaşık bir kural (örneğin "değer benimse sil") küçük bir Lua script'i olarak store'un içinde, araya hiçbir komut girmeden çalışır. Kilit sunucusu ve "önce oku sonra yaz" gerekmez.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Aynı değeri aynı anda değiştiren çok istemci: "300 alıcı, 10 adet", "saniyede 20.000 rate limit artırması", "altı worker aynı kilidi istiyor", "aynı müşterinin iki siparişi aynı anda skora ekleniyor". Kural tek bir key'in içinde kalıyorsa sinyal buradadır.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Geri alma yoktur: MULTI/EXEC'te bir komut hata verirse diğerleri yine çalışır. Birkaç key'li bir kural cluster mode'da tek slot'ta kalmalıdır (hash tag). Ve en önemlisi: atomik olmak kalıcı olmak değildir; kilit ya da sayaç asenkron kopyalamada failover'da kaybolabilir (M2 kart 7).</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Kural kaybı kabul edilemeyen bir kayıt üzerindeyse (ödeme kilidi, idempotency işareti, koltuk tutma) DynamoDB'nin koşullu yazması aynı atomik garantiyi kalıcı bir yazmayla verir. Kural birkaç table'ı kapsıyor ve geri alma gerekiyorsa ilişkisel database'in transaction'ı.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö4 · Tam anında süre sonu ve eviction</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Her key kendi süresini taşır ve süresi dolduğu milisaniyede okunamaz; uygulama süre kontrolü ve temizlik işi yazmaz. Bellek dolduğunda bir eviction politikası (örneğin en uzun süredir kullanılmayan süreli key'ler) yeni veriye yer açar; bir cache için bu, en az değerli kopyayı kendiliğinden atmak demektir.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Ömrü yazıldığı anda bilinen veri: "30 dakika hareketsizlikte oturum düşsün", "dakika bitince sayaç gitsin", "kilit 15 dakika sonra kendiliğinden düşsün", "ürün sayfası kopyası 5 dakika yaşasın". Süresi dolmuş verinin okunması bir güvenlik ya da doğruluk hatasıysa sinyal güçlüdür.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Süre key başınadır (field başına süre ElastiCache'te Valkey 9.0 ile gelir). <code>SET</code> ile üzerine yazma süreyi siler. Bellek dolduğunda bir şey ya silinir ya da yazma reddedilir; süresiz önemli veri yanlış bir politikayla silinebilir.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Silme saniye hassasiyetinde olmak zorunda değilse ve veri kalıcı olmalıysa DynamoDB'nin TTL'i (süresi dolan item'lar genellikle birkaç gün içinde silinir; okuma süreyi kendisi kontrol eder). Silme bir iş kuralıysa ve denetim izi istiyorsa ilişkisel database'te zamanlanmış bir iş.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö5 · Pub/Sub ve stream</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Pub/Sub ile bir <code>PUBLISH</code>, channel'a abone olan her bağlı istemciye milisaniyenin altında gider ve yayınlayan aboneleri bilmez. Stream ile mesajlar saklanır, consumer group'lar mesajları okuyucular arasında paylaştırır ve <code>XACK</code> ile işlenen mesaj onaylanır; kaçan mesaj sonradan okunur. List ile bloklayan bir kuyruk (<code>BLMOVE</code>) kurulur.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"Bir olay 20 WebSocket sunucusunun hepsine", "kampanya sayfasında canlı stok sayısı", "küçük bir iş kuyruğu, worker iş gelince uyansın", "bir olay akışını birkaç servis kendi hızında okusun". Mesaj küçük ve hız önemliyse sinyal buradadır.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Pub/Sub at-most-once'tır: bağlı olmayan abone mesajı kaybeder, kalıcı log'lu bir store'da bile. Stream ve list mesajları bellektedir; kalıcı log yoksa arızada son mesajlar kaybolabilir. Görünürlük süresi, yeniden deneme sayacı ve bozuk mesaj kuyruğu hazır gelmez; uygulama yazar.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Her mesajın kesin işlenmesi gerekiyorsa yönetilen bir kuyruk (Amazon SQS) ya da fan-out servisi (Amazon SNS). Olaylar günlerce saklanmalı ve baştan okunmalıysa bir akış platformu (Kinesis, MSK). Olaylar zaten DynamoDB'ye yazılan verinin değişiklikleriyse DynamoDB Streams.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö6 · Hash slot ve shard</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Key'ler CRC16 mod 16384 ile slot'lara, slot'lar shard'lara dağılır; bellek ve trafik shard ekleyerek büyür ve key'lerin adı ya da slot'u hiç değişmez. ElastiCache Serverless'ta bunu servis yapar: belleği ve trafiği izler, shard ekler ve bir proxy katmanı yüzünden uygulama tek bir adrese bağlanır.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Veri ya da trafik tek bir makineyi aşıyor: "40 GB öneri listesi", "saniyede 100.000 okuma", "kampanya akşamı on kat trafik". Büyüme önceden planlanamıyorsa sinyal güçlüdür.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Birkaç key'li komut ve Lua script'i tek slot'ta kalmalıdır; yoksa <code>CROSSSLOT</code> hatası. Tek bir sıcak key (kampanya stoğu) tek bir shard'a yüklenir; daha fazla shard yardım etmez. Hash tag'i geniş kullanmak bir shard'ı diğerlerinden önce doldurur. Serverless'ta boş bir cache saniyede 30.000 ECPU (ElastiCache Processing Unit: yaklaşık 1 KB'lık basit bir komut 1 ECPU'dur; B9) ile başlar ve kapasitesini her 2–3 dakikada iki katına çıkarabilir; daha hızlı bir sıçrama için önceden ölçeklendirme (pre-scaling) ayarlanır.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Veri birkaç TB'ı aşıyor ve çoğu nadiren okunuyorsa disk tabanlı ve kendiliğinden bölünen bir key-value database (DynamoDB). Sıcak bir key'in okumaları için replica'lardan okuma (Serverless'ta 6380 portu) ya da uygulamada kısa ömürlü bir yerel kopya.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö7 · Replica ve failover</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Veri başka AZ'lerdeki replica'larda tutulur; bir node ya da AZ düşünce servis bir replica'yı yeni primary yapar ve istemciler aynı adrese yeniden bağlanır. ElastiCache Serverless bunu yapılandırma olmadan yapar ve her cache için yüzde 99,99'luk bir erişilebilirlik SLA'sı (AWS'in sözleşmeyle verdiği erişilebilirlik sözü) verir. Replica'lar okuma yükünü de paylaşır.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Kesintisiz çalışması gereken ama son birkaç yazmasının kaybı kabul edilen veri: oturumlar, sayaçlar, sıralamalar, kopyalar. "Bir AZ arızası herkesi login ekranına göndermesin" ama "son saniyenin oturumları kaybolsa da olur" diyorsan sinyal buradadır.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Kopyalama asenkrondur: "OK" alınmış son yazmalar failover'da kaybolabilir; Serverless'ta her yazmayı diske yazan kalıcı bir log yoktur. Saniye düzeyinde geri dönüş yoktur; sadece snapshot'lardan yeni cache kurulur. Bir shard'ın bütün node'ları giderse cache soğuk başlar.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Bellek içi hız ve onaylanan yazmanın kaybolmaması birlikte gerekiyorsa MemoryDB (Multi-AZ transaction log, tek haneli milisaniye yazma) ya da ElastiCache'in node'lu Valkey 9.0 cluster'ında senkron kalıcılık. Hız kritik değilse ve veri resmi kayıtsa DynamoDB ya da Aurora.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö8 · Cache desenleri</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Kalıcı ve yavaş bir database'in önünde sık okunan cevapların süreli kopyası: cevap bir kez hesaplanır, binlerce kez bellekten okunur. Okuma yükü database'in writer'ından alınır; kampanya akşamı checkout yavaşlamaz ve ek reader ödenmez. TTL eski verinin üst sınırını, <code>DEL</code> anında silmeyi verir.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"Görüntülemelerin yüzde 80'i aynı 50 ürüne", "aynı JOIN saniyede binlerce kez", "fiyat değişikliği 5 dakika içinde görünse yeter", "okuma yükü checkout'u yavaşlatıyor". Okuma yazmanın katlarıysa ve sıcak bir küme varsa sinyal buradadır.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Kopya TTL kadar eski olabilir; silmeyi unutan bir yazma yolu eski veri hatası üretir. Soğuk cache'te (yeni cache, büyük bir kayıp) bütün yük bir anda database'e biner; aynı key'in eşzamanlı miss'leri (stampede) önlenmelidir. Kopya tek kayıt olamaz.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Eski veri hiç kabul edilmiyorsa (borsa fiyatı, son adet stoğu) kaynağı doğrudan oku. Kaynak DynamoDB ise aynı API ile çalışan DAX daha az kod ister. Her ürün eşit sıklıkta okunuyorsa (sıcak küme yoksa) cache'in hit oranı düşüktür ve database'in reader'ları daha basittir.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="usecases" data-short="Use case'ler, alternatifleriyle"><span class="sec">M2</span>Use case'ler: neden bellek içi store, en yakın alternatif neyi karşılar, yine de seçersek ne olur</h2>
+<p>Her kart bir iş yükünü anlatır ve beş parçadan oluşur. (1) <b>Gerçek projede:</b> iş yükü kim için, hangi ekranda, hangi sayılarla. (2) <b>Gereksinimler R1–R5:</b> her biri için "ne istiyoruz" (sayılı) ve "neden önemli, karşılanmazsa ne olur". (3) <b>Puan tablosu:</b> seçilen servis (ElastiCache) ve en yakın iki alternatif, her gereksinimde 10 üzerinden. (4) <b>Her adayın gerekçesi:</b> gereksinim gereksinim nasıl karşıladığı (A10'daki Ö-numarasıyla), kaç puan aldığı ve puanın neden kırıldığı; her alternatif için uzun bir <b>kafa kafaya</b> paragrafı: nerede ayrışır, bu iş yükünde neden seçilmedi, hangi koşul değişseydi o seçilirdi. (5) <b>Karar:</b> toplamın okunuşu ve "yine de ElastiCache seçersek" artı ve eksilerimiz. Simülasyonu olan beş kart M7'de aynı puanlarla adım adım oynar. Başlığa tıklayarak kartı aç.</p>
+<p>Ölçek hakkında bir not: zorunlu bir gereksinimde 0 ya da 1, adayın o gereksinimi hiç karşılayamadığı demektir (kart 7'de ElastiCache'in kilidi). Bir gecikme sınırını aşan ama iş yükünü taşıyan aday 5–7 alır: sınır aşılır, iş durmaz. Bu yüzden diskalifiye seyrektir ve karar, toplamla birlikte "karar veren gereksinim" cümlesiyle okunur.</p>
+<p>On kartın ikisinde ElastiCache kazanmaz: kart 7'de (ödeme kilidi) net kaybeder, kart 9'da (öneri listeleri) bir puanla kaybeder ve doğru cevap "ikisi birlikte"dir. Kart 4'te (ürün sayfası) ElastiCache kazanır ama Aurora'nın yerine değil önüne konur.</p>
+<table class="data">
+  <caption>puan ölçeği: her kartta aynı</caption>
+  <thead><tr><th>Puan</th><th>Anlamı</th></tr></thead>
+  <tbody>
+    <tr><td class="y">10</td><td>Gereksinimi doğrudan, ek iş olmadan ve sayıları aşarak karşılar.</td></tr>
+    <tr><td class="y">8–9</td><td>Karşılar; küçük bir ek iş ya da küçük bir maliyet vardır.</td></tr>
+    <tr><td class="p">5–7</td><td>Karşılar, ama uygulama tarafında belirgin ek iş, boyutlandırma ya da bir sınırla.</td></tr>
+    <tr><td class="p">2–4</td><td>Kısmen: gereksinimin bir parçası karşılanmaz ya da ciddi bir bedelle karşılanır.</td></tr>
+    <tr><td class="n">0–1</td><td>Karşılamaz. Zorunlu bir gereksinimde 0 ya da 1 alan aday diskalifiye olur ama tabloda kalır.</td></tr>
+  </tbody>
+</table>
+<table class="data">
+  <caption>kartlarda geçen ve başka sayfalarda tanımlanan terimler</caption>
+  <thead><tr><th>Terim</th><th>Ne demek</th><th>Nerede</th></tr></thead>
+  <tbody>
+    <tr><td>ECPU, GB-saat</td><td>ElastiCache Serverless'ın iki fatura birimi: istekler (yaklaşık her KB için 1 ECPU) ve saatlik ortalama saklanan veri</td><td>B9</td></tr>
+    <tr><td>MemoryDB</td><td>Valkey uyumlu, her yazmayı Multi-AZ transaction log'una yazan bellek içi database; node'lu bir cluster</td><td>A9, M5</td></tr>
+    <tr><td>GetItem, PutItem, UpdateItem, ADD, ConditionExpression, attribute_not_exists</td><td>DynamoDB'nin key ile okuma, yazma, kısmi değiştirme, atomik artırma ve koşullu yazma işlemleri</td><td><a href="/e2etutorial/dynamodb?lang=tr">DynamoDB tutorial'ı</a> B2, B3</td></tr>
+    <tr><td>GSI, TTL (DynamoDB), Streams, on-demand, DAX</td><td>DynamoDB'nin ikinci index'i, arka planda (genellikle birkaç gün içinde) silen süre sonu, değişiklik akışı, istek başına ödeme ve önündeki bellek içi cache</td><td><a href="/e2etutorial/dynamodb?lang=tr">DynamoDB tutorial'ı</a> B4, B5, M5</td></tr>
+    <tr><td>Global table</td><td>DynamoDB'nin birkaç AWS Region'ında okuma ve yazma alan kopyaları. ElastiCache'in node'lu karşılığı Global Datastore'dur: bir Region'da yazma, en fazla iki başka Region'da okuma; Serverless'ta yoktur.</td><td><a href="/e2etutorial/dynamodb?lang=tr">DynamoDB tutorial'ı</a> M5</td></tr>
+    <tr><td>Engine App, Admin Console, Seed, Live leaderboard</td><td>Lale Market workshop'unun parçaları: her database'e bağlanan uygulama, yönetim ekranı, verileri baştan kuran iş ve sıralamayı gösteren sayfa</td><td>M6, C3</td></tr>
+    <tr><td>Reader instance, ACU, vacuum, PostGIS, JSONB</td><td>Aurora'nın okuma kopyası, kapasite birimi, eski row versiyonlarının temizliği, coğrafi eklentisi ve JSON column'u</td><td><a href="/e2etutorial/aurora?lang=tr">Aurora tutorial'ı</a></td></tr>
+    <tr><td>Point, pencere toplamı, Flux / InfluxQL</td><td>Timestream for InfluxDB'nin zamanlı ölçümü ve sorguları</td><td><a href="/e2etutorial/influxdb?lang=tr">Timestream for InfluxDB tutorial'ı</a></td></tr>
+    <tr><td>geo_point, refresh, mapping</td><td>OpenSearch'ün konum alanı, yeni dokümanların aranabilir olduğu an ve alan tanımı</td><td><a href="/e2etutorial/opensearch?lang=tr">OpenSearch tutorial'ı</a></td></tr>
+  </tbody>
+</table>
+{% for uc in usecases %}{{ k.usecase(uc) }}
+{% endfor %}
+
+<h2 id="away" data-short="Uzaklaştıran sinyaller"><span class="sec">M3</span>Bellek içi store'dan uzaklaştıran sinyaller</h2>
+<table class="data">
+  <thead><tr><th>İş yükündeki sinyal</th><th>Bellek içi store neden zayıf bir seçim</th><th>Daha iyi seçim</th></tr></thead>
+  <tbody>
+    <tr><td>Veri resmi kayıttır ve başka hiçbir yerde yoktur (sipariş, ödeme, fatura)</td><td>Asenkron kopyalamada onaylanan son yazmalar kaybolabilir; ElastiCache Serverless'ta kalıcı log yoktur.</td><td><a href="/e2etutorial/aurora?lang=tr">İlişkisel database (Aurora)</a> ya da <a href="/e2etutorial/dynamodb?lang=tr">key-value database (DynamoDB)</a>; bellek hızı da gerekiyorsa MemoryDB</td></tr>
+    <tr><td>Bir kilidin ya da işaretin kaybı çift ödeme ya da çift satış demek</td><td>Failover'da "OK" alınmış kilit kaybolabilir (M2 kart 7).</td><td><a href="/e2etutorial/dynamodb?lang=tr">DynamoDB</a>'nin koşullu yazması</td></tr>
+    <tr><td>Büyük ve nadiren okunan veri (yıllık geçmiş, dosyalar)</td><td>Bellek GB başına çok pahalıdır ve her GB her saat ödenir.</td><td><a href="/e2etutorial/s3?lang=tr">S3</a> ya da disk tabanlı bir database</td></tr>
+    <tr><td>Her column'da değişen sorular, JOIN, GROUP BY</td><td>Store key ile bulur; genel bir sorgu dili yoktur.</td><td><a href="/e2etutorial/aurora?lang=tr">İlişkisel database (Aurora)</a></td></tr>
+    <tr><td>Metinle, yazım hatasıyla ve relevance ile arama</td><td>Key ile bulma metni sıralamaz.</td><td><a href="/e2etutorial/opensearch?lang=tr">Search engine (OpenSearch)</a></td></tr>
+    <tr><td>Kaybı kabul edilmeyen mesajlar ve iş akışları</td><td>Pub/Sub at-most-once'tır; list ve stream kalıcı log olmadan arızada kaybolabilir; yeniden deneme ve bozuk mesaj kuyruğu elle yazılır.</td><td>Yönetilen kuyruk (Amazon SQS) ya da akış servisi (Kinesis, MSK)</td></tr>
+    <tr><td>Aylar ve yıllar üzerinde rapor</td><td>Bellek şimdiyi tutar, geçmişi değil.</td><td><a href="/e2etutorial/redshift?lang=tr">Data warehouse (Redshift)</a></td></tr>
+  </tbody>
+</table>
+
+<h2 id="questions" data-short="Mimarın soruları"><span class="sec">M4</span>Bir mimarın sorduğu sorular, bu sırayla</h2>
+<ol>
+  <li><b>Bu veri kaybolursa ne olur?</b> Yeni bir login, bir dakikalık fazladan istek ya da yeniden hesaplama ise bellek içi store uygundur. Para ya da güven kaybı ise kaydı kalıcı bir store'da tut; bellek içi store en fazla önünde bir kopya olur (Ö7, Ö8).</li>
+  <li><b>Veri başka bir yerden yeniden kurulabilir mi, ne kadar sürede?</b> Kurulabiliyorsa soğuk cache süresini database'in taşıyıp taşıyamayacağını sor (Ö8).</li>
+  <li><b>Veriyi nasıl buluyorsun?</b> Her zaman bir key ile: iyi. Value'nun içine göre: başka bir araç (Ö1).</li>
+  <li><b>Hangi value tipi soruyu tek komut yapar?</b> Sayaç, hash, sorted set, list, konum, HyperLogLog (Ö2).</li>
+  <li><b>Aynı değeri aynı anda kaç istemci değiştiriyor?</b> Çoksa tek bir atomik komut kullan, asla okuyup sonra yazma (Ö3). Kural birkaç key'liyse key'ler aynı slot'ta mı (Ö6)?</li>
+  <li><b>Veri ne kadar yaşamalı ve ne kadar eski olabilir?</b> Bu sayı TTL'dir. Bellek dolarsa hangi key silinebilir: eviction politikası (Ö4)?</li>
+  <li><b>Sıcak veri ne kadar büyük ve trafik nasıl sıçrıyor?</b> Bellek GB-saat olarak ödenir; ani bir sıçrama için önceden ölçeklendirme gerekir mi (Ö6)?</li>
+  <li><b>Mesaj varsa kaçan bir mesaj zarar verir mi?</b> Vermiyorsa Pub/Sub; veriyorsa stream ya da yönetilen bir kuyruk (Ö5).</li>
+</ol>
+
+<h2 id="aws" data-short="AWS'te bellek içi"><span class="sec">M5</span>AWS'te bellek içi store ve ne zaman ElastiCache</h2>
+<p>AWS'te veriyi bellekte tutan birkaç servis ve seçenek var. Kalıcılıkta, işletmede ve API'da farklılaşırlar
+   (<a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.corecomponents.html">How ElastiCache works</a>, <a href="https://docs.aws.amazon.com/memorydb/latest/devguide/what-is-memorydb.html">What is MemoryDB</a>):</p>
+<table class="data">
+  <thead><tr><th>Servis</th><th>Nedir</th><th>Ne zaman seç</th></tr></thead>
+  <tbody>
+    <tr><td><b>ElastiCache Serverless (Valkey)</b></td><td>Node seçimi yok, tek bir endpoint. Servis belleği ve işlemciyi izler, dikey ve yatay ölçeklenir, veriyi birkaç AZ'de kopyalar. Veri (GB-saat) ve istek (ECPU) başına ödeme. Kalıcı log yok.</td><td>Yeni bir cache ya da kısa ömürlü veri için varsayılan seçim. Lale Market bunu kullanır.</td></tr>
+    <tr><td>ElastiCache node'lu cluster (Valkey ya da Redis OSS)</td><td>Node tipini, shard ve replica sayısını sen seçersin; node-saat başına ödeme; parametreleri (örneğin maxmemory-policy) ayarlarsın.</td><td>İnce ayar, öngörülebilir düz yük ya da node fiyatıyla daha ucuz bir sürekli yük.</td></tr>
+    <tr><td>ElastiCache node'lu Valkey 9.0, kalıcılık açık</td><td>Multi-AZ transaction log'u. AWS'e göre senkron yazma "designed for zero data loss at single-digit millisecond write latency", asenkron yazma mikrosaniye gecikme ve arızada "up to 10 seconds" kayıp.</td><td>Zaten node'lu bir ElastiCache cluster'ı işletiyorsan ve aynı cluster'da kaybı kabul edilmeyen veri de tutulacaksa. MemoryDB'den farkı: bu ElastiCache'in bir özelliğidir (cache ayarlarıyla ve asenkron seçeneğiyle birlikte); MemoryDB ise baştan kalıcı bir birincil database olarak tasarlanmış ayrı bir servistir.</td></tr>
+    <tr><td>ElastiCache (Memcached)</td><td>Sadece basit value'lar; çok çekirdekli node'lar; replica ve failover yok.</td><td>En basit nesne cache'i ve çok çekirdekli dikey ölçek.</td></tr>
+    <tr><td>Amazon MemoryDB</td><td>Valkey ve Redis OSS uyumlu, kalıcı bellek içi database: mikrosaniye okuma, tek haneli milisaniye yazma, Multi-AZ transaction log'u. Planlanmamış failover AWS'e göre "typically happens in under 20 seconds".</td><td>Bellek hızı ve bir database'in kalıcılığı birlikte gerekiyorsa; ayrı bir cache + database yerine tek store.</td></tr>
+    <tr><td>DynamoDB Accelerator (DAX)</td><td>Sadece DynamoDB'nin önünde, DynamoDB API'ı ile çalışan bellek içi cache.</td><td>Uygulama zaten DynamoDB okuyor ve mikrosaniye okuma istiyor.</td></tr>
+  </tbody>
+</table>
+<p>ElastiCache'in içinde birkaç seçenek bir tasarımı değiştirir:</p>
+<table class="data">
+  <thead><tr><th>Seçenek</th><th>Ne yapar</th><th>Ne zaman seç</th></tr></thead>
+  <tbody>
+    <tr><td>Serverless ya da node'lu</td><td>Serverless'ta kapasite ve shard servisindir; node'luda senindir. Valkey'in Serverless'ta en düşük faturalanan veri miktarı 100 MB'tır.</td><td>Trafik dalgalıysa ya da ekip sunucu istemiyorsa Serverless; düz ve büyük yükte ya da parametre ayarı gerekiyorsa node'lu.</td></tr>
+    <tr><td>Okuma replica'lardan (Serverless'ta 6380 portu)</td><td>Daha düşük gecikmeli, eventually consistent okuma.</td><td>Okuma ağırlıklı ve az önceki yazmayı görmek zorunda olmayan okumalar.</td></tr>
+    <tr><td>Kullanım sınırları ve önceden ölçeklendirme</td><td>Üst sınır faturayı korur (sınırda veri silinir ya da yazma reddedilir); alt sınır kapasiteyi önceden hazırlar ve AWS'e göre 60 dakika içinde hazır olur.</td><td>Bir kampanya ya da lansman öncesi; ve beklenmedik bir faturaya karşı.</td></tr>
+    <tr><td>Snapshot (yedek)</td><td>Cache'in bir anlık kopyasını S3'e yazar; geri yükleme yeni bir cache kurar. Günlük otomatik snapshot ve en fazla 35 gün saklama.</td><td>Yeniden kurulması uzun süren veri (büyük sıralamalar) için; saniye düzeyinde geri dönüş vermez.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="lalemarket-arch" data-short="Lale Market'teki yeri"><span class="sec">M6</span>Lale Market'te ElastiCache'in yeri</h2>
+<p>Lale Market tek bir ElastiCache Serverless cache'i (<code>dbws-cache</code>, Valkey 8.1) dört iş için kullanır: kampanya ürünü (<code>lm:deal</code> hash'i ve <code>lm:deal:stock</code> sayacı), ziyaretçi oturumları (TTL'li hash'ler ve aktif ziyaretçileri tutan <code>lm:active</code>), canlı müşteri sıralaması (<code>lm:leaderboard</code> sorted set'i) ve günlük sipariş sayacı (<code>lm:orders:today</code>). Bu dört işin hepsi M4'ün ilk sorusundan geçer: hiçbiri resmi kayıt değildir.</p>
+<ul>
+  <li><b>Sıralama</b> siparişlerden hesaplanır; Admin Console'daki Seed işi onu Aurora'daki siparişlerden yeniden kurar (M2 kart 2).</li>
+  <li><b>Kampanya stoğu</b> bir sayaçtır; satış kararı DECR ile verilir. Mağaza bir workshop olduğu için gerçek stok düşüşü Aurora'ya ayrıca yazılmaz; bir üretim sisteminde satılan her adet Aurora'daki stok row'una ve siparişe yazılır ve bellekteki sayaç sadece hızlı kapıdır.</li>
+  <li><b>Oturumlar</b> kaybolursa ziyaretçi yeniden başlar; sepet DynamoDB'de, siparişler Aurora'da kalıcıdır.</li>
+  <li><b>Siparişin kendisi</b> hiçbir zaman sadece bellekte yaşamaz.</li>
 </ul>
 
-<h2 id="recall" data-short="Recall test"><span class="sec">10</span>Recall test</h2>
-{{ k.quiz("ec-r1", "Hangi data type \"en çok gelir getiren 10 müşteri\"yi okuma anında sıralama yapmadan verir?",
-   ["Bir hash", "Bir sorted set", "Bir string", "Bir list"],
-   1, "Bir sorted set üyeleri her yazmada skor sırasında tutar.") }}
-{{ k.quiz("ec-r2", "Oku-sonra-yaz flash deal'inin bir testi tam olarak 10 adet sattı. Bu neyi kanıtlar?",
-   ["Kod bütün zamanlamalar için doğrudur", "Valkey kendisi bir lock ekledi", "Hiçbir şeyi, çünkü yarış her zaman görünmez", "Mağazanın daha fazla thread'e ihtiyacı var"],
-   2, "Bir race condition zamanlamaya bağlıdır. Temiz tek bir çalıştırma kodun doğru olduğunu kanıtlamaz.") }}
-{{ k.quiz("ec-r3", "Cache-aside pattern'inin bedeli nedir?",
-   ["Okumalar bir TTL kadar eski veri döndürebilir", "Database'e her yazma yavaşlar", "Database her key'i iki kez saklamak zorundadır", "Cache'in her okuması bir database okumasına mal olur"],
-   0, "Cache, TTL bitene ya da uygulama key'i silene kadar bir kopya tutar. O zamana kadar bir okuma eski değeri döndürebilir.") }}
+<h2 id="decide" data-short="Karar simülasyonları"><span class="sec">M7</span>Karar simülasyonları: M2'nin beş kartı adım adım</h2>
+<p>Her simülasyon M2'deki bir kartın verisini kullanır: aynı iş yükü, aynı R1–R5, aynı üç aday, aynı 10'luk puanlar ve aynı gerekçeler. Fark şudur: simülasyon gereksinimleri teker teker açar ve puan tablosu adım adım dolar; sonunda kazananı, ikinciyi ve kartın karar paragrafını görürsün. Oynat'a basmadan önce kartı okuyup kazananı tahmin et.</p>
+<p>Beş simülasyonun biri net bir kazanma (rate limit), biri net bir kaybetme (ödeme kilidi, DynamoDB kazanır), üçü yakın yarıştır (oturum, liderlik tablosu, öneri listesi). Üçüncü yarışı ElastiCache bir puanla kaybeder: yakın yarış her zaman seçilen servisin kazandığı yarış değildir.</p>
+{{ k.sim("win_rate", "Kart 3: rate limit sayaçları (net bir kazanma)") }}
+{{ k.sim("lose_lock", "Kart 7: satıcı ödemesinin kilidi (net bir kaybetme: DynamoDB kazanır)") }}
+{{ k.sim("race_session", "Kart 1: oturumlar, ElastiCache mi DynamoDB mi? (yakın yarış)") }}
+{{ k.sim("race_board", "Kart 2: liderlik tablosu, ElastiCache mi MemoryDB mi? (yakın yarış)") }}
+{{ k.sim("race_reco", "Kart 9: öneri listeleri, ElastiCache mi DynamoDB mi? (yakın yarış, ikisi birlikte)") }}
+<p>Her kararın son cümlesine bak: "Bir koşul değişseydi". İyi bir mimar bu cümleyi karar kaydına yazar. Koşul daha sonra değişirse ekip kararın yeniden kontrol edilmesi gerektiğini bilir. Bellek içi store'da bu koşul çoğunlukla aynıdır: "verinin kaybı kabul edilmeseydi".</p>
+
+{{ k.quiz("ec-a1", "Bir online mağaza son bir saatin en çok satan 20 ürününü ana sayfada göstermek istiyor. Sayfa dakikada 3.000 kez açılıyor ve sayılar siparişlerden yeniden hesaplanabiliyor. Ne en iyi oturur ve hangi koşul cevabı değiştirir?",
+   ["ZINCRBY ile güncellenen bir ElastiCache sorted set'i. Sayılar başka hiçbir yerde olmasaydı MemoryDB seçilirdi.", "Her görüntülemede siparişler üzerinde GROUP BY. Sipariş azsa DynamoDB seçilirdi.", "Her gece çalışan bir Redshift raporu. Sayfa az açılsaydı S3 seçilirdi.", "Her görüntülemede sipariş table'ının Scan'i. Ürün azsa Memcached seçilirdi."],
+   0, "Sıra sürekli değişir ve her görüntüleme onu hemen ister; sorted set sırayı yazma anında korur. Sayılar siparişlerden yeniden kurulabildiği için kayıp kabul edilir; tek kayıt olsalardı kalıcı log gerekirdi.") }}
+{{ k.quiz("ec-a2", "Bir bilet sitesi koltuk tutmalarını 10 dakikalık SET NX EX ile ElastiCache'te tutmak istiyor; tutma kaybolursa aynı koltuk iki kişiye satılabilir. Ne dersin?",
+   ["Uygun, SET NX atomik olduğu için kayıp olmaz", "Atomik olmak kalıcı olmak değildir: failover'da tutma kaybolabilir, kalıcı bir koşullu yazma (DynamoDB) ya da MemoryDB gerekir", "Uygun, sadece TTL'i kısaltmak yeter", "Uygun değil, ElastiCache SET NX desteklemez"],
+   1, "Kural doğru ama kayıp penceresi vardır: primary OK deyip replica'ya kopyalamadan düşerse tutma yeni primary'de yoktur. Kaybı çift satış olan bir tutma kalıcı bir store ister (kart 7 ile aynı ders).") }}
+{{ k.quiz("ec-a3", "Bir web mağazasının oturumları bir milisaniyenin altında okunmalı ve kaybolan bir oturum sadece yeni bir login demek. Hangi AWS servisi kazanır ve hangi koşul cevabı değiştirir?",
+   ["DynamoDB. Trafik iki katına çıksaydı ElastiCache kazanırdı.", "ElastiCache. Oturumun kaybı kabul edilemez olsaydı ya da sınır 10 ms olsaydı DynamoDB kazanırdı.", "Redshift. Oturumlar daha büyük olsaydı S3 kazanırdı.", "Aurora. Kullanıcıların arkadaşları olsaydı Neptune kazanırdı."],
+   1, "Hız ve tam anında süre sonu bellek içi store'u öne çıkarır (kart 1: 43 ile 42). Kararı DynamoDB'ye taşıyacak koşul dayanıklılık ya da gevşeyen gecikme sınırıdır.") }}
+
+<div class="part"><b>Bölüm B</b><h2 id="partB" data-short="Bölüm B: İleri">İleri: pratikte Valkey ve ElastiCache</h2>
+<p>Bölüm A'daki fikirlerin Valkey'deki adları, canlı Lale Market key'leri ve cevapları, yarış ve düzeltmesi, key'lerin yeri, süre ayarları, cache kodu, mesajlaşma, bir arızanın resmi ve maliyet.</p></div>
+
+<h2 id="names" data-short="İsimler ve canlı key"><span class="sec">B1</span>Valkey'de isimler, canlı bir key ve gerçek tanım</h2>
+<p>A2'deki key ve value ile A3'teki data type, field ve member Valkey'de aynı adlarla geçerlidir; bu bölüm onları canlı Lale Market cache'inden gerçek bir key'in üzerine koyar. Bölüm A'nın terimleri değişmez. Diğer ürünlerdeki karşılıklar:</p>
+<table class="data">
+  <thead><tr><th>Genel fikir</th><th>Memcached</th><th>Amazon MemoryDB</th><th>ElastiCache (Valkey)</th></tr></thead>
+  <tbody>
+    <tr><td class="c-pk">Key (A2)</td><td>key</td><td>key</td><td>key</td></tr>
+    <tr><td>Data type (A3)</td><td>yok: value bir metindir</td><td>Valkey ile aynı</td><td>string, hash, list, set, sorted set (<code>TYPE</code> komutu <code>zset</code> der), stream, konum, HyperLogLog</td></tr>
+    <tr><td class="c-sk">Field ve member (A3)</td><td>yok</td><td>Valkey ile aynı</td><td>field (hash), member (set, sorted set)</td></tr>
+    <tr><td>Hash slot ve shard (A4)</td><td>slot yok; istemci key'leri node'lara dağıtır</td><td>16.384 slot, shard</td><td>16.384 slot, shard; Serverless'ta servis yönetir ve uygulama görmez</td></tr>
+    <tr><td>Replica ve failover (A9)</td><td>yok</td><td>replica, failover ve Multi-AZ transaction log'u</td><td>replica ve failover; Serverless'ta otomatik ve birkaç AZ'de</td></tr>
+    <tr><td>Bütün key'lerin bulunduğu alan</td><td>—</td><td>keyspace</td><td>keyspace</td></tr>
+  </tbody>
+</table>
+{{ k.concept("Keyspace",
+   "Bir cache'teki bütün key'lerin bulunduğu tek ve düz alan. Valkey'de table ya da klasör yoktur: <code>lm:deal</code> ile <code>lm:session:7f3a</code> aynı alanda yan yana durur. Keyspace'i gezmek için <code>SCAN</code> kullanılır; sayfa sayfa ilerler ve diğer istemcileri bekletmez. Cluster mode'da keyspace slot'lara bölünür ve SCAN her shard'da ayrı çalışır.",
+   "Lale Market'in keyspace'inde <code>lm:</code> ile başlayan yedi tür key vardır: kampanya, kampanya stoğu, oturumlar, sıralama, aktif ziyaretçiler, sipariş sayacı ve müşteri adları (<code>lm:name:C00001</code>).",
+   "Bir otoparkın tek büyük katı: araçlar plakalarıyla bulunur; katlar ya da bölümler yoktur.") }}
+<p>Bu gerçek bir key'dir. Workshop canlı cache'e AWS'teki ElastiCache Engine App üzerinden dört komut gönderdi; ilk komut 300 milisaniye sürdü (yeni bir TLS bağlantısı kuruldu), sonraki üçü 1,4'er milisaniye:</p>
+{% call k.live("kampanya key'leri, canlı ElastiCache Serverless cache'inin döndürdüğü hâliyle (TYPE lm:deal · HGETALL lm:deal · TYPE lm:deal:stock · GET lm:deal:stock)") %}
+<pre><code>TYPE lm:deal          → hash
+HGETALL lm:deal       → product_id  P0001
+                        name        Alpen Kablosuz Kulaklık 1
+                        price       2024.3
+                        old_price   3373.84
+                        ends_at     1793058882
+TYPE lm:deal:stock    → string
+GET lm:deal:stock     → "46"</code></pre>
+{% endcall %}
+<p>Aynı key'ler, Valkey'in isimleri ve bu sayfanın renkleriyle:</p>
+{{ k.anatomy([
+   {"pk": "lm:deal", "sk": "product_id", "attrs": [["value", "P0001"]]},
+   {"pk": "lm:deal", "sk": "name", "attrs": [["value", "Alpen Kablosuz Kulaklık 1"]]},
+   {"pk": "lm:deal", "sk": "price", "attrs": [["value", "2024.3"]]},
+   {"pk": "lm:deal", "sk": "old_price", "attrs": [["value", "3373.84"]]},
+   {"pk": "lm:deal", "sk": "ends_at", "attrs": [["value", "1793058882"]]},
+   {"pk": "lm:deal:stock", "sk": "—", "attrs": [["value", "46"]]}],
+   "Canlı kampanyanın iki key'i. lm:deal bir hash'tir: beş field ve her field'ın değeri bir metindir; Valkey sayı tipi tutmaz, 2024.3 bir metindir ve artırma komutları onu sayı olarak yorumlar. lm:deal:stock bir string'dir: field'ı yoktur. İki key ayrı key'lerdir ve farklı slot'lardadır (3299 ve 1725).",
+   pk_name="key", sk_name="field",
+   labels={"primary": "Key + field", "pk": "Key", "sk": "Field", "attrs": "Value", "note": "hash'te her değer bir metin", "items": "Canlı key'ler"}) }}
+<p>Her ismi oku:</p>
+<ul>
+  <li><b>Key</b> <code>lm:deal</code>'dir: kampanyanın kendisini adlandırır. <code>lm:</code> öneki Lale Market'in geleneğidir.</li>
+  <li><b>Data type</b> hash'tir (<code>TYPE</code> komutunun cevabı). Hash olduğu için <code>HGET lm:deal price</code> sadece fiyatı okur, <code>HSET lm:deal price 1999</code> sadece fiyatı değiştirir.</li>
+  <li><b>Field</b>'lar <code>product_id</code>, <code>name</code>, <code>price</code>, <code>old_price</code> ve <code>ends_at</code>'tir. <code>ends_at</code> bir Unix zamanıdır (saniye); bu bir field'dır, key'in TTL'i değildir: kampanyanın bitişini uygulama kontrol eder.</li>
+  <li><code>lm:deal:stock</code> ayrı bir string key'dir. Stok hash'in içinde bir field olsaydı <code>HINCRBY lm:deal stock -1</code> de atomik olurdu; ayrı key, stoğu tek başına okumayı ve <code>DECR</code>'ı basit tutar.</li>
+  <li>Ürün id'si <code>P0001</code>'in sahibi katalogdur (Aurora). Cache onu ödünç alır ve var olup olmadığını kontrol etmez.</li>
+</ul>
+<table class="data">
+  <caption>Valkey'in data type'ları ve Lale Market'teki karşılıkları</caption>
+  <thead><tr><th>Tip (<code>TYPE</code> cevabı)</th><th>Ne tutar</th><th>Lale Market'te</th></tr></thead>
+  <tbody>
+    <tr><td><code>string</code></td><td>Metin ya da sayı gibi görünen metin; en fazla 512 MB</td><td><code>lm:deal:stock</code>, <code>lm:orders:today</code>, <code>lm:name:C00001</code></td></tr>
+    <tr><td><code>hash</code></td><td>Field–değer çiftleri</td><td><code>lm:deal</code>, <code>lm:session:7f3a</code></td></tr>
+    <tr><td><code>zset</code> (sorted set)</td><td>Score'lu, sıralı member'lar</td><td><code>lm:leaderboard</code> (gelir), <code>lm:active</code> (son görülme zamanı)</td></tr>
+    <tr><td><code>list</code></td><td>Eklenme sırasıyla elemanlar</td><td>Kullanılmıyor (M2 kart 8'deki iş kuyruğu)</td></tr>
+    <tr><td><code>set</code></td><td>Tekrarsız member'lar</td><td>Kullanılmıyor</td></tr>
+    <tr><td><code>stream</code></td><td>Saklanan mesajlar (A8)</td><td>Kullanılmıyor</td></tr>
+    <tr><td>konum index'i</td><td><code>TYPE</code> onu <code>zset</code> olarak gösterir: koordinat score olarak saklanır</td><td>Kullanılmıyor (M2 kart 10)</td></tr>
+  </tbody>
+</table>
+<p>Lale Market cache'inin gerçek tanımı budur (<code>cloudformation/workshop.yaml</code> içinden):</p>
+{% call k.sql("T1", "dbws-cache: ElastiCache Serverless cache'i ve kullanıcısı") %}
+<pre><code>CacheAppUser:
+  Type: AWS::ElastiCache::User
+  Properties:
+    UserId: dbws-app
+    Engine: valkey
+    AccessString: on ~* +@all -@dangerous
+    AuthenticationMode: { Type: password, Passwords: [ {{ '{{' }}resolve:secretsmanager:...{{ '}}' }} ] }
+
+Cache:
+  Type: AWS::ElastiCache::ServerlessCache
+  Properties:
+    ServerlessCacheName: dbws-cache
+    Engine: valkey
+    MajorEngineVersion: '8'
+    UserGroupId: !Ref CacheUserGroup
+    SubnetIds: [!Ref DataSubnetA, !Ref DataSubnetB, !Ref DataSubnetC]
+    SecurityGroupIds: [!Ref DbSgElastiCache]</code></pre>
+<table class="clause">
+  <tr><td>AccessString: on ~* +@all -@dangerous</td><td>Kullanıcının izni: açık (<code>on</code>), bütün key'lere (<code>~*</code>), bütün komutlara (<code>+@all</code>) ama tehlikeli komutlar hariç (<code>-@dangerous</code>; örneğin bütün veriyi silen ya da sunucu ayarını değiştiren komutlar). Parola Secrets Manager'da üretilir.</td></tr>
+  <tr><td>Type: AWS::ElastiCache::ServerlessCache</td><td>Node'suz bir cache. Kapasite, shard ve replica alanı yoktur; servis yönetir.</td></tr>
+  <tr><td>Engine: valkey, MajorEngineVersion: '8'</td><td>Valkey 8. Canlı cache'in tam sürümü 8.1'dir (C3).</td></tr>
+  <tr><td>SubnetIds: üç data subnet'i</td><td>Cache'in VPC endpoint'i üç AZ'deki subnet'lerde açılır; uygulama kendi AZ'sindeki endpoint'e bağlanır.</td></tr>
+  <tr><td>SecurityGroupIds</td><td>Cache'e sadece ElastiCache Engine App'in security group'u, 6379 ve 6380 portlarından ulaşabilir.</td></tr>
+</table>
+{% endcall %}
+{% call k.ask("Fiyat neden \"2024.3\" diye metin olarak dönüyor?") %}
+<p>Çünkü hash'in field değerleri metindir; Valkey'de ayrı bir sayı tipi yoktur. <code>HINCRBY</code> ya da <code>HINCRBYFLOAT</code> metni sayı olarak yorumlar, artırır ve yine metin olarak saklar. Uygulama okurken metni sayıya çevirir. Para gibi hassas değerlerde uygulama kuruş cinsinden tam sayı tutmayı seçebilir.</p>
+{% endcall %}
+{% call k.ask("Bütün lm:session: key'lerini listeleyebilir miyim?") %}
+<p>Evet, ama ucuz değil: <code>SCAN 0 MATCH lm:session:* COUNT 500</code> keyspace'i sayfa sayfa gezer ve her sayfada eşleşenleri döndürür; cluster mode'da her shard ayrı gezilir. Lale Market'in Engine App'i bunu sadece öğretici ekranlarda yapar ve en fazla 400 key okur. Sık sorulan bir soru için ikinci bir key tutulur: aktif ziyaretçiler <code>lm:active</code> sorted set'inde, son görülme zamanıyla.</p>
+{% endcall %}
+{{ k.quiz("ec-b1", "lm:deal hash'inin sadece fiyatını değiştirmek istiyorsun. Hangi komut, diğer field'lara dokunmadan?",
+   ["SET lm:deal 1999", "HSET lm:deal price 1999", "INCR lm:deal", "DEL lm:deal price"],
+   1, "HSET sadece verilen field'ı yazar. SET lm:deal bütün hash'in yerine bir string koyar ve diğer field'lar kaybolur; INCR bir hash üzerinde WRONGTYPE hatası verir.") }}
+
+<h2 id="strings" data-short="String, sayaç, yarış"><span class="sec">B2</span>String ve sayaçlar pratikte: SET, INCR ve son adedin yarışı</h2>
+<p>A5'teki atomik komutların Valkey'deki adları <code>SET … NX</code>, <code>INCR</code> ve <code>DECR</code>'dır. Bu bölüm onları canlı cache'te çalıştırır ve "önce oku, sonra yaz" yarışını canlı sistemde ölçer.</p>
+{% call k.sql("Q1", "Bir metin yaz, 10 dakika süre ver, oku") %}
+<pre><code>SET lm:tut:greeting "merhaba" EX 600
+GET lm:tut:greeting
+TTL lm:tut:greeting</code></pre>
+<table class="clause">
+  <tr><td>SET lm:tut:greeting "merhaba"</td><td>Key'e bir metin yaz; key varsa üzerine yaz (ve eski süresini at).</td></tr>
+  <tr><td>EX 600</td><td>Yazmayla birlikte 600 saniyelik bir süre ver: ayrı bir EXPIRE komutuna gerek yok, iki adım arasında süresiz kalma anı da yok.</td></tr>
+  <tr><td>TTL lm:tut:greeting</td><td>Kalan saniyeyi döndür. -1 "süre yok", -2 "key yok" demektir.</td></tr>
+</table>
+{% endcall %}
+{% call k.live("aynı üç komut, canlı cache'te (her biri 1,3–1,6 milisaniye)") %}
+<pre><code>key              value     TTL (seconds left)
+lm:tut:greeting  merhaba   600</code></pre>
+{% endcall %}
+{% call k.sql("Q2", "Bir sayaç: üç kez artır, sonra 10 ekle") %}
+<pre><code>INCR lm:tut:visits
+INCR lm:tut:visits
+INCR lm:tut:visits
+EXPIRE lm:tut:visits 600
+INCRBY lm:tut:visits 10</code></pre>
+<table class="clause">
+  <tr><td>INCR lm:tut:visits</td><td>Değeri bir artır ve yeni değeri döndür. Key yoksa 0'dan başlar: ilk INCR 1 döndürür. Okuma, artırma ve yazma tek komuttur.</td></tr>
+  <tr><td>EXPIRE lm:tut:visits 600</td><td>Sayaca 10 dakikalık süre ver. INCR süreyi değiştirmez; süre bir kez verilir.</td></tr>
+  <tr><td>INCRBY lm:tut:visits 10</td><td>Değere 10 ekle. <code>DECR</code> ve <code>DECRBY</code> azaltır.</td></tr>
+</table>
+{% endcall %}
+{% call k.live("canlı cevaplar: her INCR yeni değeri döndürür") %}
+<pre><code>command                    reply (the new value)
+INCR lm:tut:visits         1
+INCR lm:tut:visits         2
+INCR lm:tut:visits         3
+INCRBY lm:tut:visits 10    13</code></pre>
+{% endcall %}
+<p>Şimdi A5'teki yarış. Kampanyada bir adet kaldı ve iki alıcı aynı milisaniyede "Satın al"a basıyor. İlk simülasyon "önce oku, sonra yaz" yolunu, ikincisi tek bir <code>DECR</code>'ı oynatır:</p>
+{% call k.predict("Bir adet kaldı. İki alıcı GET, sonra SET (değer eksi 1) çalıştırıyor. Komutların en kötü sırasında mağaza kaç adet satar?") %}
+<p>İki. İki GET de ilk SET'ten önce çalışırsa iki alıcı da 1 görür ve ikisi de 0 yazar. Birinci simülasyon tam bu sırayı oynatır; ikincisinde her alıcı tek bir DECR gönderir.</p>
+{% endcall %}
+{{ k.sim("race_naive", "Önce oku, sonra yaz: iki alıcı, bir adet") }}
+{{ k.sim("race_atomic", "DECR: iki alıcı, bir adet") }}
+<p>Aynı yarışı canlı cache'te 10 adet ve 60 alıcıyla (20 paralel iş parçacığı) çalıştırdık. "Önce oku, sonra yaz" yolunda uygulama okuma ile yazma arasında 2 milisaniyelik bir iş yapıyor:</p>
+{% call k.live("canlı deneme: 10 adet, 60 alıcı, iki yol (SET 10; 60 alıcı: GET sonra SET · DECR, sıfırın altındaysa INCR)") %}
+<pre><code>mode            stock at start   pieces sold   stock at end   result
+GET, then SET   10               59            7              oversold
+DECR            10               10            0              correct</code></pre>
+{% endcall %}
+<p>Satırları oku. İlk yolda 10 adet için 59 satış oldu ve stok sonunda 7 kaldı: alıcılar aynı değeri okuyup aynı değeri yazdı, satışlar birbirinin üzerine yazıldı. İkinci yolda tam 10 satış oldu ve stok 0'da bitti. Sayı her çalıştırmada değişir, çünkü zamanlamaya bağlıdır; bir yarış hatasının doğası budur: bir test geçebilir, üretim bozulabilir.</p>
+{% call k.ask("DECR -1 döndürdüğünde neden INCR ile geri veriyoruz? SET NX kullanamaz mıyız?") %}
+<p>DECR her zaman azaltır; sıfırın altına inmeyi kendisi engellemez. Alıcının programı -1'i görünce satmaz ve INCR ile adedi geri koyar; böylece stok tekrar 0 olur. Tek komutta "sıfırın altına inme" kuralı istenirse küçük bir Lua script'i yazılır (değeri oku, 0'dan büyükse azalt, sonucu döndür); script de tek adımda çalışır. SET NX bir sayaç için değil, "key yoksa yaz" için kullanılır.</p>
+{% endcall %}
+{{ k.quiz("ec-b2", "Canlı denemede GET-sonra-SET yolu 10 adet için bir çalıştırmada tam 10 sattı. Bu ne kanıtlar?",
+   ["Kod her zamanlama için doğrudur", "Valkey kendiliğinden bir kilit ekledi", "Hiçbir şey, çünkü yarış her çalıştırmada görünmez", "Mağazanın daha fazla iş parçacığına ihtiyacı var"],
+   2, "Yarış zamanlamaya bağlıdır. Temiz bir çalıştırma kodun doğru olduğunu kanıtlamaz; 59 satışlık çalıştırma aynı kodla oldu.") }}
+
+<h2 id="structures" data-short="Hash ve sorted set"><span class="sec">B3</span>Hash ve sorted set pratikte: sepet satırları ve canlı sıralama</h2>
+<p>A3'teki hash ve sorted set Valkey'de <code>H…</code> ve <code>Z…</code> ile başlayan komutlarla kullanılır. Bu bölüm ikisini canlı cache'te çalıştırır ve gerçek müşteri sıralamasını okur.</p>
+{% call k.sql("Q3", "Bir sepet hash'i: iki field yaz, birini artır") %}
+<pre><code>HSET lm:tut:cart:demo P0001 2 P0044 1
+HINCRBY lm:tut:cart:demo P0001 1
+EXPIRE lm:tut:cart:demo 600
+HGETALL lm:tut:cart:demo</code></pre>
+<table class="clause">
+  <tr><td>HSET … P0001 2 P0044 1</td><td>İki field yaz: field ürün id'si, değer adet. Hash yoksa oluşturulur.</td></tr>
+  <tr><td>HINCRBY … P0001 1</td><td>Sadece P0001 field'ını atomik olarak bir artır; diğer field'lar değişmez.</td></tr>
+  <tr><td>HGETALL</td><td>Bütün field'ları ve değerlerini döndür.</td></tr>
+</table>
+{% endcall %}
+{% call k.live("canlı cevap (HSET her çalıştırmada P0001'i 2'ye geri koyar, HINCRBY 3 yapar)") %}
+<pre><code>field   value
+P0001   3
+P0044   1</code></pre>
+{% endcall %}
+{% call k.sql("Q4", "Bir siparişin tutarını müşterinin skoruna ekle, sonra ilk üçü ve bir müşterinin sırasını oku") %}
+<pre><code>ZINCRBY lm:leaderboard 20000 C00003
+ZREVRANGE lm:leaderboard 0 2 WITHSCORES
+ZREVRANK lm:leaderboard C00003</code></pre>
+<table class="clause">
+  <tr><td>ZINCRBY lm:leaderboard 20000 C00003</td><td>C00003 member'ının score'una 20.000 ekle. Member yoksa o score ile oluşturulur. Valkey member'ı hemen yeni yerine taşır; maliyet O(log N). Lale Market'in checkout'u bu komutu sipariş tutarıyla gönderir.</td></tr>
+  <tr><td>ZREVRANGE … 0 2 WITHSCORES</td><td>En yüksek score'dan aşağı doğru 0., 1. ve 2. sıradaki member'ları score'larıyla döndür. <code>REV</code> "ters", yani en yüksek önce demektir. Okuma anında sıralama yoktur.</td></tr>
+  <tr><td>ZREVRANK … C00003</td><td>C00003'ün sırasını (0'dan başlayarak) döndür. "Sen 5. sıradasın" demek için cevaba 1 eklenir.</td></tr>
+</table>
+{% endcall %}
+{{ k.sim("zset", "Her yazmada kendini sıralayan bir liderlik tablosu") }}
+{% call k.live("canlı cache'teki öğretici tablo: beş müşteri, Elif'e 20.000 eklendikten sonra (ZADD · ZINCRBY · ZREVRANGE 0 2 · ZREVRANK)") %}
+<pre><code>rank   member   score
+1      Mert     98210.1
+2      Lukas    45120.0
+3      Ayşe     36708.47
+Elif is at rank 5 (ZREVRANK + 1)</code></pre>
+{% endcall %}
+<p>Simülasyon ve bu canlı deneme gerçek sıralamaya dokunmaz: öğretici kopya <code>lm:tut:board</code> key'indedir ve 10 dakika sonra silinir; Q4'teki <code>lm:leaderboard</code> checkout'un gerçek komutudur. Elif 1.599,41'den 21.599,41'e çıktı ama hâlâ beşinci: Zeynep 27.300,55 ile önünde. Simülasyonda Zeynep'e 30.000 eklenince Zeynep ikinci sıraya atlar. Gerçek Lale Market sıralaması da aynı yapıdır:</p>
+{% call k.live("gerçek müşteri sıralaması, canlı cache (ZREVRANGE lm:leaderboard 0 4 WITHSCORES · ZCARD lm:leaderboard; her biri 1,4–1,8 milisaniye)") %}
+<pre><code>rank   member   name (from lm:name:&lt;id&gt;)   revenue (score)
+1      C00002   Mert Doğan                1168114.91
+2      C00001   Ayşe Yılmaz                455065.99
+3      C00487   Mehmet Yılmaz              237363.13
+4      C00004   Lukas Weber                225767.79
+5      C00717   İrem Kurt                  197244.42
+ZCARD → 994 members</code></pre>
+{% endcall %}
+<p>Müşteri adları sıralamada değil, ayrı string key'lerdedir (<code>lm:name:C00002</code>): sorted set sadece member ve score tutar. Member id'leri Aurora'daki customers table'ından ödünç alınır; Valkey onları kontrol etmez.</p>
+{% call k.ask("İki müşterinin score'u eşitse sıra nasıl belirlenir?") %}
+<p>Score eşitse member'lar metin sırasına (byte sırası) göre sıralanır: C00001, C00002'den önce gelir. Eşitlikte "ilk ulaşan önde olsun" isteniyorsa score'a küçük bir zaman bileşeni eklenir; bu bir tasarım kararıdır.</p>
+{% endcall %}
+{{ k.quiz("ec-b3", "Öğretici tabloda Elif'in skoru 1.599,41'di. ZINCRBY 20000'den sonra kaçıncı sırada? (Diğerleri: Mert 98.210,10 · Lukas 45.120,00 · Ayşe 36.708,47 · Zeynep 27.300,55)",
+   ["İkinci", "Üçüncü", "Dördüncü", "Beşinci"],
+   3, "21.599,41; Mert, Lukas, Ayşe ve Zeynep'in altındadır. Canlı ZREVRANK cevabı da 4'tür (0'dan sayar), yani beşinci sıra.") }}
+
+<h2 id="slotsb" data-short="Slot'lar pratikte"><span class="sec">B4</span>Hash slot'lar pratikte: Lale Market key'lerinin yeri</h2>
+<p>A4'teki hash slot ve shard, Valkey'de cluster mode'un parçalarıdır ve ElastiCache Serverless her zaman cluster mode'da çalışır. Bu bölüm Lale Market'in gerçek key'lerinin slot'larını hesaplar ve CROSSSLOT hatasını gösterir.</p>
+{{ k.sample("valkey_slots", "Lale Market key'leri, gerçek slot'ları ve öğretici üç shard'daki yerleri (CRC16 mod 16384)", key=["key"], pk="key") }}
+{% call k.sql("Q5", "Bir key'in slot'unu sor") %}
+<pre><code>CLUSTER KEYSLOT lm:deal:stock        → 1725
+CLUSTER KEYSLOT {lm:deal}:stock      → 3299
+CLUSTER KEYSLOT {lm:deal}:info       → 3299</code></pre>
+<table class="clause">
+  <tr><td>CLUSTER KEYSLOT key</td><td>Key'in slot numarasını döndür (CRC16 mod 16384). Key'i yazmaz, sadece hesaplar.</td></tr>
+  <tr><td>{lm:deal}:stock</td><td>Süslü parantez bir hash tag'dir: sadece <code>lm:deal</code> hash'lenir, bu yüzden slot <code>lm:deal</code>'in slot'udur (3299).</td></tr>
+</table>
+{% endcall %}
+{{ k.sim("slots", "Altı key, üç shard ve bir CROSSSLOT hatası") }}
+<p>ElastiCache Serverless'ta uygulama shard'ları görmez: tek bir endpoint'e bağlanır ve proxy katmanı her komutu doğru cache node'una gönderir (C2). Ama slot kuralı yine geçerlidir: birkaç key'li bir komut ya da Lua script'i farklı slot'lardaki key'lere dokunursa reddedilir. Lale Market'in her komutu bu yüzden tek bir key kullanır. Serverless cluster mode'da çalıştığı için cluster mode'u destekleyen ve TLS kullanan bir istemci kullanılır; Lale Market'in Engine App'i Python'daki <code>RedisCluster</code> istemcisiyle bağlanır ve slot'u kendisi hesaplar. Proxy, node'lar değişince istemcinin topolojiyi yeniden keşfetmesini gereksiz kılar.</p>
+{% call k.ask("Kampanya stoğu çok sıcak bir key. Serverless onu birkaç shard'a böler mi?") %}
+<p>Hayır. Bir key tek bir slot'tadır ve bir slot tek bir shard'ındır; servis bir key'i bölmez. Tek bir key'e gelen yazmaların hepsi aynı primary'de sırayla çalışır. Bir bellek içi node için saniyede binlerce DECR küçük bir yüktür; çok daha büyük bir yük için stok birkaç alt key'e (<code>lm:deal:stock:1</code> … <code>:4</code>) bölünür ve her alıcı birini seçer. Okumalar 6380 portuyla replica'lara dağıtılabilir.</p>
+{% endcall %}
+
+<h2 id="expiryb" data-short="TTL pratikte"><span class="sec">B5</span>TTL ve bellek sınırı pratikte: oturumlar ve 5 saniyelik bir key</h2>
+<p>A6'daki süre sonu Valkey'de <code>EX</code>, <code>EXPIRE</code> ve <code>TTL</code> komutlarıdır; eviction ise ElastiCache Serverless'ta kullanım sınırlarıyla birlikte gelir. Bu bölüm bir key'in son saniyelerini canlı ölçer.</p>
+{% call k.sql("Q6", "5 saniyelik bir key ve 2 saniyede bir TTL") %}
+<pre><code>SET lm:tut:short "I expire soon" EX 5
+TTL lm:tut:short      EXISTS lm:tut:short      # 0., 2., 4. ve 6. saniyede</code></pre>
+<table class="clause">
+  <tr><td>EX 5</td><td>Key 5 saniye yaşar.</td></tr>
+  <tr><td>TTL</td><td>Kalan saniye; key yoksa -2.</td></tr>
+  <tr><td>EXISTS</td><td>Key varsa 1, yoksa 0.</td></tr>
+</table>
+{% endcall %}
+{% call k.live("canlı ölçüm: aynı key'in dört anı") %}
+<pre><code>time        TTL (seconds left, -2 = no key)   EXISTS
+after 0 s   5                                 1
+after 2 s   3                                 1
+after 4 s   1                                 1
+after 6 s   -2                                0</code></pre>
+{% endcall %}
+<p>4. saniyede key hâlâ okunur; 6. saniyede yoktur. Arada bir silme komutu gönderilmedi. Lale Market'in oturum kodu (<code>engines/elasticache.py</code>) her sayfa görüntülemesinde üç komut gönderir:</p>
+{% call k.sql("Q7", "Bir oturumu yaz ve 30 dakika yaşat") %}
+<pre><code>HSET lm:session:7f3a persona C00001 last_page /cart
+EXPIRE lm:session:7f3a 1800
+ZADD lm:active 1793057082 7f3a</code></pre>
+<table class="clause">
+  <tr><td>HSET lm:session:7f3a …</td><td>Oturum hash'ine iki field yaz. HSET süreyi değiştirmez.</td></tr>
+  <tr><td>EXPIRE lm:session:7f3a 1800</td><td>Süreyi 1.800 saniyeden yeniden başlat. Her sayfa görüntülemesi bunu yapar; sayfa açmayan ziyaretçinin oturumu 30 dakika sonra gider.</td></tr>
+  <tr><td>ZADD lm:active &lt;şimdi&gt; 7f3a</td><td>Aktif ziyaretçiler sorted set'inde 7f3a'nın score'unu şimdiki zaman yap. "Son 5 dakikada aktif olanlar" sorusu <code>ZCOUNT lm:active &lt;şimdi-300&gt; +inf</code> ile tek komuttur; bütün oturum key'lerini taramak gerekmez. Eski member'lar kendiliğinden gitmez (süre key başınadır, member başına değil): Lale Market'te workshop sıfırlaması <code>lm:active</code>'i siler; bir üretim sisteminde <code>ZREMRANGEBYSCORE lm:active -inf &lt;şimdi-300&gt;</code> periyodik çalışır.</td></tr>
+</table>
+{% endcall %}
+<p>Bellek sınırı: ElastiCache Serverless'ta her cache varsayılan olarak 5 TB veriye ve saniyede 15.000.000 ECPU'ya kadar büyüyebilir. Bir üst sınır koyarsan ve cache ona ulaşırsa servis veri silmeye, yeni yazmaları "Out of Memory" hatasıyla reddetmeye ya da ikisine başlar (<a href="https://docs.aws.amazon.com/help-panel/AmazonElastiCache/latest/console/serverless-capacity-page-hp.html">Serverless capacity settings</a>). Node'lu cluster'larda <code>maxmemory-policy</code> parametresi A6'daki politikalardan birini seçer.</p>
+{% call k.ask("Oturum EXPIRE'ı her istekte göndermek pahalı değil mi?") %}
+<p>Her EXPIRE bir komut ve bir ECPU'dur; saniyede 40.000 sayfa için saniyede 40.000 ECPU daha. Bellek içi store'da bu ucuzdur (B9), ama azaltmak istersen süreyi her istekte değil, kalan süre yarıya indiğinde yenileyebilirsin. Ya da HSET ve EXPIRE'ı tek bir pipeline'da (art arda, cevap beklemeden) göndererek ağ gidiş-dönüşünü bire indirirsin.</p>
+{% endcall %}
+
+<h2 id="cacheb" data-short="Cache-aside pratikte"><span class="sec">B6</span>Cache-aside pratikte: kod, simülasyon ve stampede</h2>
+<p>A7'deki cache-aside deseni uygulama kodudur; Valkey'de ayrı bir özellik değildir. Bu bölüm Lale Market'in ürün sayfası için deseni Python ile yazar, altı görüntülemeyle oynatır ve sıcak bir key'in süresi dolduğunda ne olduğunu gösterir.</p>
+{% call k.sql("Q8", "Ürün sayfası verisini önce cache'te ara (Python, redis-py)") %}
+<pre><code>def product_page(pid):
+    key = f"product:{pid}"
+    cached = r.get(key)                       # 1. önce kopyaya bak
+    if cached is not None:
+        return json.loads(cached)             # 2. hit: database çalışmaz
+    page = aurora_query(pid)                  # 3. miss: Aurora'yı oku
+    r.set(key, json.dumps(page), ex=300)      #    ve 5 dakika sakla
+    return page
+
+def change_price(pid, price):
+    aurora_update_price(pid, price)           # önce kaynak
+    r.delete(f"product:{pid}")                # sonra kopyayı sil</code></pre>
+<table class="clause">
+  <tr><td>r.get(key)</td><td>Kopya varsa metin, yoksa None döner.</td></tr>
+  <tr><td>r.set(key, …, ex=300)</td><td><code>SET product:P0001 … EX 300</code>: kopya 300 saniye yaşar; eski verinin üst sınırı budur.</td></tr>
+  <tr><td>r.delete(…)</td><td><code>DEL</code>: fiyat değişince kopya hemen silinir; bir sonraki okuma miss alır ve yeni fiyatı okur. Sıra önemlidir: önce Aurora, sonra silme.</td></tr>
+</table>
+{% endcall %}
+{{ k.sim("cache", "Altı ürün sayfası görüntülemesiyle cache-aside") }}
+<p>Sıcak bir key'in süresi dolduğu anda yüzlerce istek aynı anda miss alabilir ve hepsi aynı JOIN'i Aurora'da çalıştırır (stampede). Çözüm, miss'i tek bir okumaya indirmektir:</p>
+{% call k.sql("Q9", "Stampede'e karşı kısa bir kilit") %}
+<pre><code>if r.set(f"lock:product:{pid}", "1", nx=True, ex=5):   # SET … NX EX 5
+    page = aurora_query(pid)
+    r.set(f"product:{pid}", json.dumps(page), ex=300)
+else:
+    time.sleep(0.05); return product_page(pid)          # biraz bekle, kopyayı tekrar dene</code></pre>
+<table class="clause">
+  <tr><td>SET lock:product:P0001 1 NX EX 5</td><td>Kilidi sadece ilk istek alır; Aurora'yı o okur. Kilit 5 saniye sonra kendiliğinden düşer, böylece okuyan istek çökse bile kilit kalmaz.</td></tr>
+  <tr><td>else</td><td>Diğer istekler kısa bir an bekler ve kopyayı tekrar okur. Bu kilidin kaybı zararsızdır (en kötü durumda iki istek Aurora'yı okur); M2 kart 7'deki ödeme kilidiyle farkı budur.</td></tr>
+</table>
+{% endcall %}
+{% call k.ask("Önce kopyayı silip sonra Aurora'yı güncellesem ne olur?") %}
+<p>Arada gelen bir okuma miss alır, Aurora'dan <b>eski</b> fiyatı okur ve onu 5 dakikalığına kopyaya yazar; güncelleme bittiğinde kopya yine eskidir. Bu yüzden sıra "önce kaynak, sonra silme"dir. Daha sıkı tutarlılık için silme kısa bir gecikmeyle ikinci kez de yapılabilir.</p>
+{% endcall %}
+
+<h2 id="messagingb" data-short="Pub/Sub ve stream pratikte"><span class="sec">B7</span>Pub/Sub, stream ve list kuyruğu pratikte</h2>
+<p>A8'deki üç mesajlaşma yolunun Valkey komutları aşağıdadır. Lale Market bunları kullanmaz; komutlar M2'deki kart 6 (canlı güncellemeler) ve kart 8 (iş kuyruğu) içindir.</p>
+{% call k.sql("Q10", "Üç yol, üç komut grubu") %}
+<pre><code># Pub/Sub: bir yayın, bütün bağlı aboneler
+SUBSCRIBE stock:P0001                       # her WebSocket sunucusu
+PUBLISH stock:P0001 "3 adet kaldı"          # cevap: mesajı alan abone sayısı
+
+# Stream: saklanan, onaylanan mesajlar
+XADD lm:events MAXLEN ~ 100000 * type shipped order O000001
+XGROUP CREATE lm:events mailer $ MKSTREAM
+XREADGROUP GROUP mailer m1 COUNT 10 BLOCK 5000 STREAMS lm:events &gt;
+XACK lm:events mailer 1692632086370-0
+
+# List kuyruğu: bir iş, tek bir worker
+LPUSH jobs:thumbs "uploads/P0001.jpg"
+BLMOVE jobs:thumbs jobs:thumbs:processing:w3 RIGHT LEFT 0
+LREM jobs:thumbs:processing:w3 1 "uploads/P0001.jpg"</code></pre>
+<table class="clause">
+  <tr><td>PUBLISH … → cevap</td><td>Mesajı alan abone sayısını döndürür. 0 ise mesaj kimseye gitmedi ve kayboldu.</td></tr>
+  <tr><td>XADD … MAXLEN ~ 100000 *</td><td>Stream'e bir mesaj ekle; <code>*</code> id'yi zamandan üret; stream'i yaklaşık 100.000 mesajda kırp.</td></tr>
+  <tr><td>XREADGROUP … &gt;</td><td>mailer grubunun m1 okuyucusu, gruba henüz verilmemiş mesajları okur; 5 saniye bekler.</td></tr>
+  <tr><td>XACK</td><td>Mesaj işlendi; bekleyenler listesinden çıkar.</td></tr>
+  <tr><td>BLMOVE … 0</td><td>Kuyruğun sonundaki işi atomik olarak worker'ın "işleniyor" listesine taşı; kuyruk boşsa iş gelene kadar bekle (0 = süresiz).</td></tr>
+  <tr><td>LREM …</td><td>İş bitti; "işleniyor" listesinden sil.</td></tr>
+</table>
+{% endcall %}
+{% call k.ask("Cluster mode'da Pub/Sub nasıl çalışır? Channel'ın bir slot'u var mı?") %}
+<p>Klasik Pub/Sub'da channel bir key değildir ve mesaj cluster'ın bütün node'larına yayılır; abone hangi node'a bağlıysa oradan alır. Valkey 7 ve sonrasında sharded Pub/Sub da vardır (<code>SPUBLISH</code>, <code>SSUBSCRIBE</code>): channel bir slot'a bağlanır ve mesaj sadece o shard'da dolaşır; büyük cluster'larda trafiği azaltır.</p>
+{% endcall %}
+
+<h2 id="failure" data-short="Arıza pratikte"><span class="sec">B8</span>Doğruluk ve arıza pratikte: kaybolan kilit ve düzeltmesi</h2>
+<p>A9'daki asenkron kopyalama ve failover, M2'deki kart 7'nin (ödeme kilidi) nedenidir. Bu bölüm kayıp penceresini adım adım oynatır, sonra iki düzeltmeyi gösterir.</p>
+{{ k.sim("failover", "Asenkron kopyalama: bir kilit, bir failover, iki worker") }}
+<p>Her komut doğru çalıştı ve yine de iki worker aynı kilidi tuttu. Düzeltme kilidi değil, korunan işi kalıcı hâle getirmektir:</p>
+<table class="data">
+  <caption>bütün durumlar: kaybolan bir kilide karşı ne yapılır</caption>
+  <thead><tr><th>Yol</th><th>Ne sağlar</th><th>Bedeli</th></tr></thead>
+  <tbody>
+    <tr><td>Kilidi ElastiCache'te bırak, işi idempotent yap</td><td>Ödeme talimatı satıcı ve gün başına benzersiz bir id ile kalıcı bir store'a koşullu yazılır (DynamoDB <code>attribute_not_exists</code>); ikinci worker'ın yazması reddedilir.</td><td>Asıl koruma kalıcı store'a taşınır; kilit sadece verimlilik içindir.</td></tr>
+    <tr><td>Kilidi DynamoDB'de tut</td><td>Koşullu PutItem onaylanmadan önce birkaç AZ'de saklanır; failover penceresi yoktur.</td><td>Tek haneli milisaniye; burada önemsiz (kart 7: 48 puan).</td></tr>
+    <tr><td>Kilidi MemoryDB'de ya da kalıcılığı açık node'lu Valkey 9.0'da tut</td><td>Aynı SET NX komutu; senkron yazmada onaylanan kilit kaybolmaz.</td><td>Node'lu cluster ve node-saat; günde iki istek için orantısız.</td></tr>
+    <tr><td><code>WAIT</code> komutuyla replica'ların yazmayı almasını beklemek</td><td>Yazmanın en az bir replica'ya ulaştığını bekler.</td><td><b>Kesin bir çözüm değildir:</b> failover yine de o replica'yı seçmeyebilir; Valkey'in belgesi asenkron kopyalamada kaybın her zaman mümkün olduğunu yazar.</td></tr>
+    <tr><td>Kaybı yok saymak</td><td>—</td><td><b>Kabul edilemez</b> bu iş yükünde: bir gecenin çift ödemesi 4 milyon TL.</td></tr>
+  </tbody>
+</table>
+<p>Kalıcılık seçenekleri, AWS belgesine göre (<a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/durability.html">Durability in ElastiCache</a>): node'lu Valkey 9.0 cluster'ında senkron yazma "designed for zero data loss at single-digit millisecond write latency", asenkron yazma mikrosaniye gecikmeyle "the risk of losing up to 10 seconds of uncommitted data during a failure". Bu özellik şimdilik sadece node'lu ElastiCache'te vardır; Lale Market'in Serverless cache'inde yoktur.</p>
+{% call k.ask("Snapshot almak kalıcılık sağlamaz mı?") %}
+<p>Sadece kısmen: snapshot bir anın kopyasıdır. Günlük bir snapshot'tan geri dönmek son snapshot'tan sonraki her yazmayı kaybetmek demektir ve geri dönüş yeni bir cache kurar. Snapshot büyük ve yeniden kurulması uzun süren veri (örneğin milyonlarca member'lı bir sıralama) için bir hızlı başlangıçtır; onaylanan yazmayı korumaz. Lale Market'in cache'inde otomatik snapshot kapalıdır: sıralama Aurora'dan 4 dakikada yeniden kurulur.</p>
+{% endcall %}
+{{ k.quiz("ec-b4", "Simülasyonda iki worker aynı kilidi tuttu. Hangi değişiklik bu iş yükünde çift ödemeyi kesin olarak önler?",
+   ["Kilidin süresini 15 dakikadan 30 dakikaya çıkarmak", "Ödeme talimatını satıcı ve gün başına benzersiz bir id ile DynamoDB'ye koşullu yazmak", "SET NX yerine MULTI ve EXEC kullanmak", "Okumayı 6380 portundan yapmak"],
+   1, "Kayıp kopyalama penceresindedir; süre, MULTI/EXEC ya da okuma portu onu kapatmaz. Kalıcı bir koşullu yazma ikinci talimatı reddeder.") }}
+
+<h2 id="cost" data-short="Maliyet: ECPU, GB-saat"><span class="sec">B9</span>Performans ve maliyet: ECPU, GB-saat ve önceden ölçeklendirme</h2>
+<p>A1'deki "bellek GB başına pahalıdır" cümlesi ElastiCache Serverless'ta iki fatura birimine dönüşür (<a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.corecomponents.html">Pricing dimensions</a>):</p>
+<table class="data">
+  <thead><tr><th>Birim</th><th>Nasıl sayılır</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td><b>GB-saat</b> (saklanan veri)</td><td>Servis veriyi dakikada birkaç kez ölçer ve saatlik ortalamayı faturalar. Valkey'de en az 100 MB faturalanır (Redis OSS ve Memcached'de 1 GB).</td><td>40 GB'lık öneri listeleri ayda 40 × 730 GB-saat</td></tr>
+    <tr><td><b>ECPU</b> (istekler)</td><td>"Simple reads and writes require 1 ECPU for each kilobyte (KB) of data transferred"; daha fazla işlem süresi isteyen komutlar (sorted set, HMGET) orantılı olarak daha fazla ECPU harcar. İstek yoksa ECPU ödenmez.</td><td>1 KB'lık bir GET 1 ECPU, 3,2 KB'lık bir SET 3,2 ECPU</td></tr>
+  </tbody>
+</table>
+<p>AWS'in bir blog yazısındaki örnek hesap (us-east-1 Bölgesi, yazının yazıldığı fiyatlarla; Bölge fiyatları değişir): ortalama 10 GB veri "approximately $900/month" (0,125 $/GB-saat × 10 GB × 730 saat), saniyede ortalama 10.000 basit GET/SET ise yaklaşık 90 $/ay daha (<a href="https://aws.amazon.com/blogs/database/unlock-on-demand-cost-optimized-performance-with-amazon-elasticache-serverless/">AWS Database Blog</a>). Fiyat sayfasına göre ElastiCache Serverless for Valkey diğer engine'lere göre "33% lower pricing" sunar (<a href="https://aws.amazon.com/elasticache/pricing/">ElastiCache pricing</a>). Hesabın dersi şudur: bu örnekte faturanın onda dokuzu bellektir. Küçük ve sıcak veri bellek içi store'da ucuzdur; büyük ve soğuk veri pahalıdır.</p>
+{% call k.predict("Lale Market'in sıralaması 994 member, oturumları birkaç bin hash. Faturanın büyük kısmı GB-saat mi, ECPU mu?") %}
+<p>Veri birkaç MB'tır ve Valkey'in en az faturalanan miktarı olan 100 MB'ın altındadır; GB-saat bu en az miktar kadar sabit kalır. Fatura istek sayısıyla, yani ECPU ile büyür. 40 GB'lık öneri listelerinde (M2 kart 9) durum tersidir: orada GB-saat baskındır ve kartın R5 puanı bu yüzden kırılır.</p>
+{% endcall %}
+<p>Hız tarafında: AWS'e göre ElastiCache Serverless boş bir cache'te saniyede 30.000 ECPU destekler ve Valkey 8.0 ile desteklenen istek hızını "every 2-3 minutes" iki katına çıkarabilir. Daha hızlı bir sıçrama bekleniyorsa (bir lansman, bir kampanyanın ilk dakikası) en az ECPU/saniye değeri tepeden en az 60 dakika önce ayarlanır; bu en az değer, kullanılmasa da faturalanır (<a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Scaling-serverless.html">Scaling ElastiCache Serverless</a>).</p>
+{% call k.ask("Node'lu bir cluster ne zaman Serverless'tan ucuz olur?") %}
+<p>Trafik düz ve büyükse: node-saat sabit bir fiyattır ve her saat tam kullanılan bir node, aynı işi ECPU ile ödemekten ucuz olabilir. Trafik dalgalıysa (gece boş, kampanya akşamı on kat) Serverless boş saatlerde neredeyse sadece veriyi faturalar. Karar, kendi trafik eğrinle iki fiyat modelini hesaplamaktır; ElastiCache'in fiyat sayfası iki modeli de listeler.</p>
+{% endcall %}
+
+<div class="part"><b>Bölüm C</b><h2 id="partC" data-short="Bölüm C: AWS servisi">AWS servisi: ElastiCache'in senin için çalıştırdıkları</h2>
+<p>Valkey'i kendin çalıştırdığında ne yapman gerekir ve bunun yerine ElastiCache Serverless ne yapar.</p></div>
+
+<h2 id="selfrun" data-short="Kendin çalıştırırsan"><span class="sec">C1</span>Valkey'i kendin çalıştırdığında ne yapmalısın</h2>
+<p>Bölüm A ve B'deki her şey tek bir Valkey sürecinde çalışabilir. Gerçek bir mağaza için tek süreç yetmez. Şu görevleri kendin çözmen gerekir:</p>
+<ol>
+  <li><b>Bellek boyutu.</b> Sıcak veriye ve büyümeye yetecek bellekli sunucuları seç; dolmadan önce büyüt. Bellek dolarsa store ya veri siler ya da yazmayı reddeder (A6).</li>
+  <li><b>Replica'lar ve failover.</b> Her shard için başka bir veri merkezinde replica kur, primary'nin düştüğünü fark eden ve replica'yı yükselten bir mekanizma işlet, istemcileri yeni primary'ye yönlendir (A9).</li>
+  <li><b>Shard'lar.</b> Veri ya da trafik bir sunucuyu aşınca shard ekle ve slot'ları kesintisiz taşı; istemcilerin yeni dağılımı öğrenmesini sağla (A4).</li>
+  <li><b>Güvenlik.</b> TLS sertifikaları, kullanıcılar ve izinler (ACL), ağ erişimi.</li>
+  <li><b>Yamalar ve sürümler.</b> İşletim sistemini ve Valkey'i, cache'i boşaltmadan güncelle.</li>
+  <li><b>Yedek.</b> Gerekiyorsa snapshot al, başka bir yerde sakla ve geri yüklemeyi dene.</li>
+  <li><b>Kapasite.</b> Kampanya tepesi için önceden büyüt, sonra küçült; tepeyi bekleyen sunucular bütün yıl ödenir.</li>
+</ol>
+<p>Bu işlerin hiçbiri senin mağazanla ilgili değildir. ElastiCache bunların çoğunu devralır; komutlar, value tipleri ve atomik kurallar aynı kalır.</p>
+
+<h2 id="service" data-short="Servis olarak ElastiCache"><span class="sec">C2</span>ElastiCache Serverless'ın tasarımı: tek endpoint, proxy ve cache node'ları</h2>
+<p>AWS'in belgesine göre ElastiCache Serverless ile "You simply provide a name for your cache and you receive a single endpoint". Uygulama bu tek adrese bağlanır. Arkada bir <b>proxy katmanı</b> (bir network load balancer'ın arkasındaki proxy node'ları) bağlantıları kabul eder ve her komutu doğru cache node'una gönderir; böylece istemci shard'ları ve node'ları bilmez ve bir node değiştiğinde yeniden bağlanmak zorunda kalmaz. Servis belleği, işlemciyi ve ağı izler, node'ları büyütür ve aynı anda yeni node'lar ekler (<a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.corecomponents.html">How ElastiCache works</a>).</p>
+{{ k.fig("elasticache-serverless.png", "soldaki Customer VPC'de her Availability Zone'da bir Application ve bir VPC Endpoint var. Oklar Service VPC'deki Proxy kutusuna, oradan sağdaki CACHE node'larına gidiyor. \"A\" yazan node'lar aynı verinin kopyalarıdır: farklı AZ'lerden gelen istekler farklı kopyalara gidebilir. Customer VPC senin AWS ağındır, Service VPC AWS'in yönettiği ağdır; VPC Endpoint ikisini birbirine bağlayan özel bağlantı noktasıdır. Uygulama sadece kendi VPC Endpoint'ini görür; kaç cache node'u olduğunu bilmez. Shard'lar (A4) ve replica'lar (A9) bu sağ kutunun içindedir.") }}
+<p>Bunu C1'deki yedi işle karşılaştır:</p>
+<table class="data">
+  <thead><tr><th>İş</th><th>Kendi sunucunda Valkey</th><th>ElastiCache Serverless</th></tr></thead>
+  <tbody>
+    <tr><td>Bellek boyutu</td><td>Sen seçer ve dolmadan büyütürsün.</td><td>Servis büyütür ve küçültür; varsayılan üst sınır 5 TB. GB-saat ödersin.</td></tr>
+    <tr><td>Replica'lar ve failover</td><td>Sen kurar ve işletirsin.</td><td>Veri otomatik olarak birkaç AZ'de; node arızasında servis node'u değiştirir. Her cache için yüzde 99,99 erişilebilirlik SLA'sı.</td></tr>
+    <tr><td>Shard'lar</td><td>Sen ekler, slot'ları taşırsın; istemci dağılımı öğrenir.</td><td>Servis ekler; proxy katmanı yüzünden istemci hiçbir şey öğrenmez.</td></tr>
+    <tr><td>Güvenlik</td><td>TLS ve ACL'i sen kurarsın.</td><td>Aktarımda ve diskte şifreleme her zaman açık; sadece TLS destekleyen istemciler bağlanır; kullanıcılar ve izinler (user group) servisle yönetilir.</td></tr>
+    <tr><td>Yamalar</td><td>Sen planlar ve çalıştırırsın.</td><td>Minor ve patch sürümleri "without any availability impact" uygulanır; major sürüm için bildirim gelir.</td></tr>
+    <tr><td>Yedek</td><td>Sen alır ve saklarsın.</td><td>İstersen günlük otomatik snapshot (en fazla 35 gün) ve elle snapshot; geri yükleme yeni bir cache kurar.</td></tr>
+    <tr><td>Kalıcı log</td><td>AOF (append-only file: her yazmayı diske ekleyen dosya) açabilirsin; Valkey'in belgesine göre her saniye diske yazma ayarında "you may lose 1 second of data".</td><td><b>Yok.</b> Kaybı kabul edilmeyen veri için MemoryDB ya da node'lu Valkey 9.0'ın kalıcılık özelliği (M5).</td></tr>
+    <tr><td>Komutlar, value tipleri, atomiklik</td><td colspan="2">Aynı Valkey. Bölüm A ve B'deki her şey aynı kalır; aynı istemci kütüphaneleri çalışır.</td></tr>
+  </tbody>
+</table>
+<table class="data">
+  <caption>bütün durumlar: hangi iş hangi port'a</caption>
+  <thead><tr><th>İş</th><th>Port</th><th>Neden</th></tr></thead>
+  <tbody>
+    <tr><td>Her yazma (SET, INCR, DECR, ZINCRBY)</td><td>6379</td><td>Yazma sadece primary'de olur.</td></tr>
+    <tr><td>Kendi yazmasını hemen görmesi gereken okuma (satıştan sonra stok)</td><td>6379</td><td>Primary her zaman günceldir.</td></tr>
+    <tr><td>Biraz eski olabilen yoğun okuma (liderlik tablosu ekranı)</td><td>6380</td><td>Replica'lardan, daha düşük gecikmeyle; eventually consistent.</td></tr>
+    <tr><td>6380'e bir yazma göndermek</td><td>—</td><td><b>Reddedilir</b>: okuma portu replica'lara gider ve replica yazma almaz.</td></tr>
+    <tr><td>TLS'siz bir istemciyle bağlanmak</td><td>—</td><td><b>Bağlanamaz</b>: Serverless sadece TLS destekleyen istemcileri kabul eder.</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Serverless ile node'lu cluster arasında nasıl seçerim?") %}
+<p>Yük dalgalıysa, ekip sunucu istemiyorsa ya da yeni bir cache başlıyorsa Serverless: kapasite planı yoktur, boş saatlerde neredeyse sadece veri ödenir. Yük düz ve büyükse, bir parametreyi (örneğin <code>maxmemory-policy</code>) ayarlaman gerekiyorsa ya da kalıcı log'u (Valkey 9.0) istiyorsan node'lu cluster: node tipini, shard ve replica sayısını sen seçersin. AWS'in kendi önerisi arızaya dayanıklılık (fault tolerance: bir node ya da AZ gidince servisin çalışmaya devam etmesi) için Serverless'tır: "We recommend creating serverless caches over node-based clusters, as you automatically obtain better fault tolerance without additional configuration". Bu kalıcılık (durability: onaylanan yazmanın kaybolmaması) demek değildir: Serverless'ta kalıcı log yoktur; kalıcılık için node'lu Valkey 9.0'ın kalıcılık özelliği ya da MemoryDB gerekir (A9).</p>
+{% endcall %}
+{{ k.quiz("ec-c1", "ElastiCache Serverless'ta uygulama neden shard'ları ve node'ları bilmek zorunda değildir?",
+   ["Serverless'ta shard yoktur, bütün veri tek node'dadır", "Bir proxy katmanı her komutu doğru cache node'una gönderir ve uygulama tek bir endpoint'e bağlanır", "Uygulama her komuttan önce CLUSTER KEYSLOT çalıştırır", "Serverless cluster mode'da çalışmaz"],
+   1, "Serverless cluster mode'da çalışır ve shard'ları vardır, ama proxy katmanı topolojiyi istemciden gizler; node değişince istemci yeniden keşif yapmaz.") }}
+
+<h2 id="lalemarket" data-short="Lale Market'te ElastiCache"><span class="sec">C3</span>Lale Market'te ElastiCache</h2>
+<p>Workshop'un gerçek kurulumu, canlı hesaptan salt okuma bir komutla (B1'deki CloudFormation tanımının sonucu):</p>
+{% call k.live("canlı cache, AWS CLI ile (aws elasticache describe-serverless-caches --region eu-central-1)") %}
+<pre><code>ServerlessCacheName:  dbws-cache
+Status:               available
+Engine:               valkey        FullEngineVersion: 8.1
+Endpoint:             dbws-cache-qtkvec.serverless.euc1.cache.amazonaws.com:6379
+ReaderEndpoint:       dbws-cache-qtkvec.serverless.euc1.cache.amazonaws.com:6380
+UserGroupId:          dbws-users
+SubnetIds:            subnet-06ed0385f95bae869, subnet-01dbc8de3b156a620, subnet-0dd65803ee3e86d85
+StorageEncryptionType: sse-elasticache
+SnapshotRetentionLimit: 0</code></pre>
+{% endcall %}
+<ul>
+  <li><b>Valkey 8.1</b>, Serverless. Bu sürümde field başına süre ve kalıcı log yoktur; sıralama, oturumlar ve sayaçlar kaybı kabul edilen veridir (M6).</li>
+  <li><b>Aynı adreste iki port</b>: 6379 okuma ve yazma, 6380 replica'lardan okuma. Security group ikisine de sadece ElastiCache Engine App'ten izin verir.</li>
+  <li><b>Üç subnet</b>, üç AZ: endpoint her AZ'de açılır.</li>
+  <li><b>SnapshotRetentionLimit 0</b>: otomatik snapshot yok. Sıralama Admin Console'daki Seed ile Aurora'dan yeniden kurulur.</li>
+  <li>ElastiCache Engine App private bir subnet'teki bir EC2 instance'ında çalışır, TLS ile 6379 portuna bağlanır, <code>dbws-app</code> ACL kullanıcısını ve Secrets Manager'daki parolayı kullanır ve Python'daki <code>RedisCluster</code> istemcisiyle slot'ları kendisi hesaplar. B1–B5'teki canlı cevaplar bu yoldan 1–2 milisaniyede geldi (B1'deki ilk komut hariç: yeni bir TLS bağlantısı kurulduğu için 300 milisaniye).</li>
+  <li>Mağazanın kampanya sayfasında "önce oku, sonra yaz" ve DECR yarışları ile oturum TTL deneyi, Live leaderboard sayfasında her 5 saniyede okunan sorted set vardır.</li>
+</ul>
+
+<h2 id="recall" data-short="Hatırlama testi" data-group="Sonunda">Hatırlama testi</h2>
+<p>Bölümlere geri bakmadan cevapla.</p>
+{{ k.quiz("ec-r1", "Hangi value tipi \"en çok gelir getiren 10 müşteri\"yi okuma anında sıralama yapmadan verir?",
+   ["Hash", "Sorted set", "String", "List"],
+   1, "Sorted set member'ları her yazmada score sırasıyla tutar; ZREVRANGE hazır sırayı okur.") }}
+{{ k.quiz("ec-r2", "Bir arızada ElastiCache Serverless'ta ne kaybolabilir?",
+   ["Hiçbir şey, çünkü veri birkaç AZ'dedir", "\"OK\" alınmış ama replica'lara henüz kopyalanmamış son yazmalar", "Sadece okumalar, yazmalar değil", "Sadece süresi olan key'ler"],
+   1, "Kopyalama asenkrondur ve Serverless'ta kalıcı log yoktur. Replica'lar kesintiyi kısaltır ama onaylanmış son yazmaların kaybını önlemez.") }}
+{{ k.quiz("ec-r3", "Cache-aside deseninin bedeli nedir?",
+   ["Okumalar en fazla bir TTL kadar eski veri döndürebilir", "Database'e her yazma yavaşlar", "Database her key'i iki kez saklamak zorundadır", "Cache'in her okuması bir database okumasına mal olur"],
+   0, "Kopya TTL bitene ya da uygulama onu silene kadar kalır; o zamana kadar bir okuma eski değeri döndürebilir.") }}
+{{ k.quiz("ec-r4", "İki aday arasındaki yakın bir yarışta karar kaydı neyi içermeli?",
+   ["Sadece kazananın adını", "Kazananı, karar veren gereksinimi ve cevabı değiştirecek koşulu", "İki servisin fiyat listesini", "Bütün AWS servislerinin listesini"],
+   1, "Karar veren gereksinim ve seçimi tersine çevirecek koşul, ekibe kararın ne zaman yeniden kontrol edileceğini söyler. Bellek içi store'da bu koşul çoğunlukla \"verinin kaybı kabul edilmeseydi\"dir.") }}
+{{ k.quiz("ec-r5", "MGET ile iki key'i tek komutta okumak CROSSSLOT hatası veriyor. Neden ve çözüm ne?",
+   ["Key'ler farklı hash slot'larda, aynı hash tag'i vermek", "Cache dolu, eviction politikasını değiştirmek", "Komut çok yavaş, Lua script'i yazmak", "Replica geride, 6379 portunu kullanmak"],
+   0, "Birkaç key'li bir komut sadece key'ler aynı slot'taysa çalışır. Hash tag'de sadece süslü parantezin içi hash'lenir ve key'ler aynı slot'a düşer.") }}
 
 <section class="lesson-foot">
   <h2>Daha derine in</h2>
-  <p><b>Ana kaynak:</b> <a href="https://valkey.io/topics/data-types/">Valkey data types</a>, sonra
-     <a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.corecomponents.html">How ElastiCache works</a>.</p>
-  <p><b>Mağazada kullan:</b> <a href="/free-e-commerce-app/deals">Flash deal sayfasında</a> atomik ve oku-sonra-yaz yarışı ve session TTL'i var. <a href="/free-e-commerce-app/admin/live">Live leaderboard</a> sorted set'i okur.</p>
-  <p><b>Soru sor.</b> Bir kısım net değilse eğitmenine ya da AI asistanına sor. Kendi uygulamandan bir veri parçası getir ve onun sadece bellekte yaşayıp yaşayamayacağına birlikte karar verin.</p>
+  <p><b>Ana kaynak:</b> Bölüm A ve B için <a href="https://valkey.io/topics/data-types/">Valkey data types</a>, <a href="https://valkey.io/topics/transactions/">Transactions</a>, <a href="https://valkey.io/topics/cluster-spec/">Cluster specification</a> ve <a href="https://valkey.io/topics/distlock/">Distributed locks</a>; Bölüm C için <a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.corecomponents.html">How ElastiCache works</a>, <a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/durability.html">Durability in ElastiCache</a> ve <a href="https://docs.aws.amazon.com/memorydb/latest/devguide/what-is-memorydb.html">What is MemoryDB</a>.</p>
+  <p><b>Mağazada kullan:</b> <a href="/free-e-commerce-app/deals">Kampanya sayfası</a>nda atomik ve "önce oku, sonra yaz" yarışları ve oturum TTL'i var. <a href="/free-e-commerce-app/admin/live">Live leaderboard</a> sorted set'i okur.</p>
+  <p><b>Soru sor.</b> Bir kısım net değilse eğitmenine ya da AI asistanına sor. Kendi uygulamandan bir veri parçası getir ve birlikte M4'ün ilk sorusunu sorun: bu veri kaybolursa ne olur?</p>
 </section>
 {% endblock %}
