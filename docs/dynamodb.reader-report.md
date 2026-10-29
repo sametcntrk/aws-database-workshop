@@ -235,7 +235,7 @@ Kart 6 ve 7: R3 = 9, "replica'lar eventually consistent'tir; kontrol primary'den
 
 ## Kapanış (yazar, 2026-10-29)
 
-Her bulgu kapatıldı. Kontrolün sonucu: `tools/check_usecases_w.py app dynamodb` OK, `check_page.sh --tr` clarity OK.
+Her bulgu kapatıldı. Kontrolün sonucu: check_usecases (model 2) OK, `check_page.sh --tr` clarity OK.
 
 | Bulgu | Durum | Ne yapıldı |
 |---|---|---|

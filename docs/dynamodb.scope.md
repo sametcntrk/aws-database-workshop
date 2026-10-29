@@ -5,7 +5,7 @@ date: 2026-10-29
 
 Page: `app/engine_app/templates/e2e/dynamodb.tr.html`. Data: `DDB_W` in `app/engine_app/e2e_usecases_w.py` (model 2).
 Simulations: `weighted_scorecard()` in `app/engine_app/e2e_sims.py` (Turkish only: `w_iot`, `w_cart`, `w_seat`, `w_session`, `w_rate`).
-Card macro: `wusecase` in `templates/e2e/_macros.html`. Check: `tools/check_usecases_w.py app dynamodb` (temporary copy of the skill check for model 2).
+Card macro: `wusecase` in `templates/e2e/_macros.html`. Check: `~/.claude/skills/e2e-tech-tutorial/scripts/check_usecases.py --app app dynamodb` (model 2).
 
 Untouched: the English page `dynamodb.html` (model 1 data `DDB_USECASES` + `e2e_usecases_en.py`, sims `race_*`, `win_iot`, `lose_rate`), and the Turkish pages of Aurora, Keyspaces, DocumentDB and ElastiCache (model 1). Their rendered HTML equals `main` except the UI label dictionary, which has new keys.
 
@@ -60,5 +60,5 @@ Facts carried over from model 1 (400 KB item, 100-item transactions, Streams 24 
 
 ## Open after acceptance
 
-- Move the model 2 rules into the skill (SKILL.md rules 5–7, `references/decisions.md`, `scripts/check_usecases.py`, `simkit.py`) and add the catalog-design questions for a new domain.
+- Done 2026-10-29: model 2 rules, catalog questions, checker, macro and the example are in the skill.
 - Regenerate the other Turkish pages (Aurora, Keyspaces, DocumentDB, ElastiCache) and wave 2 in model 2.
