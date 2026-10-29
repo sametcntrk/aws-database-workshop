@@ -1109,6 +1109,7 @@ def ddb_decision(lang, key):
 
 
 from . import e2e_usecases as _uc
+from . import e2e_usecases_w as _ucw
 
 
 def usecase_scorecard(lang, uc):
@@ -1121,8 +1122,97 @@ def usecase_scorecard(lang, uc):
     return decide_score(lang, {"workload": uc["story"], "cands": names, "reqs": reqs, "gap": uc["verdict"], "pivot": None}, scale=10)
 
 
+def _wrow_name(lang, r):
+    """'R1.2 · TA Tutarlılık ve atomiklik' for an R1 sub-item, 'R2 Ölçek ve trafik şekli' for R2-R5."""
+    if r["code"] in _ucw.R1_CATALOG:
+        return f"{r['label']} · {r['code']} {T(lang, *_ucw.R1_CATALOG[r['code']][0])}"
+    return f"{r['label']} {T(lang, *_ucw.R_REST[r['code']])}"
+
+
+def _pts(p, w):
+    return _ucw.fmt(p * w / 10)
+
+
+def weighted_scorecard(lang, uc):
+    """The M7 simulation of a weighted use case card (model 2): the same rows, weights, points and reasons as the card.
+    Each step opens one row: its weight and why, then each candidate's points and weighted contribution."""
+    cands = [SVC[c] for c in uc["cands"]]
+    rows = uc["rows"]
+    labels = [r["label"] for r in rows]
+    cols = [T(lang, "candidate", "aday")] + labels + [T(lang, "points /100", "puan /100"), T(lang, "place", "sıra")]
+    board = [[c] + [""] * len(rows) + ["0", ""] for c in cands]
+    total = {c: 0.0 for c in uc["cands"]}
+    rules = T(lang, "Rules: every row has a weight from the priorities of this workload (sum 100). Each candidate gets 0-10 points per row; "
+                    "contribution = points x weight / 10. There is no disqualification: a weak candidate loses on the total.",
+              "Kurallar: her satırın bu iş yükünün önceliğinden gelen bir ağırlığı var (toplam 100). Her aday her satırda 0-10 puan alır; "
+              "katkı = puan x ağırlık / 10. Diskalifiye yoktur: zayıf aday toplamda kaybeder.")
+    steps = [{"say": T(lang, "Workload. ", "İş yükü. ") + T(lang, *uc["story"]) + "\n" + rules + "\n" + T(lang, "Weights: ", "Ağırlıklar: ") + T(lang, *uc["wnote"]),
+              "marks": {}, "rows": {"board": deepcopy(board)}, "out": [], "count": {T(lang, "rows scored", "puanlanan satır"): f"0 / {len(rows)}", T(lang, "weight opened", "açılan ağırlık"): "0 / 100"}}]
+    opened = 0
+    for i, r in enumerate(rows):
+        opened += r["w"]
+        detail = []
+        for k, c in enumerate(uc["cands"]):
+            p, why = uc["scores"][c][i]
+            total[c] += p * r["w"] / 10
+            board[k][i + 1] = f"{p}→{_pts(p, r['w'])}"
+            board[k][-2] = _ucw.fmt(total[c])
+            detail.append([cands[k], f"{p}/10 → {_pts(p, r['w'])}", T(lang, *why)])
+        say = (f"{_wrow_name(lang, r)} · " + T(lang, f"weight {r['w']}", f"ağırlık {r['w']}") + "\n"
+               + T(lang, "Why this weight: ", "Neden bu ağırlık: ") + T(lang, *r["wwhy"]) + "\n"
+               + T(lang, "What we need: ", "Ne istiyoruz: ") + T(lang, *r["want"]))
+        best = max(total.values())
+        steps.append({"say": say, "marks": {"board": {k: ("match" if total[c] == best else "") for k, c in enumerate(uc["cands"])}, "req": {i: "read"}},
+                      "rows": {"board": deepcopy(board)}, "out": detail,
+                      "outmarks": {k: ("match" if uc["scores"][c][i][0] >= 8 else "bad" if uc["scores"][c][i][0] <= 3 else "") for k, c in enumerate(uc["cands"])},
+                      "count": {T(lang, "rows scored", "puanlanan satır"): f"{i + 1} / {len(rows)}", T(lang, "weight opened", "açılan ağırlık"): f"{opened} / 100"}})
+    order = sorted(uc["cands"], key=lambda c: -total[c])
+    for k, c in enumerate(uc["cands"]):
+        board[k][-1] = str(order.index(c) + 1)
+    gap = round(total[order[0]] - total[order[1]], 1)
+    res = T(lang, f"Result. The best fit for this workload is {SVC[order[0]]} with {_ucw.fmt(total[order[0]])} points; second {SVC[order[1]]} with {_ucw.fmt(total[order[1]])}.",
+            f"Sonuç. Bu iş yüküne en uygun servis {_ucw.fmt(total[order[0]])} puanla {SVC[order[0]]}; ikinci {_ucw.fmt(total[order[1]])} puanla {SVC[order[1]]}.")
+    res += " " + (T(lang, f"The gap is {_ucw.fmt(gap)} points: a close race.", f"Fark {_ucw.fmt(gap)} puan: yakın bir yarış.") if gap <= _ucw.RACE_GAP
+                  else T(lang, f"The gap is {_ucw.fmt(gap)} points.", f"Fark {_ucw.fmt(gap)} puan."))
+    res += "\n" + T(lang, *uc["verdict"])
+    steps.append({"say": res, "marks": {"board": {k: ("new" if c == order[0] else "match" if c == order[1] else "") for k, c in enumerate(uc["cands"])}},
+                  "rows": {"board": deepcopy(board)}, "out": [[SVC[c], _ucw.fmt(total[c]), str(n + 1)] for n, c in enumerate(order)], "outmarks": {0: "new"},
+                  "count": {T(lang, "rows scored", "puanlanan satır"): f"{len(rows)} / {len(rows)}", T(lang, "weight opened", "açılan ağırlık"): "100 / 100"}})
+    return {"kind": "score",
+            "tables": [{"id": "req", "name": T(lang, "rows and weights", "satırlar ve ağırlıklar"), "cols": ["id", T(lang, "weight", "ağırlık"), T(lang, "what is scored", "ne puanlanır")],
+                        "rows": [[r["label"], r["w"], _wrow_name(lang, r).split(" ", 1)[1].lstrip("· ")] for r in rows], "key": [0], "ref": []},
+                       {"id": "board", "name": T(lang, "scorecard: points → contribution", "puan tablosu: puan → katkı"), "cols": cols,
+                        "rows": [[c] + [""] * len(rows) + ["0", ""] for c in cands], "key": [0], "ref": []}],
+            "out": {"name": T(lang, "this row for each candidate (at the end: the ranking)", "bu satır her aday için (sonda: sıralama)"),
+                    "cols": [T(lang, "candidate", "aday"), T(lang, "points → contribution", "puan → katkı"), T(lang, "reason (at the end: place)", "gerekçe (sonda: sıra)")]},
+            "steps": steps}
+
+
+def _wusecases(eid, lang):
+    """The M2 cards of a page that uses the weighted model (e2e_usecases_w)."""
+    page = _ucw.PAGE_SVC.get(eid)
+    L = lambda t: T(lang, *t)  # noqa: E731
+    out = []
+    for uc in _ucw.USECASES_W[eid]:
+        rows = [{"label": r["label"], "name": _wrow_name(lang, r), "r1": r["code"] in _ucw.R1_CATALOG, "w": r["w"], "wwhy": L(r["wwhy"]),
+                 "want": L(r["want"]), "why": L(r["why"])} for r in uc["rows"]]
+        cands = []
+        for c in uc["cands"]:
+            cells = [{"pts": p, "contrib": _pts(p, r["w"]), "why": L(w)} for (p, w), r in zip(uc["scores"][c], uc["rows"])]
+            cands.append({"key": c, "name": SVC[c], "cat": L(_uc.CATEGORY[c]), "link": _uc.LINK[c], "cells": cells, "total": _ucw.fmt(uc["total"][c]),
+                          "total_num": uc["total"][c], "page": c == page, "h2h": L(uc["h2h"][c]) if c in uc["h2h"] else None,
+                          "r1": _ucw.fmt(sum(p * r["w"] / 10 for (p, _), r in zip(uc["scores"][c], uc["rows"]) if r["code"] in _ucw.R1_CATALOG))})
+        t = sorted(uc["total"].values(), reverse=True)
+        out.append({"id": uc["id"], "no": uc["no"], "sim": uc["sim"], "title": L(uc["title"]), "key": L(uc["key"]), "story": L(uc["story"]),
+                    "wnote": L(uc["wnote"]), "rows": rows, "r1w": sum(r["w"] for r in uc["rows"] if r["code"] in _ucw.R1_CATALOG),
+                    "cands": cands, "best": cands[0], "race": t[0] - t[1] <= _ucw.RACE_GAP, "gap": _ucw.fmt(t[0] - t[1]), "verdict": L(uc["verdict"]), "weighted": True})
+    return out
+
+
 def usecases(eid, lang):
     """The M2 cards of a page, localized: the same data as the simulations."""
+    if lang == "tr" and eid in _ucw.USECASES_W:
+        return _wusecases(eid, lang)
     out = []
     for uc in _uc.USECASES.get(eid, []):
         L = lambda t: T(lang, *t)  # noqa: E731
@@ -1168,6 +1258,7 @@ def dynamodb(lang):
     spec = {
         **{k: ddb_decision(lang, k) for k in DDB_DECISIONS},
         **{uc["sim"]: usecase_scorecard(lang, uc) for uc in _uc.DDB_USECASES if uc["sim"]},
+        **({uc["sim"]: weighted_scorecard(lang, uc) for uc in _ucw.DDB_W if uc["sim"]} if lang == "tr" else {}),
         "hash": ddb_hash(lang), "queryscan": ddb_query_scan(lang), "condition": ddb_condition(lang), "gsi": ddb_gsi(lang),
     }
     for v in spec.values():          # key color language: pk yellow, sk blue
