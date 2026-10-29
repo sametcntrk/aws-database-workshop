@@ -1204,7 +1204,7 @@ def _wusecases(eid, lang):
                           "r1": _ucw.fmt(sum(p * r["w"] / 10 for (p, _), r in zip(uc["scores"][c], uc["rows"]) if r["code"] in _ucw.R1_CATALOG))})
         t = sorted(uc["total"].values(), reverse=True)
         out.append({"id": uc["id"], "no": uc["no"], "sim": uc["sim"], "title": L(uc["title"]), "key": L(uc["key"]), "story": L(uc["story"]),
-                    "wnote": L(uc["wnote"]), "rows": rows, "r1w": sum(r["w"] for r in uc["rows"] if r["code"] in _ucw.R1_CATALOG),
+                    "wnote": L(uc["wnote"]), "rows": rows, "r1n": sum(1 for r in rows if r["r1"]), "r1w": sum(r["w"] for r in uc["rows"] if r["code"] in _ucw.R1_CATALOG),
                     "cands": cands, "best": cands[0], "race": t[0] - t[1] <= _ucw.RACE_GAP, "gap": _ucw.fmt(t[0] - t[1]), "verdict": L(uc["verdict"]), "weighted": True})
     return out
 
