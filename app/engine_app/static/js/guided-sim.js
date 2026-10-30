@@ -899,6 +899,57 @@
     return { html, lanes: { fan: fr }, paint, final: showSum };
   }
 
+  /* ---------- join: orders → order_items → products, each step a lookup by key; then GROUP BY builds one row per order.
+   * spec.orders [{order_id, visitor_id, order_date, total}], spec.items [{order_id, product_id, qty}], spec.products
+   * [{product_id, name}], spec.visitor. One lane. */
+  function join(spec) {
+    const DB = spec.engine_label || "Aurora PostgreSQL", V = spec.visitor;
+    const fr = [{ say: START, hit: {}, out: [] }];
+    let s = { ...fr[0] };
+    const mine = spec.orders.filter((o) => o.visitor_id === V);
+    s = { ...s, hit: { orders: mine.map((o) => o.order_id) }, say: `WHERE visitor_id = '${V}': orders tablosunda visitor_id index'iyle senin siparişlerin bulundu (${mine.length} satır). Diğer satırlara bakılmadı.` };
+    fr.push(s);
+    const rows = [];
+    mine.forEach((o) => {
+      const its = spec.items.filter((i) => i.order_id === o.order_id);
+      s = { ...s, hit: { ...s.hit, items: [...(s.hit.items || []), ...its.map((i) => `${i.order_id}|${i.product_id}`)] }, cur: o.order_id,
+        say: `JOIN order_items USING (order_id): ${o.order_id} için kalemler birincil anahtarın başından (order_id) doğrudan bulundu: ${its.length} kalem.` };
+      fr.push(s);
+      its.forEach((i) => rows.push({ ...o, ...i, name: (spec.products.find((p) => p.product_id === i.product_id) || {}).name }));
+      s = { ...s, hit: { ...s.hit, products: [...new Set([...(s.hit.products || []), ...its.map((i) => i.product_id)])] },
+        say: `JOIN products USING (product_id): her kalemin ürün adı products tablosundan birincil anahtarla alındı.` };
+      fr.push(s);
+    });
+    const grouped = mine.map((o) => ({ order_id: o.order_id, order_date: o.order_date, total: o.total,
+      lines: rows.filter((r) => r.order_id === o.order_id).length, products: rows.filter((r) => r.order_id === o.order_id).map((r) => r.name).join(", ") }))
+      .sort((p, q) => String(q.order_date).localeCompare(String(p.order_date)));
+    fr.push({ ...s, cur: null, out: grouped, done: true, say: `GROUP BY order_id: her sipariş tek satıra indi; kalem sayısı count, ürün adları string_agg ile birleştirildi. ORDER BY order_date DESC: en yeni üstte.` });
+    const lanes = { join: actorize(fr, spec.send || "Uygulama tek bir SELECT gönderiyor.", spec.back || "Uygulama satırları tarayıcıya gönderdi.", DB, { hit: {} }) };
+    const t = (name, cols, list, keyf) => `<div class="gs-tx-t"><b>${esc(name)}</b><table class="gs-table" data-tb="${name}"><thead><tr>${cols.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>
+      ${list.map((r) => `<tr data-k="${esc(keyf(r))}">${cols.map((c) => `<td>${esc(r[c])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+    const body = `<div class="gs-jtables">${t("orders", ["order_id", "visitor_id", "order_date", "total"], spec.orders, (r) => r.order_id)}
+      ${t("order_items", ["order_id", "product_id", "qty"], spec.items, (r) => `${r.order_id}|${r.product_id}`)}
+      ${t("products", ["product_id", "name"], spec.products, (r) => r.product_id)}</div>
+      <div class="gs-tx-t"><b>Sonuç</b><table class="gs-table gs-join-out"><thead><tr><th>order_id</th><th>order_date</th><th>total</th><th>lines</th><th>products</th></tr></thead><tbody></tbody></table></div>`;
+    const html = `${actorBar(DB)}<div class="gs-lanes one">${shell("join", spec.title || "Üç tablo, bir SELECT", body, { count: "Bulunan satır", result: false, col: true })}</div>${summary(spec.summary || "")}`;
+    function paint(root, id, f) {
+      const L = laneOf(root, id), h = f.hit || {};
+      L.querySelector(".gs-count b").textContent = (h.orders || []).length + (h.items || []).length + (h.products || []).length;
+      L.classList.toggle("done", !!f.done);
+      ["orders", "order_items", "products"].forEach((tb) => {
+        const keys = h[tb === "order_items" ? "items" : tb] || [];
+        L.querySelectorAll(`table[data-tb="${tb}"] tbody tr`).forEach((tr) => {
+          tr.classList.toggle("hit", keys.includes(tr.dataset.k));
+          tr.classList.toggle("active", tb === "orders" && f.cur === tr.dataset.k);
+          tr.classList.toggle("dimrow", Object.keys(h).length > 0 && !keys.includes(tr.dataset.k));
+        });
+      });
+      L.querySelector(".gs-join-out tbody").innerHTML = (f.out || []).map((r) => `<tr class="hit"><td>${esc(r.order_id)}</td><td>${esc(r.order_date)}</td><td>${esc(r.total)}</td><td>${r.lines}</td><td>${esc(r.products)}</td></tr>`).join("") || '<tr><td colspan="5" class="empty">henüz boş</td></tr>';
+      sayWho(L, f);
+    }
+    return { html, lanes, paint, final: showSum };
+  }
+
   /* ---------- Who works in a frame (owner rule: work of the app is never credited to the database).
    * actorize(frames, send, back, db): after START the app sends, every middle frame is the database's (unless it names
    * its own `who`), the last frame is the app sending the answer on. actorBar(db) is the bar above the lanes;
@@ -918,7 +969,7 @@
     root.querySelectorAll(".gs-actors [data-a]").forEach((x) => x.classList.toggle("on", ws.includes(x.dataset.a)));
   }
 
-  const KINDS = { fanout, txn, spread, replicas, "ddb-items": ddbItems, projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
+  const KINDS = { join, fanout, txn, spread, replicas, "ddb-items": ddbItems, projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
 
   function render(box, spec) {
     const kind = KINDS[spec.kind];

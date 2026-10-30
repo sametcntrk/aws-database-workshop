@@ -5602,14 +5602,232 @@ steps:
   - page: orders
     path: /orders
     engines: [aurora]
-    use_case: JOIN on related tables
-    title: Your orders come from three tables
-    why: orders, order_items and products are separate tables. One SELECT with JOINs builds the list.
-    do: Look at the lit list of your orders.
+    use_case: İlişkili tabloları birleştirme (JOIN)
+    title: Siparişlerin üç tablodan gelir
+    why: >-
+      Siparişlerim sayfasındasın. Her satırda bir sipariş, tarihi, durumu, içindeki ürünler ve toplamı görünüyor. Bu adımda
+      tıklama yok, sadece bakacaksın.
+    do: Aydınlık sipariş listesine bak. Sonra kartın altındaki butonla perde arkasını aç.
     target: "#orders"
     action: look
     wait: {method: GET, path: /aurora/api/orders}
-    result: The query joins on order_id and product_id. Each join is a lookup by a primary key index.
+    result: The query joins on order_id and product_id.
+    panel:
+      need: >-
+        Bir siparişin bilgisi tek yerde durmaz: siparişin kendisi (tarih, durum, toplam), içindeki kalemler (hangi üründen kaç
+        tane) ve ürünün adı ayrı ayrı tutulur. Sayfa bunları tek bir listede birleştirmeli. Her bilgiyi tek yerde tutup gerekince
+        birleştirmek, aynı bilgiyi her yere kopyalamaktan daha az hata demektir.
+      concept:
+        term: Tablolar, anahtarlar ve JOIN
+        text: >-
+          İlişkisel bir veritabanında her bilgi türü kendi tablosunda durur: orders, order_items, products. Tablolar
+          anahtarlarla birbirine bağlanır: bir kalem hangi siparişe ait (order_id) ve hangi ürün (product_id). JOIN, bu
+          anahtarları takip ederek satırları birleştirir; bir kütüphanede fiş numarasından ödünç kaydına, oradan kitabın
+          kartına gitmek gibi. Her adım bir index'le doğrudan yapılır.
+        terms:
+          - [Birincil anahtar (primary key), "Bir satırı benzersiz tanıtan sütun. orders için order_id, products için product_id."]
+          - [Yabancı anahtar (foreign key), "Başka bir tablonun anahtarını gösteren sütun. order_items.product_id → products."]
+          - [JOIN, "İki tablonun satırlarını ortak bir anahtar üzerinden birleştirmek."]
+          - [GROUP BY, "Satırları bir sütuna göre gruplayıp her grup için tek satır üretmek (count, string_agg)."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde sipariş tabloları için hazırlık
+        intro: >-
+          Siparişlerim sayfası hiç açılmadan, tablolar, anahtarlar ve index'ler bu sayfanın sorusuna göre kurulur. Aşağıdaki
+          beş adım bu hazırlığın sırasıdır.
+        text:
+          - title: Önce veri modeli kurulur
+            text: >-
+              Her bilgi bir kez ve kendi tablosunda tutulur (normalizasyon): sipariş başlığı orders'ta, kalemler order_items'ta,
+              ürün adı products'ta. Ürünün adı değişirse tek yerde değişir.
+            code: |-
+              orders(order_id PK, customer_id FK, visitor_id, order_date, status, total)
+              order_items(order_id FK, product_id FK, qty, unit_price, PRIMARY KEY (order_id, product_id))
+              products(product_id PK, name, category, price, stock)
+          - title: İlişkiler veritabanına yazılır
+            text: >-
+              Yabancı anahtarlar (REFERENCES) olmayan bir siparişe kalem eklenmesini ya da var olmayan bir ürünün satılmasını
+              engeller. Sipariş silinirse kalemleri de silinir (ON DELETE CASCADE).
+          - title: Sayfanın sorusuna index kurulur
+            text: >-
+              "Bu ziyaretçinin siparişleri" sorusu için orders(visitor_id) üzerinde bir index kurulur; JOIN'ler birincil
+              anahtarların index'lerini kullanır. Index olmasaydı her sayfa açılışında bütün orders tablosu taranırdı.
+            code: |-
+              CREATE INDEX ON orders (visitor_id);
+              CREATE INDEX ON orders (customer_id);
+          - title: Plan kontrol edilir
+            text: >-
+              EXPLAIN ANALYZE ile sorgunun hangi index'leri kullandığı ve kaç satır okuduğu görülür (Adım 32). Tablo büyüdükçe
+              plan yeniden kontrol edilir.
+            code: |-
+              EXPLAIN ANALYZE SELECT … FROM orders o JOIN order_items oi USING (order_id) … WHERE o.visitor_id = $1 …;
+          - title: Okumalar okuma ucuna gider
+            text: >-
+              Liste ve rapor gibi sadece okuyan sorgular Aurora'nın okuma ucuna (reader endpoint) gönderilir; yazma ucu
+              siparişlere kalır. Okuma kopyaları depolamayı paylaştığı için gecikmeleri genelde milisaniyeler düzeyindedir.
+      feed:
+        title: Veri nereden geliyor?
+        writes: Uygulama, ödeme adımında (sipariş ve kalemler); durum değişiklikleri sipariş takip sisteminden.
+        reads: Uygulama, siparişlerim sayfası ve sipariş detayı için.
+        kind: >-
+          Uygulama orkestrasyonu. Aurora siparişin asıl kaydıdır; değişikliklerini zero-ETL ile analiz deposuna (Redshift)
+          kendisi aktarır.
+        with: >-
+          Sipariş listesi tek veritabanından gelir; ama aynı sipariş başka yerlerde kopya olarak durur: Redshift'te rapor için,
+          Keyspaces'te alışveriş geçmişinde, Neptune'da önerilerde. Asıl ve doğru olan Aurora'daki kayıttır.
+        best: >-
+          İşlemsel veri (sipariş) normalize tablolarda ve tek veritabanında tutulur; okuma yükü okuma ucuna, analiz yükü ayrı bir
+          analiz deposuna (zero-ETL) verilir. Böylece rapor sorguları siparişleri yavaşlatmaz.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              Bir önceki adımda bir sipariş verdin. Şimdi "Orders" (siparişlerim) sayfasını açtın. Açılırken oturumun güncellendi.
+            engines: [elasticache]
+          - text: >-
+              Sayfa siparişlerini istedi; uygulama Aurora'ya tek bir SELECT gönderdi. Bu SELECT üç tabloyu anahtarlarıyla
+              birleştirip her sipariş için tek bir satır üretti. Simülasyon bu SELECT'i adım adım gösteriyor.
+            engines: [aurora]
+          - text: >-
+              Liste çizildi: sipariş numarası, tarih, durum ("processing"), ürün adları ve toplam. Hiç siparişin yoksa liste boş
+              görünür.
+            engines: [aurora]
+      sim:
+        kind: join
+        title: Üç tablo, bir SELECT
+        caption: >-
+          Üç tablodan küçük bir kesit (satırlar örnek; numaralar kısaltıldı). Senin ziyaretçi kimliğin 7f3a…; iki siparişin
+          var, biri iki kalemli. Başka bir ziyaretçinin siparişi de tabloda ama sorgu ona hiç bakmıyor.
+        visitor: 7f3a…
+        orders:
+          - {order_id: W1793396741, visitor_id: 7f3a…, order_date: "2026-10-31 10:25", total: 10890.26}
+          - {order_id: W1793390012, visitor_id: c41e…, order_date: "2026-10-31 08:40", total: 1299.90}
+          - {order_id: W1793380550, visitor_id: 7f3a…, order_date: "2026-10-30 22:10", total: 951.92}
+        items:
+          - {order_id: W1793396741, product_id: P0001, qty: 1}
+          - {order_id: W1793396741, product_id: P0131, qty: 2}
+          - {order_id: W1793390012, product_id: P0021, qty: 1}
+          - {order_id: W1793380550, product_id: P0066, qty: 1}
+        products:
+          - {product_id: P0001, name: Alpen Kablosuz Kulaklık 1}
+          - {product_id: P0021, name: Bosphorus Akıllı Saat 21}
+          - {product_id: P0066, name: Rhein Powerbank 66}
+          - {product_id: P0131, name: Kapadokya Mekanik Klavye 131}
+        send: >-
+          "Orders" sayfasını açtın. Tarayıcın siparişlerini istedi; uygulama Aurora'ya tek bir SELECT gönderiyor (üç tablo,
+          JOIN, GROUP BY).
+        back: >-
+          Uygulama satırları tarayıcına gönderdi; tarihi biçimleyip tabloyu çizecek.
+        summary: >-
+          Üç tablo, tek bir SELECT. Her adım bir anahtarla doğrudan yapıldı: ziyaretçiden siparişlere, siparişten kalemlere,
+          kalemden ürüne. Sonunda GROUP BY her siparişi tek satıra indirdi.
+      wire:
+        what: >-
+          Uygulama bu istek için Aurora'ya yeni bir bağlantı açar (psycopg kütüphanesi) ve tek bir SELECT gönderir.
+        dst: "dbws-aurora.cluster-ccgs3qxfidad.eu-central-1.rds.amazonaws.com : 5432"
+        dst_note: >-
+          Aurora cluster'ının yazma adresi. Bu okuma okuma ucuna (cluster-ro) da gönderilebilirdi; uygulama tek bir adres
+          kullanıyor. Cluster internete kapalı veri alt ağında duruyor.
+        rows:
+          - [Şifreleme, "TLS (sslmode=require)", gerçek, Bağlantı şifrelenmeden kurulmaz.]
+          - [Protokol, PostgreSQL wire protokolü, gerçek, "SQL metni ve parametreleri ayrı mesajlar olarak gider."]
+          - [Kimlik, "Kullanıcı adı + şifre, bağlantı açılırken", gerçek, "Şifre kodda yazmaz; uygulama onu AWS Secrets Manager'dan alır."]
+        body_label: Gönderilen SQL
+        body: |-
+          SELECT o.order_id, o.order_date, o.status, o.total, count(oi.*) AS lines, string_agg(p.name, ', ') AS products
+          FROM orders o JOIN order_items oi USING (order_id) JOIN products p USING (product_id)
+          WHERE o.visitor_id = $1
+          GROUP BY o.order_id ORDER BY o.order_date DESC LIMIT 20;      -- $1 = '7f3a…'
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Birleştirmeyi
+        veritabanı yapar; uygulama sadece sonucu sayfaya uygun biçime getirir.
+      app_code:
+        - file: engines/aurora.py
+          func: api_orders
+          title: Siparişlerim isteği
+          sub: Sayfa açılırken gelen istek.
+          lines:
+            - {match: '@bp.get("/api/orders")', say: "Siparişlerim isteği buraya gelir.", tag: Tarayıcı → Uygulama}
+            - {match: 'q = """SELECT o.order_id', say: "SQL'i hazırlar: üç tablo, JOIN, ziyaretçiye göre filtre, siparişe göre gruplama.", tag: Uygulamanın içinde}
+            - {match: 'with conn() as c, c.cursor() as cur:', say: "Aurora'ya bir bağlantı açar.", tag: [Uygulama → Aurora, Aurora → Uygulama]}
+            - {match: 'sql(cur, "SELECT (JOIN)", q, {"vid": visitor_id()}', say: "SELECT'i ziyaretçi kimliğiyle gönderir; birleştirmeyi Aurora yapar.", tag: [Uygulama → Aurora, Aurora → Uygulama]}
+            - {match: 'rows = [dict(zip(cols, r)) for r in cur.fetchall()]', say: "Gelen satırları sütun adlarıyla eşleştirir.", tag: Uygulamanın içinde}
+            - {match: 'return jsonify(trace.payload([{**r, "order_date": r["order_date"].isoformat()', say: "Tarihi ve toplamı JSON'a uygun biçime çevirip tarayıcıya gönderir.", tag: Uygulama → Tarayıcı}
+      live:
+        title: Gerçek veritabanında ne oldu?
+        intro: Sayfa açılırken Aurora'ya giden gerçek SELECT.
+        runs:
+          - label: Siparişlerim (sayfa açılınca)
+            trigger: true
+            metrics: [[Dönen sipariş satırı, items], [Süre, ms]]
+        reading: >-
+          Dönen satır sayısı senin sipariş sayın (en fazla 20). Hiç sipariş vermediysen 0'dır; Adım 25'te sipariş verdiysen en az
+          1. Süre birkaç milisaniye ile birkaç on milisaniye arasında değişir; bağlantı her istekte yeniden açıldığı için ilk
+          komut daha uzun sürebilir.
+      query:
+        title: Uygulama Aurora'ya ne dedi?
+        intro: >-
+          Tek bir SQL komutu, parça parça. Bir parçanın üzerine gelince cümlede, kodda ve açıklamada aynı yer parlar.
+        cards_title: Parça parça
+        parts:
+          - id: sel
+            say: Her sipariş için numarasını, tarihini, durumunu, toplamını, kalem sayısını ve ürün adlarını getir;
+            code: "SELECT o.order_id, o.order_date, o.status, o.total, count(oi.*) AS lines, string_agg(p.name, ', ') AS products"
+            name: Ne getirilsin?
+            note: count kalemleri sayar, string_agg ürün adlarını virgülle birleştirir; ikisi de grup başına çalışır.
+            hl: app
+          - id: frm
+            say: siparişleri kalemleriyle sipariş numarasından, kalemleri ürünlerle ürün numarasından birleştir;
+            code: "FROM orders o JOIN order_items oi USING (order_id) JOIN products p USING (product_id)"
+            name: Nereden?
+            note: USING (order_id), "iki tabloda aynı adlı sütun eşit olsun" demek. Her JOIN bir anahtar araması.
+            hl: app
+          - id: whr
+            say: sadece bu ziyaretçinin siparişlerini al;
+            code: "WHERE o.visitor_id = $1"
+            name: Hangileri?
+            note: orders(visitor_id) index'i sayesinde sadece senin siparişlerin okunur.
+            hl: app
+          - id: grp
+            say: her siparişi tek satıra indir, en yenisi üstte, en fazla 20.
+            code: "GROUP BY o.order_id ORDER BY o.order_date DESC LIMIT 20"
+            name: Nasıl?
+            note: Kalem başına çıkan satırlar sipariş başına toplanır; liste tarihe göre yeniden eskiye sıralanır.
+            hl: app
+        columns:
+          - label: Siparişlerim
+            sub: Sayfa açılırken giden komut.
+            via: Uygulama bu komutu psycopg kütüphanesinin cursor.execute() metoduyla, ziyaretçi kimliğini parametre olarak gönderir.
+            parts: [sel, frm, whr, grp]
+        note: >-
+          Dikkat: komutta "önce şunu bul, sonra şuna git" diye bir sıra yok. Ne istendiği yazılır; hangi sırayla ve hangi
+          index'le yapılacağına PostgreSQL'in planlayıcısı karar verir (Adım 32).
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          Aurora'nın işi satırları verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: Aurora → Uygulama
+            text: "{items} satır geldi; her biri bir sipariş, ürün adları birleştirilmiş."
+          - who: Uygulama
+            text: Tarihi ISO biçimine, toplamı sayıya çevirdi.
+          - who: Uygulama → Tarayıcın
+            text: Siparişleri ve isteğin kaydını tek bir JSON cevabında gönderdi.
+          - who: Tarayıcın
+            text: Tarihi Türkçe biçimde, toplamı lira olarak yazıp tabloyu çizdi.
+          - who: Sonra
+            text: >-
+              Aynı siparişler birkaç saniye içinde Redshift'e de kopyalandı; raporlar sayfasında onları şehre göre toplayacaksın
+              (Adım 29–31).
+      remember: >-
+        Her bilgiyi bir kez, kendi tablosunda tut ve gerekince anahtarlarla birleştir (JOIN). Neyi istediğini yaz; nasıl
+        yapılacağına veritabanının planlayıcısı karar verir.
+      why_db: >-
+        Neden Aurora PostgreSQL? Siparişler, kalemler ve ürünler arasındaki ilişkiler ve bunları tek komutta birleştirmek
+        ilişkisel veritabanının temel işidir. Bedeli: çok büyük analiz sorguları burada değil, ayrı bir analiz deposunda çalışır.
 
   # ---------------------------------------------------------------- Activity: Keyspaces
   - page: activity
