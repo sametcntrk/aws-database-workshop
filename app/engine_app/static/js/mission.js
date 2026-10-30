@@ -2,7 +2,7 @@
  *
  * The page goes dark. Only the control of the current step stays lit and accepts input. A small coach card next to it says
  * what to do. A step with a `panel` has its "Perde arkası" in its own browser tab (perde.js): the click on the lit control
- * opens /guided-e-commerce-app/perde-arkasi/<n> (the click is the user gesture a new tab needs), and when the page makes
+ * opens /guided-e-commerce-app/perde-arkasi/<n> in the one tab named "perde-arkasi" (the click is the user gesture a tab needs), and when the page makes
  * the expected Engine call this tab writes the call to localStorage "lm_perde_<n>" for that tab. A "look" step has no click:
  * its card offers a button. A step with no `panel` shows its `result` text in the small card.
  * Step fields: page, path, engines, use_case, title, why, do, target (CSS selector of the control),
@@ -85,7 +85,7 @@
 
   /* ---------- The "Perde arkası" tab of the step */
   const tabUrl = (fresh) => `${BASE}/perde-arkasi/${st.i + 1}${fresh ? `?t=${Date.now()}` : ""}`;
-  const openTab = (fresh) => { tabOpen = !!window.open(tabUrl(fresh), `perde-${st.i + 1}`); };   // one tab per step; the same step reuses it
+  const openTab = (fresh) => { tabOpen = !!window.open(tabUrl(fresh), "perde-arkasi"); };   // one tab for the whole mission: each step loads into it
   function handOver() {                                         // what the tab needs: the call of the lit part and the page's calls
     try {
       const slim = (c) => c && { method: c.method, path: c.path, query: c.query, body: c.body, ok: c.ok, data: c.data, entries: c.entries, ms: c.ms, label: c.label };
@@ -113,9 +113,9 @@
   }
   function tabBox() {
     return `<div class="coach-bts coach-tab"><b>Perde arkası</b><p>${tabOpen
-      ? "Bu adımın perde arkası yeni bir sekmede açıldı: simülasyon, gerçek ölçümler, komutun açıklaması ve isteğin yolu orada. Okuduktan sonra bu sekmeye dön ve İleri'ye bas."
-      : "Bu adımın perde arkası yeni bir sekmede açılır: simülasyon, gerçek ölçümler, komutun açıklaması ve isteğin yolu. Okuduktan sonra bu sekmeye dön ve İleri'ye bas."}</p>
-      <button type="button" class="coach-tab-btn" data-c="tab">${tabOpen ? "Perde arkası sekmesine git" : "Perde arkasını yeni sekmede aç"} ↗</button></div>`;
+      ? "Bu adımın perde arkası \"Perde arkası\" sekmesinde açıldı: simülasyon, gerçek ölçümler, komutun açıklaması ve isteğin yolu orada. Okuduktan sonra bu sekmeye dön ve İleri'ye bas."
+      : "Bu adımın perde arkası ayrı bir \"Perde arkası\" sekmesinde açılır (bütün adımlar aynı sekmeyi kullanır): simülasyon, gerçek ölçümler, komutun açıklaması ve isteğin yolu. Okuduktan sonra bu sekmeye dön ve İleri'ye bas."}</p>
+      <button type="button" class="coach-tab-btn" data-c="tab">${tabOpen ? "Perde arkası sekmesine git" : "Perde arkasını aç"} ↗</button></div>`;
   }
   function renderCard() {
     card.innerHTML = `<header><span>${chips()}${step.use_case ? `<em>${esc(step.use_case)}</em>` : ""}</span><small>${st.i + 1} / ${steps.length}</small></header>
