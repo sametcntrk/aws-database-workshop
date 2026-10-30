@@ -430,6 +430,67 @@
     return { html, lanes: { kv: fr }, paint, final: showSum };
   }
 
+  /* ---------- nested-filter: a filter on a field inside the document (attributes.renk). Left: the real plan, an index on
+   * { category, rating } narrows to the category and every document of it is read to test the nested field. Right: an
+   * index that also holds the nested field goes straight to the matching entries. */
+  function nestedFilter(spec) {
+    const rows = spec.rows, want = spec.value, DB = spec.engine_label || "DocumentDB", L = spec.labels || {};
+    const byRating = [...rows].sort((a, b) => b.rating - a.rating || a.id.localeCompare(b.id));
+    const byNested = [...rows].sort((a, b) => a.renk.localeCompare(b.renk, "tr") || b.rating - a.rating || a.id.localeCompare(b.id));
+    const start = { say: START, active: null, read: [], hit: [], miss: [], result: [], entry: null, range: false };
+    const now = [start];
+    let s = { ...start, range: true, say: `Index ${spec.index_now} ile "${spec.category}" bölümüne gidildi. Bu index renk bilmiyor: bölümdeki her doküman okunup renge bakılacak.` };
+    now.push(s);
+    byRating.forEach((r) => {
+      const ok = r.renk === want;
+      s = { ...s, active: r.id, entry: byRating.indexOf(r), read: [...s.read, r.id], hit: ok ? [...s.hit, r.id] : s.hit, miss: ok ? s.miss : [...s.miss, r.id],
+        result: ok ? [...s.result, r.id] : s.result,
+        say: `${r.name} okundu. Dokümanın içinde attributes.renk = ${r.renk}. ${ok ? "✓ Eşleşti, sonuca girdi." : "✗ Eşleşmedi, boşuna okundu."}` };
+      now.push(s);
+    });
+    now.push({ ...s, active: null, entry: null, done: true, say: `Bitti. ${rows.length} doküman okundu, ${s.result.length} tanesi sonuca girdi. Sonuç zaten puan sırasında.` });
+    const better = [start];
+    let b = { ...start, range: true, say: `Index ${spec.index_better} ile doğrudan "${spec.category} · ${want}" bölümüne gidildi. Renk index'in içinde olduğu için başka renge bakılmayacak.` };
+    better.push(b);
+    byNested.filter((r) => r.renk === want).forEach((r) => {
+      b = { ...b, active: r.id, entry: byNested.indexOf(r), read: [...b.read, r.id], hit: [...b.hit, r.id], result: [...b.result, r.id],
+        say: `Index ${r.name} kaydını gösterdi; doküman okundu ve doğrudan sonuca girdi.` };
+      better.push(b);
+    });
+    better.push({ ...b, active: null, entry: null, done: true, say: `Bitti. ${b.read.length} doküman okundu, ${b.read.length}'ü de sonuca girdi.` });
+    const lanes = {
+      now: actorize(now, spec.send_now || "Uygulama find komutunu gönderiyor: kategori ve iç içe renk alanı, puana göre sıralı.", spec.back_now || "Uygulama dokümanları tarayıcıya gönderdi.", DB, { active: null }),
+      better: actorize(better, spec.send_better || "Olsaydı: aynı komut, ama veritabanında üç alanlı bir index olsaydı.", spec.back_better || "Uygulama aynı listeyi tarayıcıya gönderirdi.", DB, { active: null }),
+    };
+    const idxList = (list, withNested, label, hl) => `<div class="gs-index" data-hl="${hl}"><div class="gs-index-cap">Index ${esc(label)}</div><ol>${list.map((r, k) =>
+      `<li data-k="${k}" data-v="${esc(r.renk)}"><span>${esc(spec.category)}</span>${withNested ? `<span>${esc(r.renk)}</span>` : ""}<span>${esc(r.rating)}</span><span>→ ${esc(r.id)}</span></li>`).join("")}</ol></div>`;
+    const table = `<table class="gs-table" data-hl="table"><thead><tr><th>Ürün no</th><th>Ürün</th><th data-hl="nested">attributes.renk</th><th data-hl="sort">Puan</th><th class="gs-mark"></th></tr></thead><tbody>
+      ${byRating.map((r) => `<tr data-id="${esc(r.id)}"><td>${esc(r.id)}</td><td>${esc(r.name)}</td><td data-hl="nested"><code>${esc(r.renk)}</code></td><td data-hl="sort">${esc(r.rating)}</td><td class="gs-mark"></td></tr>`).join("")}</tbody></table>`;
+    const lane = (id, title, list, nested, label, hl) => shell(id, title, idxList(list, nested, label, hl) + table, { hl: id, count: "Okunan doküman", result: spec.result_title || "Sonuç (puan sırasında)", col: true });
+    const html = `${actorBar(DB)}<div class="gs-lanes">${lane("now", L.now || "Gerçek plan", byRating, false, spec.index_now, "index")}${lane("better", L.better || "Olsaydı: üç alanlı index", byNested, true, spec.index_better, "index2")}</div>${summary(spec.summary || "")}`;
+    function paint(root, id, f) {
+      const Ln = laneOf(root, id), list = id === "now" ? byRating : byNested;
+      Ln.querySelector(".gs-count b").textContent = (f.read || []).length;
+      Ln.classList.toggle("done", !!f.done);
+      Ln.querySelectorAll("tbody tr").forEach((tr) => {
+        const x = tr.dataset.id;
+        tr.classList.toggle("active", f.active === x);
+        tr.classList.toggle("read", (f.read || []).includes(x));
+        tr.classList.toggle("hit", (f.hit || []).includes(x));
+        tr.classList.toggle("miss", (f.miss || []).includes(x));
+        tr.querySelector(".gs-mark").textContent = (f.hit || []).includes(x) ? "✓" : (f.miss || []).includes(x) ? "✗" : "";
+      });
+      Ln.querySelectorAll(".gs-index li").forEach((li) => {
+        const k = Number(li.dataset.k);
+        li.classList.toggle("range", !!f.range && (id === "now" || li.dataset.v === want));
+        li.classList.toggle("active", f.entry === k);
+      });
+      chips(Ln, (f.result || []).map((x) => { const r = rows.find((y) => y.id === x); return `<li>${esc(r.name)} <small>${esc(r.rating)}</small></li>`; }));
+      sayWho(Ln, f);
+    }
+    return { html, lanes, paint, final: showSum };
+  }
+
   /* ---------- Who works in a frame (owner rule: work of the app is never credited to the database).
    * actorize(frames, send, back, db): after START the app sends, every middle frame is the database's (unless it names
    * its own `who`), the last frame is the app sending the answer on. actorBar(db) is the bar above the lanes;
@@ -449,7 +510,7 @@
     root.querySelectorAll(".gs-actors [data-a]").forEach((x) => x.classList.toggle("on", ws.includes(x.dataset.a)));
   }
 
-  const KINDS = { kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
+  const KINDS = { "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
 
   function render(box, spec) {
     const kind = KINDS[spec.kind];

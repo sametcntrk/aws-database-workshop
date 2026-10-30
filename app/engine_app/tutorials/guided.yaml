@@ -858,16 +858,286 @@ steps:
   - page: category
     path: /c/Elektronik
     engines: [docdb]
-    use_case: Query a nested field
-    title: Filter on a field inside the document
+    use_case: İç içe alanla filtreleme
+    title: Dokümanın içindeki bir alanla filtrele
     why: >-
-      The colour is inside a nested object, attributes.renk. DocumentDB can filter on it with dot notation, and an index on attributes.renk keeps the filter fast.
-    do: Select a colour in the lit list.
+      Elektronik kategorisindesin. Ürünlerin rengi, her ürünün kendi özellikleri arasında saklanıyor. Şimdi listeyi bir
+      renge göre daraltacaksın ve veritabanının bu iç içe bilgiye nasıl ulaştığını göreceksin.
+    do: Aydınlık "Colour" (renk) listesinden bir renk seç, örneğin siyah.
     target: "#color"
     action: change
     wait: {method: GET, path: /docdb/api/products, query: {color: "*"}}
     focus: "#products"
-    result: The filter is now {category, "attributes.renk"}. In a relational model, optional attributes like this often need a separate table.
+    result: The filter is now {category, "attributes.renk"}.
+    panel:
+      need: >-
+        Ürünlerin ortak alanları (ad, kategori, fiyat, puan) her dokümanda aynı yerde duruyor. Renk, garanti süresi, ağırlık
+        gibi ürüne göre değişen bilgiler ise dokümanın içinde attributes adlı ayrı bir bölümde. Sayfa şimdi "Elektronik ve
+        rengi siyah olanlar, puanı yüksek olan önce" istiyor; yani filtrenin dokümanın içine bakması gerekiyor.
+      concept:
+        term: İç içe alan ve nokta gösterimi (dot notation)
+        text: >-
+          Bir doküman, içinde başka bir küçük doküman taşıyabilir: attributes: { renk: "siyah", garanti_ay: 36 }. Buna iç içe
+          (nested) alan denir. İçteki alana adresiyle ulaşılır: "attributes.renk", tıpkı bir dosyanın klasör yolu gibi. Filtre,
+          index ve sıralama bu adresle yazılır; veriyi ayrı bir tabloya bölmeye gerek yoktur.
+        terms:
+          - ["attributes.renk", "attributes bölümünün içindeki renk alanının adresi. Nokta, \"içindeki\" demek."]
+          - [Bileşik index, "Birden fazla alanı birlikte tutan index. Alanların sırası önemlidir."]
+          - [explain, "Veritabanına \"bu sorguyu nasıl çalıştırdın, kaç doküman okudun?\" diye sormak."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde iç içe alanlar için hazırlık
+        intro: >-
+          Renk listesi hiç kullanılmadan, dokümanın şekli ve bu filtrenin index'i hazırlanır. Aşağıdaki beş adım bu hazırlığın
+          sırasıdır.
+        text:
+          - title: Önce sayfanın sorusu yazılır
+            text: >-
+              Kategori sayfasının ikinci sorusu: "bu kategori, şu renk, puanı yüksek olan önce, en fazla 48". Renk listesinin
+              kendisi de bir sorudur: "bu kategoride hangi renkler var?".
+            code: |-
+              db.products.find({ category: "Elektronik", "attributes.renk": "siyah" }).sort({ rating: -1 }).limit(48)
+              db.products.distinct("attributes.renk", { category: "Elektronik" })
+          - title: Değişken özellikler bir bölümde toplanır
+            text: >-
+              Her üründe olan alanlar üst seviyede, ürüne göre değişenler attributes altında durur. Böylece yeni bir özellik
+              eklemek şema değişikliği gerektirmez; sadece yeni dokümanlar o alanı taşır.
+            code: |-
+              { _id: "P0021", category: "Elektronik", rating: 4.8, …,
+                attributes: { renk: "siyah", garanti_ay: 36, agirlik_kg: 5.1 } }
+          - title: Sık sorulan birleşim için bileşik index kurulur
+            text: >-
+              Alan sırası kuralı (ESR): eşitlik alanları önce (category, attributes.renk), sıralama alanı sonra (rating). Bu
+              index'le veritabanı doğrudan "Elektronik · siyah" bölümüne gider ve okuduğu her doküman sonuca girer.
+            code: |-
+              db.products.createIndex({ category: 1, "attributes.renk": 1, rating: -1 })
+          - title: Plan explain ile kontrol edilir
+            text: >-
+              Veritabanı her sorgu için genelde tek bir index seçer. Sadece { "attributes.renk": 1 } index'i varsa, sıralamayı
+              da karşılayan { category: 1, rating: -1 } seçilebilir ve renk okunduktan sonra elenir. explain'de okunan doküman
+              sayısı dönen sayıdan büyükse index eksiktir.
+            code: |-
+              ….explain("executionStats")  →  totalDocsExamined: 40, nReturned: 9   (index eksik)
+          - title: Çok çeşitli özellikler için tek bir dizi kullanılır
+            text: >-
+              Ürün türü arttıkça özellik sayısı yüzlere çıkar ve her biri için index kurmak imkânsızlaşır. O zaman özellikler
+              { k, v } çiftlerinden oluşan bir diziye yazılır ve tek bir index hepsini karşılar.
+            code: |-
+              attrs: [ { k: "renk", v: "siyah" }, { k: "garanti_ay", v: 36 } ]
+              db.products.createIndex({ "attrs.k": 1, "attrs.v": 1 })
+      feed:
+        title: Veri nereden geliyor?
+        writes: >-
+          Katalog yönetimi: ürün ekleyen ve özelliklerini güncelleyen arka ofis ekranları ya da tedarikçi dosyalarını aktaran
+          bir iş. Tedarikçi yeni bir özellik gönderdiğinde (ör. "su geçirmez") doküman o alanı kendisi taşır.
+        reads: Uygulama, kategori ve ürün sayfaları için.
+        kind: >-
+          Uygulama orkestrasyonu. DocumentDB başka bir veritabanından kendiliğinden veri çekmez. Kendi değişikliklerini ise
+          change streams ile dışarı verebilir.
+        with: >-
+          Kategori sayfası tek bir veritabanıyla çalışmaz: ürün görselleri nesne deposundan (S3, büyük sistemlerde bir CDN ile)
+          gelir, oturum bellekte (ElastiCache) tutulur. Çok sayıda özellikle aynı anda filtreleme ve her filtrenin yanında
+          sayılar (facet) gerekiyorsa bu iş bir arama motoruna (OpenSearch) verilir.
+        best: >-
+          Katalog tek yerde tutulur, arama motoru oradan beslenir (DocumentDB'nin OpenSearch ile zero-ETL entegrasyonu ya da
+          change streams). Basit ve sık kullanılan filtreler DocumentDB'de index'le; çok boyutlu filtre ve facet'ler arama
+          motorunda çalışır.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              Elektronik kategorisindesin. Sayfa yeniden açıldığı için "Use the index" yine seçili. Açılırken oturumun
+              güncellendi ve 40 ürün DocumentDB'den, görselleri S3'ten geldi.
+            engines: [elasticache, docdb, s3]
+          - text: >-
+              Renk listesindeki seçenekler de aynı istekte geldi: uygulama DocumentDB'ye "bu kategoride hangi renkler var?"
+              diye ikinci bir komut (distinct) gönderdi.
+            engines: [docdb]
+          - text: >-
+              Listeden bir renk seçtin (ör. siyah). Tarayıcın aynı listeyi bu kez color=siyah ile istedi; uygulama filtreye
+              "attributes.renk" = siyah ekleyip find komutunu gönderdi. Simülasyonun sol şeridi bu istek.
+            engines: [docdb]
+          - text: >-
+              Liste daraldı ve kartlar yeniden çizildi; görseller büyük olasılıkla tarayıcının önbelleğinden geldi. Sağ şerit,
+              aynı komutun daha iyi bir index'le nasıl çalışacağını gösteriyor; o index bu katalogda yok.
+            engines: [docdb]
+      sim:
+        kind: nested-filter
+        caption: >-
+          Elektronik kategorisinden 8 ürünlük gerçek bir kesit, puan sırasında. Renk her dokümanın attributes bölümünde. Solda
+          bu katalogdaki gerçek plan, sağda üç alanlı bir index olsaydı ne olurdu. İki şerit aynı komutu çalıştırıyor; fark
+          sadece index'te. Üstteki etiketler o anda işi kimin yaptığını gösterir.
+        category: Elektronik
+        value: siyah
+        index_now: "{ category: 1, rating: -1 }"
+        index_better: '{ category: 1, "attributes.renk": 1, rating: -1 }'
+        labels:
+          now: "t0 · Senin seçimin · Gerçek plan: kategori index'i + renk filtresi"
+          better: "Olsaydı · Aynı komut · Üç alanlı index"
+        send_now: >-
+          Renk listesinden siyahı seçtin. Tarayıcın listeyi color=siyah ile istedi; uygulama find komutunu gönderiyor:
+          category = Elektronik ve attributes.renk = siyah, puana göre sıralı.
+        back_now: >-
+          Uygulama siyah ürünleri tarayıcına gönderdi; tarayıcın kartları yeniden çizecek.
+        send_better: >-
+          Olsaydı: uygulama aynı komutu gönderirdi; değişen tek şey veritabanındaki index olurdu.
+        back_better: >-
+          Uygulama aynı listeyi tarayıcına gönderirdi; kullanıcı farkı görmez, veritabanı daha az okur.
+        rows:
+          - {id: P0001, name: Alpen Kablosuz Kulaklık 1, rating: 4.8, renk: siyah}
+          - {id: P0021, name: Bosphorus Akıllı Saat 21, rating: 4.8, renk: siyah}
+          - {id: P0121, name: Toros Bluetooth Hoparlör 121, rating: 4.8, renk: beyaz}
+          - {id: P0141, name: Anadolu Mekanik Klavye 141, rating: 4.5, renk: beyaz}
+          - {id: P0166, name: Anadolu Akıllı Saat 166, rating: 4.3, renk: siyah}
+          - {id: P0071, name: Toros Akıllı Saat 71, rating: 4.2, renk: gri}
+          - {id: P0016, name: Nordwind Powerbank 16, rating: 3.7, renk: gri}
+          - {id: P0096, name: Bosphorus Mekanik Klavye 96, rating: 3.5, renk: beyaz}
+        summary: >-
+          Sonuç iki şeritte de aynı: 3 siyah ürün, puan sırasında. Solda 8 doküman okundu, 5'i boşuna; sağda sadece 3. Gerçek
+          katalogda soldaki plan Elektronik'in 40 dokümanını okur ve 9 siyah ürün döndürür.
+      wire:
+        what: >-
+          Uygulama, DocumentDB'ye açık tuttuğu bağlantılar üzerinden komutu gönderir (pymongo kütüphanesi).
+        dst: "dbws-docdb.cluster-ccgs3qxfidad.eu-central-1.docdb.amazonaws.com : 27017"
+        dst_note: >-
+          DocumentDB cluster'ının adresi. Okuma tercihi "secondaryPreferred" olduğu için bu okuma replica'ya gider.
+        rows:
+          - [Şifreleme, TLS, gerçek, DocumentDB'nin sertifikası AWS'nin sertifika dosyasıyla kontrol edilir.]
+          - [Protokol, MongoDB wire protokolü (OP_MSG), gerçek, "MongoDB sürücülerinin konuştuğu ikili dil. DocumentDB bu dili anlar."]
+          - [Kimlik, "Kullanıcı adı + şifre, bağlantı açılırken", gerçek, "Şifre kodda yazmaz; uygulama onu çalışırken AWS Secrets Manager'dan alır."]
+        body_label: Çerçevenin içeriği (okunur hâle getirilmiş)
+        body: |-
+          OP_MSG   veritabanı: shop
+          { find: "products",
+            filter: { category: "Elektronik", "attributes.renk": "siyah" },
+            projection: { name: 1, price: 1, rating: 1, category: 1, brand: 1, tags: 1, stock: 1 },
+            sort: { rating: -1 },
+            limit: 48,
+            $readPreference: { mode: "secondaryPreferred" } }
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Mor etiketli
+        satırda bir şey bir yerden bir yere gider; gri "Uygulamanın içinde" etiketli satırda iş uygulamanın kendi içinde
+        yapılır. Adım 3'teki kodun aynısı; bu kez renk satırı çalışıyor.
+      app_code:
+        - file: engines/docdb.py
+          func: api_products
+          title: Kategori listesi, renk filtresiyle
+          sub: Renk seçince gelen istek.
+          lines:
+            - {match: '@bp.get("/api/products")', say: "Ürün listesi isteği buraya gelir; adres color=siyah taşır.", tag: Tarayıcı → Uygulama}
+            - {match: 'color = request.args.get("color")', say: Adresteki rengi okur., tag: Uygulamanın içinde}
+            - {match: 'flt = {"category": cat} if cat else {}', say: "Filtreye kategoriyi koyar.", tag: Uygulamanın içinde, hl: table}
+            - {match: 'flt["attributes.renk"] = color', say: "Renk seçildiyse filtreye iç içe alanı ekler: attributes.renk = siyah.", tag: Uygulamanın içinde, hl: nested}
+            - {match: 'items = [_doc(d) for d in cur]', say: "Komut gönderilir, eşleşen dokümanlar gelir.", tag: [Uygulama → DocumentDB, DocumentDB → Uygulama], hl: result}
+            - {match: 'plan = db().command("explain", find, verbosity="executionStats")', say: "Aynı sorgu explain ile bir kez daha gider: kaç doküman okunduğunu ve hangi index'in seçildiğini öğrenir.", tag: [Uygulama → DocumentDB, DocumentDB → Uygulama]}
+            - {match: 'colors = db().products.distinct(', say: "Renk listesi için üçüncü bir komut: bu kategorideki renkler.", tag: [Uygulama → DocumentDB, DocumentDB → Uygulama]}
+            - {match: 'return jsonify(trace.payload({"items": items, "colors": sorted(colors)}))', say: Ürünler ve renkler tek bir cevapta tarayıcıya gider., tag: Uygulama → Tarayıcı}
+      live:
+        title: Gerçek katalogda ne oldu?
+        intro: >-
+          Senin renk seçiminle DocumentDB'ye giden gerçek istek. Sayılar explain'in cevabından geliyor.
+        runs:
+          - label: Senin seçimin (kategori + renk)
+            trigger: true
+        metrics: [[Okunan doküman, examined], [Dönen doküman, returned], [Süre, ms]]
+        stages_cap: "DocumentDB'nin yaptığı işler, sırasıyla:"
+        stages:
+          IXSCAN: "Index'te arama: { category, rating } index'iyle Elektronik bölümüne gider; renk filtresini okuduğu dokümanlara uygular."
+          LIMIT_SKIP: "Sınır: sonuçtan en fazla 48 dokümanı alır."
+        reading: >-
+          DocumentDB Elektronik'in 40 dokümanını okudu ve seçtiğin renkteki ürünleri döndürdü (her renkte birkaç ürün var).
+          Okunan sayı dönen sayıdan büyük: renk index'te olmadığı için her doküman açılıp renge bakıldı. Bu katalogda
+          { "attributes.renk": 1 } index'i de var, ama DocumentDB sıralamayı da karşılayan kategori index'ini seçti. Süre her
+          istekte biraz değişir.
+      query:
+        title: Sayfa DocumentDB'ye ne dedi?
+        intro: >-
+          Simülasyonun iki şeridi aynı komutu çalıştırıyor; fark index'te. Bu yüzden burada tek bir sütun var. Bir parçanın
+          üzerine gelince cümlede, kodda ve açıklamada aynı yer parlar.
+        cards_title: Parça parça
+        parts:
+          - id: coll
+            say: products koleksiyonundaki
+            code: db.products.find(
+            name: Nereden?
+            note: "products, ürünlerin durduğu koleksiyon. find, \"bul ve getir\" demek."
+            hl: table
+          - id: cat
+            say: kategorisi Elektronik olan
+            code: '{ category: "Elektronik",'
+            name: Hangileri?
+            note: Üst seviyedeki category alanıyla eşitlik filtresi.
+            hl: index
+            indent: 2
+          - id: nest
+            say: ve attributes bölümündeki rengi siyah olan ürünleri
+            code: '  "attributes.renk": "siyah" },'
+            name: Hangileri? (iç içe)
+            note: >-
+              Nokta gösterimi: attributes bölümünün içindeki renk alanı. Tırnak içinde yazılır, çünkü adın içinde nokta var.
+              Filtre dokümanın içine bakar.
+            hl: nested
+            indent: 2
+          - id: proj
+            say: sadece kart bilgileriyle,
+            code: "{ name: 1, price: 1, rating: 1, category: 1, brand: 1, tags: 1, stock: 1 } )"
+            name: Hangi bilgiler?
+            note: Projection. Kartta görünen alanlar gelir; attributes gelmez, çünkü kart rengi göstermiyor.
+            hl: table
+            indent: 2
+          - id: srt
+            say: puanı en yüksek olan önce
+            code: ".sort({ rating: -1 })"
+            name: Hangi sırayla?
+            note: Puana göre büyükten küçüğe. { category, rating } index'i bu sırayı hazır tuttuğu için ayrı bir sıralama yapılmaz.
+            hl: sort
+          - id: lim
+            say: en fazla 48 tane getir.
+            code: ".limit(48)"
+            name: Kaç tane?
+            note: Sayfa en fazla 48 ürün gösteriyor.
+            hl: result
+        columns:
+          - label: Kategori + renk
+            sub: Senin renk seçiminle giden komut.
+            via: >-
+              Uygulama bu komutu pymongo kütüphanesinin find() metoduyla gönderir; filtreye renk satırını ekleyen uygulamadır.
+            parts: [coll, cat, nest, proj, srt, lim]
+            mark: [nest]
+        note: >-
+          Dikkat: komutta index adı yok ve iç içe alan için özel bir şey yazılmıyor; sadece adresi ("attributes.renk").
+          Hangi index'in kullanılacağına DocumentDB karar verir. Komut aynı kalsa da index değişince okunan doküman sayısı
+          değişir.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          DocumentDB'nin işi dokümanları verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: DocumentDB → Uygulama
+            text: "{items} doküman geldi; ardından explain'in cevabı ve bu kategorideki renk listesi geldi."
+          - who: Uygulama
+            text: Her dokümanın _id alanının adını product_id yaptı ve renkleri alfabetik sıraladı.
+          - who: Uygulama → Tarayıcın
+            text: Ürünleri, renk listesini ve isteğin kaydını tek bir JSON cevabında gönderdi.
+          - who: Tarayıcın
+            text: Kartları yeniden çizdi; renk listesindeki seçimin yerinde kaldı.
+          - who: Tarayıcın → S3
+            text: >-
+              Kartların görsellerini ürün numarasından kurduğu adreslerle istedi; az önce görülen görseller büyük olasılıkla
+              önbellekten geldi. Kartta bilgiyi (DocumentDB) görselle (S3) birleştiren tarayıcıdır.
+          - who: Sonra
+            text: >-
+              "All" (hepsi) seçersen renk satırı filtreden çıkar ve 40 ürünün hepsi geri gelir.
+      remember: >-
+        Dokümanın içindeki bir alanı adresiyle sorgularsın: "attributes.renk". Hızlı olması için o alan, sık birlikte sorulan
+        alanlarla aynı bileşik index'te olmalı; explain'de okunan sayı dönen sayıya yaklaşmalı.
+      why_db: >-
+        Neden DocumentDB? Ürünlerin özellikleri türden türe değişiyor; DocumentDB onları dokümanın içinde, ayrı tablo
+        açmadan saklar ve iç içe alanlarda filtre ve index sunar. Bedeli: çok sayıda farklı özellikle birlikte filtreleme ve
+        sayılar (facet) gerekiyorsa bir arama motoru daha uygundur.
 
   # ---------------------------------------------------------------- Search: OpenSearch
   - page: search
