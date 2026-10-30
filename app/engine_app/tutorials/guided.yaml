@@ -1452,17 +1452,273 @@ steps:
   - page: search
     path: /search?q=kulaklk
     engines: [opensearch]
-    use_case: Typo tolerance
-    title: Fuzziness accepts a typo
+    use_case: Yazım hatası toleransı
+    title: Fuzziness bir yazım hatasını kabul eder
     why: >-
-      "kulaklk" has a missing letter. With fuzziness AUTO, OpenSearch also matches words that are one or two edits away.
-      An edit is one added, removed or changed letter.
-    do: Click the lit button "Exact words".
+      Arama kutusunda "kulaklk" yazıyor: bir harf eksik, hızlı yazan birinin yapacağı türden. Yine de kulaklıklar listelendi.
+      Şimdi bu toleransı kapatıp ne değiştiğine bakacaksın.
+    do: Aydınlık "Exact words" (sadece birebir kelimeler) butonuna tıkla.
     target: "#exp-fuzzy [data-value=off]"
     action: click
     wait: {method: GET, path: /opensearch/api/search, query: {fuzzy: "off", q: kulaklk}}
     focus: "#hits"
-    result: The match query has no "fuzziness" now, so the typo finds no product. Fuzziness costs more work, but it saves the search of a shopper who types fast.
+    result: The match query has no "fuzziness" now, so the typo finds no product.
+    panel:
+      need: >-
+        Ziyaretçiler hızlı yazar ve harf atlar: "kulaklk", "kablosz". Arama bunlara "sonuç yok" derse ziyaretçi alışverişi
+        bırakabilir. Aramanın bir iki harf farkı tolere etmesi, ama ilgisiz kelimeleri de getirmemesi gerekiyor.
+      concept:
+        term: Fuzziness ve düzenleme mesafesi (edit distance)
+        text: >-
+          İki kelime arasındaki düzenleme mesafesi, birini diğerine çevirmek için gereken en az harf ekleme, silme ya da
+          değiştirme sayısıdır. "kulaklk" ile "kulaklik" arasında mesafe 1: bir "i" eklemek yeter. Fuzziness açıkken arama motoru
+          index'teki terimlerden mesafesi küçük olanları da eşleşme sayar; bir öğretmenin küçük yazım hatasını görüp anlamı
+          kabul etmesi gibi. Bulanık eşleşme, birebir eşleşmeden daha düşük puan alır.
+        terms:
+          - [Düzenleme mesafesi, "Bir kelimeyi diğerine çeviren en az harf ekleme, silme ya da değiştirme sayısı."]
+          - [fuzziness AUTO, "1–2 harfli kelimede 0, 3–5 harflide 1, daha uzunda 2 harf farkı kabul eder."]
+          - [Token, "Analyzer'ın ürettiği tek kelime. \"kulaklk\" tek bir token."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde yazım hatası toleransı için hazırlık
+        intro: >-
+          Arama kutusu hiç kullanılmadan, aramanın hatalara ne kadar esnek olacağı ve bunun bedeli belirlenir. Aşağıdaki beş adım
+          bu hazırlığın sırasıdır.
+        text:
+          - title: Önce ziyaretçinin nasıl yazdığı belirlenir
+            text: >-
+              Gerçek arama kayıtları incelenir: harf atlama, harf yer değiştirme, Türkçe harf yazmama. Türkçe harf sorunu
+              analyzer'la (Adım 5), harf atlama ve yer değiştirme fuzziness ile çözülür.
+          - title: Tolerans ölçülü açılır
+            text: >-
+              fuzziness AUTO kelime uzunluğuna göre 0–2 harf farkı kabul eder. prefix_length ilk harflerin birebir tutmasını
+              ister; hem yanlış eşleşmeyi hem işi azaltır. max_expansions denenecek benzer terim sayısını sınırlar.
+            code: |-
+              "multi_match": { "query": "kulaklk", "fields": ["name^3", "description"],
+                               "fuzziness": "AUTO", "prefix_length": 1, "max_expansions": 50 }
+          - title: Bedeli ölçülür
+            text: >-
+              Bulanık arama, index'te benzer terimleri tek tek dener; büyük bir index'te birebir aramadan belirgin şekilde
+              pahalıdır. Arama süresi (took) ve yük izlenir; gerekirse fuzziness sadece birebir arama sonuç vermediğinde
+              ikinci bir denemede açılır.
+          - title: Sık hatalar için eş anlamlı listesi tutulur
+            text: >-
+              Hep aynı şekilde yanlış yazılan ya da farklı adlandırılan kelimeler (ör. "kulaklık" ↔ "headset") bir synonym
+              filtresine yazılır; bunlar fuzziness'e bırakılmaz.
+            code: |-
+              "filter": { "tr_syn": { "type": "synonym", "synonyms": ["kulaklik, headset", "powerbank, tasinabilir sarj"] } }
+          - title: Sonuçsuz aramalar izlenir
+            text: >-
+              "Sonuç yok" dönen aramalar kaydedilir ve düzenli okunur. Sık görülenler synonym listesine eklenir ya da "Bunu mu
+              demek istediniz?" önerisi (suggester) gösterilir.
+      feed:
+        title: Veri nereden geliyor?
+        writes: >-
+          Arama index'ine kullanıcı yazmaz. Ürünlerin asıl kaydı katalog veritabanındadır; arama motoru ondan beslenir.
+        reads: Uygulama, arama sayfası ve arama kutusunun öneri listesi için.
+        kind: >-
+          OpenSearch başka bir veritabanından kendiliğinden veri çekmez; birinin onu beslemesi gerekir (Amazon OpenSearch
+          Ingestion ya da kataloğun değişikliklerini okuyan bir program).
+        with: >-
+          Sonuç kartlarının görselleri nesne deposundan (S3) gelir; ürünün asıl kaydı katalogdadır (DocumentDB). Sonuçsuz
+          aramaların kaydı çoğu zaman bir olay akışına ya da analiz deposuna yazılır.
+        best: >-
+          Katalog tek yerde tutulur ve arama index'i ondan otomatik beslenir (DocumentDB'nin OpenSearch ile zero-ETL
+          entegrasyonu). Synonym listesi de kod gibi sürümlenir; değişince index ayarları güncellenir.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              Arama sayfası "kulaklk" aramasıyla açıldı: bir harfi eksik bir arama. Açılırken oturumun güncellendi.
+            engines: [elasticache]
+          - text: >-
+              Sayfa açılırken tarayıcın aramayı gönderdi; uygulama OpenSearch'e fuzziness AUTO ile sordu ("Fuzziness AUTO"
+              seçiliydi). Simülasyonun sol şeridi bu istek.
+            engines: [opensearch]
+          - text: >-
+              5 kulaklık listelendi; kart görselleri S3'ten geldi. Skorlar düşüktü, çünkü eşleşme birebir değil bulanıktı.
+            engines: [opensearch, s3]
+          - text: >-
+              Sonra "Exact words" butonuna bastın. Tarayıcın aynı aramayı fuzzy=off ile istedi; uygulama sorgudan fuzziness'i
+              çıkardı. Simülasyonun sağ şeridi bu istek. Hiç ürün gelmedi.
+            engines: [opensearch]
+      sim:
+        kind: inverted-index
+        caption: >-
+          Ürün adlarının ters index'inden küçük bir kesit (ad alanı, tr_folded). İki şerit iki ayrı gerçek istek: soldaki sayfa
+          açılırken fuzziness ile, sağdaki senin tıklamanla fuzziness'siz gitti. Skorlar gerçek sonuçlardan.
+        docs:
+          - {id: P0136, name: Bosphorus Kablosuz Kulaklık 136}
+          - {id: P0081, name: Kapadokya Kablosuz Kulaklık 81}
+          - {id: P0031, name: Alpen Kablosuz Kulaklık 31}
+          - {id: P0001, name: Alpen Kablosuz Kulaklık 1}
+          - {id: P0196, name: Nordwind Kablosuz Kulaklık 196}
+          - {id: P0141, name: Anadolu Mekanik Klavye 141}
+        lanes:
+          - id: fuzzy
+            title: "t-1 · İstek 1 · Sayfa açılınca · Fuzziness AUTO"
+            field: name
+            terms:
+              - [kablosuz, [P0136, P0081, P0031, P0001, P0196]]
+              - [klavye, [P0141]]
+              - [kulaklik, [P0136, P0081, P0031, P0001, P0196]]
+              - [mekanik, [P0141]]
+            tokens: [kulaklk]
+            send: >-
+              Arama sayfası "kulaklk" ile açıldı. Tarayıcın aramayı istedi; uygulama OpenSearch'e fuzziness AUTO ile
+              multi_match gönderiyor.
+            analyze_say: Sorgu tr_folded analyzer'ından geçti; tek token var - kulaklk. Bu terim index'te birebir yok.
+            lookups:
+              - {token: kulaklk, term: kulaklik, fuzzy: true, say: '"kulaklk" 7 harfli; AUTO 2 harf farkına izin veriyor. "kulaklik" terimi 1 harf uzakta (bir "i" eksik): eşleşme sayıldı. "klavye" çok uzak, sayılmadı.'}
+            scores: [[P0136, 3.99], [P0081, 3.68], [P0031, 3.54], [P0001, 3.34], [P0196, 3.34]]
+            score_say: 5 kulaklık bulundu; bulanık eşleşme olduğu için skorlar birebir aramadakinden düşük.
+            back: Uygulama 5 ürünü tarayıcına gönderdi.
+          - id: exact
+            title: "t0 · İstek 2 · Senin tıklaman · Exact words"
+            field: name
+            terms:
+              - [kablosuz, [P0136, P0081, P0031, P0001, P0196]]
+              - [klavye, [P0141]]
+              - [kulaklik, [P0136, P0081, P0031, P0001, P0196]]
+              - [mekanik, [P0141]]
+            tokens: [kulaklk]
+            send: >-
+              "Exact words" butonuna bastın. Tarayıcın aynı aramayı fuzzy=off ile istedi; uygulama sorguyu fuzziness olmadan
+              gönderiyor.
+            analyze_say: Sorgu yine tek token - kulaklk.
+            lookups:
+              - {token: kulaklk, term: "", say: '"kulaklk" index''te birebir aranıyor. Böyle bir terim yok; benzerlerine bakılmıyor.'}
+            scores: []
+            score_say: Hiç ürün eşleşmedi. Sonuç boş.
+            back: Uygulama boş bir listeyi tarayıcına gönderdi; sayfada "sonuç yok" görünecek.
+        summary: >-
+          Aynı yazım hatası: fuzziness açıkken 5 ürün, kapalıyken 0. Fuzziness index'te benzer terimleri dener; bu yüzden
+          kurtarır ama birebir aramadan daha çok iş yapar ve daha düşük puan verir.
+      wire:
+        what: >-
+          Uygulama arama isteğini HTTPS ile OpenSearch'e gönderir (opensearch-py kütüphanesi). Her istek, uygulamanın IAM
+          kimliğiyle imzalanır.
+        dst: "vpc-dbws-search-shmosucy37orsjafn7t226ewjm.eu-central-1.es.amazonaws.com : 443"
+        dst_note: >-
+          OpenSearch domain'inin VPC içindeki adresi. Domain internete kapalı; sadece bu uygulama sunucusundan gelen bağlantıyı
+          kabul ediyor.
+        rows:
+          - [Şifreleme, TLS (HTTPS), gerçek, OpenSearch domain'i sadece şifreli bağlantı kabul eder.]
+          - [Protokol, "HTTP, POST /products/_search (JSON)", gerçek, "Arama bir web isteğidir; sorgu JSON gövdede gider."]
+          - [Kimlik, "IAM, SigV4 imzası (servis: es)", gerçek, "Şifre yok. İsteğe, geçici AWS kimliğiyle hesaplanmış bir imza eklenir."]
+        body_label: İsteğin içeriği (okunur hâle getirilmiş)
+        body: |-
+          POST /products/_search HTTP/1.1
+          Authorization: AWS4-HMAC-SHA256 Credential=…/eu-central-1/es/aws4_request, …
+
+          { "query": { "bool": { "must": [ { "multi_match": { "query": "kulaklk",
+                                                              "fields": ["name^3", "description"] } } ] } },
+            "size": 24, "aggs": { … } }
+          (fuzziness yok: "Exact words")
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. İki istek de aynı
+        kodu çalıştırır; fark tek bir satırın çalışıp çalışmaması.
+      app_code:
+        - file: engines/opensearch.py
+          func: api_search
+          title: Arama isteği (iki istekte de aynı kod)
+          sub: Adresteki fuzzy=on ya da fuzzy=off tek farkı belirler.
+          lines:
+            - {match: '@bp.get("/api/search")', say: Arama isteği buraya gelir., tag: Tarayıcı → Uygulama}
+            - {match: 'fuzzy = request.args.get("fuzzy", "on") == "on"', say: "Yazım hatası toleransı açık mı, ona bakar.", tag: Uygulamanın içinde}
+            - {match: 'match = {"multi_match":', say: "Sorguyu kurar: aranan metin, ad (3 kat önemli) ve açıklama.", tag: Uygulamanın içinde, hl: analyze}
+            - {match: 'match["multi_match"]["fuzziness"] = "AUTO"', say: "Tolerans açıksa sorguya fuzziness AUTO eklenir. \"Exact words\" seçiliyken bu satır çalışmaz.", tag: Uygulamanın içinde, hl: index}
+            - {match: 'r = client().search(index="products", body=body)', say: Sorgu OpenSearch'e gider ve cevap döner., tag: [Uygulama → OpenSearch, OpenSearch → Uygulama]}
+            - {match: 'return jsonify(trace.payload({"hits": hits, "aggs": aggs, "total":', say: "Sonuçlar (ya da boş liste) tarayıcıya gider.", tag: Uygulama → Tarayıcı}
+      live:
+        title: Gerçek index'te ne oldu?
+        intro: >-
+          Sayfa açılırken fuzziness ile giden arama ve senin tıklamanla fuzziness'siz giden arama.
+        runs:
+          - label: Fuzziness AUTO (sayfa açılınca)
+            page_call: {path: /opensearch/api/search, query: {fuzzy: "on"}}
+            metrics: [[Bulunan ürün, data.total], [Süre, ms]]
+          - label: Exact words (senin tıklaman)
+            trigger: true
+            metrics: [[Bulunan ürün, data.total], [Süre, ms]]
+        reading: >-
+          Fuzziness ile 5 kulaklık bulundu, birebir aramada hiçbiri. Süreler her istekte değişir ve sayfa açılırken giden ilk
+          arama çoğu zaman daha yavaştır; 200 ürünlük bu küçük index'te süre farkını fuzziness'e bağlamak doğru olmaz. Index
+          büyüdükçe bulanık arama daha çok terim dener ve gerçek bir fark açılır.
+      query:
+        title: Sayfa OpenSearch'e ne dedi?
+        intro: >-
+          İki sütun, simülasyondaki iki isteğin sorgusu. Tek fark bir parça. Bir parçanın üzerine gelince cümlede, kodda ve
+          açıklamada aynı yer parlar.
+        cards_title: Parça parça
+        parts:
+          - id: q
+            say: '"kulaklk" metnini'
+            code: '{ "multi_match": { "query": "kulaklk",'
+            name: Ne aranıyor?
+            note: Ziyaretçinin yazdığı metin, hatasıyla birlikte. Önce analyzer'dan geçer.
+            hl: analyze
+          - id: f
+            say: ürün adında (3 kat önemli) ve açıklamada
+            code: '    "fields": ["name^3", "description"],'
+            name: Nerede?
+            note: Ad alanındaki eşleşme skora 3 kat katkı yapar.
+            hl: index
+            indent: 2
+          - id: z
+            say: bir iki harf farkı kabul ederek ara.
+            code: '    "fuzziness": "AUTO" } }'
+            name: Ne kadar esnek?
+            note: Bu parça yoksa sadece birebir aynı terimler eşleşir. "kulaklk" ile "kulaklik" arasındaki 1 harfi kapatan bu parça.
+            hl: index
+            indent: 2
+            tag: sadece soldaki sorguda var
+          - id: e
+            say: sadece birebir aynı kelimeyle ara.
+            code: '    } }'
+            name: Ne kadar esnek?
+            note: Fuzziness yok; "kulaklk" index'te birebir aranır ve bulunamaz.
+            hl: index
+            indent: 2
+        columns:
+          - label: Fuzziness AUTO
+            sub: Sayfa açılırken giden sorgu.
+            via: Uygulama bu sorguyu opensearch-py kütüphanesinin search() metoduyla gönderir.
+            parts: [q, f, z]
+            mark: [z]
+          - label: Exact words
+            sub: Senin "Exact words" tıklamanla giden sorgu.
+            via: Aynı search() çağrısı; uygulama fuzziness parçasını eklemedi.
+            parts: [q, f, e]
+        note: >-
+          Dikkat: soldaki sorgu "hatayı düzelt" demiyor; arama metni hâlâ "kulaklk". OpenSearch metni değiştirmez, index'te
+          ona yakın terimleri arar. Yani düzeltme aramanın kendisinde değil, eşleştirmededir.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          OpenSearch'ün işi cevabı verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: OpenSearch → Uygulama
+            text: Boş bir sonuç listesi ve sıfır sayılar geldi; toplam 0.
+          - who: Uygulama
+            text: Boş listeyi sayfanın beklediği şekle çevirdi.
+          - who: Uygulama → Tarayıcın
+            text: Boş sonucu ve isteğin kaydını tek bir JSON cevabında gönderdi.
+          - who: Tarayıcın
+            text: Sonuç alanını boşalttı; kategori ve fiyat sayıları da sıfırlandı.
+          - who: Sonra
+            text: >-
+              "Fuzziness AUTO" butonuna basarsan aynı arama yine 5 kulaklık bulur. Gerçek bir mağazada bu sonuçsuz arama
+              kaydedilir ve sık görülüyorsa synonym listesine eklenir.
+      remember: >-
+        Fuzziness, index'te arama kelimesine birkaç harf yakın terimleri de eşleşme sayar. Yazım hatalarını kurtarır, ama daha
+        çok iş yapar ve daha düşük puan verir; bu yüzden ölçülü açılır.
+      why_db: >-
+        Neden OpenSearch? Yazım hatası toleransı, düzenleme mesafesiyle eşleşme ve skorla sıralama ister; OpenSearch bunları ters
+        index üzerinde hazır sunar. Bedeli: bulanık arama birebir aramadan pahalıdır ve index katalogdan beslenmelidir.
 
   - page: search
     path: /search?q=kablosuz%20kulaklik
