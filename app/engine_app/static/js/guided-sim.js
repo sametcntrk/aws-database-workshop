@@ -336,6 +336,65 @@
     return { html, lanes, paint, final: showSum };
   }
 
+  /* ---------- doc-group: an aggregation ($group) counts on the server (left); the "what if" lane ships every document
+   * to the app, which counts them itself (right). The count is what crossed the network to the app. */
+  function docGroup(spec) {
+    const rows = spec.rows, key = spec.group_by || "category", mf = spec.min_field || "price", DB = spec.engine_label || "DocumentDB";
+    const money = (v) => `₺${Number(v).toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const add = (g, r) => { const c = g[r[key]] || { n: 0, min: Infinity }; return { ...g, [r[key]]: { n: c.n + 1, min: Math.min(c.min, r[mf]) } }; };
+    const sorted = (g) => Object.keys(g).sort((x, y) => x.localeCompare(y, "tr"));
+    const start = { say: START, active: null, read: 0, groups: {}, shipped: 0, ship: [] };
+    // left: the database groups while it reads
+    const srv = [start];
+    let s = { ...start };
+    rows.forEach((r, k) => {
+      const g = add(s.groups, r);
+      s = { ...s, active: k, read: k + 1, groups: g, say: `${r.name} okundu: ${key} = ${r[key]}. "${r[key]}" grubunun sayacı ${g[r[key]].n} oldu, en düşük ${mf === "price" ? "fiyat" : mf} ${money(g[r[key]].min)}.` };
+      srv.push(s);
+    });
+    s = { ...s, active: null, sorted: true, say: `$sort: gruplar ada göre dizildi. ${sorted(s.groups).length} satırlık sonuç hazır.` };
+    srv.push(s);
+    s = { ...s, shipped: sorted(s.groups).length, done: true, say: `DocumentDB uygulamaya sadece ${sorted(s.groups).length} küçük satır gönderdi. ${rows.length} dokümanın hiçbiri ağdan gitmedi.` };
+    srv.push(s);
+    // right: every document goes to the app, the app counts
+    const cli = [start];
+    let c = { ...start };
+    rows.forEach((r, k) => {
+      c = { ...c, active: k, read: k + 1, shipped: k + 1, ship: [...c.ship, k], say: `${r.name} okundu ve olduğu gibi uygulamaya gönderildi. Ağdan giden doküman: ${k + 1}.` };
+      cli.push(c);
+    });
+    const all = rows.reduce(add, {});
+    c = { ...c, active: null, groups: all, sorted: true, who: APP_NAME, say: `Uygulama gelen ${rows.length} dokümanı kendi belleğinde grupladı ve saydı. Sonuç soldakiyle aynı, ama bütün dokümanlar ağdan geçti.` };
+    cli.push(c);
+    c = { ...c, done: true, say: c.say };
+    cli.push(c);
+    const L = spec.labels || {};
+    const lanes = {
+      server: actorize(srv, spec.send_server || "Uygulama aggregate komutunu gönderiyor: kategoriye göre grupla, say, en düşük fiyatı bul.",
+        spec.back_server || "Uygulama gelen satırları tarayıcıya gönderdi; tarayıcı kategori kutularını çizecek.", DB, { active: null }),
+      client: actorize(cli, spec.send_client || "Olsaydı: uygulama bütün dokümanları isterdi (find, filtresiz).",
+        spec.back_client || "Uygulama kendi saydığı sonucu tarayıcıya gönderirdi.", DB, { active: null }),
+    };
+    const table = `<table class="gs-table" data-hl="table"><thead><tr><th>Ürün no</th><th>Ürün</th><th data-hl="group">${esc(key)}</th><th data-hl="min">${esc(mf)}</th></tr></thead><tbody>
+      ${rows.map((r, k) => `<tr data-k="${k}"><td>${esc(r.id)}</td><td>${esc(r.name)}</td><td data-hl="group">${esc(r[key])}</td><td data-hl="min">${money(r[mf])}</td></tr>`).join("")}</tbody></table>`;
+    const lane = (id, title) => shell(id, title, table, { hl: id, count: "Ağdan uygulamaya giden", result: spec.result_title || "Sonuç (kategori · ürün sayısı · en düşük fiyat)", col: true });
+    const html = `${actorBar(DB)}<div class="gs-lanes">${lane("server", L.server || "DocumentDB'de grupla")}${lane("client", L.client || "Olsaydı: hepsini çek, uygulamada say")}</div>${summary(spec.summary || "")}`;
+    function paint(root, id, f) {
+      const Ln = laneOf(root, id);
+      Ln.querySelector(".gs-count b").textContent = f.shipped || 0;
+      Ln.classList.toggle("done", !!f.done);
+      Ln.querySelectorAll("tbody tr").forEach((tr) => {
+        const k = Number(tr.dataset.k);
+        tr.classList.toggle("active", f.active === k);
+        tr.classList.toggle("read", (f.read || 0) > k);
+        tr.classList.toggle("shipped", (f.ship || []).includes(k));
+      });
+      chips(Ln, sorted(f.groups || {}).map((g) => `<li data-hl="count">${esc(g)} <small>${f.groups[g].n} · ${money(f.groups[g].min)}</small></li>`));
+      sayWho(Ln, f);
+    }
+    return { html, lanes, paint, final: showSum };
+  }
+
   /* ---------- Who works in a frame (owner rule: work of the app is never credited to the database).
    * actorize(frames, send, back, db): after START the app sends, every middle frame is the database's (unless it names
    * its own `who`), the last frame is the app sending the answer on. actorBar(db) is the bar above the lanes;
@@ -355,7 +414,7 @@
     root.querySelectorAll(".gs-actors [data-a]").forEach((x) => x.classList.toggle("on", ws.includes(x.dataset.a)));
   }
 
-  const KINDS = { "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
+  const KINDS = { "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
 
   function render(box, spec) {
     const kind = KINDS[spec.kind];

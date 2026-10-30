@@ -12,16 +12,282 @@ steps:
   - page: home
     path: /
     engines: [docdb]
-    use_case: Product catalog
-    title: The category tiles are one aggregation
+    use_case: Ürün kataloğu
+    title: Kategori kutuları tek bir gruplama sorgusundan gelir
     why: >-
-      Each product is one JSON document in DocumentDB. The page asked DocumentDB to group the 200 products by category
-      and count them. DocumentDB did the counting on the server and returned only five small results.
-    do: Look at the lit category tiles. Read the Behind-the-scenes note, then answer the checkpoint.
+      Mağazanın ana sayfasındasın. Ortadaki kutular her kategoride kaç ürün olduğunu ve en ucuz fiyatı gösteriyor. Bu
+      sayılar elle yazılmadı: sayfa açılırken veritabanı 200 ürünü saydı. Bu adımda tıklama yok, sadece bakacaksın.
+    do: Aydınlık "Categories" (kategoriler) kutularına bak. Sonra kartın altındaki butonla perde arkasını aç.
     target: "#cats"
     action: look
     wait: {method: GET, path: /docdb/api/home}
-    result: The pipeline has a $group stage. DocumentDB counted the documents of each category and sent only the counts and the lowest prices to the Engine App.
+    result: The pipeline has a $group stage. DocumentDB counted the documents of each category and sent only the counts and the lowest prices to the app.
+    panel:
+      need: >-
+        Ana sayfa her kategori için iki sayı gösteriyor: kaç ürün var ve en ucuzu kaç lira. Katalogda 200 ürün var ve her
+        ziyaretçi ana sayfayı açıyor. Bu sayıları her seferinde 200 ürünü tek tek uygulamaya taşıyıp orada saymak hem yavaş
+        hem israf olurdu. Saymanın, verinin durduğu yerde yapılması gerekiyor.
+      concept:
+        term: Doküman ve aggregation (gruplama)
+        text: >-
+          DocumentDB her ürünü bir doküman olarak saklar: ürünün bütün bilgisi, JSON biçiminde tek bir kayıtta. Aggregation,
+          veritabanına bir "tarif" göndermektir: "dokümanları kategoriye göre grupla, her grupta say, en düşük fiyatı bul".
+          Bunu bir kütüphane görevlisine benzetebilirsin: kitapları sana tek tek getirmez, rafların başına bakar ve "Roman
+          rafında 40 kitap var" diye sadece sonucu söyler. Tarifin adımlarına stage (aşama) denir; burada iki aşama var:
+          $group ve $sort.
+        terms:
+          - [Doküman, "Bir ürünün bütün bilgisi, JSON biçiminde tek bir kayıt. Burada her ürün bir doküman."]
+          - [Koleksiyon, "Aynı türden dokümanların durduğu yer. Burada adı products; 200 doküman var."]
+          - [$group, "Dokümanları bir alana göre gruplayan ve her grupta hesap (sayma, en küçük, toplam) yapan aşama."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde katalog ve özet sorguları için hazırlık
+        intro: >-
+          Ana sayfa hiç açılmadan, katalog koleksiyonu ve sayfanın özet sorusu hazırlanır. Aşağıdaki beş adım bu hazırlığın
+          sırasıdır.
+        text:
+          - title: Önce sayfanın soruları yazılır
+            text: >-
+              Ana sayfanın iki sorusu var: "her kategoride kaç ürün var ve en ucuzu kaç?" (özet) ve "puanı en yüksek 8
+              ürün" (vitrin). Özet sorusu bir aggregation, vitrin sorusu sıralı bir find olur.
+            code: |-
+              db.products.aggregate([ { $group: { _id: "$category", products: { $sum: 1 }, from_price: { $min: "$price" } } },
+                                      { $sort: { _id: 1 } } ])
+          - title: Her ürün tek bir doküman olur
+            text: >-
+              Ürünler farklı yapıda bilgi taşır: kulaklığın pil süresi, ceketin bedeni. Ortak alanlar (ad, kategori, fiyat,
+              puan) her dokümanda aynı adla durur; farklı olanlar attributes altında toplanır. Gruplama ve filtreleme ortak
+              alanlar üzerinden yapılır.
+            code: |-
+              { _id: "P0021", name: "Akıllı Saat", category: "Elektronik", price: 1299.90, rating: 4.8,
+                attributes: { renk: "siyah", garanti_ay: 24 }, tags: ["yeni"] }
+          - title: Gruplama sunucuda yapılır
+            text: >-
+              Sayma, en küçük ve toplam gibi hesaplar veritabanında, aggregation ile yapılır; uygulamaya sadece sonuç gider.
+              Aggregation'ın başına bir $match konursa (ör. sadece stokta olanlar) önce bir index'le eleme yapılır, sonra
+              gruplanır.
+          - title: Çok okunan özet önbelleğe alınabilir
+            text: >-
+              Kategori sayıları dakikalar içinde pek değişmez ama her ziyarette sorulur. Katalog çok büyüdüğünde bu sonuç
+              birkaç dakikalığına bellekte (ör. ElastiCache) tutulur ya da ürün eklenip silindikçe güncellenen küçük bir özet
+              dokümanına yazılır.
+          - title: Plan ve süre izlenir
+            text: >-
+              Aggregation'ın planı explain ile görülür. Katalog büyüdükçe süre izlenir; özet sorgusu yavaşlarsa önbellek ya
+              da özet dokümanı devreye alınır.
+            code: |-
+              db.products.explain("executionStats").aggregate([ … ])
+      feed:
+        title: Veri nereden geliyor?
+        writes: >-
+          Katalog yönetimi: ürün ekleyen, fiyat ve stok güncelleyen arka ofis ekranları ya da tedarikçi dosyalarını aktaran bir
+          iş. Hepsi uygulama üzerinden yazar.
+        reads: Uygulama, mağaza sayfaları için (ana sayfa, kategori, ürün sayfası).
+        kind: >-
+          Uygulama orkestrasyonu. DocumentDB başka bir veritabanından kendiliğinden veri çekmez. Kendi değişikliklerini ise
+          change streams ile dışarı verebilir.
+        with: >-
+          Ana sayfa tek bir veritabanıyla çalışmaz: fırsat kutusu bellekte duran bir veritabanından (ElastiCache), ürün
+          görselleri nesne deposundan (S3, büyük sistemlerde bir CDN ile), "son baktıkların" şeridi bir olay tablosundan
+          (Keyspaces) gelir. Hepsini aynı sayfada tarayıcı birleştirir; her bölüm kendi isteğiyle gelir.
+        best: >-
+          Katalog tek yerde tutulur, diğer sistemler oradan beslenir. Ana sayfa gibi çok okunan bir sayfada her bölüm ayrı
+          istekle ve birbirini beklemeden yüklenir; biri yavaşlarsa diğerleri gecikmez.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, ana sayfa açılırken gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda
+          çalışan veritabanları var.
+        steps:
+          - text: >-
+              Mağazaya girdin ve bir müşteri seçtin (ör. Ayşe Yılmaz). Şifreyle giriş yok: tarayıcın iki çerez taşıyor.
+              lm_visitor bu tarayıcının kimliği, lm_persona seçtiğin müşteri.
+          - text: >-
+              Ana sayfa açılır açılmaz arka planda oturum kaydın oluşturuldu: hangi müşteri olduğun ve hangi sayfada olduğun,
+              30 dakikalık bir süreyle bellekte.
+            engines: [elasticache]
+          - text: >-
+              Aynı anda tarayıcın uygulamaya "ana sayfanın verisini ver" dedi. Uygulama DocumentDB'ye iki komut gönderdi: bir
+              aggregation (kategori kutuları) ve bir find (puanı en yüksek 8 ürün). Simülasyon ilk komutu gösteriyor.
+            engines: [docdb]
+          - text: >-
+              Kutular çizildi: her kategori için ürün sayısı ve "from ₺…" fiyatı. Vitrin kartlarının adı ve fiyatı da
+              DocumentDB'den geldi; görselleri her kart için ayrı bir istekle S3'ten.
+            engines: [docdb, s3]
+          - text: >-
+              Sayfanın üstündeki fırsat kutusu ayrı bir istekle bellekten (ElastiCache) geldi. Daha önce ürünlere baktıysan
+              "Recently viewed" şeridi de Keyspaces'ten geldi.
+            engines: [elasticache, keyspaces]
+      sim:
+        kind: doc-group
+        caption: >-
+          Gerçek katalogdan 9 ürünlük bir kesit (üç kategoriden üçer ürün; her kategorinin en ucuzu dahil). Gerçek katalogda
+          5 kategori ve her birinde 40 ürün var. Solda gerçekte olan: DocumentDB dokümanları okurken grupluyor. Sağda olsaydı ne
+          olurdu: bütün dokümanlar uygulamaya taşınıp orada sayılsaydı; o istek gönderilmedi. Üstteki etiketler o anda işi
+          kimin yaptığını gösterir.
+        labels:
+          server: "t0 · Sayfa açılınca · DocumentDB'de grupla ($group)"
+          client: "Olsaydı · Hepsini uygulamaya çek, orada say"
+        send_server: >-
+          Ana sayfayı açtın. Tarayıcın "ana sayfanın verisini ver" dedi; uygulama DocumentDB'ye aggregation tarifini
+          gönderiyor: kategoriye göre grupla, say, en düşük fiyatı bul, ada göre sırala.
+        back_server: >-
+          Uygulama gelen kategori satırlarını tarayıcına gönderdi. Tarayıcın kutuları çizecek; her kutu bir satır.
+        send_client: >-
+          Olsaydı: uygulama bütün ürünleri isterdi (filtresiz find, sadece kategori ve fiyat alanları).
+        back_client: >-
+          Uygulama kendi saydığı sonucu tarayıcına gönderirdi. Sonuç aynı, ama 200 ürünlük gerçek katalogda 200 doküman
+          ağdan geçerdi.
+        rows:
+          - {id: P0009, name: Nordwind Python ile Veri 9, category: Kitap, price: 101.43}
+          - {id: P0068, name: Anadolu Spor Çantası 68, category: Spor, price: 495.48}
+          - {id: P0084, name: Anadolu Algoritmalar 84, category: Kitap, price: 397.42}
+          - {id: P0090, name: Kapadokya Sırt Çantası 90, category: Moda, price: 81.52}
+          - {id: P0113, name: Kapadokya Dambıl Seti 113, category: Spor, price: 194.94}
+          - {id: P0119, name: Anadolu Algoritmalar 119, category: Kitap, price: 590.12}
+          - {id: P0130, name: Nordwind Yün Kazak 130, category: Moda, price: 291.71}
+          - {id: P0143, name: Alpen Koşu Ayakkabısı 143, category: Spor, price: 478.65}
+          - {id: P0175, name: Anadolu Yün Kazak 175, category: Moda, price: 601.17}
+        summary: >-
+          Sonuç iki yolda da aynı: Kitap 3 · ₺101,43, Moda 3 · ₺81,52, Spor 3 · ₺194,94. Fark, ağdan geçen veride: solda 3 küçük
+          satır, sağda 9 dokümanın hepsi. Gerçek katalogda bu fark 5 satıra karşı 200 doküman olur.
+      wire:
+        what: >-
+          Uygulama, DocumentDB'ye açık tuttuğu bağlantılar üzerinden komutu gönderir (pymongo kütüphanesi). Bağlantılar her
+          istekte yeniden kurulmaz.
+        dst: "dbws-docdb.cluster-ccgs3qxfidad.eu-central-1.docdb.amazonaws.com : 27017"
+        dst_note: >-
+          DocumentDB cluster'ının adresi. Okuma tercihi "secondaryPreferred" olduğu için bu okuma replica'ya gider. Cluster
+          internete kapalı veri alt ağında duruyor.
+        rows:
+          - [Şifreleme, TLS, gerçek, DocumentDB'nin sertifikası AWS'nin sertifika dosyasıyla kontrol edilir.]
+          - [Protokol, MongoDB wire protokolü (OP_MSG), gerçek, "MongoDB sürücülerinin konuştuğu ikili dil. DocumentDB bu dili anlar."]
+          - [Kimlik, "Kullanıcı adı + şifre, bağlantı açılırken", gerçek, "Şifre kodda yazmaz; uygulama onu çalışırken AWS Secrets Manager'dan alır."]
+        body_label: Çerçevenin içeriği (okunur hâle getirilmiş)
+        body: |-
+          OP_MSG   veritabanı: shop
+          { aggregate: "products",
+            pipeline: [ { $group: { _id: "$category", products: { $sum: 1 }, from_price: { $min: "$price" } } },
+                        { $sort: { _id: 1 } } ],
+            cursor: {},
+            $readPreference: { mode: "secondaryPreferred" } }
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Mor etiketli
+        satırda bir şey bir yerden bir yere gider; gri "Uygulamanın içinde" etiketli satırda iş uygulamanın kendi içinde
+        yapılır, hiçbir yere bir şey gitmez.
+      app_code:
+        - file: engines/docdb.py
+          func: api_home
+          title: Ana sayfa isteği
+          sub: Sayfa açılırken gelen istek; iki komut gönderir.
+          lines:
+            - {match: '@bp.get("/api/home")', say: Ana sayfanın veri isteği buraya gelir., tag: Tarayıcı → Uygulama}
+            - {match: 'pipeline = [{"$group":', say: "Gruplama tarifini hazırlar: kategoriye göre grupla, say, en düşük fiyatı bul; sonra ada göre sırala.", tag: Uygulamanın içinde, hl: group}
+            - {match: 'cats = list(db().products.aggregate(pipeline))', say: "Tarif DocumentDB'ye gider; her kategori için bir satır döner.", tag: [Uygulama → DocumentDB, DocumentDB → Uygulama], hl: count}
+            - {match: 'featured = [_doc(d) for d in db().products.find({"rating": {"$gte": 4.5}}', say: "İkinci komut: puanı 4,5 ve üstü olan en iyi 8 ürün (vitrin).", tag: [Uygulama → DocumentDB, DocumentDB → Uygulama]}
+            - {match: 'return jsonify(trace.payload({"categories":', say: "Kategori satırlarının alan adlarını sayfanın beklediği adlara çevirir ve vitrinle birlikte tarayıcıya gönderir.", tag: Uygulama → Tarayıcı}
+      live:
+        title: Gerçek katalogda ne oldu?
+        intro: >-
+          Ana sayfa açılırken DocumentDB'ye giden gerçek aggregation. Gerçek katalogda 200 ürün var.
+        runs:
+          - label: Kategori aggregation'ı (sayfa açılınca)
+            trigger: true
+            metrics: [[Dönen satır (kategori), items], [Süre, ms]]
+        reading: >-
+          200 doküman okundu ama uygulamaya sadece kategori sayısı kadar küçük satır döndü (her kategoride 40 ürün var).
+          Süre her istekte biraz değişir. Katalog büyüdükçe okunan doküman sayısı artar; uygulamaya giden satır sayısı ise
+          kategori sayısı kadar kalır.
+      query:
+        title: Sayfa DocumentDB'ye ne dedi?
+        intro: >-
+          İki sütun, simülasyondaki iki şeridin komutu. Solda gerçekten gönderilen aggregation, sağda "olsaydı" yolunun
+          komutu. Bir parçanın üzerine gelince cümlede, kodda ve açıklamada aynı yer parlar.
+        cards_title: Parça parça
+        parts:
+          - id: agg
+            say: products koleksiyonundaki dokümanları
+            code: "db.products.aggregate(["
+            name: Nereden?
+            note: "products, ürünlerin durduğu koleksiyon. aggregate, \"şu aşamalardan geçir\" demek."
+            hl: table
+          - id: grp
+            say: kategoriye göre grupla,
+            code: '  { $group: { _id: "$category",'
+            name: Neye göre?
+            note: "$group aşaması. _id, grubun anahtarı: her farklı category değeri bir grup olur. $ işareti \"bu alanın değeri\" demek."
+            hl: group
+          - id: cnt
+            say: her grupta kaç doküman olduğunu say,
+            code: "      products: { $sum: 1 },"
+            name: Ne hesaplansın?
+            note: "Her doküman için 1 ekle: grubun ürün sayısı. Sonuçta bu alanın adı products."
+            hl: count
+            indent: 2
+          - id: mn
+            say: en düşük fiyatı bul,
+            code: '      from_price: { $min: "$price" } } },'
+            name: Ne hesaplansın?
+            note: Grubun en küçük price değeri. Kutudaki "from ₺…" bu sayı.
+            hl: min
+            indent: 2
+          - id: srt
+            say: sonra gruplar ada göre sırala.
+            code: "  { $sort: { _id: 1 } } ])"
+            name: Hangi sırayla?
+            note: İkinci aşama. Grupları kategori adına göre A'dan Z'ye dizer. 1 küçükten büyüğe demek.
+            hl: count
+          - id: all
+            say: products koleksiyonundaki bütün dokümanların kategori ve fiyatını getir.
+            code: "db.products.find({}, { category: 1, price: 1 })"
+            name: Olsaydı
+            note: "Filtresiz find: {} \"hepsi\" demek. Her doküman ağdan uygulamaya gider; sayma işi uygulamaya kalır."
+            hl: table
+            tag: sadece sağdaki komutta var
+        columns:
+          - label: DocumentDB'de grupla
+            sub: Sayfa açılırken giden gerçek komut.
+            via: >-
+              Uygulama bu komutu pymongo kütüphanesinin aggregate() metoduyla gönderir; sonucu satır satır okur.
+            parts: [agg, grp, cnt, mn, srt]
+          - label: "Olsaydı: hepsini çek, uygulamada say"
+            sub: Gönderilmeyen, karşılaştırma için yazılmış komut.
+            via: Uygulama bu komutu find() ile gönderir ve saymayı kendi kodunda yapardı.
+            parts: [all]
+            mark: [all]
+        note: >-
+          Dikkat: soldaki komut "sonucu" değil, "nasıl hesaplanacağını" söylüyor. DocumentDB bu tarifi verinin yanında çalıştırır
+          ve sadece sonucu gönderir. Sağdaki komut kısa görünür ama bütün katalogu ağdan taşır.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          DocumentDB'nin işi sonucu verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: DocumentDB → Uygulama
+            text: "{items} kategori satırı geldi; ardından ikinci komutun cevabı olarak vitrinin 8 ürünü geldi."
+          - who: Uygulama
+            text: >-
+              Kategori satırlarındaki _id alanının adını name yaptı, vitrin ürünlerinin _id'sini product_id yaptı ve ikisini
+              tek bir cevapta topladı.
+          - who: Uygulama → Tarayıcın
+            text: Kategorileri, vitrini ve isteğin kaydını tek bir JSON cevabında gönderdi.
+          - who: Tarayıcın
+            text: Her kategori satırını bir kutuya çevirdi ("40 products, from ₺…") ve vitrin kartlarını çizdi.
+          - who: Tarayıcın → S3
+            text: >-
+              Vitrin kartlarının görsellerini ürün numarasından kurduğu adresle (/s3/api/img/P0103) ayrı ayrı istedi; görseller
+              S3'ten geldi. Kartta adı ve fiyatı (DocumentDB) görselle (S3) birleştiren tarayıcıdır.
+          - who: Sonra
+            text: >-
+              Bir kategori kutusuna tıklarsan o kategorinin sayfası açılır; orada DocumentDB filtre ve index ile çalışır
+              (Adım 3).
+      remember: >-
+        Sayma, en küçük, toplam gibi hesapları verinin durduğu yerde yaptır. Aggregation ile veritabanı binlerce dokümanı
+        okur ama uygulamaya sadece birkaç satırlık sonucu gönderir.
+      why_db: >-
+        Neden DocumentDB? Ürünler farklı yapılarda bilgi taşıyor ve her biri tek bir doküman olarak saklanıyor. DocumentDB bu
+        dokümanlar üzerinde gruplama, sıralama ve hesaplama aşamalarını sunucuda çalıştırır. Bedeli: çok büyük katalogda her
+        ziyarette yeniden hesaplamak pahalılaşır; o zaman sonuç önbelleğe ya da bir özet dokümanına alınır.
 
   - page: home
     path: /
