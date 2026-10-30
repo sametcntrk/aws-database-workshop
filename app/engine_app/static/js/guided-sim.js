@@ -1120,6 +1120,56 @@
     return { html, lanes, paint, final: showSum };
   }
 
+  /* ---------- hops: the same result reached by two paths; each lane is a list of hops (who → who, what travels).
+   * spec.lanes [{id, title, steps [{who, label, cmd, bytes, say}], send, back}]. The count is the bytes the app carried. */
+  function hops(spec) {
+    const lanes = {};
+    spec.lanes.forEach((ln) => {
+      const fr = [{ say: START, cur: null, done: [], carried: 0 }];
+      let s = { ...fr[0] };
+      ln.steps.forEach((x, k) => { s = { ...s, cur: k, done: [...s.done, k], carried: s.carried + (x.app_bytes || 0), who: x.who, say: x.say }; fr.push(s); });
+      fr.push({ ...s, cur: null, end: true, who: APP_NAME, say: ln.back || "Bitti." });
+      lanes[ln.id] = fr;
+    });
+    const html = `<div class="gs-actors" aria-hidden="true"><span data-a="app" data-hl="app">Uygulama</span><i>⇄</i><span data-a="db" data-hl="db">Tarayıcı ve S3</span></div>
+      <div class="gs-lanes">${spec.lanes.map((ln) => shell(ln.id, ln.title, `<ol class="gs-fan">${ln.steps.map((x, k) =>
+        `<li data-k="${k}"><span class="chip">${esc(x.label)}</span><code>${esc(x.cmd)}</code><em></em></li>`).join("")}</ol>`, { hl: ln.id, count: "Uygulamanın taşıdığı veri", result: false, col: true })).join("")}</div>${summary(spec.summary || "")}`;
+    function paint(root, id, f) {
+      const L = laneOf(root, id);
+      L.querySelector(".gs-count b").textContent = `${f.carried || 0} KB`;
+      L.classList.toggle("done", !!f.end);
+      L.querySelectorAll(".gs-fan li").forEach((li) => { const k = Number(li.dataset.k); li.classList.toggle("now", f.cur === k); li.classList.toggle("ok", (f.done || []).includes(k)); li.querySelector("em").textContent = (f.done || []).includes(k) ? "✓" : ""; });
+      sayWho(L, { ...f, who: f.who === APP_NAME ? APP_NAME : f.who });
+    }
+    return { html, lanes, paint, final: showSum };
+  }
+
+  /* ---------- objects: a bucket as a flat list of keys; a PUT adds an object (with a version), a LIST reads keys by prefix.
+   * spec.objects [{key, size, type, version}], spec.put {key, size, type, version, say}, spec.list_prefix, spec.back. One lane. */
+  function objects(spec) {
+    const DB = spec.engine_label || "S3";
+    let objs = spec.objects.map((o) => ({ ...o }));
+    const fr = [{ say: START, objs, fresh: null, listed: [] }];
+    fr.push({ who: APP_NAME, objs, say: spec.send || "Uygulama dosyayı aldı ve anahtarını kurdu." });
+    objs = [...objs, { ...spec.put }].sort((p, q) => p.key.localeCompare(q.key));
+    fr.push({ who: DB, objs, fresh: spec.put.key, say: spec.put.say || `PutObject: ${spec.put.key} yazıldı; sürüm ${spec.put.version}.` });
+    const listed = objs.filter((o) => o.key.startsWith(spec.list_prefix)).map((o) => o.key);
+    fr.push({ who: APP_NAME, objs, fresh: spec.put.key, say: spec.list_send || `Sayfa listeyi yeniledi: uygulama ListObjectsV2 Prefix='${spec.list_prefix}' gönderiyor.` });
+    fr.push({ who: DB, objs, fresh: spec.put.key, listed, say: spec.list_say || `S3 '${spec.list_prefix}' ile başlayan ${listed.length} anahtarı döndürdü; klasör yok, sadece adın başı eşleşti.` });
+    fr.push({ who: APP_NAME, objs, listed, done: true, say: spec.back || "Uygulama listeyi tarayıcıya gönderdi." });
+    const body = `<table class="gs-table"><thead><tr><th data-hl="key">Anahtar (key)</th><th>Boyut</th><th>Tür</th><th data-hl="version">Sürüm</th></tr></thead><tbody></tbody></table>`;
+    const html = `${actorBar(DB)}<div class="gs-lanes one">${shell("obj", spec.title || "Bucket", body, { count: "Listelenen nesne", result: false, col: true })}</div>${summary(spec.summary || "")}`;
+    function paint(root, id, f) {
+      const L = laneOf(root, id);
+      L.querySelector(".gs-count b").textContent = (f.listed || []).length;
+      L.classList.toggle("done", !!f.done);
+      L.querySelector("tbody").innerHTML = (f.objs || []).map((o) => `<tr class="${f.fresh === o.key ? "fresh" : ""} ${(f.listed || []).includes(o.key) ? "hit" : ""} ${(f.listed || []).length && !(f.listed || []).includes(o.key) ? "dimrow" : ""}">
+        <td data-hl="key"><code>${esc(o.key)}</code></td><td>${esc(o.size)}</td><td>${esc(o.type)}</td><td data-hl="version"><code>${esc(o.version)}</code></td></tr>`).join("");
+      sayWho(L, f);
+    }
+    return { html, lanes: { obj: fr }, paint, final: showSum };
+  }
+
   /* ---------- Who works in a frame (owner rule: work of the app is never credited to the database).
    * actorize(frames, send, back, db): after START the app sends, every middle frame is the database's (unless it names
    * its own `who`), the last frame is the app sending the answer on. actorBar(db) is the bar above the lanes;
@@ -1139,7 +1189,7 @@
     root.querySelectorAll(".gs-actors [data-a]").forEach((x) => x.classList.toggle("on", ws.includes(x.dataset.a)));
   }
 
-  const KINDS = { timeseries, zset, "plan-tree": planTree, columnar, replicate, join, fanout, txn, spread, replicas, "ddb-items": ddbItems, projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
+  const KINDS = { hops, objects, timeseries, zset, "plan-tree": planTree, columnar, replicate, join, fanout, txn, spread, replicas, "ddb-items": ddbItems, projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
 
   function render(box, spec) {
     const kind = KINDS[spec.kind];

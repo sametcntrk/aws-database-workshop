@@ -7919,26 +7919,455 @@ steps:
   - page: seller
     path: /seller
     engines: [s3]
-    use_case: Private files, direct download
-    title: A presigned URL
+    use_case: Özel dosya, doğrudan indirme
+    title: Önceden imzalı adres
     why: >-
-      The bucket is private. The Engine App signs a URL with its IAM role. The browser then downloads the object from S3 itself, and the bytes do not go through EC2.
-    do: Click the lit button "Presigned URL, straight from S3".
+      Satıcı panelindesin. "Download: two ways" (iki yoldan indirme) bölümünde aynı ürün görseli iki farklı yoldan indirilebiliyor.
+      Şimdi ikinci yolu deneyip görselin nereden geldiğine bakacaksın.
+    do: Aydınlık "Presigned URL, straight from S3" (imzalı adresle, doğrudan S3'ten) butonuna tıkla.
     target: "#via-presign"
     action: click
     wait: {method: GET, path: /s3/api/presign/*}
     focus: "#direct"
     result: The URL host is the S3 endpoint. The query string has X-Amz-Signature and X-Amz-Expires.
+    panel:
+      need: >-
+        Ürün görselleri gizli bir bucket'ta duruyor; herkese açık değil. Ama tarayıcının görseli görmesi gerekiyor. Görseli her
+        seferinde uygulama sunucusundan geçirmek (S3'ten oku, tarayıcıya aktar) sunucunun ağını ve belleğini doldurur; büyük
+        dosyalarda (video, PDF) sunucu darboğaz olur. Bucket'ı açmadan, tarayıcının dosyayı doğrudan S3'ten almasına izin vermek
+        gerekiyor.
+      concept:
+        term: Önceden imzalı adres (presigned URL)
+        text: >-
+          Uygulama, kendi IAM kimliğiyle belirli bir dosya için süreli bir adres imzalar. Adres "bu kişi bu dosyayı 5 dakika
+          boyunca indirebilir" demektir; imza ve son kullanma zamanı adresin içindedir. Bu imzalama S3'e bir istek bile göndermez;
+          uygulama hesabı kendi içinde yapar. Tarayıcı bu adresle dosyayı doğrudan S3'ten alır. Bir konser biletinin üstündeki
+          barkod gibi: kapıdaki görevli bileti kontrol eder, bileti satan kişinin orada olması gerekmez.
+        terms:
+          - [Bucket ve nesne, "Bucket dosyaların deposu; her dosya bir nesne ve bir anahtarla (products/P0001.jpg) bulunur."]
+          - [Presigned URL, "Belirli bir nesne için, belirli bir süre geçerli, imzalı adres."]
+          - [X-Amz-Signature / X-Amz-Expires, "Adresteki imza ve geçerlilik süresi (saniye). Süre bitince adres reddedilir."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde dosya deposu için hazırlık
+        intro: >-
+          Satıcı paneli hiç açılmadan, bucket'ın güvenliği ve dosyaların nasıl dağıtılacağı belirlenir. Aşağıdaki beş adım bu
+          hazırlığın sırasıdır.
+        text:
+          - title: Önce dosyaların soruları yazılır
+            text: >-
+              Kim yükleyecek, kim görecek, ne kadar süre saklanacak? Ürün görselleri herkes tarafından görülür ama kimse doğrudan
+              bucket'ı listelememeli ya da yazmamalı.
+          - title: Bucket herkese kapatılır
+            text: >-
+              Block Public Access'in dört ayarı da açılır; bucket ve nesneler hiçbir zaman herkese açık olmaz. Erişim sadece IAM
+              kimlikleri, imzalı adresler ya da bir CDN üzerinden verilir.
+            code: |-
+              aws s3api put-public-access-block --bucket dbws-images-… --public-access-block-configuration \
+                BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+          - title: Dağıtım yolu seçilir
+            text: >-
+              Herkesin göreceği görseller için CloudFront + Origin Access Control: CDN dosyayı kullanıcıya yakın yerden verir, bucket
+              kapalı kalır. Kişiye özel dosyalar (fatura, rapor) için kısa süreli imzalı adres.
+            code: |-
+              s3.generate_presigned_url("get_object", Params={"Bucket": b, "Key": "products/P0001.jpg"}, ExpiresIn=300)
+          - title: İmzalayan kimlik sınırlanır
+            text: >-
+              İmzalı adres, imzalayan kimliğin yetkisi kadar geçerlidir. Uygulamanın IAM rolü sadece gereken bucket ve önek (prefix)
+              için s3:GetObject / s3:PutObject izni taşır. Geçici kimlikle imzalanan adres, kimliğin süresi bitince de geçersiz olur.
+          - title: Süre kısa tutulur
+            text: >-
+              Adresin süresi işin gerektirdiği kadardır (dakikalar). Adres paylaşılırsa süre içinde başkası da kullanabilir; bu yüzden
+              uzun süreli imza verilmez.
+      feed:
+        title: Veri nereden geliyor?
+        writes: >-
+          Satıcılar ve içerik ekibi görselleri yükler; büyük sistemlerde tarayıcı dosyayı önceden imzalı bir PUT adresiyle doğrudan
+          S3'e yükler, uygulama sadece adresi imzalar.
+        reads: Mağaza sayfaları (ürün kartları, ürün sayfası, fırsat kutusu) ve satıcı paneli.
+        kind: >-
+          S3 başka bir veritabanından veri çekmez; içine yazılanı saklar. Bir nesne yüklendiğinde olay yayınlayabilir (S3 Event
+          Notifications → Lambda, SQS, EventBridge); küçük görsel üretme gibi işler bu olayla başlar.
+        with: >-
+          Görselin hangi ürüne ait olduğu katalogdadır (DocumentDB); S3'te sadece dosya ve küçük metadata durur. Bu mağazada görsel
+          anahtarı ürün numarasından türetiliyor (products/P0001.jpg); gerçek sistemlerde anahtar ürün dokümanına yazılır.
+        best: >-
+          Dosyalar nesne deposunda, kayıtları veritabanında. Herkese açık bucket yerine özel bucket + CDN (CloudFront, Origin Access
+          Control) ya da süreli imzalı adresler. Sürümleme açık, eski sürümler yaşam döngüsü kuralıyla temizlenir.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              "Seller" (satıcı) panelini açtın. Sayfa bucket'taki ürün görsellerini listeledi (ListObjectsV2 ve her biri için
+              HeadObject).
+            engines: [s3]
+          - text: >-
+              "Presigned URL, straight from S3" butonuna bastın. Tarayıcın uygulamaya "P0001'in görseli için bir adres imzala"
+              dedi. Uygulama adresi kendi IAM kimliğiyle imzaladı; bunun için S3'e istek gitmedi.
+          - text: >-
+              Tarayıcın imzalı adresi aldı ve görseli doğrudan S3'ten indirdi (bucket adındaki S3 adresi). Görselin byte'ları
+              uygulama sunucusundan geçmedi. Simülasyonun sağ şeridi bu yol.
+            engines: [s3]
+          - text: >-
+              Görselin altında "Loaded from S3 in … ms. URL host: dbws-images-…s3.amazonaws.com" yazdı.
+      sim:
+        kind: hops
+        caption: >-
+          Aynı görsel, iki yol. Solda uygulama üzerinden (sayfadaki "Through the Engine App" butonu ve mağazadaki bütün ürün kartları
+          bu yolu kullanıyor), sağda senin tıklamanla imzalı adres. Görsel yaklaşık 48 KB.
+        lanes:
+          - id: via_app
+            title: "Uygulama üzerinden (/s3/api/img/P0001)"
+            steps:
+              - {who: Tarayıcı, label: Tarayıcı → Uygulama, cmd: "GET /s3/api/img/P0001", say: "Tarayıcı görseli uygulamadan istedi."}
+              - {who: Uygulama, label: Uygulama → S3, cmd: "GetObject products/P0001.jpg", say: "Uygulama S3'ten dosyayı okudu (gateway endpoint üzerinden)."}
+              - {who: S3, label: S3 → Uygulama, cmd: "48 KB", app_bytes: 48, say: "S3 dosyanın byte'larını uygulamaya gönderdi; bütün dosya sunucunun belleğine girdi."}
+              - {who: Uygulama, label: Uygulama → Tarayıcı, cmd: "48 KB, image/jpeg", say: "Uygulama aynı byte'ları tarayıcıya aktardı."}
+            back: Görsel geldi; ama dosya uygulama sunucusundan geçti. Büyük dosyalarda sunucu darboğaz olur.
+          - id: presign
+            title: "t0 · Senin tıklaman · İmzalı adres, doğrudan S3"
+            steps:
+              - {who: Tarayıcı, label: Tarayıcı → Uygulama, cmd: "GET /s3/api/presign/P0001", say: "Tarayıcı uygulamadan bir adres istedi."}
+              - {who: Uygulama, label: Uygulama (imzalar), cmd: "generate_presigned_url(…, ExpiresIn=300)", say: "Uygulama adresi kendi kimliğiyle imzaladı. S3'e istek gitmedi; hesap uygulamanın içinde yapıldı."}
+              - {who: Uygulama, label: Uygulama → Tarayıcı, cmd: "https://dbws-images-…s3.amazonaws.com/products/P0001.jpg?X-Amz-…", say: "İmzalı adres tarayıcıya gitti (birkaç yüz bayt)."}
+              - {who: S3, label: Tarayıcı ⇄ S3, cmd: "GET (imzalı adres) → 48 KB", say: "Tarayıcı dosyayı doğrudan S3'ten aldı; S3 imzayı ve süreyi kontrol etti."}
+            back: Görsel geldi ve byte'lar uygulama sunucusuna hiç uğramadı; bucket yine kapalı.
+        summary: >-
+          İki yolda da aynı görsel. Solda uygulama 48 KB taşıdı, sağda sadece birkaç yüz baytlık bir adres. Uygulama sağda yetkiyi
+          verdi ama veriyi taşımadı.
+      wire:
+        what: >-
+          Uygulama S3'e AWS'nin Python kütüphanesi boto3 ile HTTPS üzerinden konuşur; istekler VPC'deki gateway endpoint'ten,
+          internete çıkmadan gider. Her istek uygulamanın IAM kimliğiyle imzalanır.
+        dst: "dbws-images-179330777878-eu-central-1.s3.eu-central-1.amazonaws.com : 443"
+        dst_note: >-
+          Ürün görsellerinin bucket'ı. Herkese açık erişim tamamen kapalı (Block Public Access); bucket'a sadece IAM kimliği ya da
+          imzalı bir adresle erişilir.
+        rows:
+          - [Şifreleme, TLS (HTTPS), gerçek, S3'e şifreli bağlanılır.]
+          - [Protokol, "HTTP (S3 REST API)", gerçek, "GET, PUT, HEAD ve liste istekleri; her nesne bir adres (anahtar)."]
+          - [Kimlik, "IAM, SigV4 imzası (servis: s3)", gerçek, "Şifre yok. İsteğe geçici AWS kimliğiyle hesaplanmış bir imza eklenir."]
+        body_label: Uygulamanın döndürdüğü imzalı adres (kısaltıldı)
+        body: |-
+          https://dbws-images-179330777878-eu-central-1.s3.amazonaws.com/products/P0001.jpg
+            ?X-Amz-Algorithm=AWS4-HMAC-SHA256
+            &X-Amz-Credential=ASIA…/20261030/eu-central-1/s3/aws4_request
+            &X-Amz-Date=20261030T…Z
+            &X-Amz-Expires=300
+            &X-Amz-SignedHeaders=host
+            &X-Amz-Security-Token=…
+            &X-Amz-Signature=…
+          (Bu adres uygulamadan S3'e değil, tarayıcıdan S3'e, internet üzerinden gider.)
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Uygulama sadece imzalar;
+        indirmeyi tarayıcı yapar.
+      app_code:
+        - file: engines/s3.py
+          func: api_presign
+          title: '"Adres imzala" isteği'
+          sub: Senin tıklamanla gelen istek.
+          lines:
+            - {match: '@bp.get("/api/presign/<pid>")', say: "İmza isteği buraya gelir; adres ürün numarasını taşır.", tag: Tarayıcı → Uygulama}
+            - {match: 'key = f"products/{pid}.jpg"', say: "Nesnenin anahtarını ürün numarasından kurar.", tag: Uygulamanın içinde}
+            - {match: 'url = s3().generate_presigned_url("get_object"', say: "Adresi IAM kimliğiyle, 300 saniye geçerli olarak imzalar. S3'e istek gitmez.", tag: Uygulamanın içinde}
+            - {match: 'return jsonify(trace.payload({"url": url}))', say: İmzalı adres tarayıcıya gider., tag: Uygulama → Tarayıcı}
+        - file: templates/pages/seller.html
+          where: tarayıcıda çalışan sayfa kodu
+          start: '$("#via-presign").addEventListener("click", async () => {'
+          title: Tarayıcıdaki kod
+          sub: Adresi alıp görseli doğrudan S3'ten yükleyen satırlar.
+          lines:
+            - {match: 'const d = await api("/s3/api/presign/P0001"', say: "Uygulamadan imzalı adresi ister.", tag: [Tarayıcı → Uygulama, Uygulama → Tarayıcı]}
+            - {match: '$("#preview").src = d.url;', say: "Görselin adresi olarak imzalı adresi verir; tarayıcı dosyayı doğrudan S3'ten indirir.", tag: Tarayıcı → S3}
+      live:
+        title: Gerçek sistemde ne oldu?
+        intro: Senin tıklamanla uygulamaya giden imza isteği.
+        runs:
+          - label: İmza (senin tıklaman)
+            trigger: true
+            metrics: [[İmzalama süresi, ms], [Adresin uzunluğu, data.url.length]]
+        reading: >-
+          İmzalama birkaç milisaniyenin altındadır, çünkü S3'e gidilmez; uygulama hesabı kendi içinde yapar. Adres birkaç yüz
+          karakterdir. Görselin indirme süresi mağaza sekmesindeki "Loaded from S3 in … ms" satırında; o istek uygulamaya uğramadığı
+          için burada ölçülmüyor.
+      query:
+        title: Uygulama S3'e ne dedi?
+        intro: >-
+          Bu adımda uygulama S3'e bir şey söylemedi; sadece bir adres imzaladı. S3'e konuşan, imzalı adresle tarayıcıdır.
+        cards_title: Parça parça
+        parts:
+          - id: g
+            say: products/P0001.jpg nesnesini okumak için
+            code: "s3.generate_presigned_url('get_object', Params={'Bucket': '…', 'Key': 'products/P0001.jpg'},"
+            name: Hangi nesne, hangi iş?
+            note: get_object, adresin sadece indirme için geçerli olduğunu söyler; aynı adresle yükleme ya da silme yapılamaz.
+            hl: app
+          - id: e
+            say: 5 dakika geçerli, imzalı bir adres üret.
+            code: "  ExpiresIn=300)"
+            name: Ne kadar süre?
+            note: 300 saniye sonra S3 bu adresi reddeder.
+            hl: app
+          - id: b
+            say: Tarayıcı bu adresle dosyayı doğrudan S3'ten indirir.
+            code: "GET https://dbws-images-…s3.amazonaws.com/products/P0001.jpg?X-Amz-…&X-Amz-Signature=…"
+            name: Kim indirir?
+            note: S3 imzayı, süreyi ve imzalayan kimliğin yetkisini kontrol eder; uygun değilse 403 döner.
+            hl: app
+        columns:
+          - label: İmzala ve indir
+            sub: Senin tıklamanla.
+            via: Uygulama imzayı boto3 kütüphanesinin generate_presigned_url() metoduyla üretir; indirmeyi tarayıcı yapar.
+            parts: [g, e, b]
+        note: >-
+          Dikkat: bucket hiçbir an herkese açılmadı. Yetki bucket'ta değil, adresin içindeki imzada ve süresinde.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          Uygulamanın işi adresi verince bitti. Bundan sonrası tarayıcı ile S3 arasında.
+        steps:
+          - who: Uygulama → Tarayıcın
+            text: İmzalı adresi tek bir JSON cevabında gönderdi.
+          - who: Tarayıcın → S3
+            text: Adresi görselin kaynağı yaptı; tarayıcı dosyayı S3'ten, internet üzerinden doğrudan indirdi.
+          - who: S3 → Tarayıcın
+            text: S3 imzayı ve süreyi kontrol etti ve dosyanın byte'larını gönderdi.
+          - who: Tarayıcın
+            text: Görseli gösterdi ve indirme süresini ve S3 adresini yazdı.
+          - who: Sonra
+            text: Bir sonraki adımda bucket'a bir görsel yükleyeceksin; S3 onu yeni bir nesne ve sürüm olarak saklayacak.
+      remember: >-
+        Gizli bir dosyayı paylaşmak için bucket'ı açma; süreli, imzalı bir adres ver. Uygulama yetkiyi verir, veriyi tarayıcı ile S3
+        doğrudan taşır.
+      why_db: >-
+        Neden S3? Dosyalar (görsel, video, belge) bir veritabanı satırına değil, nesne deposuna aittir; S3 onları dayanıklı, ucuz ve
+        sınırsız ölçekte saklar ve imzalı adreslerle güvenli dağıtır. Bedeli: S3 sorgu yapmaz; dosyanın kime ait olduğu gibi bilgiler
+        bir veritabanında tutulur.
 
   - page: seller
     path: /seller
     engines: [s3]
-    use_case: Object storage
-    title: Upload an image as an object
-    why: S3 stores each file as an object with a key, the bytes and metadata. Versioning keeps the old version when you upload to the same key again.
-    do: In the lit form, select a small JPEG or PNG file, then click "Upload".
+    use_case: Nesne depolama
+    title: Bir görseli nesne olarak yükle
+    why: >-
+      Satıcı panelindesin. Üstteki formla bucket'a bir ürün görseli yükleyebilirsin. Şimdi küçük bir resim seçip yükleyecek ve
+      S3'ün onu nasıl sakladığına bakacaksın.
+    do: Aydınlık formda küçük bir JPEG ya da PNG seç, sonra "Upload" (yükle) butonuna tıkla.
     target: "#upload"
     action: click
     wait: {method: POST, path: /s3/api/upload}
     focus: "#gallery-wrap"
-    result: PutObject stored your file with its metadata and returned a new version ID. The uploads/ list shows the object.
+    result: PutObject stored your file with its metadata and returned a new version ID.
+    panel:
+      need: >-
+        Satıcılar ürün görsellerini yükler. Her dosyanın kaybolmadan saklanması, bir adla bulunabilmesi, yanında küçük bilgiler
+        (hangi ürün, kim yükledi) taşıması ve yanlışlıkla üstüne yazılırsa eski hâlinin geri alınabilmesi gerekiyor.
+      concept:
+        term: Nesne, anahtar ve sürüm (versioning)
+        text: >-
+          S3'te her dosya bir nesnedir: anahtar (uploads/7f3a…/1793….png), dosyanın byte'ları ve metadata. Klasör yoktur; anahtarlar
+          tek ve düz bir listedir, "/" sadece adın bir parçasıdır. Sürümleme açıksa aynı anahtara yeniden yükleme eskisini silmez;
+          her yükleme yeni bir sürüm numarası (VersionId) alır. Bir belgenin her kaydedilişinin ayrı bir kopya olarak saklanması gibi.
+        terms:
+          - [Anahtar (key), "Nesnenin bucket içindeki tam adı."]
+          - [Metadata, "Nesneyle birlikte saklanan küçük bilgiler: içerik türü, product-id, uploaded-by."]
+          - [VersionId, "Her yüklemeye verilen sürüm numarası; eski sürümler geri alınabilir."]
+          - [Önek (prefix), "Anahtarın başı. ListObjectsV2 Prefix='uploads/' bu başla başlayanları listeler."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde yükleme için hazırlık
+        intro: >-
+          Yükleme formu hiç kullanılmadan, anahtar düzeni, sürümleme ve temizlik kuralları belirlenir. Aşağıdaki beş adım bu
+          hazırlığın sırasıdır.
+        text:
+          - title: Önce anahtar düzeni yazılır
+            text: >-
+              Anahtar, nesneyi kimin ve ne zaman yüklediğini söyleyecek ve çakışmayacak şekilde kurulur. Kullanıcıdan gelen dosya
+              adı temizlenir; anahtarın başına kullanıcı ve zaman konur.
+            code: |-
+              uploads/<ziyaretçi>/<zaman>-<temizlenmiş-ad>      ör. uploads/7f3a…/1793398000-kulaklik.png
+          - title: Sürümleme açılır
+            text: >-
+              Yanlışlıkla üstüne yazma ya da silme geri alınabilsin diye bucket'ta sürümleme açılır. Silme bile sadece bir "silindi"
+              işareti bırakır.
+            code: |-
+              aws s3api put-bucket-versioning --bucket dbws-images-… --versioning-configuration Status=Enabled
+          - title: Eski sürümler kuralla temizlenir
+            text: >-
+              Sürümler sonsuza kadar birikmesin diye bir yaşam döngüsü kuralı eklenir: güncel olmayan sürümler belli bir süre sonra
+              silinir (bu bucket'ta 1 gün). Eski dosyalar daha ucuz depolama sınıflarına da taşınabilir.
+            code: |-
+              { "Rules": [ { "ID": "expire-old-versions", "Status": "Enabled", "Filter": { "Prefix": "" },
+                             "NoncurrentVersionExpiration": { "NoncurrentDays": 1 } } ] }
+          - title: Yükleme sınırlanır ve doğrudan yapılır
+            text: >-
+              Boyut ve tür sınırı konur (burada 2 MB, resim). Büyük dosyalar uygulama sunucusundan geçirilmez; tarayıcı önceden
+              imzalı bir PUT adresiyle doğrudan S3'e yükler (çok büyükse multipart upload).
+          - title: Yüklemenin ardından olay tetiklenir
+            text: >-
+              Yeni nesne bir olay (S3 Event Notification) yayınlar; bir Lambda fonksiyonu küçük boyutlu kopyalar üretir, virüs
+              taraması yapar ya da ürün kaydına görselin anahtarını yazar.
+      feed:
+        title: Veri nereden geliyor?
+        writes: >-
+          Satıcılar ve içerik ekibi görselleri yükler; büyük sistemlerde tarayıcı dosyayı önceden imzalı bir PUT adresiyle doğrudan
+          S3'e yükler, uygulama sadece adresi imzalar.
+        reads: Mağaza sayfaları (ürün kartları, ürün sayfası, fırsat kutusu) ve satıcı paneli.
+        kind: >-
+          S3 başka bir veritabanından veri çekmez; içine yazılanı saklar. Bir nesne yüklendiğinde olay yayınlayabilir (S3 Event
+          Notifications → Lambda, SQS, EventBridge); küçük görsel üretme gibi işler bu olayla başlar.
+        with: >-
+          Görselin hangi ürüne ait olduğu katalogdadır (DocumentDB); S3'te sadece dosya ve küçük metadata durur. Bu mağazada görsel
+          anahtarı ürün numarasından türetiliyor (products/P0001.jpg); gerçek sistemlerde anahtar ürün dokümanına yazılır.
+        best: >-
+          Dosyalar nesne deposunda, kayıtları veritabanında. Herkese açık bucket yerine özel bucket + CDN (CloudFront, Origin Access
+          Control) ya da süreli imzalı adresler. Sürümleme açık, eski sürümler yaşam döngüsü kuralıyla temizlenir.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              Satıcı panelindesin. Formda bir resim seçtin ve "Upload" butonuna bastın. Tarayıcın dosyayı ve ürün numarasını
+              (P0001) uygulamaya çok parçalı bir form (multipart) olarak gönderdi.
+          - text: >-
+              Uygulama dosyanın 2 MB'tan küçük olduğunu kontrol etti, adını temizledi, anahtarı kurdu ve S3'e PutObject gönderdi.
+              S3 dosyayı metadata'sıyla sakladı ve yeni bir sürüm numarası döndürdü. Simülasyon bu yüklemeyi gösteriyor.
+            engines: [s3]
+          - text: >-
+              Sayfa "uploads/" listesine geçti: uygulama ListObjectsV2 ile uploads/ ile başlayan anahtarları, sonra her biri için
+              HeadObject ile metadata'yı sordu. Yüklediğin dosya listede.
+            engines: [s3]
+      sim:
+        kind: objects
+        title: "Bucket: dbws-images-… (anahtarlardan bir kesit)"
+        caption: >-
+          Bucket'taki anahtarlardan küçük bir kesit (anahtarlar gerçek, kimlikler kısaltıldı; sürüm numaraları kısaltılmış örnekler).
+          Önce senin yüklemen, sonra sayfanın uploads/ listesi oynuyor.
+        list_prefix: uploads/
+        objects:
+          - {key: products/P0001.jpg, size: 48 KB, type: image/jpeg, version: "3HL4kq…"}
+          - {key: products/P0002.jpg, size: 51 KB, type: image/jpeg, version: "Qx91Ab…"}
+          - {key: "uploads/004c5a92…/1793140631-up.png", size: 157 B, type: image/png, version: "u8Pq2Z…"}
+          - {key: "uploads/06876b05…/1793301649-images__1_.jpg", size: 27 KB, type: image/jpeg, version: "kT02mF…"}
+        put: {key: "uploads/7f3a…/1793398000-test.png", size: 99 B, type: image/png, version: "yN3c8w…", say: "PutObject: dosya anahtarı, byte'ları ve metadata'sıyla (product-id, uploaded-by) yazıldı; S3 yeni bir sürüm numarası döndürdü. Nesne en az üç Availability Zone'da saklandı."}
+        send: >-
+          "Upload"a bastın. Uygulama dosyayı aldı, boyutunu kontrol etti, adını temizledi ve anahtarı kurdu: uploads/<senin
+          kimliğin>/<zaman>-<ad>.
+        list_send: "Sayfa listeyi uploads/ öneki için yeniledi: uygulama ListObjectsV2 Prefix='uploads/' gönderiyor."
+        list_say: "S3 uploads/ ile başlayan anahtarları döndürdü; products/ anahtarlarına bakılmadı. Klasör yok, sadece adın başı eşleşti."
+        back: Uygulama listeyi ve her nesnenin metadata'sını tarayıcına gönderdi; galeri yüklediğin dosyayı gösterecek.
+        summary: >-
+          S3 dosyayı bir anahtarla, byte'larıyla ve metadata'sıyla sakladı; sürümleme açık olduğu için her yükleme yeni bir sürüm.
+          Liste bir klasörü değil, bir öneki okudu.
+      wire:
+        what: >-
+          Uygulama S3'e AWS'nin Python kütüphanesi boto3 ile HTTPS üzerinden konuşur; istekler VPC'deki gateway endpoint'ten,
+          internete çıkmadan gider. Her istek uygulamanın IAM kimliğiyle imzalanır.
+        dst: "dbws-images-179330777878-eu-central-1.s3.eu-central-1.amazonaws.com : 443"
+        dst_note: >-
+          Ürün görsellerinin bucket'ı. Herkese açık erişim tamamen kapalı (Block Public Access); bucket'a sadece IAM kimliği ya da
+          imzalı bir adresle erişilir.
+        rows:
+          - [Şifreleme, TLS (HTTPS), gerçek, S3'e şifreli bağlanılır.]
+          - [Protokol, "HTTP (S3 REST API)", gerçek, "GET, PUT, HEAD ve liste istekleri; her nesne bir adres (anahtar)."]
+          - [Kimlik, "IAM, SigV4 imzası (servis: s3)", gerçek, "Şifre yok. İsteğe geçici AWS kimliğiyle hesaplanmış bir imza eklenir."]
+        body_label: İsteğin içeriği (okunur hâle getirilmiş)
+        body: |-
+          PUT /uploads/7f3a…/1793398000-test.png HTTP/1.1
+          Host: dbws-images-179330777878-eu-central-1.s3.eu-central-1.amazonaws.com
+          Content-Type: image/png
+          x-amz-meta-product-id: P0001
+          x-amz-meta-uploaded-by: 7f3a…
+          Authorization: AWS4-HMAC-SHA256 Credential=…/eu-central-1/s3/aws4_request, …
+
+          <99 bayt PNG>
+          Cevap: 200 OK, x-amz-version-id: yN3c8w…
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Kontrolleri ve anahtarı
+        uygulama yapar; saklamayı ve sürümü S3.
+      app_code:
+        - file: engines/s3.py
+          func: api_upload
+          title: '"Yükle" isteği'
+          sub: Senin tıklamanla gelen istek.
+          lines:
+            - {match: '@bp.post("/api/upload")', say: "Yükleme isteği buraya gelir: dosya ve ürün numarası.", tag: Tarayıcı → Uygulama}
+            - {match: 'data = f.read(MAX_UPLOAD + 1)', say: "Dosyayı en fazla 2 MB + 1 bayt okur.", tag: Uygulamanın içinde}
+            - {match: 'if len(data) > MAX_UPLOAD:', say: "2 MB'tan büyükse reddeder.", tag: Uygulamanın içinde}
+            - {match: 'name = re.sub(r"[^A-Za-z0-9._-]", "_", f.filename or "image")[:60]', say: "Dosya adındaki izin verilmeyen karakterleri temizler.", tag: Uygulamanın içinde}
+            - {match: 'key = f"uploads/{visitor_id()}/{int(time.time())}-{name}"', say: "Anahtarı kurar: uploads/ + senin kimliğin + zaman + ad.", tag: Uygulamanın içinde, hl: key}
+            - {match: 'meta = {"product-id":', say: Nesneyle birlikte saklanacak metadata'yı hazırlar., tag: Uygulamanın içinde}
+            - {match: 'resp = s3().put_object(Bucket=env("BUCKET_NAME"), Key=key, Body=data', say: "Dosya S3'e gider; S3 saklar ve sürüm numarasını döner.", tag: [Uygulama → S3, S3 → Uygulama], hl: version}
+            - {match: 'return jsonify(trace.payload({"key": key, "version": resp.get("VersionId")}))', say: Anahtar ve sürüm numarası tarayıcıya gider., tag: Uygulama → Tarayıcı}
+      live:
+        title: Gerçek bucket'ta ne oldu?
+        intro: Senin yüklemenle S3'e giden gerçek PutObject.
+        runs:
+          - label: Yükleme (senin tıklaman)
+            trigger: true
+            metrics: [[Süre, ms], [Sürüm (VersionId), data.version]]
+        reading: >-
+          S3 dosyayı birkaç on milisaniyede yazdı ve bir sürüm numarası döndürdü. Aynı adla tekrar yüklesen bile anahtarın başında
+          zaman olduğu için yeni bir nesne oluşur; aynı anahtara yazılsaydı eski hâli bir sürüm olarak kalırdı (1 gün sonra silinir).
+          Süre dosyanın boyutuna ve ağa göre değişir.
+      query:
+        title: Uygulama S3'e ne dedi?
+        intro: >-
+          Yükleme ve hemen ardından giden liste. Bir parçanın üzerine gelince cümlede, kodda ve açıklamada aynı yer parlar.
+        cards_title: Parça parça
+        parts:
+          - id: put
+            say: Bu dosyayı bu anahtarla, içerik türü ve metadata'sıyla sakla;
+            code: "s3.put_object(Bucket='…', Key='uploads/7f3a…/1793398000-test.png', Body=<99 bayt>, ContentType='image/png', Metadata={…})"
+            name: Ne saklansın?
+            note: Nesne = anahtar + byte'lar + metadata. Cevapta yeni VersionId gelir.
+            hl: version
+          - id: lst
+            say: sonra uploads/ ile başlayan en fazla 12 anahtarı listele
+            code: "s3.list_objects_v2(Bucket='…', Prefix='uploads/', MaxKeys=12)"
+            name: Neler var?
+            note: Önekle listeleme; klasör yok, anahtarların başı eşleşir.
+            hl: key
+          - id: hd
+            say: ve her birinin metadata'sını getir.
+            code: "s3.head_object(Bucket='…', Key=…)   (ilk 6 nesne için)"
+            name: Bilgileri
+            note: HEAD, dosyanın byte'larını değil sadece bilgilerini getirir.
+            hl: key
+        columns:
+          - label: Yükle ve listele
+            sub: Senin "Upload" tıklamanla ve hemen ardından giden istekler.
+            via: Uygulama bunları boto3 kütüphanesinin put_object(), list_objects_v2() ve head_object() metotlarıyla gönderir.
+            parts: [put, lst, hd]
+        note: >-
+          Dikkat: hiçbir komutta "klasör oluştur" yok. uploads/7f3a…/ gibi bir yol sadece anahtarın başıdır; S3'te tek ve düz bir
+          anahtar listesi vardır.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          S3'ün işi nesneyi saklayıp sürümü verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: S3 → Uygulama
+            text: Yeni nesnenin sürüm numarası (VersionId) geldi.
+          - who: Uygulama → Tarayıcın
+            text: Anahtarı ve sürüm numarasını gönderdi.
+          - who: Tarayıcın → Uygulama → S3
+            text: >-
+              Sayfa "uploads/" listesine geçti; uygulama ListObjectsV2 ve her nesne için HeadObject gönderdi.
+          - who: Tarayıcın
+            text: Galeriyi yüklediğin dosyayla birlikte çizdi; anahtar, boyut, tür ve metadata görünüyor.
+          - who: Sonra
+            text: >-
+              Görevin sonu. Her veritabanının ne zaman doğru seçim olduğunu uçtan uca anlatan sayfalara (/e2etutorial) geçebilirsin.
+      remember: >-
+        Dosyalar nesne olarak saklanır: anahtar, byte'lar ve metadata. Klasör yoktur, önek vardır; sürümleme açıksa hiçbir yükleme
+        eskisini kaybettirmez.
+      why_db: >-
+        Neden S3? Görseller ve dosyalar için dayanıklı (en az üç Availability Zone), ucuz ve sınırsız bir depo; sürümleme, yaşam
+        döngüsü ve olaylar hazır. Bedeli: S3 içerik üzerinde sorgu yapmaz; dosyanın kime ait olduğu ve neyi gösterdiği bir
+        veritabanında tutulur.
