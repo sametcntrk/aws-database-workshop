@@ -1578,24 +1578,42 @@ steps:
           - [ElastiCache (Valkey), "Veriyi bellekte tutan, mikrosaniyeler içinde cevap veren anahtar-değer veritabanı."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
       prior:
-        title: Gerçek bir sistemde fırsat stoğu nasıl tutulur?
+        title: Gerçek bir sistemde fırsat stoğu için hazırlık
         intro: >-
-          İzdiham başlamadan önce hazır olması gerekenler: bellekteki sayaç ve onu değiştirme kuralı.
+          İzdiham başlamadan önce, kampanya için bellekte bir sayaç ve bir fırsat kartı hazırlanır. Aşağıdaki beş adım bu
+          hazırlığın sırasıdır.
         text:
-          - >-
-            Stok sayacı bellekte tek bir anahtardır. Fırsat ürününün kalan adedi ElastiCache'te bir tamsayı olarak tutulur ve
-            satış başlamadan önce asıl stok kaydından (veritabanından) kurulur. Bellekte durduğu için binlerce alıcıya
-            aynı anda mikrosaniyeler içinde cevap verir.
-          - >-
-            Paylaşılan değer tek bir atomik komutla değişir: DECR, INCR. Birden fazla şey birlikte kontrol edilecekse (ör.
-            hem stok hem "kişi başı en fazla 1") bunlar Valkey'de tek bir Lua betiği ya da fonksiyon olarak, yine tek
-            hamlede çalıştırılır. "Önce oku, sonra yaz" yapılmaz.
-          - >-
-            Sayaç kapıdaki ilk elemedir, asıl kayıt değildir. Satışın asıl kaydı (sipariş, ödeme) ilişkisel bir veritabanına
-            transaction ile yazılır. Ödeme başarısız olursa sayaç INCR ile geri artırılır.
-          - >-
-            Tek bir anahtar tek bir yerde durur. ElastiCache yüke göre büyür ve anahtarları parçalara (shard) dağıtır, ama
-            tek bir sayaç her zaman tek bir parçadadır. Çok büyük kampanyalarda stok birkaç anahtara bölünür.
+          - title: Önce sayfanın soruları yazılır
+            text: >-
+              Fırsat sayfasının iki işi var: "kaç parça kaldı?" (çok sık okunur) ve "bir tane al" (çok sayıda kişi aynı anda,
+              aynı değere yazar). İkisi de tek bir anahtar üzerinde, bellekte, milisaniyenin altında cevaplanmalıdır.
+            code: |-
+              GET  lm:deal:stock    → kaç parça kaldı
+              DECR lm:deal:stock    → bir tane al, yeni değeri söyle
+          - title: Kampanya başlamadan sayaç kurulur
+            text: >-
+              Fırsat kartı (ürün no, ad, indirimli fiyat) katalogdan kopyalanıp bir hash olarak, kalan adet de asıl stok
+              kaydından alınıp bir tamsayı olarak belleğe yazılır. Satış sırasında katalog ya da stok veritabanı sorulmaz.
+            code: |-
+              HSET lm:deal product_id P0021 name "Akıllı Saat" price 1199.94
+              SET  lm:deal:stock 50
+          - title: Paylaşılan değer tek bir atomik komutla değişir
+            text: >-
+              "Önce oku, sonra yaz" yapılmaz. DECR sayacı tek hamlede azaltır; sonuç eksiye düşerse parça kalmamıştır ve INCR
+              ile geri verilir. Birden fazla şey birlikte kontrol edilecekse (ör. stok ve "kişi başı en fazla 1") hepsi tek bir
+              Lua betiğinde, yine tek hamlede çalışır.
+            code: |-
+              EVAL "if tonumber(redis.call('GET', KEYS[1])) > 0 then return redis.call('DECR', KEYS[1]) else return -1 end" 1 lm:deal:stock
+          - title: Sayaç kapıdaki ilk elemedir
+            text: >-
+              Asıl satış kaydı (sipariş, ödeme) ilişkisel bir veritabanına transaction ile yazılır. Ödeme başarısız olursa sayaç
+              INCR ile geri artırılır. Satış bitince satılan adetler siparişlerle karşılaştırılır; sayaç kaybolursa asıl
+              kayıttan yeniden kurulur.
+          - title: Tek anahtar tek bir parçadadır
+            text: >-
+              ElastiCache yüke göre büyür ve anahtarları parçalara (shard) dağıtır, ama tek bir sayaç her zaman tek bir
+              parçadadır. Çok büyük kampanyalarda stok birkaç anahtara bölünür (ör. lm:deal:stock:1 … :4) ve alıcılar bu
+              anahtarlara dağıtılır.
       feed:
         title: Veri nereden geliyor?
         writes: >-
@@ -1604,9 +1622,39 @@ steps:
         kind: >-
           Uygulama orkestrasyonu. ElastiCache başka bir veritabanından kendiliğinden veri çekmez; içine ne yazılırsa onu
           tutar.
+        with: >-
+          Fırsat sayfası ElastiCache'in yanında başka veritabanlarına dayanır: fırsat kartındaki ürün adı ve fiyat kampanya
+          başlarken katalogdan (DocumentDB) kopyalanır; görsel nesne deposundan (S3, büyük sistemlerde bir CDN ile) gelir;
+          satın almanın asıl kaydı sipariş veritabanına (Aurora) yazılır.
         best: >-
           Asıl gerçek her zaman veritabanındadır. Satış bitince satılan adetler veritabanındaki siparişlerle karşılaştırılır.
           Sayaç kaybolursa (ör. bir bakım sırasında) asıl kayıttan yeniden kurulur.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              Mağazada bir müşteri olarak geziyorsun. Şifreyle giriş yok: tarayıcın lm_visitor çereziyle tanınıyor. Bu
+              kimlik, birazdan kurulacak geçici sayacın adında da kullanılacak (lm:sim:<kimlik>).
+          - text: >-
+              "Deals" (fırsatlar) sayfasını açtın. Oturumun güncellendi; fırsat kartı da bellekten geldi: ürün no, ad ve
+              indirimli fiyat bir hash'ten (lm:deal), kalan adet bir sayaçtan (lm:deal:stock). Ürün görseli S3'ten geldi.
+            engines: [elasticache, s3]
+          - text: >-
+              Bir önceki adımda "Read, then write" (önce oku, sonra yaz) yolunu seçtin. Bu sadece sayfadaki bir seçim; henüz
+              hiçbir istek gitmedi.
+          - text: >-
+              "Start the rush" (izdihamı başlat) butonuna bastın. Tarayıcın uygulamaya "300 alıcı, 10 parça, önce oku sonra
+              yaz" dedi. Uygulama gerçek fırsat stoğuna dokunmadan bu deneme için geçici bir sayaç kurdu ve 300 alıcıyı aynı
+              anda koşturdu; her alıcı ElastiCache'e önce GET, sonra SET gönderdi. Simülasyonun sol şeridi bu tur.
+            engines: [elasticache]
+          - text: >-
+              Aynı istekte uygulama sayacı yeniden 10'a kurdu ve aynı 300 alıcıyı bu kez DECR ile koşturdu (sağ şerit). Sonra
+              geçici sayacı sildi ve iki turun sonucunu gönderdi; sayfada sonuç kutusu çizildi. Bu deneme saatte en fazla 3 kez
+              yapılabilir.
+            engines: [elasticache]
       sim:
         kind: race
         caption: >-
@@ -1618,6 +1666,12 @@ steps:
         stock: 3
         buyers: [Ayşe, Mert, Elif, Lukas, Zeynep, Can]
         tick_ms: 1100
+        send: >-
+          "Start the rush" butonuna bastın. Uygulama bu deneme için geçici bir sayaç kurdu ve 6 alıcıyı aynı anda başlatıyor;
+          her alıcı ElastiCache'e kendi komutlarını gönderecek.
+        back: >-
+          Uygulama kazananları saydı, fazla satışı hesapladı, geçici sayacı sildi ve sonucu tarayıcına gönderdi; sayfada sonuç
+          kutusu çizilecek.
         labels: {naive: 't0 · 1. tur · Senin seçtiğin · "Önce oku, sonra yaz"', atomic: "t0 · 2. tur · Aynı istekte · Atomik DECR"}
       wire:
         what: >-
