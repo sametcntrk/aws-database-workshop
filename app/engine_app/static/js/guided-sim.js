@@ -287,14 +287,16 @@
       const last = ln.hops[ln.hops.length - 1].nodes.filter((x) => !x.excluded);
       const tally = last.map((x) => ({ ...x, score: new Set(x.from).size })).sort((p, q) => q.score - p.score || String(p.id).localeCompare(String(q.id)));
       fr.push({ hop: ln.hops.length, edges, tally, done: true, say: ln.end_say || "Her ürün, ona kaç farklı yoldan ulaşıldığına göre sayıldı. En çok yol, en güçlü öneri." });
-      lanes[ln.id] = fr;
+      lanes[ln.id] = spec.engine_label === false ? fr : actorize(fr, ln.send_say || "Uygulama openCypher sorgusunu Neptune'a gönderiyor.",
+        ln.back_say || "Uygulama önerileri olduğu gibi tarayıcıya gönderdi. Sayma, eleme ve sıralama sorgunun içinde, Neptune'da yapıldı.",
+        spec.engine_label || "Neptune", { hop: -1 });
     });
     const nodeHtml = (x, hop) => `<span class="gs-node ${x.type || ""}" data-id="${esc(x.id)}" data-hop="${hop}" ${x.excluded ? 'data-hl="exclude"' : ""} title="${esc(x.excluded || "")}">${esc(x.label)}${x.excluded ? `<small>${esc(x.excluded)}</small>` : ""}</span>`;
     const laneHtml = (ln) => shell(ln.id, ln.title, `<div class="gs-graph"><svg class="gs-edges" aria-hidden="true"></svg>
         <div class="gs-hop" data-hl="start"><h5>${esc(ln.start_title || "Başlangıç")}</h5>${nodeHtml(ln.start, 0)}</div>
         ${ln.hops.map((h, k) => `<div class="gs-hop" data-hl="hop${k + 1}"><h5>${esc(h.title)}</h5>${h.nodes.map((x) => nodeHtml(x, k + 1)).join("")}</div>`).join("")}</div>`,
       { hl: ln.id, count: "Yürünen kenar (edge)", result: ln.result_title || "Öneri (ortak müşteri sayısı)" });
-    const html = `<div class="gs-lanes">${specs.map(laneHtml).join("")}</div>${summary(spec.summary || "")}`;
+    const html = `${actorBar(spec.engine_label || "Neptune")}<div class="gs-lanes">${specs.map(laneHtml).join("")}</div>${summary(spec.summary || "")}`;
     function paint(root, id, f) {
       const ln = specs.find((x) => x.id === id), L = laneOf(root, id), g = L.querySelector(".gs-graph");
       L.querySelector(".gs-count b").textContent = f.edges || 0;
@@ -316,9 +318,28 @@
       });
       svg.innerHTML = lines;
       chips(L, (f.tally || []).map((x) => `<li>${esc(x.label)} <small>${x.score}</small></li>`));
-      L.querySelector(".gs-say").textContent = f.say;
+      sayWho(L, f);
     }
     return { html, lanes, paint, final: showSum };
+  }
+
+  /* ---------- Who works in a frame (owner rule: work of the app is never credited to the database).
+   * actorize(frames, send, back, db): after START the app sends, every middle frame is the database's (unless it names
+   * its own `who`), the last frame is the app sending the answer on. actorBar(db) is the bar above the lanes;
+   * sayWho(L, f) writes the narration with its badge and lights the actor(s) of the visible frames. */
+  const APP_NAME = "Uygulama";
+  function actorize(frames, send, back, db, reset) {
+    return [frames[0], { ...frames[0], ...(reset || {}), who: APP_NAME, say: send },
+      ...frames.slice(1).map((f) => ({ ...f, who: f.who || db })), { ...frames[frames.length - 1], who: APP_NAME, say: back }];
+  }
+  const actorBar = (db) => `<div class="gs-actors" aria-hidden="true"><span data-a="app" data-hl="app">Uygulama (sunucudaki program)</span><i>⇄</i><span data-a="db" data-hl="db">${esc(db)} (veritabanı)</span></div>`;
+  function sayWho(L, f) {
+    L.querySelector(".gs-say").innerHTML = `${f.who ? `<b class="gs-who ${f.who === APP_NAME ? "app" : "db"}">${esc(f.who)}</b> ` : ""}${esc(f.say)}`;
+    L.dataset.who = f.who === APP_NAME ? "app" : f.who ? "db" : "";
+    const root = L.closest(".gs");
+    if (!root) return;
+    const ws = [...root.querySelectorAll(".gs-lane")].map((x) => x.dataset.who).filter(Boolean);
+    root.querySelectorAll(".gs-actors [data-a]").forEach((x) => x.classList.toggle("on", ws.includes(x.dataset.a)));
   }
 
   const KINDS = { "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };

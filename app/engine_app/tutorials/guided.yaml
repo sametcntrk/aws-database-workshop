@@ -672,18 +672,54 @@ steps:
           - [Düğüm (vertex), "Bir şey: bir müşteri ya da bir ürün."]
           - [Kenar (edge), "İki düğüm arasındaki ilişki. Burada BOUGHT: bu müşteri bu ürünü aldı."]
           - [openCypher, "Graf sorgulama dili. Yolu çizer gibi yazarsın: (müşteri)-[:BOUGHT]->(ürün)."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde öneri grafı nasıl kurulur ve beslenir?
+        intro: >-
+          Sayfa açılmadan önce hazır olması gerekenler: grafın şekli ve içindeki satın almalar.
+        text:
+          - >-
+            Graf, sorulacak ilişkiye göre modellenir. Soru "kim neyi aldı?" olduğu için müşteri ve ürün birer düğüm
+            (vertex), her satın alma da müşteriden ürüne giden bir BOUGHT kenarı (edge) olur. Sipariş no ve adet gibi
+            bilgiler kenarın üzerine özellik (property) olarak yazılır.
+          - >-
+            Graf, asıl kaydın kopyasıdır. Siparişin kendisi (fiyat, ödeme, stok düşme) ilişkisel bir veritabanında, tek bir
+            transaction içinde tutulur. Graf sadece öneri için gereken ilişkileri tutar; kaybolursa asıl kayıttan yeniden
+            kurulabilir.
+          - >-
+            İlk yükleme toplu yapılır: geçmiş siparişler CSV dosyaları olarak Amazon S3'e konur ve Neptune bulk loader ile
+            tek seferde yüklenir. Sonrasında her yeni sipariş grafa tek tek, birkaç saniye içinde eklenir.
+          - >-
+            Yürüyüşler kısa tutulur. Çok satan bir ürün binlerce müşteriye bağlıdır (süper düğüm); her hop sonucu katlar.
+            Bu yüzden öneri sorguları 2–3 hop ile sınırlanır ve sonuç LIMIT ile kesilir.
+      feed:
+        title: Veri nereden geliyor?
+        writes: >-
+          Asıl sipariş kaydı ilişkisel veritabanına yazılır. Grafa her yeni siparişin BOUGHT kenarlarını bir besleme süreci
+          ekler.
+        reads: Uygulama, öneri şeritleri için ("bunu alanlar şunları da aldı", "sana özel").
+        kind: >-
+          Neptune başka bir veritabanından kendiliğinden veri çekmez; graf dışarıdan beslenir. Besleyen ya uygulama ya da
+          sipariş veritabanının değişikliklerini dinleyen bir süreçtir.
+        best: >-
+          Sipariş veritabanının değişiklik akışı (CDC) dinlenir: AWS DMS, Neptune'u hedef olarak alabilir; ya da siparişle
+          aynı transaction'da bir "outbox" tablosuna yazılan olayı küçük bir program okuyup grafa ekler. Uygulamanın siparişi
+          iki veritabanına ayrı ayrı yazması (dual write) önerilmez: ikinci yazma başarısız olursa iki kayıt birbirini tutmaz.
       sim:
         kind: graph-walk
         caption: >-
           Gerçek graftan küçük bir kesit: canlı Neptune'dan okunan müşteriler ve alımları. Gerçek grafta her ürünü
-          onlarca müşteri almış; burada her yolu görebilmen için sadece birkaçı var. İki yürüyüş yan yana, aynı hızda.
+          onlarca müşteri almış; burada her yolu görebilmen için sadece birkaçı var. Bunlar iki farklı algoritma değil,
+          aynı sayfanın gönderdiği iki ayrı gerçek istek: soldaki sayfa açılırken giden "bu ürüne göre" sorgusu, sağdaki
+          senin tıklamanla giden "sana göre" sorgusu. Uygulama iki öneri modu sunuyor; iki yürüyüş yan yana, aynı hızda.
+          Üstteki etiketler o anda işi kimin yaptığını gösterir: uygulama mı, Neptune mu.
         tick_ms: 1600
         summary: >-
           Soldaki yürüyüş herkese aynı önerileri verir ve senin zaten aldıklarını da önerebilir. Sağdaki yürüyüş bir adım
           daha uzun ama sana özel: aldıklarını eler, sana en çok benzeyenlerin seçtiklerini öne çıkarır.
         lanes:
           - id: product
-            title: Bu ürüne göre (2 hop)
+            title: "t-1 · İstek 1 · Sayfa açılınca · Bu ürüne göre (2 hop)"
             start: {id: P0001, label: Kablosuz Kulaklık, type: product}
             start_title: Bu ürün
             start_say: Yürüyüş bu sayfadaki ürünün düğümünden, Kablosuz Kulaklık'tan başlıyor.
@@ -707,7 +743,7 @@ steps:
               Her ürün kaç farklı müşteriden ulaşıldığına göre sayıldı. Powerbank 2 ile en üstte. Python ile Veri ve
               Toros Spor Çantası da listede, oysa Ayşe bunları zaten almış: bu yürüyüş kimin baktığını bilmez.
           - id: persona
-            title: Sana göre (3 hop)
+            title: "t0 · İstek 2 · Senin tıklaman · Sana göre (3 hop)"
             start: {id: C00001, label: Ayşe Yılmaz, type: me}
             start_title: Sen
             start_say: Yürüyüş senin seçtiğin müşterinin, Ayşe Yılmaz'ın düğümünden başlıyor.
@@ -739,6 +775,56 @@ steps:
             end_say: >-
               Kalan ürünler kaç farklı müşteriden ulaşıldığına göre sayıldı. Alpen Spor Çantası 4 ile en üstte; canlı sonuçta
               da Ayşe için ilk sıralarda bu ürün var.
+      wire:
+        what: >-
+          Uygulama sorguyu HTTPS ile Neptune'a gönderir (Python'un requests kütüphanesi). Her istek, uygulamanın IAM
+          kimliğiyle ayrı ayrı imzalanır.
+        dst: "dbws-neptune.cluster-ccgs3qxfidad.eu-central-1.neptune.amazonaws.com : 8182"
+        dst_note: >-
+          Neptune cluster'ının adresi. Cluster internete kapalı veri alt ağında; güvenlik grubu sadece bu uygulama
+          sunucusundan gelen bağlantıya izin veriyor.
+        rows:
+          - [Şifreleme, TLS (HTTPS), gerçek, Neptune sadece şifreli bağlantı kabul eder.]
+          - [Protokol, "HTTP, POST /openCypher", gerçek, "Neptune'un openCypher kapısı sıradan bir web adresi gibidir; sorgu bir form alanı olarak gider."]
+          - [Kimlik, "IAM, SigV4 imzası (servis: neptune-db)", gerçek, "Şifre yok. İsteğin başlıklarına, geçici AWS kimliğiyle hesaplanmış bir imza eklenir; Neptune imzayı kontrol eder."]
+        body_label: İsteğin içeriği (okunur hâle getirilmiş, imza değerleri kısaltıldı)
+        body: |-
+          POST /openCypher HTTP/1.1
+          Host: dbws-neptune.cluster-ccgs3qxfidad.eu-central-1.neptune.amazonaws.com:8182
+          Content-Type: application/x-www-form-urlencoded
+          X-Amz-Date: 20261030T…Z
+          X-Amz-Security-Token: …
+          Authorization: AWS4-HMAC-SHA256 Credential=…/eu-central-1/neptune-db/aws4_request, SignedHeaders=…, Signature=…
+
+          query=MATCH (me:Customer {`~id`: $cid})-[:BOUGHT]->(:Product)<-[:BOUGHT]-(o:Customer)-[:BOUGHT]->(rec:Product) …
+          &parameters={"cid": "C00001"}
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Her satırın
+        etiketi işin nerede olduğunu söyler: mor etiketli satırda bir şey bir yerden bir yere gider (tarayıcıdan uygulamaya,
+        uygulamadan Neptune'a ya da geri). Gri "Uygulamanın içinde" etiketli satırda iş uygulamanın kendi içinde yapılır,
+        hiçbir yere bir şey gitmez. İki istek de aynı kodu çalıştırır; hangi sorgunun seçileceğini adresteki mode belirler.
+      app_code:
+        - file: engines/neptune.py
+          func: api_recs
+          title: "1. Öneri isteği (iki istekte de aynı kod)"
+          sub: Adresteki mode=product ya da mode=persona hangi sorgunun gideceğini seçer.
+          lines:
+            - {match: '@bp.get("/api/recs")', say: Öneri isteği buraya gelir., tag: Tarayıcı → Uygulama}
+            - {match: 'mode = request.args.get("mode", "product")', say: "Hangi öneri isteniyor: bu ürüne göre mi, sana göre mi?", tag: Uygulamanın içinde}
+            - {match: 'params, query = {"cid": persona_id()}, BY_PERSONA', say: "Sana göre ise 3 hop'luk sorguyu seçer; başlangıç, seçtiğin müşteri.", tag: Uygulamanın içinde, hl: hop3}
+            - {match: 'params, query = {"pid": request.args.get("product", "P0001")}, BY_PRODUCT', say: "Değilse 2 hop'luk sorguyu seçer; başlangıç, bu sayfadaki ürün.", tag: Uygulamanın içinde, hl: start}
+            - {match: 'rows = _q(query, params)', say: "Sorgu Neptune'a gider, en fazla 6 öneri geri gelir (gönderme işi 2. kartta).", tag: [Uygulama → Neptune, Neptune → Uygulama], hl: result}
+            - {match: 'return jsonify(trace.payload(rows))', say: "Öneriler olduğu gibi tarayıcıya gider. Uygulama sayma, eleme ya da sıralama yapmaz; hepsi sorgunun içinde.", tag: Uygulama → Tarayıcı}
+        - file: engines/neptune.py
+          func: _q
+          title: "2. Sorguyu Neptune'a gönderme"
+          sub: Bütün Neptune sorgularının geçtiği küçük yardımcı.
+          lines:
+            - {match: 'url = f"https://', say: "Neptune'un adresi: HTTPS, 8182 numaralı kapı, /openCypher yolu.", tag: Uygulamanın içinde}
+            - {match: 'body = {"query": query}', say: Sorgu metni isteğin gövdesine konur., tag: Uygulamanın içinde}
+            - {match: 'SigV4Auth(', say: "İstek, uygulamanın geçici AWS kimliğiyle imzalanır. Şifre yok.", tag: Uygulamanın içinde}
+            - {match: 'resp = requests.post(', say: requests kütüphanesi isteği Neptune'a gönderir ve cevabı bekler., tag: [Uygulama → Neptune, Neptune → Uygulama]}
+            - {match: 'return resp.json()["results"]', say: Cevaptaki satırlar alınır., tag: Uygulamanın içinde}
       live:
         title: Gerçek grafta ne oldu?
         intro: >-
@@ -836,15 +922,40 @@ steps:
         columns:
           - label: Bu ürüne göre (2 hop)
             sub: Sayfa ilk açıldığında giden sorgu.
+            via: >-
+              Uygulama bu sorguyu requests kütüphanesinin post() metoduyla, SigV4 imzalı bir HTTPS isteği olarak gönderir.
             parts: [pstart, pback, pfwd, pwhere, pret]
           - label: Sana göre (3 hop)
             sub: Senin "For my persona" tıklamanla giden sorgu.
+            via: >-
+              Aynı yoldan gider. Bu sorgunun eleme ve sayma işleri de Neptune'da yapılır; uygulama sonuca dokunmaz.
             parts: [mstart, mback, mfwd, mwhere, mret]
             mark: [mwhere]
         note: >-
           Dikkat: iki sorguda da "tabloyu tara" diyen bir şey yok. Sorgu bir yol çiziyor ve Neptune o yolu başlangıç
           düğümünden takip ediyor. Sağdaki sorgunun farkı başlangıç noktası (ürün yerine sen), bir hop fazlası ve senin
           aldıklarını eleyen NOT (me)-[:BOUGHT]->(rec) parçası.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          Neptune'un işi önerileri verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: Neptune → Uygulama
+            text: >-
+              {items} öneri geldi: ürün no, ad, kategori ve skor (ortak müşteri sayısı). Eleme, sayma ve sıralama Neptune'da,
+              sorgunun içinde yapıldı.
+          - who: Uygulama
+            text: Satırlara dokunmadı. Sadece isteğin kaydını (trace) cevaba ekledi.
+          - who: Uygulama → Tarayıcın
+            text: Önerileri ve isteğin kaydını tek bir JSON cevabında gönderdi.
+          - who: Tarayıcın
+            text: >-
+              Önerileri "Recommended for …" (sana önerilenler) başlığıyla çizdi. Her kartın altındaki "shared customers"
+              (ortak müşteri) sayısı skordur.
+          - who: Sonra
+            text: >-
+              Yeni bir sipariş grafa BOUGHT kenarı olarak eklendiği anda bir sonraki öneri değişir; grafı baştan hesaplamaya
+              gerek yoktur.
       remember: >-
         İlişkiler üzerinden giden sorularda ("benim gibi alanlar ne aldı?") graf veritabanı yolu doğrudan takip eder.
         Bir hop eklemek sorguya bir parça eklemek kadar kolaydır.
