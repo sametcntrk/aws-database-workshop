@@ -7429,16 +7429,251 @@ steps:
   - page: ops
     path: /admin/ops
     engines: [influxdb]
-    use_case: Time-series metrics
-    title: One value per time window
+    use_case: Zaman serisi ölçümleri
+    title: Her zaman penceresi için tek değer
     why: >-
-      Each sensor reading is one point: a time, tags and a value. aggregateWindow calculates one mean per window. A larger window returns fewer points.
-    do: Click the lit button "1 h".
+      Operasyon ekranındasın: depoların sıcaklığı ve dakikadaki sipariş sayısı grafiklerde. Grafik şu an 15 dakikalık
+      ortalamaları gösteriyor. Şimdi pencereyi büyütüp grafiğin nasıl sadeleştiğine bakacaksın.
+    do: Aydınlık "1 hour" (1 saat) butonuna tıkla.
     target: "#exp-win [data-value='1h']"
     action: click
     wait: {method: GET, path: /influxdb/api/series, query: {window: 1h}}
     focus: "#temp-wrap"
-    result: The Flux query has range, filter and aggregateWindow. Fewer, smoother points came back. The raw points stay in the bucket.
+    result: The Flux query has range, filter and aggregateWindow.
+    panel:
+      need: >-
+        Depolardaki sensörler her 5 dakikada bir ölçüm gönderiyor; sipariş sayısı her dakika yazılıyor. Bir günde binlerce nokta
+        birikir. Ekran bunların hepsini çizmek yerine seçilen aralığı (ör. son 6 saat) seçilen pencerelere (15 dakika, 1 saat)
+        bölüp her pencere için tek bir ortalama göstermeli. Bu hesap verinin durduğu yerde yapılmalı.
+      concept:
+        term: Zaman serisi ve pencere toplama (aggregateWindow)
+        text: >-
+          Zaman serisi, zaman damgalı ölçümlerin dizisidir: "10:05'te sıcaklık 21,4". Her ölçüm bir noktadır; ölçümün adı
+          (measurement), etiketleri (depo, sensör) ve değeri vardır. aggregateWindow, zamanı eşit pencerelere böler ve her
+          penceredeki noktaları tek bir değere (ortalama, toplam) indirir. Bir saatteki 12 termometre okumasını "saatin
+          ortalaması 22,1" diye özetlemek gibi.
+        terms:
+          - [Nokta (point), "Tek bir ölçüm: zaman + ölçüm adı + etiketler + değer."]
+          - [Etiket (tag), "Noktayı tanımlayan, index'lenen alan: warehouse = İstanbul, sensor = temperature."]
+          - [Flux, "InfluxDB'nin sorgu dili; adımlar |> ile birbirine bağlanır."]
+          - [aggregateWindow, "Zamanı pencerelere bölüp her pencere için tek değer hesaplayan adım."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde zaman serisi deposu için hazırlık
+        intro: >-
+          Grafik hiç açılmadan, ölçümlerin şekli, saklama süresi ve sorguları belirlenir. Aşağıdaki beş adım bu hazırlığın
+          sırasıdır.
+        text:
+          - title: Önce ekranın soruları yazılır
+            text: >-
+              "Son X saatte her depo için sıcaklığın Y dakikalık ortalaması" ve "dakikadaki sipariş sayısının toplamı". Hepsi bir
+              zaman aralığı, bir filtre ve bir pencere toplamasıdır.
+            code: |-
+              from(bucket: "metrics") |> range(start: -6h)
+                |> filter(fn: (r) => r._measurement == "warehouse_env" and r.sensor == "temperature")
+                |> aggregateWindow(every: 1h, fn: mean)
+          - title: Nokta şekli tasarlanır
+            text: >-
+              Filtrelenecek ve gruplanacak bilgiler etiket (tag), ölçülen sayılar alan (field) olur. Etiketin farklı değer sayısı
+              (cardinality) sınırlı tutulur; kullanıcı kimliği gibi sınırsız değerler etikete konmaz.
+            code: |-
+              warehouse_env,warehouse=istanbul,sensor=temperature value=21.43 1793390400
+          - title: Saklama süresi belirlenir
+            text: >-
+              Bucket'a bir saklama süresi (retention) verilir; eski ham noktalar kendiliğinden silinir. Uzun dönem için ham veri
+              yerine saatlik özetler ayrı bir bucket'a yazılır (downsampling).
+          - title: Yazma toplu yapılır
+            text: >-
+              Sensörler noktaları tek tek değil, gruplar hâlinde gönderir; satır protokolü (line protocol) çok noktayı tek istekte
+              taşır. Zaman damgası ölçümün kendi zamanıdır.
+          - title: Ekran zaman aralığı ve pencereyle sınırlanır
+            text: >-
+              Ekran her zaman bir aralık ve pencere ister; sınırsız aralıkta ham nokta istenmez. Pencere ne kadar büyükse dönen nokta
+              o kadar azdır.
+      feed:
+        title: Veri nereden geliyor?
+        writes: >-
+          Depolardaki sensörler (ya da onları toplayan bir ajan, ör. Telegraf) ve uygulama (sipariş başına bir nokta).
+        reads: Operasyon ekranı ve alarm kuralları.
+        kind: >-
+          Kaynaktan doğrudan yazma: sensörler ve uygulama InfluxDB'ye kendileri yazar. InfluxDB başka bir veritabanından
+          kendiliğinden veri çekmez.
+        with: >-
+          Sipariş sayacının kaynağı siparişlerdir (Aurora'da asıl kayıt); operasyon ekranı onun zaman serisi hâlini InfluxDB'den
+          okur. Sensör verisinin başka bir kopyası yoktur.
+        best: >-
+          Sensör ve metrik gibi çok sık, zaman damgalı ve hiç güncellenmeyen veri bir zaman serisi veritabanında, saklama süresi
+          ve özetlerle tutulur. İş verisi (sipariş) asıl veritabanında kalır.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              "Ops" (operasyon) ekranını açtın. Sayfa "15 minutes" ve "6 hours" seçiliyken sıcaklık ve sipariş serilerini istedi;
+              uygulama InfluxDB'ye iki Flux sorgusu gönderdi.
+            engines: [influxdb]
+          - text: >-
+              "1 hour" butonuna bastın. Tarayıcın aynı serileri window=1h ile istedi; uygulama aynı Flux sorgusunu 1 saatlik
+              pencereyle gönderdi. Simülasyonun sağ şeridi bu istek.
+            engines: [influxdb]
+          - text: >-
+              Grafik daha az ve daha düzgün noktayla yeniden çizildi. Ham noktalar InfluxDB'de olduğu gibi duruyor; değişen sadece
+              özetin penceresi.
+            engines: [influxdb]
+      sim:
+        kind: timeseries
+        caption: >-
+          Bir deponun sıcaklık sensöründen 1 saatlik, 5 dakikada bir alınmış 12 ham nokta (değerler örnek, ama verinin şekli
+          gerçek). Solda sayfa açılırken giden 15 dakikalık pencere, sağda senin tıklamanla giden 1 saatlik pencere.
+        start: "10:00"
+        points:
+          - {t: "10:00", v: 21.4}
+          - {t: "10:05", v: 21.9}
+          - {t: "10:10", v: 22.3}
+          - {t: "10:15", v: 21.7}
+          - {t: "10:20", v: 22.8}
+          - {t: "10:25", v: 23.1}
+          - {t: "10:30", v: 22.6}
+          - {t: "10:35", v: 23.4}
+          - {t: "10:40", v: 22.9}
+          - {t: "10:45", v: 23.6}
+          - {t: "10:50", v: 24.0}
+          - {t: "10:55", v: 23.3}
+        lanes:
+          - id: w15
+            title: "t-1 · İstek 1 · Sayfa açılınca · 15 dakikalık pencere"
+            window: 15
+            send: Ops ekranını açtın. Uygulama Flux sorgusunu aggregateWindow(every 15m) ile gönderiyor.
+            back: Uygulama 4 noktayı tarayıcına gönderdi.
+          - id: w60
+            title: "t0 · İstek 2 · Senin tıklaman · 1 saatlik pencere"
+            window: 60
+            send: '"1 hour"a bastın. Uygulama aynı sorguyu aggregateWindow(every 1h) ile gönderiyor.'
+            back: Uygulama tek noktayı tarayıcına gönderdi; grafik sadeleşecek.
+        summary: >-
+          Aynı 12 ham nokta: 15 dakikalık pencereyle 4, 1 saatlik pencereyle 1 nokta döndü. Ortalamayı InfluxDB hesapladı;
+          uygulamaya sadece sonuç gitti. Ham noktalar silinmedi.
+      wire:
+        what: >-
+          Uygulama her sorgu için InfluxDB'ye HTTPS ile bağlanır (influxdb-client kütüphanesi) ve Flux sorgusunu gönderir.
+        dst: "f9a4tsktku-p4muk2z3lkadrg.timestream-influxdb.eu-central-1.on.aws : 8086"
+        dst_note: >-
+          Amazon Timestream for InfluxDB örneğinin adresi (db.influx.medium). İnternete kapalı veri alt ağında duruyor.
+        rows:
+          - [Şifreleme, TLS (HTTPS), gerçek, InfluxDB'ye şifreli bağlanılır.]
+          - [Protokol, "HTTP, POST /api/v2/query (Flux)", gerçek, "Sorgu metni gövdede gider; cevap CSV biçiminde satırlar olarak döner."]
+          - [Kimlik, "Kullanıcı adı + şifre", gerçek, "Şifre kodda yazmaz; uygulama onu AWS Secrets Manager'dan alır."]
+        body_label: İsteğin içeriği (okunur hâle getirilmiş)
+        body: |-
+          POST /api/v2/query?org=dbws HTTP/1.1
+          Content-Type: application/vnd.flux
+
+          from(bucket: "metrics")
+            |> range(start: -6h)
+            |> filter(fn: (r) => r._measurement == "warehouse_env" and r.sensor == "temperature")
+            |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Pencereyi uygulama
+        seçer; ortalamayı InfluxDB hesaplar.
+      app_code:
+        - file: engines/influxdb.py
+          func: api_series
+          title: Seri isteği
+          sub: Adresteki window=1h pencereyi seçer.
+          lines:
+            - {match: '@bp.get("/api/series")', say: "Seri isteği buraya gelir; adres ölçümü, pencereyi ve aralığı taşır.", tag: Tarayıcı → Uygulama}
+            - {match: 'window = request.args.get("window", "15m")', say: "Pencereyi okur.", tag: Uygulamanın içinde, hl: window}
+            - {match: 'window = window if window in WINDOWS else "15m"', say: "Sadece izin verilen pencereleri kabul eder (1m, 5m, 15m, 1h).", tag: Uygulamanın içinde}
+            - {match: '|> aggregateWindow(every: {window}, fn: mean, createEmpty: false)', say: "Flux sorgusunun son adımı: her pencere için ortalama.", tag: Uygulamanın içinde, hl: window}
+            - {match: 'tables = flux("Flux query", q,', say: "Sorgu InfluxDB'ye gider; pencere başına bir nokta döner.", tag: [Uygulama → InfluxDB, InfluxDB → Uygulama]}
+            - {match: 'series.setdefault(rec.values.get(group) or "all", []).append(', say: "Noktaları depoya göre gruplayıp zaman ve değer olarak listeler.", tag: Uygulamanın içinde}
+            - {match: 'return jsonify(trace.payload({"series": series, "window": window, "range": rng}))', say: Seriler tarayıcıya gider., tag: Uygulama → Tarayıcı}
+      live:
+        title: Gerçek zaman serisi veritabanında ne oldu?
+        intro: Senin tıklamanla InfluxDB'ye giden gerçek sorgu.
+        runs:
+          - label: 1 saatlik pencere (senin tıklaman)
+            trigger: true
+            metrics: [[Dönen nokta, items], [Süre, ms]]
+        reading: >-
+          Dönen nokta sayısı, seçili aralıkta veri olan pencere sayısı ve depo sayısının çarpımıdır. Bu kurulumda sensör verisi bir
+          kez yüklendi ve zamanla eskidi; son 24 saatte sensör noktası yoksa grafik boş ve dönen nokta 0 olur. Bu durumda Flux
+          sorgusu yine çalıştı, sadece aralıkta nokta bulamadı. Süre her istekte değişir.
+      query:
+        title: Uygulama InfluxDB'ye ne dedi?
+        intro: >-
+          İki sütun, iki isteğin Flux sorgusu. Tek fark pencere. Bir parçanın üzerine gelince cümlede, kodda ve açıklamada aynı yer
+          parlar.
+        cards_title: Parça parça
+        parts:
+          - id: fr
+            say: metrics bucket'ından
+            code: 'from(bucket: "metrics")'
+            name: Nereden?
+            note: Bucket, noktaların durduğu, saklama süresi olan depo.
+            hl: time
+          - id: rg
+            say: son 6 saatin
+            code: "  |> range(start: -6h)"
+            name: Hangi zaman?
+            note: Zaman aralığı her sorguda zorunludur; InfluxDB sadece o aralığın verisini okur.
+            hl: time
+          - id: fl
+            say: depo sıcaklık ölçümlerini al,
+            code: '  |> filter(fn: (r) => r._measurement == "warehouse_env" and r.sensor == "temperature")'
+            name: Hangileri?
+            note: Ölçüm adı ve sensör etiketi ile filtre; etiketler index'lidir.
+            hl: time
+          - id: a15
+            say: ve her 15 dakika için ortalamayı hesapla.
+            code: "  |> aggregateWindow(every: 15m, fn: mean, createEmpty: false)"
+            name: Nasıl özetlensin?
+            note: 15 dakikalık pencereler; boş pencereler atlanır.
+            hl: window
+          - id: a60
+            say: ve her saat için ortalamayı hesapla.
+            code: "  |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)"
+            name: Nasıl özetlensin?
+            note: 1 saatlik pencereler; aynı veriden dört kat az nokta.
+            hl: window
+            tag: sadece sağdaki sorguda var
+        columns:
+          - label: 15 dakika
+            sub: Sayfa açılırken giden sorgu.
+            via: Uygulama bu sorguyu influxdb-client kütüphanesinin query_api().query() metoduyla gönderir.
+            parts: [fr, rg, fl, a15]
+          - label: 1 saat
+            sub: Senin "1 hour" tıklamanla giden sorgu.
+            via: Aynı query() çağrısı; uygulama sadece pencereyi değiştirdi.
+            parts: [fr, rg, fl, a60]
+            mark: [a60]
+        note: >-
+          Dikkat: pencere değişince veri değişmez; sadece özet değişir. Ham noktalar saklama süresi bitene kadar InfluxDB'de durur.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          InfluxDB'nin işi noktaları verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: InfluxDB → Uygulama
+            text: "{items} nokta geldi: her depo ve her pencere için bir ortalama."
+          - who: Uygulama
+            text: Noktaları depoya göre gruplayıp zaman ve değer listelerine çevirdi.
+          - who: Uygulama → Tarayıcın
+            text: Serileri ve isteğin kaydını tek bir JSON cevabında gönderdi.
+          - who: Tarayıcın
+            text: Grafiği daha az ve daha düzgün noktayla yeniden çizdi.
+          - who: Sonra
+            text: >-
+              Graf ekranına geçeceksin; orada müşteriler ve ürünler arasındaki ilişkiler Neptune'da yürünüyor (Adım 35).
+      remember: >-
+        Zaman serisinde ham noktaları değil, istenen pencerenin özetini oku. Pencere büyüdükçe dönen nokta azalır; hesap verinin
+        durduğu yerde yapılır.
+      why_db: >-
+        Neden Timestream for InfluxDB? Sensör ve metrik verisi çok sık, zaman damgalı ve hiç güncellenmeyen bir veri; InfluxDB onu
+        zamana göre saklar, saklama süresiyle temizler ve pencere toplamalarını kendisi yapar. Bedeli: ilişkisel sorgular ve iş
+        kayıtları için uygun değildir.
 
   # ---------------------------------------------------------------- Graph: Neptune
   - page: graph

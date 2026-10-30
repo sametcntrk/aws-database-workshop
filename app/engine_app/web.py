@@ -100,10 +100,10 @@ def app_code(spec):
         start = next(i for i, x in enumerate(src) if x.lstrip().startswith(f"def {spec['func']}("))
         base, end, in_str = len(src[start]) - len(src[start].lstrip()), len(src), False
         for i in range(start + 1, len(src)):                          # the function ends at the first line back at its indent,
-            if not in_str and src[i].strip() and len(src[i]) - len(src[i].lstrip()) <= base:   # not counting lines of a """ string
+            if not in_str and src[i].strip() and len(src[i]) - len(src[i].lstrip()) <= base:   # not counting lines inside a """ or ''' string
                 end = i
                 break
-            if src[i].count('"""') % 2:
+            if (src[i].count('"""') + src[i].count("'''")) % 2:
                 in_str = not in_str
     while start > 0 and src[start - 1].lstrip().startswith("@"):      # the route decorator says which URL the function answers
         start -= 1

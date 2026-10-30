@@ -1079,6 +1079,47 @@
     return { html, lanes: { z: fr }, paint, final: showSum };
   }
 
+  /* ---------- timeseries: raw points (time, value) are grouped into time windows and one mean per window comes back.
+   * spec.points [{t: "HH:MM", v}], spec.lanes [{id, title, window (minutes), send, back}], spec.start ("HH:MM"). */
+  function timeseries(spec) {
+    const DB = spec.engine_label || "InfluxDB", pts = spec.points;
+    const mins = (hhmm) => { const [h, m] = hhmm.split(":").map(Number); return h * 60 + m; };
+    const t0 = mins(spec.start || pts[0].t), fmt = (m) => `${String(Math.floor(m / 60) % 24).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+    const lanes = {};
+    spec.lanes.forEach((ln) => {
+      const W = ln.window, win = (p) => t0 + Math.floor((mins(p.t) - t0) / W) * W;
+      const fr = [{ say: START, cur: null, buckets: {}, out: [] }];
+      let s = { ...fr[0], range: true, say: ln.range_say || `range + filter: zaman aralığındaki ${pts.length} ham nokta seçildi.` };
+      fr.push(s);
+      pts.forEach((p, k) => {
+        const w = win(p), b = { ...s.buckets, [w]: [...(s.buckets[w] || []), p.v] };
+        s = { ...s, cur: k, buckets: b, say: `${p.t} noktası (${p.v}) ${fmt(w)}–${fmt(w + W)} penceresine kondu.` };
+        fr.push(s);
+      });
+      const out = Object.entries(s.buckets).map(([w, vs]) => [fmt(Number(w) + W), Math.round((vs.reduce((a, c) => a + c, 0) / vs.length) * 100) / 100]);
+      fr.push({ ...s, cur: null, out, done: true, say: `aggregateWindow(every: ${W}m, fn: mean): her pencere için tek bir ortalama. ${pts.length} ham noktadan ${out.length} nokta döndü.` });
+      lanes[ln.id] = actorize(fr, ln.send || "Uygulama Flux sorgusunu gönderiyor.", ln.back || "Uygulama noktaları tarayıcıya gönderdi.", DB, { cur: null });
+    });
+    const table = (ln) => `<table class="gs-table gs-ts"><thead><tr><th data-hl="time">Zaman</th><th>Değer</th><th data-hl="window">Pencere</th></tr></thead><tbody>
+      ${pts.map((p, k) => { const W = ln.window, w = t0 + Math.floor((mins(p.t) - t0) / W) * W; return `<tr data-k="${k}" data-w="${w}"><td>${esc(p.t)}</td><td>${esc(p.v)}</td><td class="w">${fmt(w)}–${fmt(w + W)}</td></tr>`; }).join("")}</tbody></table>`;
+    const html = `${actorBar(DB)}<div class="gs-lanes">${spec.lanes.map((ln) => shell(ln.id, ln.title, table(ln), { hl: ln.id, count: "Dönen nokta", result: spec.result_title || "Grafiğe giden noktalar (pencere sonu · ortalama)", col: true })).join("")}</div>${summary(spec.summary || "")}`;
+    function paint(root, id, f) {
+      const L = laneOf(root, id);
+      L.querySelector(".gs-count b").textContent = (f.out || []).length;
+      L.classList.toggle("done", !!f.done);
+      const ws = [...new Set([...L.querySelectorAll("tbody tr")].map((tr) => tr.dataset.w))];
+      L.querySelectorAll("tbody tr").forEach((tr) => {
+        const k = Number(tr.dataset.k);
+        tr.classList.toggle("active", f.cur === k);
+        tr.classList.toggle("read", f.cur !== null && f.cur !== undefined ? k <= f.cur : !!f.done);
+        tr.dataset.band = ws.indexOf(tr.dataset.w) % 2;
+      });
+      chips(L, (f.out || []).map(([t, v]) => `<li>${esc(t)} <small>${v}</small></li>`));
+      sayWho(L, f);
+    }
+    return { html, lanes, paint, final: showSum };
+  }
+
   /* ---------- Who works in a frame (owner rule: work of the app is never credited to the database).
    * actorize(frames, send, back, db): after START the app sends, every middle frame is the database's (unless it names
    * its own `who`), the last frame is the app sending the answer on. actorBar(db) is the bar above the lanes;
@@ -1098,7 +1139,7 @@
     root.querySelectorAll(".gs-actors [data-a]").forEach((x) => x.classList.toggle("on", ws.includes(x.dataset.a)));
   }
 
-  const KINDS = { zset, "plan-tree": planTree, columnar, replicate, join, fanout, txn, spread, replicas, "ddb-items": ddbItems, projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
+  const KINDS = { timeseries, zset, "plan-tree": planTree, columnar, replicate, join, fanout, txn, spread, replicas, "ddb-items": ddbItems, projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
 
   function render(box, spec) {
     const kind = KINDS[spec.kind];
