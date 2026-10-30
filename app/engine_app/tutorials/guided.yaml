@@ -7200,15 +7200,230 @@ steps:
   - page: live
     path: /admin/live
     engines: [elasticache]
-    use_case: Leaderboard
-    title: A sorted set keeps the order at each write
+    use_case: Liderlik tablosu
+    title: Sıralı küme her yazmada sırayı korur
     why: >-
-      The leaderboard is a sorted set. Your checkout added the order total to your persona with ZINCRBY. ZREVRANGE returns the top members with no sort at read time.
-    do: Look at the lit leaderboard.
+      Canlı ekrandasın: en çok alışveriş yapan 10 müşteri, bugünkü sipariş sayısı ve şu an aktif ziyaretçiler. Sayfa her 5
+      saniyede kendini yeniliyor. Bu adımda tıklama yok, sadece bakacaksın.
+    do: Aydınlık liderlik tablosuna bak. Sonra kartın altındaki butonla perde arkasını aç.
     target: "#board"
     action: look
     wait: {method: GET, path: /elasticache/api/leaderboard}
-    result: ZREVRANGE lm:leaderboard 0 9 WITHSCORES returned the top 10. ZCOUNT counted the Visitors active in the last 5 minutes.
+    result: ZREVRANGE lm:leaderboard 0 9 WITHSCORES returned the top 10.
+    panel:
+      need: >-
+        Canlı ekran en çok alışveriş yapan 10 müşteriyi her 5 saniyede gösteriyor; her siparişte sıralama değişebilir. Her
+        yenilemede bütün müşterilerin cirosunu toplayıp sıralamak (binlerce satır, her 5 saniyede) hem yavaş hem israf olur.
+        Sıralamanın her an hazır durması gerekiyor.
+      concept:
+        term: Sıralı küme (sorted set)
+        text: >-
+          Sorted set, her üyesinin bir puanı olan ve üyeleri puana göre sıralı tutan bir yapıdır. Bir yazma (ZINCRBY) bir üyenin
+          puanını artırınca üye hemen yeni yerine geçer. Okurken (ZREVRANGE) sıralama yapılmaz; ilk 10 zaten baştadır. Bir koşu
+          yarışında sıralamanın her an tabelada güncel durması gibi: sonuç tablosu yarış bitince hesaplanmaz.
+        terms:
+          - [Sorted set, "Üyeleri puana göre sıralı tutan küme. Burada üye müşteri numarası, puan toplam ciro."]
+          - [ZINCRBY, "Bir üyenin puanını artırır; üye sıradaki yerine kendiliğinden geçer."]
+          - [ZREVRANGE, "Puanı en yüksekten başlayarak istenen kadar üyeyi getirir."]
+          - [ZCOUNT, "Puanı bir aralıkta olan üyeleri sayar (burada son 5 dakikada görülen ziyaretçiler)."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde canlı sıralama için hazırlık
+        intro: >-
+          Canlı ekran hiç açılmadan, sıralama ve sayaçlar bellekte kurulur. Aşağıdaki beş adım bu hazırlığın sırasıdır.
+        text:
+          - title: Önce ekranın soruları yazılır
+            text: >-
+              "En çok ciro yapan 10 müşteri", "bugünkü sipariş sayısı", "son 5 dakikada aktif ziyaretçi". Üçü de her birkaç saniyede
+              sorulur ve tek komutla cevaplanmalıdır.
+            code: |-
+              ZREVRANGE lm:leaderboard 0 9 WITHSCORES
+              GET       lm:orders:today
+              ZCOUNT    lm:active <şimdi − 300> +inf
+          - title: Sıralama yazarken güncellenir
+            text: >-
+              Her sipariş verildiğinde müşterinin puanı tutar kadar artırılır; sayaç bir artırılır. Okuma tarafında hesap yapılmaz.
+            code: |-
+              ZINCRBY lm:leaderboard 3373.84 C00001
+              INCR    lm:orders:today
+          - title: Başlangıç değeri asıl kayıttan kurulur
+            text: >-
+              Liderlik tablosu ilk kez kurulurken müşterilerin geçmiş cirosu sipariş veritabanından hesaplanır ve tek seferde
+              yazılır (ZADD). Bellek kaybolursa aynı yolla yeniden kurulur.
+          - title: Gösterim bilgisi tek komutla alınır
+            text: >-
+              İlk 10'un adları için 10 ayrı GET yerine tek bir MGET ya da bir hash (HMGET lm:names …) kullanılır, ya da komutlar bir
+              pipeline'da tek gidiş-dönüşte gönderilir. Her ayrı komut bir ağ gidiş-dönüşüdür.
+            code: |-
+              MGET lm:name:C00487 lm:name:C00717 lm:name:C00163 …
+          - title: Günlük sayaçlar kendiliğinden sıfırlanır
+            text: >-
+              "Bugünkü siparişler" gibi sayaçların anahtarına tarih konur (lm:orders:2026-10-31) ve bir süre verilir; ertesi gün yeni
+              anahtar başlar, eskisi kendiliğinden silinir.
+      feed:
+        title: Veri nereden geliyor?
+        writes: >-
+          Sipariş verildiğinde (ZINCRBY ve INCR) ve her sayfa açılışında aktif ziyaretçiler kümesine (ZADD). Başlangıç sıralaması
+          sipariş veritabanından bir kez yüklenir.
+        reads: Canlı ekran, her 5 saniyede.
+        kind: >-
+          Uygulama orkestrasyonu. ElastiCache sipariş veritabanından kendiliğinden veri çekmez; her siparişte ona haber verilir.
+        with: >-
+          Puanların kaynağı siparişlerdir: asıl kayıt Aurora'da, sıralama ElastiCache'te bir kopya. Müşteri adları da bellekte
+          kopya olarak tutulur (lm:name:<id>); asıl müşteri kaydı Aurora'dadır.
+        best: >-
+          Sıralama ve sayaçlar bellekte, yazarken güncellenir; ekranlar sadece okur. Puanlar asıl kayıttan yeniden kurulabilir ve
+          sipariş olayları kuyruktan okunarak, idempotent biçimde eklenir.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              Adım 25'te sipariş verdiğinde, sayfa ElastiCache'e senin persona'nın puanına sipariş tutarını ekletmişti (ZINCRBY) ve
+              bugünkü sipariş sayacını bir artırmıştı (INCR).
+            engines: [elasticache]
+          - text: >-
+              Şimdi canlı ekranı açtın. Sayfa liderlik tablosunu istedi; uygulama ElastiCache'e üç komut gönderdi: ZREVRANGE (ilk 10),
+              GET (bugünkü sipariş sayısı), ZCOUNT (aktif ziyaretçiler). Ardından persona olmayan üyelerin adlarını tek tek sordu.
+            engines: [elasticache]
+          - text: >-
+              Tablo çizildi; sayfa her 5 saniyede aynı isteği tekrar gönderiyor. Biri sipariş verirse sıralama bir sonraki yenilemede
+              değişir.
+            engines: [elasticache]
+      sim:
+        kind: zset
+        title: "lm:leaderboard (sorted set) - canlı değerler"
+        caption: >-
+          Liderlik tablosunun gerçek ilk 10'u. Önce Adım 25'teki gibi bir siparişin ZINCRBY'si (Ayşe'nin puanı 3.373,84 arttı),
+          sonra sayfanın ZREVRANGE okuması oynuyor.
+        top: 10
+        members:
+          - {id: C00002, name: Mert Doğan, score: 1168114.91, persona: true}
+          - {id: C00001, name: Ayşe Yılmaz, score: 465187.51, persona: true}
+          - {id: C00487, name: Mehmet Yılmaz, score: 237363.13}
+          - {id: C00004, name: Lukas Weber, score: 225767.79, persona: true}
+          - {id: C00717, name: İrem Kurt, score: 197244.42}
+          - {id: C00163, name: Seda Yılmaz, score: 195806.03}
+          - {id: C00608, name: Ozan Doğan, score: 182240.94}
+          - {id: C00404, name: Lukas Weber, score: 173614.52}
+          - {id: C00983, name: Mehmet Demir, score: 169980.56}
+          - {id: C00270, name: Mehmet Müller, score: 164401.25}
+        incr:
+          id: C00001
+          by: 3373.84
+          say: "Adım 25: sipariş verildi ve sayfa ZINCRBY lm:leaderboard 3373.84 C00001 gönderdi. Ayşe'nin puanı arttı ve yeri yazarken güncellendi."
+        send: Canlı ekranı açtın. Uygulama ZREVRANGE lm:leaderboard 0 9 WITHSCORES gönderiyor.
+        read_say: ElastiCache kümenin başından 10 üyeyi puanlarıyla verdi; sıralama zaten hazırdı.
+        names_say: >-
+          Uygulama persona olmayan 7 üyenin adını tek tek GET lm:name:<id> ile sordu: 7 ayrı komut, 7 ağ gidiş-dönüşü. Tek bir MGET
+          ile bir kerede alınabilirdi.
+        back: Uygulama ilk 10'u, sipariş sayısını ve aktif ziyaretçi sayısını tarayıcına gönderdi.
+        summary: >-
+          Sıralama okurken değil, yazarken yapıldı: ZINCRBY üyeyi yerine koydu, ZREVRANGE sadece baştan okudu. Ek iş uygulamadaydı:
+          adlar için ayrı ayrı GET'ler.
+      wire:
+        what: >-
+          Uygulama, ElastiCache'e açık tuttuğu bağlantılar üzerinden komutları sırayla gönderir (redis-py kütüphanesi, cluster
+          istemcisi).
+        dst: "dbws-cache-qtkvec.serverless.euc1.cache.amazonaws.com : 6379"
+        dst_note: >-
+          ElastiCache Serverless'ın adresi. Bu ad, VPC'nin içindeki uç noktaya çözülür; cache internete kapalıdır.
+        rows:
+          - [Şifreleme, TLS, gerçek, ElastiCache Serverless sadece şifreli bağlantı kabul eder.]
+          - [Protokol, RESP (Redis/Valkey protokolü), gerçek, "Her komut ayrı bir çerçeve; her biri bir gidiş-dönüş."]
+          - [Kimlik, "ACL kullanıcısı + şifre, bağlantı açılırken", gerçek, "Şifre kodda yazmaz; uygulama onu AWS Secrets Manager'dan alır."]
+        body_label: Komutlar ve cevaplar (okunur hâle getirilmiş)
+        body: |-
+          ZREVRANGE lm:leaderboard 0 9 WITHSCORES   → C00002 1168114.91, C00001 468561.35, C00487 237363.13, …
+          GET lm:orders:today                       → "6"
+          ZCOUNT lm:active 1793397600 +inf          → 3
+          GET lm:name:C00487                        → "Mehmet Yılmaz"     (ve persona olmayan her üye için birer GET)
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Sıralamayı ElastiCache
+        hazır tutar; adları birleştiren uygulamadır.
+      app_code:
+        - file: engines/elasticache.py
+          func: api_lb
+          title: Liderlik tablosu isteği
+          sub: Sayfa açılırken ve her 5 saniyede gelen istek.
+          lines:
+            - {match: '@bp.get("/api/leaderboard")', say: "Liderlik tablosu isteği buraya gelir.", tag: Tarayıcı → Uygulama}
+            - {match: 'top = cmd("ZREVRANGE"', say: "İlk 10 üyeyi puanlarıyla ister; sıralama hazır.", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], hl: member}
+            - {match: 'orders = cmd("GET", "GET lm:orders:today"', say: Bugünkü sipariş sayacını ister., tag: [Uygulama → ElastiCache, ElastiCache → Uygulama]}
+            - {match: 'active = cmd("ZCOUNT"', say: "Son 5 dakikada görülen ziyaretçileri saydırır.", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama]}
+            - {match: 'for i, (member, score) in enumerate(top, start=1):', say: İlk 10'u tek tek dolaşır., tag: Uygulamanın içinde}
+            - {match: 'name = names.get(member) or r().get(f"lm:name:{member}") or member', say: "Persona değilse adını ayrı bir GET ile sorar; her üye için bir komut daha.", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama]}
+            - {match: 'return jsonify(trace.payload({"top": rows, "orders_today":', say: "İlk 10'u, sipariş sayısını ve aktif ziyaretçi sayısını tarayıcıya gönderir.", tag: Uygulama → Tarayıcı}
+      live:
+        title: Gerçek bellekte ne oldu?
+        intro: Sayfa açılırken ElastiCache'e giden komutlar.
+        runs:
+          - label: Liderlik tablosu (sayfa açılınca)
+            trigger: true
+            metrics: [[ZREVRANGE, ms], [GET (sayaç), e1.ms], [ZCOUNT, e2.ms], [Bugünkü sipariş, data.orders_today], [Aktif ziyaretçi, data.active_visitors]]
+        reading: >-
+          Her komut yaklaşık bir milisaniye. Ad sorgularının (GET lm:name:…) süresi isteğin kaydına yazılmıyor ama her biri ayrı bir
+          gidiş-dönüş. Bugünkü sipariş ve aktif ziyaretçi sayısı mağazanın o anki durumuna göre değişir.
+      query:
+        title: Uygulama ElastiCache'e ne dedi?
+        intro: >-
+          Üç ana komut ve ad sorguları. Bir parçanın üzerine gelince cümlede, kodda ve açıklamada aynı yer parlar.
+        cards_title: Parça parça
+        parts:
+          - id: zr
+            say: Liderlik tablosunun en yüksek puanlı 10 üyesini puanlarıyla getir,
+            code: "ZREVRANGE lm:leaderboard 0 9 WITHSCORES"
+            name: Kimler önde?
+            note: 0 ile 9 sıra numaralarıdır (ilk 10). REV, en yüksekten başla demek.
+            hl: member
+          - id: gt
+            say: bugünkü sipariş sayısını getir,
+            code: "GET lm:orders:today"
+            name: Kaç sipariş?
+            note: Her siparişte INCR ile artan sayaç.
+            hl: member
+          - id: zc
+            say: son 5 dakikada görülen ziyaretçileri say,
+            code: "ZCOUNT lm:active <şimdi − 300> +inf"
+            name: Kaç kişi aktif?
+            note: Puanı son görülme zamanı olan sıralı kümede bir zaman aralığını saymak.
+            hl: member
+          - id: nm
+            say: ve persona olmayan her üyenin adını ayrı ayrı getir.
+            code: "GET lm:name:<id>   (her üye için)"
+            name: Adlar
+            note: Tek bir MGET ile bir kerede alınabilirdi; burada her biri ayrı bir komut.
+            hl: member
+        columns:
+          - label: Canlı ekran
+            sub: Sayfa açılırken (ve her 5 saniyede) giden komutlar.
+            via: Uygulama bu komutları redis-py kütüphanesinin zrevrange(), get() ve zcount() metotlarıyla, sırayla gönderir.
+            parts: [zr, gt, zc, nm]
+        note: >-
+          Dikkat: komutlarda "sırala" diye bir şey yok. Sıralama ZINCRBY ile her yazmada yapıldı; okuma sadece baştan aldı.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          ElastiCache'in işi cevapları verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: ElastiCache → Uygulama
+            text: İlk 10 üye ve puanları, sipariş sayacı, aktif ziyaretçi sayısı ve adlar geldi.
+          - who: Uygulama
+            text: Her üyeye sıra numarasını ve adını ekledi, puanları iki basamağa yuvarladı.
+          - who: Uygulama → Tarayıcın
+            text: Tabloyu ve sayaçları tek bir JSON cevabında gönderdi.
+          - who: Tarayıcın
+            text: Tabloyu ve sayaçları çizdi; 5 saniye sonra aynı isteği yeniden gönderecek.
+          - who: Sonra
+            text: Operasyon ekranına geçeceksin; orada zaman serisi verisi bir zaman veritabanında (InfluxDB) duruyor (Adım 34).
+      remember: >-
+        Sıralı küme sıralamayı yazarken korur; okumak sadece baştan almaktır. Ekranın her yenilemesi birkaç komut ve birkaç
+        milisaniyedir; ek gidiş-dönüşleri tek bir komutta toplamak hızı korur.
+      why_db: >-
+        Neden ElastiCache? Canlı sıralama her saniye okunur ve her siparişte değişir; ElastiCache'in sorted set'i bunu bellekte,
+        yazarken sıralayarak ve milisaniyenin altında sunar. Bedeli: sıralama bir kopyadır; asıl ciro siparişlerden hesaplanır.
 
   # ---------------------------------------------------------------- Ops: InfluxDB
   - page: ops

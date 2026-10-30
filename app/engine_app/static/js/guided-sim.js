@@ -1048,6 +1048,37 @@
     return { html, lanes, paint, final: showSum };
   }
 
+  /* ---------- zset: a sorted set keeps members ordered by score at every write; reading the top N needs no sort.
+   * spec.members [{id, name, score, persona}], spec.incr {id, by, say}, spec.top, spec.names_say. One lane. */
+  function zset(spec) {
+    const DB = spec.engine_label || "ElastiCache";
+    const order = (list) => [...list].sort((p, q) => q.score - p.score);
+    let ms = order(spec.members.map((m) => ({ ...m })));
+    const fr = [{ say: START, list: ms, moved: null, top: [], named: [] }];
+    if (spec.incr) {
+      const m0 = ms.find((x) => x.id === spec.incr.id), before = ms.indexOf(m0) + 1;
+      ms = order(ms.map((x) => (x.id === spec.incr.id ? { ...x, score: Math.round((x.score + spec.incr.by) * 100) / 100 } : x)));
+      fr.push({ who: DB, list: ms, moved: spec.incr.id, top: [], named: [], say: spec.incr.say || `ZINCRBY: ${m0.name} puanına ${spec.incr.by} eklendi; ${before}. sıradan ${ms.findIndex((x) => x.id === spec.incr.id) + 1}. sıraya yerleşti. Sıralama yazarken yapıldı.` });
+    }
+    fr.push({ who: APP_NAME, list: ms, moved: null, top: [], named: [], say: spec.send || `Uygulama ZREVRANGE lm:leaderboard 0 ${spec.top - 1} WITHSCORES gönderiyor.` });
+    const top = ms.slice(0, spec.top).map((x) => x.id);
+    fr.push({ who: DB, list: ms, top, named: [], say: spec.read_say || `ElastiCache sıralı kümenin başından ${spec.top} üyeyi puanlarıyla verdi; okurken sıralama yapılmadı.` });
+    const need = ms.slice(0, spec.top).filter((x) => !x.persona).map((x) => x.id);
+    fr.push({ who: APP_NAME, list: ms, top, named: need, say: spec.names_say || `Uygulama persona olmayan ${need.length} üyenin adını tek tek GET lm:name:<id> ile sordu: ${need.length} ayrı komut.` });
+    fr.push({ who: APP_NAME, list: ms, top, named: need, done: true, say: spec.back || "Uygulama sıralamayı tarayıcıya gönderdi." });
+    const body = `<table class="gs-table gs-zt"><thead><tr><th>Sıra</th><th data-hl="member">Üye</th><th>Ad</th><th data-hl="score">Puan (ciro)</th></tr></thead><tbody></tbody></table>`;
+    const html = `${actorBar(DB)}<div class="gs-lanes one">${shell("z", spec.title || "lm:leaderboard (sorted set)", body, { count: "Okunan üye", result: false, col: true })}</div>${summary(spec.summary || "")}`;
+    function paint(root, id, f) {
+      const L = laneOf(root, id);
+      L.querySelector(".gs-count b").textContent = (f.top || []).length;
+      L.classList.toggle("done", !!f.done);
+      L.querySelector("tbody").innerHTML = (f.list || []).map((x, i) => `<tr class="${f.moved === x.id ? "fresh" : ""} ${(f.top || []).includes(x.id) ? "hit" : ""}">
+        <td>${i + 1}</td><td><code>${esc(x.id)}</code></td><td>${esc(x.name)}${(f.named || []).includes(x.id) ? ' <small class="gs-get">GET lm:name</small>' : ""}</td><td>${x.score.toLocaleString("tr-TR")}</td></tr>`).join("");
+      sayWho(L, f);
+    }
+    return { html, lanes: { z: fr }, paint, final: showSum };
+  }
+
   /* ---------- Who works in a frame (owner rule: work of the app is never credited to the database).
    * actorize(frames, send, back, db): after START the app sends, every middle frame is the database's (unless it names
    * its own `who`), the last frame is the app sending the answer on. actorBar(db) is the bar above the lanes;
@@ -1067,7 +1098,7 @@
     root.querySelectorAll(".gs-actors [data-a]").forEach((x) => x.classList.toggle("on", ws.includes(x.dataset.a)));
   }
 
-  const KINDS = { "plan-tree": planTree, columnar, replicate, join, fanout, txn, spread, replicas, "ddb-items": ddbItems, projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
+  const KINDS = { zset, "plan-tree": planTree, columnar, replicate, join, fanout, txn, spread, replicas, "ddb-items": ddbItems, projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
 
   function render(box, spec) {
     const kind = KINDS[spec.kind];
