@@ -143,6 +143,28 @@
           `<li><code>${esc(s)}</code> ${esc(L.stages[s])}</li>`).join("")}</ol>` : ""}</div>`;
     }).join("")}</div>`;
   }
+  /* Section 5: the command as a Turkish sentence, as code, piece by piece, and the one difference between the two runs.
+   * The same colour marks one piece in all four places (q0..q5). */
+  function queryHtml(Q) {
+    const parts = Q.parts || [];
+    const col = (k) => `q${k % 6}`;
+    const INDENT = new Set(["filter", "proj"]);
+    const codeLines = (list, mark) => list.map((x) => {
+      const k = parts.indexOf(x);
+      return `<span class="gq-line ${col(k)}${mark && x.only_off ? " added" : ""}" data-q="${esc(x.id)}" tabindex="0"><b>${k + 1}</b>${INDENT.has(x.id) ? "  " : ""}${esc(x.code)}</span>`;
+    }).join("");
+    const D = Q.diff;
+    return `<section class="gp-sec gq"><h3><span>5</span>${esc(Q.title || "Sorgu")}</h3><p>${esc(Q.intro || "")}</p>
+      <div class="gq-row"><span class="gq-label">Türkçesi</span><p class="gq-say">${parts.map((x, k) =>
+        `<span class="${col(k)}" data-q="${esc(x.id)}" tabindex="0">${esc(x.say)}</span>`).join(" ")}</p></div>
+      <div class="gq-row"><span class="gq-label">Komut</span><pre class="gq-code">${codeLines(parts, false)}</pre></div>
+      <ol class="gq-cards">${parts.map((x, k) => `<li class="${col(k)}" data-q="${esc(x.id)}" tabindex="0"><header><b>${k + 1}</b><strong>${esc(x.name || "")}</strong><code>${esc(x.code)}</code></header>
+        <p>${esc(x.note)}</p></li>`).join("")}</ol>
+      ${D ? `<h4 class="gq-diff-title">${esc(D.title)}</h4><div class="gq-diff">
+        <div><span class="gq-label">${esc(D.label_on)}</span><pre class="gq-code">${codeLines(parts.filter((x) => !x.only_off), false)}</pre></div>
+        <div><span class="gq-label">${esc(D.label_off)}</span><pre class="gq-code">${codeLines(parts, true)}</pre></div></div>
+        <p class="gq-diff-note">${esc(D.note)}</p>` : ""}</section>`;
+  }
   function renderPanel() {
     const P = step.panel;
     const trig = calls[from];
@@ -159,9 +181,7 @@
         ${P.sim ? `<section class="gp-sec"><h3><span>3</span>Simülasyon</h3><div class="gp-sim"></div></section>` : ""}
         ${P.live ? `<section class="gp-sec"><h3><span>4</span>${esc(P.live.title || "Sistemde gerçekte ne oldu?")}</h3><p>${esc(P.live.intro || "")}</p>
           <div class="gp-live"></div><p class="gp-reading">${esc(P.live.reading || "")}</p></section>` : ""}
-        ${P.query ? `<section class="gp-sec"><h3><span>5</span>Sorgu, satır satır</h3><p>${esc(P.query.intro || "")}</p>
-          <ol class="gp-query">${P.query.lines.map(([code, note, hl]) => `<li data-hl="${esc(hl || "")}" tabindex="0"><code>${esc(code)}</code><span>${esc(note)}</span></li>`).join("")}</ol>
-          ${entryOf(trig) ? `<p class="gp-raw-cap">${esc(P.query.raw || "Gerçek komut")}:</p><pre class="gp-raw">${esc(entryOf(trig).request)}</pre>` : ""}</section>` : ""}
+        ${P.query ? queryHtml(P.query) : ""}
         <section class="gp-sec gp-keep"><h3>Akılda kalsın</h3><p>${esc(P.remember || "")}</p>${P.why_db ? `<p class="gp-why">${esc(P.why_db)}</p>` : ""}</section>
       </div>`;
     wire(sheet);
@@ -175,17 +195,18 @@
     });
     if (P.sim && window.GuidedSim) {
       sim = GuidedSim.render(sheet.querySelector(".gp-sim"), P.sim);
-      sheet.querySelectorAll(".gp-query li").forEach((li) => {
-        const on = () => { sim.highlight(li.dataset.hl); li.classList.add("on"); };
-        const off = () => { sim.highlight(null); li.classList.remove("on"); };
-        li.addEventListener("mouseenter", on); li.addEventListener("focus", on);
-        li.addEventListener("mouseleave", off); li.addEventListener("blur", off);
-      });
       const io = new IntersectionObserver((seen) => {             // the simulation plays once, when it comes into view in the panel
         if (seen.some((x) => x.isIntersecting)) { io.disconnect(); setTimeout(() => sim.play(), 400); }
       }, { root: sheet.querySelector(".gp-body"), threshold: 0.35 });
       io.observe(sheet.querySelector(".gp-sim"));
     }
+    sheet.querySelectorAll(".gq [data-q]").forEach((el) => {     // one piece of the command: the sentence, the code and the card light up together
+      const part = (P.query.parts || []).find((x) => x.id === el.dataset.q) || {};
+      const on = () => { sheet.querySelectorAll(`.gq [data-q="${el.dataset.q}"]`).forEach((x) => x.classList.add("on")); if (sim) sim.highlight(part.hl); };
+      const off = () => { sheet.querySelectorAll(".gq .on").forEach((x) => x.classList.remove("on")); if (sim) sim.highlight(null); };
+      el.addEventListener("mouseenter", on); el.addEventListener("focus", on);
+      el.addEventListener("mouseleave", off); el.addEventListener("blur", off);
+    });
     if (P.live) fillLive(P.live, trig);
     document.body.classList.add("gp-on");
   }

@@ -99,9 +99,9 @@
     if (!kind) { box.innerHTML = `<p class="gs-missing">Bu simülasyon türü henüz yok: ${esc(spec.kind)}</p>`; return { play() {}, highlight() {} }; }
     const k = kind(spec);
     const total = Math.max(...Object.values(k.lanes).map((f) => f.length)) - 1;
-    box.innerHTML = `<div class="gs gs-${esc(spec.kind)}">${spec.caption ? `<p class="gs-caption">${esc(spec.caption)}</p>` : ""}${k.html}
+    box.innerHTML = `<div class="gs gs-${esc(spec.kind)}">${spec.caption ? `<p class="gs-caption">${esc(spec.caption)}</p>` : ""}
       <div class="gs-controls"><button type="button" data-g="play">▶ Oynat</button><button type="button" data-g="step">⏭ Sonraki adım</button>
-      <button type="button" data-g="reset">↺ Baştan</button><span class="gs-tick"></span></div></div>`;
+      <button type="button" data-g="reset">↺ Baştan</button><span class="gs-tick"></span></div>${k.html}</div>`;
     const root = box.firstElementChild;
     let t = 0, timer = 0;
     const show = () => {

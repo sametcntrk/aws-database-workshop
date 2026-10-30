@@ -109,15 +109,62 @@ steps:
           SORT: "Bellekte sıralama: eşleşen dokümanları okuduktan sonra puana göre ayrıca dizer."
           LIMIT_SKIP: "Sınır: sonuçtan en fazla 48 dokümanı alır."
       query:
-        intro: Sayfanın DocumentDB'ye gönderdiği komut bu. Bir satırın üzerine gelince simülasyonda ilgili yer parlar.
-        lines:
-          - [db.products.find(, "products koleksiyonunda doküman ara.", table]
-          - ['  { category: "Elektronik" },', "Filtre: sadece kategorisi Elektronik olan dokümanlar.", filter]
-          - ["  <kart alanları> )", "Sadece ürün kartının ihtiyaç duyduğu alanları getir (ad, fiyat, puan...). Bu yüzden daha az veri taşınır.", columns]
-          - [".sort({ rating: -1 })", "Puana göre sırala. -1, büyükten küçüğe demek.", sort]
-          - [".limit(48)", "En fazla 48 doküman getir.", result]
-          - [".hint({ $natural: 1 })", "Bu satır sadece index kapalıyken eklenir. \"Index kullanma, dokümanları diskte durdukları sırayla oku\" demek. Collection scan'i bu satır yaptırır.", scan]
-        raw: Uygulamanın gönderdiği gerçek komut
+        title: Sayfa DocumentDB'ye ne dedi?
+        intro: >-
+          Sayfa, veritabanına isteğini bir komutla söyler. Önce komutun Türkçesini oku, sonra aynı renkteki kod parçasını bul.
+          Bir parçanın üzerine gelince cümlede, kodda ve açıklamada aynı yer parlar.
+        # parts: one piece of the command each. say = the piece in the Turkish sentence, code = the piece in the command,
+        # note = what it does, hl = the part of the simulation it belongs to, only_off = the piece exists only without the index.
+        parts:
+          - id: coll
+            say: products koleksiyonundaki
+            code: db.products.find(
+            name: Nereden?
+            note: "products, ürünlerin durduğu koleksiyon. find, \"bul ve getir\" demek."
+            hl: table
+          - id: filter
+            say: kategorisi Elektronik olan ürünleri
+            code: '{ category: "Elektronik" },'
+            name: Hangileri?
+            note: Filtre. Sadece category alanı "Elektronik" olan dokümanlar sonuca girer, diğerleri girmez.
+            hl: filter
+          - id: proj
+            say: sadece kartta gereken bilgileriyle
+            code: "{ name: 1, price: 1, rating: 1, category: 1, brand: 1, tags: 1, stock: 1 } )"
+            name: Hangi bilgiler?
+            note: >-
+              Projection. 1 "bu alanı getir" demek. Ürün kartı ad, fiyat, puan, kategori, marka, etiket ve stok gösteriyor;
+              dokümandaki diğer alanlar (açıklama, renk, ürün özellikleri) gelmiyor. Böylece ağdan daha az veri taşınır.
+            hl: columns
+          - id: sort
+            say: puanı en yüksek olan en üstte olacak şekilde sıralayıp
+            code: ".sort({ rating: -1 })"
+            name: Hangi sırayla?
+            note: Sıralama. rating alanına göre sıralar. -1 "büyükten küçüğe", 1 olsaydı "küçükten büyüğe" demek olurdu.
+            hl: sort
+          - id: limit
+            say: en fazla 48 tane getir
+            code: ".limit(48)"
+            name: Kaç tane?
+            note: Sınır. Sayfa en fazla 48 ürün gösteriyor. Elektronik'te 40 ürün olduğu için 40'ın hepsi geliyor.
+            hl: result
+          - id: hint
+            say: ve bunu yaparken index'i kullanma.
+            code: ".hint({ $natural: 1 })"
+            name: Nasıl?
+            note: >-
+              Hint, veritabanına "bu sorguyu şu yolla çalıştır" diye yol göstermek. $natural, "dokümanları diskte durdukları
+              sırayla, baştan sona oku" demek. Yani index'i bırak, collection scan yap. Bu parça sadece "Collection scan"
+              seçiliyken eklenir.
+            hl: scan
+            only_off: true
+        diff:
+          title: Index açıkken ve kapalıyken komutlar arasındaki tek fark
+          label_on: Index ile
+          label_off: Index olmadan
+          note: >-
+            İki komut, son parça dışında aynı. Index açıkken bu parça yok: DocumentDB kendisi en iyi yolu seçiyor ve
+            { category, rating } index'ini kullanıyor. Tek bir parça eklemek, okunan doküman sayısını 40'tan 200'e çıkardı.
       remember: >-
         Sonuç aynı, yapılan iş farklı. Index olmadan veritabanı her dokümanı okumak zorunda kalır. Index, sık kullanılan bir
         filtre ve sıralama için doğru bölüme doğrudan gitmeyi sağlar.
