@@ -534,6 +534,55 @@
     return { html, lanes, paint, final: showSum };
   }
 
+  /* ---------- facets: the hits and their counts (aggregations) come from one pass over the matching documents. Left: the
+   * query alone; right: the same query with a filter (no score change). spec.rows [{id, name, category, price, score}],
+   * spec.ranges [[label, from, to]], spec.filter [field, value], spec.labels {all, filtered}. */
+  function facets(spec) {
+    const rows = spec.rows, DB = spec.engine_label || "OpenSearch", [ff, fv] = spec.filter, Lb = spec.labels || {};
+    const money = (v) => `₺${Number(v).toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const rangeOf = (p) => (spec.ranges.find(([, f, t]) => (f == null || p >= f) && (t == null || p < t)) || ["?"])[0];
+    const run = (withFilter) => {
+      const fr = [{ say: START, active: null, cats: {}, prices: {}, kept: [], out: [] }];
+      let s = { ...fr[0] };
+      rows.forEach((r, k) => {
+        const keep = !withFilter || String(r[ff]) === String(fv);
+        const cats = keep ? { ...s.cats, [r.category]: (s.cats[r.category] || 0) + 1 } : s.cats;
+        const pr = rangeOf(r.price), prices = keep ? { ...s.prices, [pr]: (s.prices[pr] || 0) + 1 } : s.prices;
+        s = { ...s, active: k, cats, prices, kept: keep ? [...s.kept, k] : s.kept, out: keep ? s.out : [...s.out, k],
+          say: keep ? `${r.name} (skor ${r.score}) sonuca girdi; aynı anda sayılara eklendi: ${r.category} +1, ${pr} +1.`
+            : `${r.name}: ${ff} = ${r[ff]}, filtreye uymadı, atlandı. Skoru hesaplanmaz, sayılara girmez.` };
+        fr.push(s);
+      });
+      fr.push({ ...s, active: null, done: true, say: withFilter ? `Bitti. Filtreden geçen ${s.kept.length} ürün, skorları değişmeden; sayılar da sadece onlardan.` : `Bitti. ${s.kept.length} ürün ve sayıları aynı geçişte hazır; ayrı bir sayım sorgusu gerekmedi.` });
+      return fr;
+    };
+    const lanes = {
+      all: actorize(run(false), spec.send_all || "Uygulama arama isteğini gönderiyor: sonuçlar ve sayılar (aggs) aynı istekte.", spec.back_all || "Uygulama sonuçları ve sayıları tarayıcıya gönderdi.", DB, { active: null }),
+      filtered: actorize(run(true), spec.send_filtered || "Uygulama aynı aramayı bir filtreyle gönderiyor.", spec.back_filtered || "Uygulama filtrelenmiş sonuçları tarayıcıya gönderdi.", DB, { active: null }),
+    };
+    const table = `<table class="gs-table" data-hl="table"><thead><tr><th>Ürün</th><th data-hl="filter">Kategori</th><th data-hl="price">Fiyat</th><th data-hl="score">Skor</th></tr></thead><tbody>
+      ${rows.map((r, k) => `<tr data-k="${k}"><td>${esc(r.name)}</td><td data-hl="filter">${esc(r.category)}</td><td data-hl="price">${money(r.price)}</td><td data-hl="score">${esc(r.score)}</td></tr>`).join("")}</tbody></table>`;
+    const buckets = `<div class="gs-buckets" data-hl="aggs"><div><b>Kategori sayıları</b><ol class="b-cat"></ol></div><div><b>Fiyat aralıkları</b><ol class="b-price"></ol></div></div>`;
+    const lane = (id, title) => shell(id, title, table + buckets, { hl: id, count: "Sonuca giren", result: false, col: true });
+    const html = `${actorBar(DB)}<div class="gs-lanes">${lane("all", Lb.all || "Sadece arama")}${lane("filtered", Lb.filtered || "Arama + filtre")}</div>${summary(spec.summary || "")}`;
+    function paint(root, id, f) {
+      const L = laneOf(root, id);
+      L.querySelector(".gs-count b").textContent = (f.kept || []).length;
+      L.classList.toggle("done", !!f.done);
+      L.querySelectorAll("tbody tr").forEach((tr) => {
+        const k = Number(tr.dataset.k);
+        tr.classList.toggle("active", f.active === k);
+        tr.classList.toggle("hit", (f.kept || []).includes(k));
+        tr.classList.toggle("miss", (f.out || []).includes(k));
+      });
+      const list = (o) => Object.entries(o || {}).map(([k, v]) => `<li>${esc(k)} <b>${v}</b></li>`).join("") || '<li class="empty">henüz yok</li>';
+      L.querySelector(".b-cat").innerHTML = list(f.cats);
+      L.querySelector(".b-price").innerHTML = list(f.prices);
+      sayWho(L, f);
+    }
+    return { html, lanes, paint, final: showSum };
+  }
+
   /* ---------- Who works in a frame (owner rule: work of the app is never credited to the database).
    * actorize(frames, send, back, db): after START the app sends, every middle frame is the database's (unless it names
    * its own `who`), the last frame is the app sending the answer on. actorBar(db) is the bar above the lanes;
@@ -553,7 +602,7 @@
     root.querySelectorAll(".gs-actors [data-a]").forEach((x) => x.classList.toggle("on", ws.includes(x.dataset.a)));
   }
 
-  const KINDS = { "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
+  const KINDS = { facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
 
   function render(box, spec) {
     const kind = KINDS[spec.kind];

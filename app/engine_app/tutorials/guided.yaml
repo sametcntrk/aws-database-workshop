@@ -1721,18 +1721,269 @@ steps:
         index üzerinde hazır sunar. Bedeli: bulanık arama birebir aramadan pahalıdır ve index katalogdan beslenmelidir.
 
   - page: search
-    path: /search?q=kablosuz%20kulaklik
+    path: /search?q=siyah
     engines: [opensearch]
-    use_case: Facets
-    title: The facet counts come from the same request
+    use_case: Facet'ler
+    title: Facet sayıları aynı istekten gelir
     why: >-
-      The category and price counts at the left are aggregations. OpenSearch calculates them in the same request as the hits.
-    do: Click the lit category name in the facet list.
-    target: "#facet-cat [data-cat]:not([data-cat=''])"
+      Arama sayfasında "siyah" aradın; 40 ürün beş farklı kategoriden geldi. Soldaki listede her kategorinin yanında kaç ürün
+      olduğu yazıyor. Şimdi bir kategoriye tıklayıp listeyi daraltacaksın.
+    do: Soldaki listede aydınlık "Elektronik" satırına tıkla.
+    target: "#facet-cat [data-cat='Elektronik']"
     action: click
     wait: {method: GET, path: /opensearch/api/search, query: {category: "*"}}
     focus: "#hits"
-    result: The query now has a filter on the keyword field "category". A filter does not change the relevance score, and OpenSearch can cache it.
+    result: The query now has a filter on the keyword field "category". A filter does not change the relevance score.
+    panel:
+      need: >-
+        Arama sonuçlarının yanında "Kitap (11), Elektronik (9)…" gibi sayılar ve fiyat aralıkları gösteriliyor. Bu sayılar
+        sonuçlarla birlikte, aynı anda hazır olmalı; her kategori için ayrı bir sayım sorgusu göndermek sayfayı yavaşlatırdı.
+        Bir kategori seçilince de liste daralmalı ama ürünlerin sıralaması (skor) bozulmamalı.
+      concept:
+        term: Facet (aggregation) ve filtre
+        text: >-
+          Facet, arama sonuçlarının bir alana göre sayılmış hâlidir: "bu aramada Elektronik'ten 9, Kitap'tan 11 ürün var".
+          OpenSearch eşleşen ürünleri bulurken onları aynı geçişte kovalara (bucket) ayırıp sayar; bir kasiyerin ürünleri
+          okutup aynı anda reyonlara göre sayması gibi. Filtre ise "sadece Elektronik" gibi evet/hayır bir koşuldur: ürünü
+          eler ama skorunu değiştirmez.
+        terms:
+          - [Aggregation (aggs), "Sonuçlar üzerinde sayma ve gruplama. Kategori sayıları terms, fiyat aralıkları range aggregation."]
+          - [Bucket (kova), "Bir aggregation'ın her grubu: Elektronik kovası, 500–2000 ₺ kovası…"]
+          - [Filtre (filter context), "Ürünü eleyen ama skora katkı yapmayan koşul. Sonucu önbelleğe alınabilir."]
+          - [keyword, "Analyzer'dan geçmeyen, olduğu gibi saklanan alan türü. Sayma ve birebir filtre için kullanılır."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde facet'li arama için hazırlık
+        intro: >-
+          Facet listesi hiç kullanılmadan, sayılacak alanlar index'te doğru türle tanımlanır. Aşağıdaki beş adım bu hazırlığın
+          sırasıdır.
+        text:
+          - title: Önce sayfanın soruları yazılır
+            text: >-
+              Arama sayfası tek istekte üç şey ister: eşleşen ürünler (skor sırasında), kategori sayıları ve fiyat aralığı
+              sayıları. Kullanıcı bir facet seçince aynı istek bir filtreyle tekrarlanır.
+            code: |-
+              { "query": { … }, "size": 24,
+                "aggs": { "categories": { "terms": { "field": "category" } },
+                          "price": { "range": { "field": "price", "ranges": [ {"to": 500}, {"from": 500, "to": 2000}, {"from": 2000} ] } } } }
+          - title: Sayılacak alanlar keyword olarak tanımlanır
+            text: >-
+              Kategori gibi alanlar analyzer'dan geçirilmez (keyword); "Ev & Yaşam" tek bir değer olarak kalır ve sayılabilir.
+              Hem aranacak hem sayılacak bir alan, text ve keyword olarak iki kez tanımlanır.
+            code: |-
+              "category": { "type": "keyword" },
+              "brand":    { "type": "text", "fields": { "raw": { "type": "keyword" } } }
+          - title: Seçim filtre olarak eklenir, sorguya değil
+            text: >-
+              Kullanıcının seçtiği kategori bool sorgusunun filter bölümüne konur. Filtre skoru değiştirmez ve sonucu
+              önbelleğe alınabilir; aynı filtre sık kullanıldıkça daha ucuzlar.
+            code: |-
+              "bool": { "must": [ { "multi_match": { … } } ], "filter": [ { "term": { "category": "Elektronik" } } ] }
+          - title: Seçili facet'in diğer seçenekleri ayrıca düşünülür
+            text: >-
+              Filtre aggregation'ları da daraltır: Elektronik seçilince kategori listesinde sadece Elektronik kalır. Kullanıcı
+              diğer kategorileri de görmeye devam etsin isteniyorsa filtre post_filter'a konur; o zaman sonuçlar daralır ama
+              sayılar bütün aramadan hesaplanır.
+          - title: Kova sayısı sınırlanır
+            text: >-
+              terms aggregation varsayılan olarak en çok ürünü olan 10 kovayı döndürür. Çok değerli alanlarda (ör. marka)
+              size açıkça verilir ve en çok kullanılanlar gösterilir; hepsini döndürmek pahalıdır.
+      feed:
+        title: Veri nereden geliyor?
+        writes: >-
+          Arama index'ine kullanıcı yazmaz. Ürünlerin asıl kaydı katalog veritabanındadır; arama motoru ondan beslenir.
+        reads: Uygulama, arama sayfası ve facet listesi için.
+        kind: >-
+          OpenSearch başka bir veritabanından kendiliğinden veri çekmez; birinin onu beslemesi gerekir (Amazon OpenSearch
+          Ingestion ya da kataloğun değişikliklerini okuyan bir program).
+        with: >-
+          Sonuç kartlarının görselleri nesne deposundan (S3) gelir; ürünün asıl kaydı ve stok katalogdadır (DocumentDB).
+          Facet sayıları index'teki kopyadan hesaplanır; katalogda yeni bir ürün eklendiğinde sayı, index güncellenince değişir.
+        best: >-
+          Katalog tek yerde tutulur ve arama index'i ondan otomatik beslenir (DocumentDB'nin OpenSearch ile zero-ETL
+          entegrasyonu). Facet olarak gösterilecek alanlar katalog tasarlanırken belirlenir ve index'te keyword olarak tanımlanır.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              Arama sayfası "siyah" aramasıyla açıldı. Açılırken oturumun güncellendi.
+            engines: [elasticache]
+          - text: >-
+              Tarayıcın aramayı gönderdi; uygulama OpenSearch'e tek bir istekte hem ürünleri hem kategori ve fiyat sayılarını
+              sordu. Simülasyonun sol şeridi bu istek.
+            engines: [opensearch]
+          - text: >-
+              40 ürün listelendi (açıklamasında "siyah" geçen ürünler). Soldaki liste "Kitap (11), Elektronik (9)…" diye doldu;
+              bu sayılar aynı cevaptan geldi. Kart görselleri S3'ten.
+            engines: [opensearch, s3]
+          - text: >-
+              Sonra soldaki listede "Elektronik"e tıkladın. Tarayıcın aynı aramayı category=Elektronik ile istedi; uygulama
+              sorguya bir filtre ekledi. Simülasyonun sağ şeridi bu istek.
+            engines: [opensearch]
+          - text: >-
+              9 Elektronik ürünü kaldı; skorları değişmedi. Kategori listesinde artık sadece Elektronik var, çünkü sayılar da
+              filtreden geçen ürünlerden hesaplandı.
+            engines: [opensearch]
+      sim:
+        kind: facets
+        caption: >-
+          "siyah" aramasının gerçek sonuçlarından 10 ürünlük bir kesit, skor sırasında. Solda sayfa açılırken giden arama, sağda
+          senin tıklamanla giden aynı arama + Elektronik filtresi. Gerçekte 40 ve 9 ürün var. Skorlar gerçek.
+        filter: [category, Elektronik]
+        ranges: [["0–500 ₺", null, 500], ["500–2000 ₺", 500, 2000], ["2000 ₺ +", 2000, null]]
+        labels:
+          all: "t-1 · İstek 1 · Sayfa açılınca · Sadece arama"
+          filtered: "t0 · İstek 2 · Senin tıklaman · Arama + Elektronik filtresi"
+        send_all: >-
+          Arama sayfası "siyah" ile açıldı. Tarayıcın aramayı istedi; uygulama OpenSearch'e sorguyu iki aggregation'la birlikte
+          gönderiyor: kategori sayıları ve fiyat aralıkları.
+        back_all: >-
+          Uygulama ürünleri ve sayıları tek cevapta tarayıcına gönderdi; soldaki liste bu sayılarla dolacak.
+        send_filtered: >-
+          "Elektronik"e tıkladın. Tarayıcın aynı aramayı category=Elektronik ile istedi; uygulama sorgunun filter bölümüne
+          term: { category: Elektronik } ekleyip gönderiyor.
+        back_filtered: >-
+          Uygulama filtrelenmiş ürünleri ve sayıları tarayıcına gönderdi; liste daralacak, skorlar aynı kalacak.
+        rows:
+          - {id: P0066, name: Rhein Powerbank 66, category: Elektronik, price: 951.92, score: 0.84}
+          - {id: P0151, name: Anadolu Powerbank 151, category: Elektronik, price: 1947.82, score: 0.84}
+          - {id: P0114, name: Rhein Bulut Mimarisi 114, category: Kitap, price: 700.15, score: 0.81}
+          - {id: P0130, name: Nordwind Yün Kazak 130, category: Moda, price: 291.71, score: 0.81}
+          - {id: P0078, name: Kapadokya Matara 78, category: Spor, price: 2678.13, score: 0.79}
+          - {id: P0169, name: Nordwind Algoritmalar 169, category: Kitap, price: 4891.26, score: 0.79}
+          - {id: P0082, name: Alpen Masa Lambası 82, category: Ev & Yaşam, price: 1862.45, score: 0.78}
+          - {id: P0125, name: Ege Güneş Gözlüğü 125, category: Moda, price: 3851.89, score: 0.76}
+          - {id: P0181, name: Alpen Bluetooth Hoparlör 181, category: Elektronik, price: 1312.95, score: 0.76}
+          - {id: P0001, name: Alpen Kablosuz Kulaklık 1, category: Elektronik, price: 3373.84, score: 0.75}
+        summary: >-
+          Sonuçlar ve sayılar aynı geçişte hesaplandı; ayrı bir sayım sorgusu yok. Filtre 6 ürünü eledi, kalan 4'ün skoru hiç
+          değişmedi (0,84 · 0,84 · 0,76 · 0,75). Sayılar da sadece filtreden geçenlerden hesaplandı.
+      wire:
+        what: >-
+          Uygulama arama isteğini HTTPS ile OpenSearch'e gönderir (opensearch-py kütüphanesi). Her istek, uygulamanın IAM
+          kimliğiyle imzalanır.
+        dst: "vpc-dbws-search-shmosucy37orsjafn7t226ewjm.eu-central-1.es.amazonaws.com : 443"
+        dst_note: >-
+          OpenSearch domain'inin VPC içindeki adresi. Domain internete kapalı; sadece bu uygulama sunucusundan gelen bağlantıyı
+          kabul ediyor.
+        rows:
+          - [Şifreleme, TLS (HTTPS), gerçek, OpenSearch domain'i sadece şifreli bağlantı kabul eder.]
+          - [Protokol, "HTTP, POST /products/_search (JSON)", gerçek, "Arama bir web isteğidir; sorgu, filtre ve aggregation'lar aynı JSON gövdede gider."]
+          - [Kimlik, "IAM, SigV4 imzası (servis: es)", gerçek, "Şifre yok. İsteğe, geçici AWS kimliğiyle hesaplanmış bir imza eklenir."]
+        body_label: İsteğin içeriği (okunur hâle getirilmiş)
+        body: |-
+          POST /products/_search HTTP/1.1
+          Authorization: AWS4-HMAC-SHA256 Credential=…/eu-central-1/es/aws4_request, …
+
+          { "query": { "bool": { "must":   [ { "multi_match": { "query": "siyah", "fields": ["name^3", "description"], "fuzziness": "AUTO" } } ],
+                                 "filter": [ { "term": { "category": "Elektronik" } } ] } },
+            "size": 24,
+            "aggs": { "categories": { "terms": { "field": "category" } },
+                      "price": { "range": { "field": "price", "ranges": [ {"to": 500}, {"from": 500, "to": 2000}, {"from": 2000} ] } } } }
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. İki istek de aynı
+        kodu çalıştırır; fark, adreste bir kategori olup olmaması.
+      app_code:
+        - file: engines/opensearch.py
+          func: api_search
+          title: Arama isteği (iki istekte de aynı kod)
+          sub: Adresteki category=Elektronik filtreyi ekler.
+          lines:
+            - {match: '@bp.get("/api/search")', say: Arama isteği buraya gelir., tag: Tarayıcı → Uygulama}
+            - {match: 'cat = request.args.get("category")', say: Adreste bir kategori seçimi var mı, ona bakar., tag: Uygulamanın içinde}
+            - {match: 'query = {"bool": {"must":', say: "Sorguyu iki bölümle kurar: must (skorlanan arama) ve filter (skorsuz eleme; kategori seçildiyse).", tag: Uygulamanın içinde, hl: filter}
+            - {match: '"aggs": {"categories": {"terms": {"field": "category"}},', say: "Aynı isteğe iki sayım ekler: kategori sayıları ve fiyat aralıkları.", tag: Uygulamanın içinde, hl: aggs}
+            - {match: 'r = client().search(index="products", body=body)', say: "Tek istek OpenSearch'e gider; ürünler ve sayılar birlikte döner.", tag: [Uygulama → OpenSearch, OpenSearch → Uygulama]}
+            - {match: 'aggs = {"categories": [{"name": b["key"], "count": b["doc_count"]}', say: "Kovaları sayfanın beklediği şekle çevirir: ad ve sayı.", tag: Uygulamanın içinde, hl: aggs}
+            - {match: 'return jsonify(trace.payload({"hits": hits, "aggs": aggs, "total":', say: "Ürünler, sayılar ve toplam tarayıcıya gider.", tag: Uygulama → Tarayıcı}
+      live:
+        title: Gerçek index'te ne oldu?
+        intro: >-
+          Sayfa açılırken giden arama ve senin tıklamanla giden filtreli arama.
+        runs:
+          - label: Sadece arama (sayfa açılınca)
+            page_call: {path: /opensearch/api/search, query: {q: siyah}}
+            metrics: [[Bulunan ürün, data.total], [Kategori sayısı, data.aggs.categories.length], [İlk ürünün skoru, data.hits.0.score], [Süre, ms]]
+          - label: Arama + Elektronik (senin tıklaman)
+            trigger: true
+            metrics: [[Bulunan ürün, data.total], [Kategori sayısı, data.aggs.categories.length], [İlk ürünün skoru, data.hits.0.score], [Süre, ms]]
+        reading: >-
+          Filtre 40 ürünü 9'a indirdi; ilk ürünün skoru iki aramada da aynı, çünkü filtre skora dokunmaz. Kategori sayısı 5'ten
+          1'e indi: aggregation'lar da filtreden geçen ürünlerden hesaplandı. Süre her istekte biraz değişir.
+      query:
+        title: Sayfa OpenSearch'e ne dedi?
+        intro: >-
+          İki sütun, simülasyondaki iki isteğin sorgusu. Tek fark filtre parçası. Bir parçanın üzerine gelince cümlede, kodda ve
+          açıklamada aynı yer parlar.
+        cards_title: Parça parça
+        parts:
+          - id: mm
+            say: '"siyah" kelimesini adda ve açıklamada arayıp skorla,'
+            code: '{ "bool": { "must": [ { "multi_match": { "query": "siyah", … } } ],'
+            name: Ne aranıyor?
+            note: must bölümü skorlanır; eşleşmesi daha güçlü olan ürün daha üstte.
+            hl: score
+          - id: flt
+            say: sadece kategorisi Elektronik olanları bırak,
+            code: '              "filter": [ { "term": { "category": "Elektronik" } } ] },'
+            name: Hangileri kalsın?
+            note: term, keyword alanında birebir eşleşme. filter bölümü skora katkı yapmaz; sadece eler.
+            hl: filter
+            tag: sadece sağdaki sorguda var
+          - id: cats
+            say: kalanları kategoriye göre say,
+            code: '  "aggs": { "categories": { "terms": { "field": "category" } },'
+            name: Ne sayılsın?
+            note: Her farklı kategori bir kova; içindeki ürün sayısı doc_count.
+            hl: aggs
+          - id: prc
+            say: ve fiyat aralıklarına göre say.
+            code: '           "price": { "range": { "field": "price", "ranges": [ … ] } } } }'
+            name: Ne sayılsın?
+            note: 0–500, 500–2000 ve 2000 üstü olmak üzere üç kova.
+            hl: aggs
+        columns:
+          - label: Sadece arama
+            sub: Sayfa açılırken giden sorgu.
+            via: Uygulama bu sorguyu opensearch-py kütüphanesinin search() metoduyla gönderir; sayılar aynı istekte.
+            parts: [mm, cats, prc]
+          - label: Arama + Elektronik
+            sub: Senin "Elektronik" tıklamanla giden sorgu.
+            via: Aynı search() çağrısı; uygulama filter bölümüne kategori satırını ekledi.
+            parts: [mm, flt, cats, prc]
+            mark: [flt]
+        note: >-
+          Dikkat: kategori sayıları için ayrı bir sorgu yok; "aggs" aynı isteğin bir parçası. Ve kategori seçimi "must"a değil
+          "filter"a eklendi: bu yüzden ürünlerin skoru ve sırası değişmedi.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          OpenSearch'ün işi cevabı verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: OpenSearch → Uygulama
+            text: Tek cevapta Elektronik'ten 9 ürün, tek kovalık kategori sayısı ve üç fiyat aralığı sayısı geldi.
+          - who: Uygulama
+            text: Kovaları ad ve sayı listesine çevirdi; ürünleri sayfanın beklediği şekle getirdi.
+          - who: Uygulama → Tarayıcın
+            text: Ürünleri, sayıları ve isteğin kaydını tek bir JSON cevabında gönderdi.
+          - who: Tarayıcın
+            text: Sonuçları çizdi; soldaki listede Elektronik kalın yazıldı ve fiyat sayıları güncellendi.
+          - who: Tarayıcın → S3
+            text: >-
+              Kart görsellerini ürün numarasından kurduğu adreslerle istedi; çoğu az önce görüldüğü için önbellekten geldi.
+          - who: Sonra
+            text: >-
+              "All categories" (bütün kategoriler) seçersen filtre çıkar ve 40 ürün, beş kategori sayısıyla geri gelir.
+      remember: >-
+        Sonuçlar ve facet sayıları aynı istekte, aynı geçişte hesaplanır. Kullanıcının seçimi filtre olarak eklenir: ürünleri
+        eler ama skorlarına dokunmaz.
+      why_db: >-
+        Neden OpenSearch? Arama sonucunun yanında anlık sayılar ve skor bozulmadan filtreleme, arama motorunun temel işidir;
+        OpenSearch bunları tek istekte, ters index ve keyword alanları üzerinde yapar. Bedeli: sayılar index'teki kopyadan gelir
+        ve katalog ile index arasındaki birkaç saniyelik gecikmeyi taşır.
 
   # ---------------------------------------------------------------- Stores: OpenSearch geo
   - page: stores

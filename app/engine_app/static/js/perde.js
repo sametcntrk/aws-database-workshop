@@ -63,9 +63,10 @@
     const box = root.querySelector(".gp-live");
     if (!box) return;
     const trig = d && d.trig, page = (d && d.page) || [];
+    const isTrig = (c) => !!trig && c.path === trig.path && JSON.stringify(c.query || {}) === JSON.stringify(trig.query || {}) && c.ms === trig.ms;   // a page call is never the click itself
     const same = (c, pc) => c.path === pc.path && Object.entries(pc.query || {}).every(([k, v]) => String((c.query || {})[k]) === String(v));
     const runs = L.runs.map((r) => (!d ? null : r.trigger ? (trig && trig.ok === false ? { error: true } : runOf(trig))
-      : r.page_call ? runOf([...page].reverse().find((c) => same(c, r.page_call))) || { error: true } : null));
+      : r.page_call ? runOf([...page].reverse().find((c) => same(c, r.page_call) && !isTrig(c))) || { error: true } : null));
     box.innerHTML = liveHtml(L, runs);
     if (!d) return;
     await Promise.all(L.runs.map(async (r, k) => {
