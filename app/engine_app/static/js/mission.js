@@ -149,21 +149,25 @@
     const parts = Q.parts || [];
     const col = (k) => `q${k % 6}`;
     const INDENT = new Set(["filter", "proj"]);
+    const D = Q.diff || {};
     const codeLines = (list, mark) => list.map((x) => {
       const k = parts.indexOf(x);
       return `<span class="gq-line ${col(k)}${mark && x.only_off ? " added" : ""}" data-q="${esc(x.id)}" tabindex="0"><b>${k + 1}</b>${INDENT.has(x.id) ? "  " : ""}${esc(x.code)}</span>`;
     }).join("");
-    const D = Q.diff;
+    const sentence = (list) => {
+      const txt = list.map((x) => `<span class="${col(parts.indexOf(x))}" data-q="${esc(x.id)}" tabindex="0">${esc(x.say)}</span>`).join(" ");
+      return /[.!?]$/.test(list[list.length - 1].say) ? txt : `${txt}.`;
+    };
+    // Two columns in the same order as the simulation: left with the index, right without it.
+    const col2 = (title, sub, list, mark) => `<div class="gq-col"><h4>${esc(title)}</h4><p class="gq-sub">${esc(sub || "")}</p>
+      <span class="gq-label">Türkçesi</span><p class="gq-say">${sentence(list)}</p>
+      <span class="gq-label">Komut</span><pre class="gq-code">${codeLines(list, mark)}</pre></div>`;
     return `<section class="gp-sec gq"><h3><span>5</span>${esc(Q.title || "Sorgu")}</h3><p>${esc(Q.intro || "")}</p>
-      <div class="gq-row"><span class="gq-label">Türkçesi</span><p class="gq-say">${parts.map((x, k) =>
-        `<span class="${col(k)}" data-q="${esc(x.id)}" tabindex="0">${esc(x.say)}</span>`).join(" ")}</p></div>
-      <div class="gq-row"><span class="gq-label">Komut</span><pre class="gq-code">${codeLines(parts, false)}</pre></div>
-      <ol class="gq-cards">${parts.map((x, k) => `<li class="${col(k)}" data-q="${esc(x.id)}" tabindex="0"><header><b>${k + 1}</b><strong>${esc(x.name || "")}</strong><code>${esc(x.code)}</code></header>
-        <p>${esc(x.note)}</p></li>`).join("")}</ol>
-      ${D ? `<h4 class="gq-diff-title">${esc(D.title)}</h4><div class="gq-diff">
-        <div><span class="gq-label">${esc(D.label_on)}</span><pre class="gq-code">${codeLines(parts.filter((x) => !x.only_off), false)}</pre></div>
-        <div><span class="gq-label">${esc(D.label_off)}</span><pre class="gq-code">${codeLines(parts, true)}</pre></div></div>
-        <p class="gq-diff-note">${esc(D.note)}</p>` : ""}</section>`;
+      <div class="gq-two">${col2(D.label_on, D.sub_on, parts.filter((x) => !x.only_off), false)}${col2(D.label_off, D.sub_off, parts, true)}</div>
+      ${D.note ? `<p class="gq-diff-note">${esc(D.note)}</p>` : ""}
+      <h4 class="gq-cards-title">${esc(Q.cards_title || "Parça parça")}</h4>
+      <ol class="gq-cards">${parts.map((x, k) => `<li class="${col(k)}" data-q="${esc(x.id)}" tabindex="0"><header><b>${k + 1}</b><strong>${esc(x.name || "")}</strong><code>${esc(x.code)}</code>
+        ${x.only_off ? `<em>${esc(D.only_off_tag || "sadece sağdaki komutta")}</em>` : ""}</header><p>${esc(x.note)}</p></li>`).join("")}</ol></section>`;
   }
   function renderPanel() {
     const P = step.panel;
