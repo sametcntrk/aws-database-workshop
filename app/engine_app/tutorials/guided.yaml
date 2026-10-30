@@ -3785,16 +3785,254 @@ steps:
   - page: cart
     path: /cart
     engines: [dynamodb]
-    use_case: Read consistency
-    title: Read the cart for half the cost
+    use_case: Okuma tutarlılığı
+    title: Sepeti yarı maliyetle oku
     why: >-
-      A strongly consistent read returns the last write. An eventually consistent read can be a moment behind, and it costs half the read capacity.
-    do: Click the lit button "Eventually consistent".
+      Sepet sayfasındasın. Sepetin, az önce eklediğin ürünlerle listelendi. Şimdi aynı sepeti daha ucuz bir okuma türüyle
+      isteyeceksin ve neyin değiştiğine bakacaksın.
+    do: Aydınlık "Eventually consistent" (sonunda tutarlı) butonuna tıkla.
     target: "#exp-consistent [data-value=false]"
     action: click
     wait: {method: GET, path: /dynamodb/api/cart, query: {consistent: "false"}}
     focus: "#cart"
-    result: The Query used half the read request units (RRU). Checkout still reads the cart strongly consistent, because the order must have the last quantity.
+    result: The Query used half the read request units (RRU).
+    panel:
+      need: >-
+        Sepet sayfası çok sık okunur. Her okuma para ve kapasite harcar. Ama ödeme adımında sepetin en son hâli kesin olarak
+        okunmalı: bir saniye önce eklenen ürün eksik görünürse sipariş yanlış olur. İki ihtiyaç farklı: biri ucuz olsun, diğeri
+        kesin olsun.
+      concept:
+        term: Güçlü ve sonunda tutarlı okuma (strong / eventual consistency)
+        text: >-
+          DynamoDB her item'ı bir bölgenin birden fazla veri merkezinde (Availability Zone) kopyalar hâlinde tutar. Bir yazma
+          önce ana kopyaya gelir, diğer kopyalara genellikle bir saniyeden kısa sürede ulaşır. Güçlü tutarlı okuma ana kopyaya sorar
+          ve en son yazmayı kesin görür. Sonunda tutarlı okuma herhangi bir kopyaya sorar; yarı fiyatına okur ama az önceki
+          yazmayı henüz görmeyebilir. Üç şubesi olan bir bankada bakiyeye merkez şubeden ya da en yakın şubeden bakmak gibi.
+        terms:
+          - [Güçlü tutarlı okuma, "En son başarılı yazmayı kesin döndürür. 4 KB'a kadar 1 okuma birimi (RRU)."]
+          - [Sonunda tutarlı okuma, "Herhangi bir kopyadan okur; çok yeni bir yazmayı kaçırabilir. 4 KB'a kadar 0,5 RRU."]
+          - [Availability Zone, "Bir AWS bölgesindeki birbirinden ayrı veri merkezleri. Kopyalar farklı AZ'lerde durur."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde okuma tutarlılığı için hazırlık
+        intro: >-
+          Sepet sayfası hiç açılmadan, her ekranın hangi okuma türünü kullanacağı belirlenir. Aşağıdaki beş adım bu hazırlığın
+          sırasıdır.
+        text:
+          - title: Önce her ekranın ihtiyacı yazılır
+            text: >-
+              Her okuma için şu sorulur: "bir saniye önceki bir yazmayı kaçırmak sorun olur mu?". Sepet listesi ve başlıktaki
+              sayaç için olmaz; ödeme özeti ve stok kontrolü için olur.
+            code: |-
+              Sepet sayfası  → ConsistentRead = false   (ucuz)
+              Ödeme özeti    → ConsistentRead = true    (kesin)
+          - title: Okuma türü her istekte seçilir
+            text: >-
+              Tutarlılık tablo ayarı değil, isteğin parametresidir. Aynı tablo, aynı item farklı ekranlarda farklı türle
+              okunabilir. Varsayılan sonunda tutarlıdır; güçlü okuma açıkça istenir.
+            code: |-
+              table.query(KeyConditionExpression=Key("pk").eq(pk), ConsistentRead=True)
+          - title: Maliyet hesaplanır
+            text: >-
+              Güçlü okuma, sonunda tutarlı okumanın iki katı birim harcar (4 KB başına 1 ve 0,5 RRU). Çok okunan ekranlarda
+              sonunda tutarlı okumak okuma faturasını yarıya indirir.
+          - title: İndeks ve bölgeler arası kopya sınırları bilinir
+            text: >-
+              Global secondary index'ler ve başka bölgelere kopyalanan tablolar (global tables) güçlü tutarlı okumayı her durumda
+              sunmaz. Kesin okuma gereken sorular ana tabloya, yazmanın yapıldığı bölgeye sorulur.
+          - title: Kendi yazdığını görmek ayrıca düşünülür
+            text: >-
+              "Ekledim ama listede yok" hissi kullanıcıyı şaşırtır. Bu yüzden yazmanın hemen arkasından gelen okuma (ekledikten
+              sonra sepeti göstermek) güçlü yapılır; sonraki sayfa açılışları sonunda tutarlı olabilir.
+      feed:
+        title: Veri nereden geliyor?
+        writes: Uygulama. Ürün sayfasındaki "sepete ekle", sepet sayfasındaki silme ve adet değiştirme.
+        reads: Uygulama. Sepet sayfası, başlıktaki sepet sayacı ve ödeme adımı (her biri farklı tutarlılıkla).
+        kind: >-
+          Uygulama orkestrasyonu. Kopyalama DynamoDB'nin kendi içindedir: kopyaları kendisi tutar, uygulama bunu görmez.
+        with: >-
+          Sepet sayfasındaki ürün adları ve fiyatlar sepet item'larının içinde kopya olarak durur (katalogdan, DocumentDB);
+          ödemede sipariş ilişkisel veritabanına (Aurora) yazılır.
+        best: >-
+          Okuma türü ekran ekran seçilir: kesinlik gereken yerde güçlü, gerisinde sonunda tutarlı. Böylece hem doğruluk hem
+          maliyet korunur.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              Başlıktaki "Cart" (sepet) bağlantısına tıkladın ve sepet sayfası açıldı. Açılırken oturumun güncellendi.
+            engines: [elasticache]
+          - text: >-
+              Sayfa sepeti istedi; "Strongly consistent" (güçlü tutarlı) seçiliydi. Uygulama DynamoDB'ye güçlü tutarlı bir Query
+              gönderdi; 1 okuma birimi harcandı. Simülasyonun sol şeridi bu istek.
+            engines: [dynamodb]
+          - text: >-
+              Sepetin listelendi: ürün adları ve fiyatlar item'ların içinden (sepete eklerken katalogdan kopyalanan bilgiler).
+            engines: [dynamodb]
+          - text: >-
+              Sonra "Eventually consistent" butonuna bastın. Tarayıcın aynı sepeti consistent=false ile istedi; uygulama aynı
+              Query'yi sonunda tutarlı gönderdi; 0,5 okuma birimi harcandı. Simülasyonun sağ şeridi bu istek.
+            engines: [dynamodb]
+      sim:
+        kind: replicas
+        caption: >-
+          Senin sepetindeki bir item'ın kopyaları (burada üç kopya çiziyoruz). Bir an önce adedi 1'den 2'ye çıkaran bir yazma olduğunu varsayıyoruz ve
+          kopyalardan biri onu henüz almamış (gerçekte bu aralık genelde bir saniyeden kısadır). Solda güçlü okuma, sağda
+          sonunda tutarlı okuma; ikisi de gerçek istek.
+        key: ITEM#P0001 qty
+        old: 1
+        new: 2
+        lag: [c]
+        nodes:
+          - {id: a, label: "Kopya 1 · ana (AZ-a)"}
+          - {id: b, label: "Kopya 2 (AZ-b)"}
+          - {id: c, label: "Kopya 3 (AZ-c)"}
+        state_say: >-
+          Adedi 2 yapan yazma ana kopyaya ve ikinci kopyaya ulaştı; üçüncü kopyada hâlâ eski değer (1) var.
+        lanes:
+          - id: strong
+            title: "t-1 · İstek 1 · Sayfa açılınca · Güçlü tutarlı"
+            reads: [a]
+            cost: 1 RRU
+            send: >-
+              Sepet sayfasını açtın. Tarayıcın sepeti istedi; uygulama DynamoDB'ye ConsistentRead=True ile Query gönderiyor.
+            read_say: Güçlü okuma ana kopyaya gidiyor; ana kopya en son yazmayı her zaman bilir.
+            got_say: "Cevap: qty = 2, en son değer. Bedeli 1 okuma birimi."
+            back: Uygulama sepeti tarayıcına gönderdi.
+          - id: eventual
+            title: "t0 · İstek 2 · Senin tıklaman · Sonunda tutarlı"
+            reads: [c]
+            cost: 0,5 RRU
+            send: >-
+              "Eventually consistent" butonuna bastın. Tarayıcın sepeti consistent=false ile istedi; uygulama aynı Query'yi
+              ConsistentRead=False ile gönderiyor.
+            read_say: Sonunda tutarlı okuma herhangi bir kopyaya gidebilir; bu kez yazmayı henüz almamış olana denk geldi.
+            got_say: "Cevap: qty = 1, bir an önceki değer. Bedeli 0,5 okuma birimi. Kısa süre sonra bütün kopyalar 2 olur."
+            back: Uygulama sepeti tarayıcına gönderdi; bu senaryoda bir an önceki hâliyle.
+        summary: >-
+          Güçlü okuma en son yazmayı kesin gördü ve iki kat ödedi. Sonunda tutarlı okuma yarı fiyatına okudu ama çok yeni bir
+          yazmayı kaçırabildi. Gerçek denemende sepet bir süredir değişmediği için iki okuma da aynı sepeti gösterdi.
+      wire:
+        what: >-
+          Uygulama komutu HTTPS ile DynamoDB'ye gönderir (boto3 kütüphanesi). Her istek, uygulamanın IAM kimliğiyle imzalanır.
+        dst: "dynamodb.eu-central-1.amazonaws.com : 443"
+        dst_note: >-
+          DynamoDB'nin bölge adresi. VPC'deki gateway endpoint sayesinde istek internete çıkmadan AWS'nin iç ağından gider.
+        rows:
+          - [Şifreleme, TLS (HTTPS), gerçek, DynamoDB sadece şifreli bağlantı kabul eder.]
+          - [Protokol, "HTTP, POST /  (JSON gövde)", gerçek, "Komutun adı X-Amz-Target başlığında: Query."]
+          - [Kimlik, "IAM, SigV4 imzası (servis: dynamodb)", gerçek, "Şifre yok. İsteğe, geçici AWS kimliğiyle hesaplanmış bir imza eklenir."]
+        body_label: İsteğin içeriği (okunur hâle getirilmiş)
+        body: |-
+          POST / HTTP/1.1
+          X-Amz-Target: DynamoDB_20120810.Query
+
+          { "TableName": "dbws-cart",
+            "KeyConditionExpression": "pk = :pk",
+            "ExpressionAttributeValues": { ":pk": {"S": "CART#7f3a…"} },
+            "ConsistentRead": false,
+            "ReturnConsumedCapacity": "TOTAL" }
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. İki istek de aynı
+        kodu çalıştırır; fark tek bir değer (ConsistentRead).
+      app_code:
+        - file: engines/dynamodb.py
+          func: api_cart
+          title: Sepet isteği
+          sub: Adresteki consistent=true ya da consistent=false okuma türünü seçer.
+          lines:
+            - {match: '@bp.get("/api/cart")', say: "Sepet isteği buraya gelir.", tag: Tarayıcı → Uygulama}
+            - {match: 'consistent = request.args.get("consistent", "true") == "true"', say: "Güçlü mü, sonunda tutarlı mı? Varsayılan güçlü.", tag: Uygulamanın içinde, hl: node}
+            - {match: 'items = get_cart(consistent)', say: "Sepeti okuyan ortak fonksiyonu çağırır (yandaki kart).", tag: Uygulamanın içinde}
+            - {match: 'return jsonify(trace.payload({"items": items, "total":', say: "Sepeti ve toplam tutarı tarayıcıya gönderir; toplamı uygulama hesaplar.", tag: Uygulama → Tarayıcı}
+        - file: engines/dynamodb.py
+          func: get_cart
+          title: Sepeti okuyan fonksiyon
+          sub: Sepet sayfası, ekleme sonrası ve ödeme aynı fonksiyonu kullanır.
+          lines:
+            - {match: 'pk = f"CART#{visitor_id()}"', say: "Senin sepetinin anahtarını kurar.", tag: Uygulamanın içinde}
+            - {match: 'resp = table().query(KeyConditionExpression=Key("pk").eq(pk), ConsistentRead=consistent,', say: "Query DynamoDB'ye gider; okuma türü bu satırda seçilir.", tag: [Uygulama → DynamoDB, DynamoDB → Uygulama], hl: node}
+            - {match: 'units, cost = _units(resp, "Read")', say: Harcanan okuma birimini cevaptan okur., tag: Uygulamanın içinde}
+            - {match: 'items = [{"product_id": it["sk"].split("#", 1)[1]', say: "Item'ları sayfanın beklediği şekle çevirir (ITEM#P0001 → P0001).", tag: Uygulamanın içinde}
+      live:
+        title: Gerçek tabloda ne oldu?
+        intro: >-
+          Sayfa açılırken giden güçlü okuma ve senin tıklamanla giden sonunda tutarlı okuma.
+        runs:
+          - label: Güçlü tutarlı (sayfa açılınca)
+            page_call: {path: /dynamodb/api/cart, query: {consistent: "true"}}
+            metrics: [[Okuma birimi, capacity], [Okunan item, items], [Süre, ms]]
+          - label: Sonunda tutarlı (senin tıklaman)
+            trigger: true
+            metrics: [[Okuma birimi, capacity], [Okunan item, items], [Süre, ms]]
+        reading: >-
+          Aynı sepet, aynı item'lar; güçlü okuma 1, sonunda tutarlı okuma 0,5 okuma birimi harcadı. Sepet bir süredir değişmediği
+          için iki okuma da aynı sonucu verdi. Fark sadece bir yazmanın hemen arkasından okunduğunda görülebilir. Sepet boş
+          olsa bile her Query en az bu kadar birim harcar. Süre her istekte biraz değişir.
+      query:
+        title: Sayfa DynamoDB'ye ne dedi?
+        intro: >-
+          İki sütun, simülasyondaki iki isteğin komutu. Tek fark bir parça. Bir parçanın üzerine gelince cümlede, kodda ve
+          açıklamada aynı yer parlar.
+        cards_title: Parça parça
+        parts:
+          - id: q
+            say: Bu sepetin bütün item'larını
+            code: "table.query(KeyConditionExpression=Key('pk').eq('CART#7f3a…'),"
+            name: Hangi item'lar?
+            note: Senin partition'ının bütün item'ları, sk sırasıyla.
+            hl: node
+          - id: st
+            say: en son yazmayı kesin görecek şekilde oku.
+            code: "  ConsistentRead=True)"
+            name: Nasıl okunsun?
+            note: Güçlü okuma; ana kopyaya sorar. 4 KB'a kadar 1 RRU.
+            hl: node
+          - id: ev
+            say: herhangi bir kopyadan, yarı fiyatına oku.
+            code: "  ConsistentRead=False)"
+            name: Nasıl okunsun?
+            note: Sonunda tutarlı okuma. 4 KB'a kadar 0,5 RRU; çok yeni bir yazmayı kaçırabilir.
+            hl: node
+            tag: sadece sağdaki komutta var
+        columns:
+          - label: Güçlü tutarlı
+            sub: Sayfa açılırken giden komut.
+            via: Uygulama bu komutu boto3 kütüphanesinin query() metoduyla gönderir.
+            parts: [q, st]
+          - label: Sonunda tutarlı
+            sub: Senin "Eventually consistent" tıklamanla giden komut.
+            via: Aynı query() çağrısı; sadece ConsistentRead değeri değişti.
+            parts: [q, ev]
+            mark: [ev]
+        note: >-
+          Dikkat: komutta hangi kopyanın okunacağı yazmıyor. ConsistentRead sadece "en son yazmayı kesin görmem gerekiyor mu?"
+          sorusunun cevabıdır; kopyayı DynamoDB seçer.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          DynamoDB'nin işi item'ları verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: DynamoDB → Uygulama
+            text: Sepetin item'ları ve harcanan birim (0,5 RRU) geldi.
+          - who: Uygulama
+            text: Item'ları sayfanın beklediği şekle çevirdi ve toplam tutarı hesapladı.
+          - who: Uygulama → Tarayıcın
+            text: Sepeti, toplamı ve isteğin kaydını tek bir JSON cevabında gönderdi.
+          - who: Tarayıcın
+            text: Sepet tablosunu yeniden çizdi; görünen bir değişiklik yok.
+          - who: Sonra (ödeme)
+            text: >-
+              Ödeme sayfası sepeti her zaman güçlü tutarlı okur (consistent=true), çünkü sipariş en son adetle yazılmalı.
+      remember: >-
+        Okuma türünü ekran ekran seç: kesinlik gereken yerde güçlü okuma (en son yazmayı görür, iki kat birim), gerisinde
+        sonunda tutarlı okuma (yarı fiyatına, çok yeni bir yazmayı kaçırabilir).
+      why_db: >-
+        Neden DynamoDB? Sepet çok okunur; DynamoDB her okumada tutarlılığı ve bedeli seçmeye izin verir ve kopyaları kendisi
+        yönetir. Bedeli: global secondary index'lerde ve bölgeler arası kopyalarda güçlü okuma her zaman mümkün değildir.
 
   - page: cart
     path: /cart

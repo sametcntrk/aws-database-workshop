@@ -736,6 +736,42 @@
     return { html, lanes: { ddb: fr }, paint, final: showSum };
   }
 
+  /* ---------- replicas: one item kept in several copies. A write reaches the copies one after the other; a read asks one
+   * copy (eventual) or the leader / a majority (strong). spec.nodes [{id, label}], spec.key, spec.old, spec.new,
+   * spec.lag (ids of the copies that do not have the new value yet), spec.lanes [{id, title, reads: [ids], cost, send, read_say, back}]. */
+  function replicas(spec) {
+    const DB = spec.engine_label || "DynamoDB", nodes = spec.nodes;
+    const lanes = {};
+    spec.lanes.forEach((ln) => {
+      const fr = [{ say: START, val: {}, ask: [], got: null }];
+      const before = Object.fromEntries(nodes.map((n) => [n.id, (spec.lag || []).includes(n.id) ? spec.old : spec.new]));
+      let s = { ...fr[0], val: before, say: spec.state_say || `Az önceki yazma ana kopyaya geldi ve kopyalara yayılıyor. Şu an ${spec.lag.length} kopyada hâlâ eski değer var.` };
+      fr.push(s);
+      s = { ...s, ask: ln.reads, say: ln.read_say || `Okuma ${ln.reads.join(", ")} kopyasına gidiyor.` };
+      fr.push(s);
+      const vals = ln.reads.map((x) => before[x]), got = ln.pick === "newest" ? spec.new : vals[0];
+      s = { ...s, got, cost: ln.cost, done: true, say: ln.got_say || `Cevap: ${spec.key} = ${got}. Harcanan: ${ln.cost}.` };
+      fr.push(s);
+      lanes[ln.id] = actorize(fr, ln.send || "Uygulama okuma isteğini gönderiyor.", ln.back || "Uygulama sonucu tarayıcıya gönderdi.", DB, { ask: [] });
+    });
+    const body = `<div class="gs-nodes">${nodes.map((n) => `<div class="gs-node-box" data-n="${esc(n.id)}" data-hl="node"><b>${esc(n.label)}</b><span>${esc(spec.key)} = <i></i></span></div>`).join("")}</div>`;
+    const html = `${actorBar(DB)}<div class="gs-lanes">${spec.lanes.map((ln) => shell(ln.id, ln.title, body, { hl: ln.id, count: "Okunan kopya", result: spec.result_title || "Okumanın cevabı", col: true })).join("")}</div>${summary(spec.summary || "")}`;
+    function paint(root, id, f) {
+      const L = laneOf(root, id);
+      L.querySelector(".gs-count b").textContent = (f.ask || []).length;
+      L.classList.toggle("done", !!f.done);
+      L.querySelectorAll(".gs-node-box").forEach((el) => {
+        const n = el.dataset.n, v = (f.val || {})[n];
+        el.querySelector("i").textContent = v === undefined ? "…" : v;
+        el.classList.toggle("stale", v !== undefined && v !== spec.new);
+        el.classList.toggle("asked", (f.ask || []).includes(n));
+      });
+      chips(L, f.got !== null && f.got !== undefined ? [`<li>${esc(spec.key)} = <b>${esc(f.got)}</b> <small>${esc(f.cost || "")}</small></li>`] : []);
+      sayWho(L, f);
+    }
+    return { html, lanes, paint, final: showSum };
+  }
+
   /* ---------- Who works in a frame (owner rule: work of the app is never credited to the database).
    * actorize(frames, send, back, db): after START the app sends, every middle frame is the database's (unless it names
    * its own `who`), the last frame is the app sending the answer on. actorBar(db) is the bar above the lanes;
@@ -755,7 +791,7 @@
     root.querySelectorAll(".gs-actors [data-a]").forEach((x) => x.classList.toggle("on", ws.includes(x.dataset.a)));
   }
 
-  const KINDS = { "ddb-items": ddbItems, projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
+  const KINDS = { replicas, "ddb-items": ddbItems, projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
 
   function render(box, spec) {
     const kind = KINDS[spec.kind];
