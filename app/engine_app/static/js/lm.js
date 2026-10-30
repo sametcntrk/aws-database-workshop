@@ -137,7 +137,7 @@
     addCall({ label: opts.label || url, url, method, entries: json.trace || [], ms, ok: json.ok !== false, source: opts.source, background: opts.background, data: json.data });
     // The Mission (Guided e-commerce app) waits for these events.
     const done = { method, url, path: new URL(url, location.origin).pathname, query: Object.fromEntries(new URL(url, location.origin).searchParams),
-      body: opts.body || {}, ok: json.ok !== false, data: json.data, background: !!opts.background, entries: json.trace || [], ms, label: opts.label || url };
+      body: opts.body || {}, ok: json.ok !== false, data: json.data, background: !!opts.background, entries: json.trace || [], net: json.net || null, ms, label: opts.label || url };
     calls.push(done);
     document.dispatchEvent(new CustomEvent("lm:call", { detail: done }));
     if (json.ok === false) { const e = new Error(json.error || "The call failed."); e.payload = json; throw e; }

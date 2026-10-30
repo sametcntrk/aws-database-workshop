@@ -95,7 +95,7 @@ def register(bp):
                 if r.event_type == "view" and r.product_id not in seen:
                     seen.add(r.product_id)
                     recent.append({"product_id": r.product_id, "detail": r.detail})
-            t.result(items=len(recent), note="The partition holds your history in time order, so 'recently viewed' is one read.")
+            t.result(items=len(recent), read=len(rows), note="The partition holds your history in time order, so 'recently viewed' is one read.")
         return jsonify(trace.payload(recent[:8]))
 
     @bp.post("/api/simulate")

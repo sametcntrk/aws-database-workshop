@@ -281,9 +281,13 @@ steps:
     use_case: Kullanıcı başına olay geçmişi
     title: Sayfa, baktığın ürünü Keyspaces'e yazdı
     why: >-
-      Bu sayfa açılırken iki şey oldu: önce "bu ürüne baktın" bilgisi Keyspaces adlı veritabanına bir satır olarak yazıldı,
-      sonra "Son baktıkların" şeridi aynı yerden okundu. Keyspaces her kullanıcının satırlarını bir arada tutar, tıpkı
-      her kişinin ayrı bir defteri olması gibi. Bu deftere partition denir.
+      Bir önceki adımda bu ürünün sayfasını açtın. Sayfa açılırken mağaza arka planda iki iş yaptı: "bu ürüne baktın"
+      bilgisini bir veritabanına (Keyspaces) kaydetti, hemen ardından baktığın ürünlerin listesini aynı yerden geri okudu.
+      Sayfadaki "Recently viewed" (son baktıkların) şeridi bu listedir. Bu adımda tıklama yok, sadece bakacaksın.
+    after: >-
+      Şeritteki her ürün, Keyspaces'te sana ait partition'a (kişiye ait deftere) yazılmış bir "view" satırından geliyor.
+      Keyspaces sadece senin defterini açtı ve en yeni satırları verdi. "view" olmayan satırları ve aynı ürünün tekrarlarını
+      Engine App ayıkladı, en fazla 8 ürünü şeride koydu. Başka bir ürüne bakıp geri dönersen o ürün şeridin en başına geçer.
     do: Aydınlık "Recently viewed" (son baktıkların) şeridine bak. Sonra kartın altındaki butonla perde arkasını aç.
     target: "#recent-wrap"
     action: look
@@ -304,12 +308,43 @@ steps:
           - [Partition key, "Satırın hangi partition'a gideceğini belirleyen alan. Bu tabloda user_id."]
           - [Clustering key, "Partition içindeki sırayı belirleyen alan. Bu tabloda event_time, yeniden eskiye."]
           - [Keyspaces, "Amazon'un Apache Cassandra uyumlu, sunucusuz geniş sütunlu (wide column) veritabanı."]
+          - [Engine App, "Mağazanın arka uç programı. Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Tablo nasıl kuruldu, içindeki satırlar nereden geldi?
+        intro: >-
+          Bu sayfayı açmadan önce hazır olanlar: tablonun kendisi ve içindeki eski satırlar. Simülasyondaki tablo bu hâliyle başlıyor.
+        text:
+          - >-
+            Tablo, workshop kurulurken bir kez oluşturuldu: dbws.activity_by_user. Kurulurken üç karar verildi. Satırlar
+            user_id'ye göre partition'lara ayrılacak. Her partition'ın içinde satırlar event_time'a göre yeniden eskiye sıralı
+            duracak. Her satır 7 gün sonra kendiliğinden silinecek (TTL, "son kullanma süresi").
+          - >-
+            Senin partition'ındaki eski satırlar, bu tarayıcıyla mağazada daha önce yaptıklarından geliyor: açtığın ürün
+            sayfaları "view", verdiğin siparişler "purchase" satırı olarak yazıldı. Ayşe ve Mert gibi örnek müşterilerin
+            satırları ise workshop kurulurken toplu olarak yüklendi; onlarda "search", "add_to_cart" gibi başka türler de var.
+      feed:
+        writes: >-
+          Engine App. Bir ürün sayfası açılınca ya da bir sipariş verilince tarayıcı Engine App'e haber verir, Engine App de
+          Keyspaces'e bir INSERT komutu gönderir.
+        reads: Yine Engine App. "Son baktıkların" şeridi ve "My activity" (hareketlerim) sayfası için.
+        kind: >-
+          Uygulama orkestrasyonu: Keyspaces'e yazan da ondan okuyan da sadece Engine App. Keyspaces başka bir veritabanından
+          veri çekmez, başka bir veritabanına veri de göndermez.
+        here: >-
+          Örnek müşterilerin geçmişi kurulumda bir kez toplu yüklendi. Senin satırların canlı: sen gezdikçe yazılıyor.
+        real: >-
+          Trafik çok büyüyünce olaylar çoğu zaman önce bir olay akışına (ör. Amazon Kinesis) yazılır. Oradan hem bu tabloya
+          hem analiz sistemlerine dağıtılır; sayfa da yazmanın bitmesini beklemez.
+      now_intro: >-
+        Sayfanın açıldığı an. Önce resmin tamamı (simülasyon), sonra aynı anın ayrıntıları: isteğin yolu, Engine App'in
+        kodu, Keyspaces'e giden komutlar ve gerçek ölçümler.
       sim:
         kind: partition
         title: "Keyspaces tablosu: dbws.activity_by_user"
         caption: >-
           Tablodan küçük bir kesit: üç ziyaretçinin partition'ı. Ayşe ve Mert'in satırları canlı tablodan; senin
-          partition'ındaki eski satırlar örnek. Önce sayfanın INSERT'i, sonra SELECT'i oynuyor.
+          partition'ındaki eski satırlar örnek. Önce sayfanın INSERT'i, sonra SELECT'i, en sonda Engine App'in gelen satırları
+          süzmesi oynuyor. Üstteki iki etiket o anda işi kimin yaptığını gösterir: Engine App mi, Keyspaces mi.
         result_title: Son baktıkların şeridi
         partitions:
           - label: C00002 · Mert
@@ -319,7 +354,7 @@ steps:
           - label: "7f3a… (bu tarayıcı)"
             me: true
             rows:
-              - {time: "2 dk önce", type: add_to_cart, product: P0021 Akıllı Saat}
+              - {time: "2 dk önce", type: purchase, product: P0021 Akıllı Saat}
               - {time: "3 dk önce", type: view, product: P0021 Akıllı Saat}
               - {time: "5 dk önce", type: view, product: P0131 Mekanik Klavye}
               - {time: "6 dk önce", type: view, product: P0021 Akıllı Saat}
@@ -331,7 +366,49 @@ steps:
         insert: {time: "şimdi", type: view, product: P0001 Kablosuz Kulaklık}
         summary: >-
           Yazma da okuma da tek bir partition'a gitti. Tablo ne kadar büyürse büyüsün, senin geçmişini okumak için sadece
-          senin defterin açılır.
+          senin defterin açılır. Keyspaces satırları olduğu gibi verdi; "sadece view, tekrar yok, en fazla 8" kuralları
+          Engine App'in kodunda.
+      wire:
+        what: >-
+          Engine App, Keyspaces'e açık tuttuğu bir bağlantının üzerinden komutu gönderir. Bağlantı her istekte yeniden
+          kurulmaz; Engine App çalıştığı sürece açık kalır.
+        dst: "cassandra.eu-central-1.amazonaws.com : 9142"
+        dst_note: >-
+          Keyspaces'in bölge adresi. Bu ad, VPC'nin içindeki interface endpoint'in özel IP'sine çözülür; trafik internete çıkmaz.
+        rows:
+          - [Şifreleme, TLS, gerçek, Keyspaces sadece şifreli bağlantı kabul eder.]
+          - [Protokol, "CQL ikili protokolü, sürüm 4", gerçek, "Cassandra'nın kendi dili, HTTP değil. Komut ve değerler küçük ikili çerçeveler hâlinde gider."]
+          - [Kimlik, "SigV4, bağlantı açılırken", gerçek, "Bağlantı ilk açıldığında Engine App, IAM rolünün geçici kimliğiyle imzalı bir doğrulama gönderdi. Şifre yok."]
+        body_label: Çerçevenin içeriği (okunur hâle getirilmiş, değer örnek)
+        body: |-
+          QUERY
+            SELECT product_id, detail, event_type FROM dbws.activity_by_user WHERE user_id = ? LIMIT 40
+            değer      : '7f3a…'   (bu tarayıcının kimliği)
+            tutarlılık : LOCAL_QUORUM   (3 kopyanın 2'sinden oku)
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda Engine App'in gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Asıl görmen
+        gereken şu: hangi işi Keyspaces yapıyor, hangi işi Engine App.
+      app_code:
+        - file: engines/keyspaces.py
+          func: api_event
+          title: "1. Yazma: \"bu ürüne baktın\""
+          sub: Sayfa açılır açılmaz gelen istek.
+          lines:
+            - {match: '@bp.post("/api/events")', say: "Tarayıcıdan gelen \"bu ürüne baktım\" isteği buraya gelir.", tag: Engine App}
+            - {match: 'cql = f"INSERT INTO', say: Keyspaces'e gidecek INSERT komutu hazırlanır., tag: Engine App}
+            - {match: 's().execute(s().prepare(cql)', say: "Komut Keyspaces'e gönderilir. Soru işaretlerinin yerine senin kimliğin, şu anki zaman ve ürün konur.", tag: Keyspaces'e, hl: insert}
+            - {match: 'return jsonify(trace.payload({"stored": True}))', say: "Tarayıcıya \"kaydedildi\" cevabı döner.", tag: Engine App}
+        - file: engines/keyspaces.py
+          func: api_recent
+          title: "2. Okuma: \"Son baktıkların\""
+          sub: Hemen ardından gelen istek.
+          lines:
+            - {match: '@bp.get("/api/recent")', say: "\"Son baktıkların\" şeridi için gelen istek buraya gelir.", tag: Engine App}
+            - {match: 'rows = list(s().execute(cql', say: "SELECT komutu gönderilir. Keyspaces senin partition'ından en fazla 40 satırı olduğu gibi geri verir.", tag: Keyspaces'e, hl: where}
+            - {match: 'for r in rows:', say: Gelen satırlar tek tek ele alınır., tag: Engine App, hl: app}
+            - {match: 'if r.event_type == "view" and r.product_id not in seen:', say: "Sadece \"view\" satırları ve listede henüz olmayan ürünler geçer. add_to_cart, purchase ve tekrarlar burada elenir.", tag: Engine App, hl: type}
+            - {match: 'recent.append(', say: Geçen ürün listeye eklenir., tag: Engine App, hl: app}
+            - {match: 'return jsonify(trace.payload(recent[:8]))', say: "Listenin ilk 8 ürünü tarayıcıya gönderilir. Şeritte en fazla 8 ürün olmasının sebebi bu.", tag: Engine App, hl: app}
       live:
         title: Gerçek tabloda ne oldu?
         intro: >-
@@ -407,13 +484,37 @@ steps:
         columns:
           - label: "1. Yazma"
             sub: Sayfa açılır açılmaz arka planda giden komut.
+            via: >-
+              Engine App bu komutu cassandra-driver kütüphanesiyle gönderir: önce prepare() ile komutu bir kez hazırlatır,
+              sonra execute() ile değerleri yollar.
             parts: [ins, cols, vals]
           - label: "2. Okuma"
             sub: Hemen ardından "Son baktıkların" şeridi için giden komut.
+            via: >-
+              Engine App bu komutu yine cassandra-driver'ın execute() metoduyla gönderir. Satırları süzme işi bu komutta değil,
+              Engine App'in kodunda (bir önceki bölümdeki kesit).
             parts: [sel, where, limit]
         note: >-
           Dikkat: iki komutta da sıralama için bir şey yazmıyoruz. Sıra, tablo kurulurken bir kez belirlendi
           (CLUSTERING ORDER BY event_time DESC). Keyspaces satırları yazarken o sıraya koyuyor, okurken sadece baştan okuyor.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          Keyspaces'in işi satırları verince bitti. Bundan sonrası Engine App'te ve tarayıcında oluyor.
+        steps:
+          - who: Keyspaces → Engine App
+            text: Senin partition'ından {read} satır döndü (en fazla 40). Satırlar en yeniden eskiye sıralı geldi.
+          - who: Engine App
+            text: >-
+              Satırları tek tek dolaştı: "view" olmayanları (ör. purchase) ve aynı ürünün tekrarlarını attı, kalanların ilk 8'ini tuttu.
+          - who: Engine App → Tarayıcın
+            text: "{items} ürünlük listeyi JSON olarak, isteğin kaydıyla (trace) birlikte geri gönderdi."
+          - who: Tarayıcın
+            text: Listeyi "Recently viewed" şeridine çizdi. Mağaza sekmesinde gördüğün şerit bu cevap.
+          - who: Sonra
+            text: >-
+              Bu satırlar 7 gün sonra TTL ile kendiliğinden silinir. Başka bir ürüne bakarsan yeni bir view satırı partition'ın
+              en üstüne girer ve o ürün şeridin başına geçer.
       remember: >-
         Keyspaces'te soruyu tablo tasarlanırken seçersin. "Bu kişinin son olayları" sorusu için satırlar kişiye göre
         partition'lara ayrılır ve zamana göre sıralı tutulur. Bu soru her ölçekte hızlıdır; tasarıma uymayan bir soru

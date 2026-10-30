@@ -167,30 +167,37 @@
 
   /* ---------- partition: Keyspaces / Cassandra wide rows. One INSERT into the user's partition, then one SELECT of it. */
   function partition(spec) {
-    const parts = spec.partitions, me = parts.findIndex((p) => p.me), ins = spec.insert;
+    const parts = spec.partitions, me = parts.findIndex((p) => p.me), ins = spec.insert, cap = spec.app_limit || 8, lim = spec.read_limit || 40;
     const rowsOf = (p, withNew) => (withNew && p.me ? [{ ...ins, fresh: true }, ...p.rows] : p.rows);
+    const APP = "Engine App", DB = "Keyspaces";
     const frames = [{ say: START, phase: 0 }];
-    frames.push({ phase: 1, lit: me, say: `INSERT geldi: user_id = ${parts[me].label}. Keyspaces bu değere bakar ve satırın hangi partition'a gideceğini bulur. Diğer partition'lara dokunmaz.` });
-    frames.push({ phase: 2, lit: me, inserted: true, say: "Yeni satır partition'ın en üstüne girdi. Tablo satırları event_time'a göre yeniden eskiye sıralı tutuyor; sıralama yazarken yapılıyor, okurken değil." });
-    frames.push({ phase: 3, lit: me, inserted: true, select: true, touched: 1, say: `Şimdi sayfa "Son baktıkların" şeridi için SELECT ... WHERE user_id = ${parts[me].label} gönderiyor. Keyspaces yine sadece bu partition'a gider.` });
-    const seen = new Set(), result = [];
-    rowsOf(parts[me], true).forEach((r, k) => {
+    const mine = rowsOf(parts[me], true), total = parts.reduce((n, p) => n + rowsOf(p, true).length, 0);
+    // 1) the write: the app sends, the engine stores
+    frames.push({ phase: 0, who: APP, say: `Sayfa açıldı. Engine App "bu ürüne baktın" bilgisini bir INSERT komutuyla Keyspaces'e gönderiyor. Satırın user_id'si bu tarayıcının kimliği.` });
+    frames.push({ phase: 1, who: DB, lit: me, say: `INSERT geldi: user_id = ${parts[me].label}. Keyspaces bu değere bakar ve satırın hangi partition'a gideceğini bulur. Diğer partition'lara dokunmaz.` });
+    frames.push({ phase: 2, who: DB, lit: me, inserted: true, say: "Yeni satır partition'ın en üstüne girdi. Tablo satırları event_time'a göre yeniden eskiye sıralı tutuyor; sıralama yazarken yapılıyor, okurken değil." });
+    // 2) the read: the app asks, the engine returns rows as they are
+    frames.push({ phase: 3, who: APP, lit: me, inserted: true, select: true, touched: 1, say: `Şimdi Engine App "Son baktıkların" şeridi için SELECT ... WHERE user_id = ${parts[me].label} LIMIT ${lim} gönderiyor.` });
+    frames.push({ phase: 4, who: DB, lit: me, inserted: true, select: true, touched: 1, read: mine.length, stage: "db",
+      say: `Keyspaces sadece bu partition'ı açtı ve satırları baştan okudu: ${mine.length} satır (en fazla ${lim} olabilirdi). Satırları olduğu gibi Engine App'e geri gönderdi. Hangisinin şeride gireceğine Keyspaces karar vermez.` });
+    // 3) the app's own work: keep only views, drop repeats, at most `cap`
+    const seen = new Set(), result = [], keep = [], skip = [];
+    mine.forEach((r, k) => {
       let why;
-      if (r.type !== "view") why = `${r.type} satırı: bakılan ürün değil, atlandı.`;
-      else if (seen.has(r.product)) why = `${r.product}: zaten listede, atlandı.`;
-      else { seen.add(r.product); result.push(r.product); why = `${r.product}: listeye eklendi.`; }
-      frames.push({ phase: 4, lit: me, inserted: true, select: true, touched: 1, read: k + 1, result: [...result],
-        say: `${k + 1}. satır okundu (${r.time}). ${why}` });
+      if (r.type !== "view") { why = `event_type = ${r.type}: bakılan ürün değil, atlandı.`; skip.push(k); }
+      else if (seen.has(r.product)) { why = `${r.product} zaten listede, tekrar eklenmedi.`; skip.push(k); }
+      else { seen.add(r.product); result.push(r.product); keep.push(k); why = `${r.product}: listeye eklendi.`; }
+      frames.push({ phase: 5, who: APP, lit: me, inserted: true, select: true, touched: 1, read: mine.length, check: k + 1, stage: "app",
+        keep: [...keep], skip: [...skip], result: [...result], say: `Engine App ${k + 1}. satıra bakıyor (${r.time}). ${why}` });
     });
-    const total = parts.reduce((n, p) => n + rowsOf(p, true).length, 0);
-    frames.push({ ...frames[frames.length - 1], done: true,
-      say: `Bitti. Tabloda ${total} satır var, sadece ${rowsOf(parts[me], true).length} tanesi okundu: hepsi tek partition'dan, zaten yeniden eskiye sıralı.` });
+    frames.push({ ...frames[frames.length - 1], check: 0, done: true, stage: "out",
+      say: `Engine App listenin en fazla ${cap} ürününü tarayıcıya gönderdi (burada ${result.length} ürün var). Tabloda ${total} satır var; Keyspaces sadece ${mine.length} tanesini okudu, süzmeyi Engine App yaptı.` });
     const block = (p, i) => `<div class="gs-part" data-p="${i}" data-hl="pk${p.me ? " where" : ""}">
       <div class="gs-part-key" data-hl="pk">user_id = <b>${esc(p.label)}</b>${p.me ? " <em>(sen)</em>" : ""}</div>
       <table class="gs-table"><thead><tr><th data-hl="ck">event_time ↓</th><th data-hl="type">event_type</th><th>product</th></tr></thead><tbody>
       ${rowsOf(p, true).map((r, k) => `<tr data-k="${k}" class="${r.fresh ? "fresh" : ""}" ${r.fresh ? 'data-hl="insert"' : ""}><td data-hl="ck">${esc(r.time)}</td><td data-hl="type">${esc(r.type)}</td><td>${esc(r.product)}</td></tr>`).join("")}
       </tbody></table></div>`;
-    const html = `<div class="gs-lanes one">${shell("table", spec.title || "Keyspaces tablosu", `<div class="gs-parts">${parts.map(block).join("")}</div>`, { count: "Okunan satır", result: spec.result_title || "Son baktıkların" })}</div>
+    const html = `<div class="gs-lanes one">${shell("table", spec.title || "Keyspaces tablosu", `<div class="gs-pwrap"><div class="gs-actors" aria-hidden="true"><span data-a="app" data-hl="app">Engine App (uygulama)</span><i>⇄</i><span data-a="db" data-hl="db">Keyspaces (veritabanı)</span></div><div class="gs-parts">${parts.map(block).join("")}</div></div>`, { count: "Okunan satır", result: spec.result_title || "Son baktıkların" })}</div>
       ${summary(spec.summary || "")}`;
     function paint(root, id, f) {
       const L = laneOf(root, id);
@@ -202,12 +209,15 @@
         el.querySelectorAll("tbody tr").forEach((tr) => {
           const k = Number(tr.dataset.k);
           if (tr.classList.contains("fresh")) tr.hidden = !f.inserted;
-          tr.classList.toggle("active", i === me && f.read === k + 1);
+          tr.classList.toggle("active", i === me && (f.check ? f.check === k + 1 : f.stage === "db"));
           tr.classList.toggle("read", i === me && (f.read || 0) > k);
+          tr.classList.toggle("gs-keep", i === me && (f.keep || []).includes(k));
+          tr.classList.toggle("gs-skip", i === me && (f.skip || []).includes(k));
         });
       });
       chips(L, (f.result || []).map((x) => `<li>${esc(x)}</li>`));
-      L.querySelector(".gs-say").textContent = f.say;
+      L.querySelector(".gs-say").innerHTML = `${f.who ? `<b class="gs-who ${f.who === APP ? "app" : "db"}">${esc(f.who)}</b> ` : ""}${esc(f.say)}`;
+      L.querySelectorAll(".gs-actors [data-a]").forEach((x) => x.classList.toggle("on", x.dataset.a === (f.who === APP ? "app" : f.who ? "db" : "")));
     }
     return { html, lanes: { table: frames }, paint, final: showSum };
   }

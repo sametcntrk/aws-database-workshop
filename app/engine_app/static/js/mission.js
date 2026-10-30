@@ -29,7 +29,7 @@
 
   const ENGINE_LABEL = { docdb: "DocumentDB", opensearch: "OpenSearch", neptune: "Neptune", dynamodb: "DynamoDB", aurora: "Aurora PostgreSQL",
     elasticache: "ElastiCache (Valkey)", keyspaces: "Keyspaces", s3: "S3", redshift: "Redshift", influxdb: "Timestream for InfluxDB" };
-  let last, actionDone, phase, calls, w, seen, from = 0, tabOpen = false;
+  let last, actionDone, phase, calls, w, seen, from = 0, tabOpen = false, back = false;
 
   /* ---------- Top bar: progress only */
   const bar = () => { $("#mission").innerHTML = `<div class="mission-head"><span class="tutor-badge">Görev</span><span class="mission-step">Adım ${st.i + 1} / ${steps.length}</span>
@@ -88,7 +88,7 @@
   const openTab = (fresh) => { tabOpen = !!window.open(tabUrl(fresh), "perde-arkasi"); };   // one tab for the whole mission: each step loads into it
   function handOver() {                                         // what the tab needs: the call of the lit part and the page's calls
     try {
-      const slim = (c) => c && { method: c.method, path: c.path, query: c.query, body: c.body, ok: c.ok, data: c.data, entries: c.entries, ms: c.ms, label: c.label };
+      const slim = (c) => c && { method: c.method, path: c.path, query: c.query, body: c.body, ok: c.ok, data: c.data, entries: c.entries, net: c.net, ms: c.ms, label: c.label };
       localStorage.setItem(`lm_perde_${st.i + 1}`, JSON.stringify({ at: Date.now(), trig: slim(calls[from]), page: lm.calls.map(slim) }));
     } catch (e) { /* storage full: the tab shows the parts that need no data */ }
   }
@@ -112,6 +112,8 @@
     return `<div class="coach-bts"><b>Perde arkası</b><p>${esc(step.result || "")}</p>${lines ? `<ol>${lines}</ol>` : ""}</div>`;
   }
   function tabBox() {
+    if (back && step.after) return `<div class="coach-bts coach-tab coach-after"><b>Okuduklarınla şimdi bak</b><p>${esc(step.after)}</p>
+      <button type="button" class="coach-tab-btn" data-c="tab">Perde arkası sekmesine git ↗</button></div>`;
     return `<div class="coach-bts coach-tab"><b>Perde arkası</b><p>${tabOpen
       ? "Bu adımın perde arkası \"Perde arkası\" sekmesinde açıldı: simülasyon, gerçek ölçümler, komutun açıklaması ve isteğin yolu orada. Okuduktan sonra bu sekmeye dön ve İleri'ye bas."
       : "Bu adımın perde arkası ayrı bir \"Perde arkası\" sekmesinde açılır (bütün adımlar aynı sekmeyi kullanır): simülasyon, gerçek ölçümler, komutun açıklaması ve isteğin yolu. Okuduktan sonra bu sekmeye dön ve İleri'ye bas."}</p>
@@ -196,7 +198,7 @@
     step = steps[st.i];
     last = st.i === steps.length - 1;
     w = step.wait || {};
-    actionDone = !step.wait; phase = "do"; calls = []; seen = 0; from = 0; tabOpen = false;
+    actionDone = !step.wait; phase = "do"; calls = []; seen = 0; from = 0; tabOpen = false; back = false;
     bar();
     if (step.action === "look" && !w.fresh) lm.calls.forEach(onCall);   // a "look" step waits for a call that the page made at load; other steps wait for the user's own action
     if (actionDone && step.focus) phase = "look-result";
@@ -205,4 +207,8 @@
   }
   document.body.classList.add("coach-on");
   begin();
+  // Back from the Perde arkası tab: the card now speaks to a reader who has read it (step.after)
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && tabOpen && actionDone && step && step.after && !back) { back = true; renderCard(); schedule(); }
+  });
 })();

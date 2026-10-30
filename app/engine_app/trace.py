@@ -10,7 +10,7 @@ import socket
 import time
 from contextlib import contextmanager
 
-from flask import g
+from flask import g, request
 
 _IP = None
 
@@ -60,7 +60,20 @@ def call(op, request, params=None):
         g.setdefault("trace", []).append(entry.data)
 
 
+def net():
+    """What the Engine App sees of the request: the hops before it (Perde arkası packet cards). The client IP is masked."""
+    try:
+        client = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+        if client.count(".") == 3:
+            client = client.rsplit(".", 1)[0] + ".x"
+        return {"client": client or None, "lb": request.remote_addr, "app": app_ip(), "app_port": request.environ.get("SERVER_PORT"),
+                "host": request.host, "proto": request.headers.get("X-Forwarded-Proto"), "method": request.method,
+                "path": request.full_path.rstrip("?")}
+    except RuntimeError:                                            # outside a request (seed scripts)
+        return None
+
+
 def payload(data=None, **extra):
-    body = {"ok": True, "data": data, "trace": getattr(g, "trace", [])}
+    body = {"ok": True, "data": data, "trace": getattr(g, "trace", []), "net": net()}
     body.update(extra)
     return body

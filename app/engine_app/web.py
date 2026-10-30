@@ -88,6 +88,27 @@ def lesson_index():
     return [{"engine": e, "id": lid, "title": l["title"]} for e in ENGINE_IDS for lid, l in lessons(e).items()]
 
 
+def app_code(spec):
+    """A short excerpt of a real route of this repo for a Perde arkası page (panel.app_code).
+    spec: {file: engines/<x>.py, func: <name>, lines: [{match, say}, ...]}. Each match is a piece of one source line, in order;
+    a missing piece raises, so the page can never show code that drifted away from the repo."""
+    src = (HERE / spec["file"]).read_text().splitlines()
+    start = next(i for i, x in enumerate(src) if x.lstrip().startswith(f"def {spec['func']}("))
+    base = len(src[start]) - len(src[start].lstrip())
+    end = next((i for i in range(start + 1, len(src)) if src[i].strip() and len(src[i]) - len(src[i].lstrip()) <= base), len(src))
+    while start > 0 and src[start - 1].lstrip().startswith("@"):      # the route decorator says which URL the function answers
+        start -= 1
+    out, at = [], start
+    for ln in spec["lines"]:
+        i = next((i for i in range(at, end) if ln["match"] in src[i]), None)
+        if i is None:
+            raise ValueError(f"app_code: '{ln['match']}' not in {spec['file']}:{spec['func']}")
+        out.append({"no": i + 1, "code": src[i][base:], "say": ln["say"], "gap": bool(out) and i > at,
+                    "hl": ln.get("hl"), "tag": ln.get("tag")})
+        at = i + 1
+    return {**{k: v for k, v in spec.items() if k != "lines"}, "lines": out}
+
+
 @lru_cache(maxsize=None)
 def mission():
     """Steps of the Guided e-commerce app (tutorials/guided.yaml)."""
@@ -249,7 +270,9 @@ def create_app():
             m = mission()
             if not 1 <= n <= len(m["steps"]):
                 abort(404)
-            return render_template("site/perde.html", prefix=prefix, mission=m, n=n, step=m["steps"][n - 1],
+            spec = m["steps"][n - 1].get("panel", {}).get("app_code")
+            code = [app_code(x) for x in (spec if isinstance(spec, list) else [spec])] if spec else None
+            return render_template("site/perde.html", prefix=prefix, mission=m, n=n, step=m["steps"][n - 1], code=code,
                                    modes=MODES, mode=MODES["guided"])
 
         for mode in MODES.values():
