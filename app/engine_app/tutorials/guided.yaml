@@ -1989,16 +1989,261 @@ steps:
   - page: stores
     path: /stores
     engines: [opensearch]
-    use_case: Geospatial search
-    title: Find the stores near a point
+    use_case: Konum araması
+    title: Bir noktanın yakınındaki mağazaları bul
     why: >-
-      Each store document has a location field of type geo_point. A geo_distance filter keeps the stores inside a circle, and a sort puts the nearest first.
-    do: Click the lit button "100 km".
+      Mağazalar sayfasındasın. Harita İstanbul'un ortasına odaklı ve çevresinde 25 km'lik bir daire var; dairenin içindeki
+      mağazalar listelendi. Şimdi daireyi büyütüp aramanın nasıl değiştiğine bakacaksın.
+    do: Aydınlık "100 km" butonuna tıkla.
     target: "#exp-km [data-value='100']"
     action: click
     wait: {method: GET, path: /opensearch/api/stores, query: {km: "100"}}
     focus: "#map"
-    result: The geo_distance query now has distance 100km. More stores are inside the circle, and the list is sorted by distance.
+    result: The geo_distance query now has distance 100km. More stores are inside the circle, sorted by distance.
+    panel:
+      need: >-
+        Ziyaretçi "bana en yakın mağaza hangisi?" diye soruyor. Bunun için her mağazanın konumunun saklanması, bir noktaya belli
+        bir uzaklıktaki mağazaların hızlıca bulunması ve en yakından uzağa sıralanması gerekiyor. Her mağazanın uzaklığını
+        tek tek hesaplamak, mağaza sayısı binlere çıkınca yavaşlar.
+      concept:
+        term: geo_point ve uzaklık araması (geo_distance)
+        text: >-
+          Her mağazanın konumu enlem ve boylam olarak, geo_point türünde bir alanda saklanır. Arama motoru bu noktaları haritayı
+          karelere bölen bir yapıda (BKD ağacı) tutar. Bir mahalle haritasında "bana 1 km içindeki dükkânlar" diye bakarken
+          önce uzak mahalleleri hiç açmaman gibi: daireye hiç değmeyen kareler atlanır, sadece daireye değen karelerdeki
+          noktaların uzaklığı hesaplanır.
+        terms:
+          - [geo_point, "Enlem ve boylamdan oluşan konum alanı türü. Örn. { lat: 41.07, lon: 28.90 }."]
+          - [geo_distance, "Bir noktaya belli bir uzaklık içindekileri bırakan filtre: \"merkeze 100 km içinde\"."]
+          - [_geo_distance sırası, "Sonuçları merkeze uzaklığa göre sıralama; cevapta her mağazanın uzaklığı da gelir."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde mağaza konumları için hazırlık
+        intro: >-
+          Harita hiç açılmadan, konum alanı doğru türle tanımlanır ve mağazalar index'e yazılır. Aşağıdaki beş adım bu
+          hazırlığın sırasıdır.
+        text:
+          - title: Önce sayfanın sorusu yazılır
+            text: >-
+              "Bu noktaya X km içindeki mağazalar, en yakın önce". Nokta, ziyaretçinin seçtiği şehir ya da haritada tıkladığı
+              yerdir.
+            code: |-
+              { "query": { "geo_distance": { "distance": "100km", "location": { "lat": 41.0082, "lon": 28.9784 } } },
+                "sort": [ { "_geo_distance": { "location": { "lat": 41.0082, "lon": 28.9784 }, "order": "asc", "unit": "km" } } ] }
+          - title: Konum alanı geo_point olarak tanımlanır
+            text: >-
+              Alan türü index kurulurken seçilir ve sonradan değiştirilemez. geo_point olmayan bir alanda (ör. iki ayrı sayı)
+              uzaklık araması yapılamaz.
+            code: |-
+              PUT stores { "mappings": { "properties": {
+                "name": { "type": "text" }, "city": { "type": "keyword" }, "location": { "type": "geo_point" } } } }
+          - title: Konum tek bir kaynaktan yazılır
+            text: >-
+              Mağaza adresleri asıl kayıtta (ör. mağaza yönetim sistemi) tutulur; adres koordinata bir kez çevrilir (geocoding)
+              ve index'e enlem/boylam olarak yazılır. Her aramada adresten koordinat hesaplanmaz.
+            code: |-
+              POST stores/_doc/S010 { "name": "İstanbul Mağaza 2", "city": "İstanbul", "location": { "lat": 41.07989, "lon": 28.90559 } }
+          - title: Uzaklık filtresi sıralamadan ayrı düşünülür
+            text: >-
+              geo_distance sadece eler; sırayı _geo_distance sort verir. Uzaklık skora da karıştırılmak istenirse (yakın ve
+              ilgili olanı öne al) function_score ile bir uzaklık eğrisi eklenir.
+          - title: Harita ve adres servisi ayrıca seçilir
+            text: >-
+              Harita görüntüsü ve adres→koordinat çevirisi arama motorunun işi değildir. Bunun için bir harita servisi kullanılır
+              (AWS'de Amazon Location Service); arama motoru sadece noktaları ve uzaklığı bilir.
+      feed:
+        title: Veri nereden geliyor?
+        writes: >-
+          Mağaza yönetimi: yeni mağaza açılınca ya da adresi değişince kayıt güncellenir ve index'e yazılır. Değişiklik seyrektir.
+        reads: Uygulama, mağaza bulucu sayfası için.
+        kind: >-
+          OpenSearch başka bir veritabanından kendiliğinden veri çekmez; mağaza kayıtları ona bir program ya da Amazon
+          OpenSearch Ingestion ile yazılır.
+        with: >-
+          Bu sayfada harita karoları (zemindeki harita görüntüsü) bir veritabanından değil, dış bir harita servisinden
+          (OpenStreetMap) gelir; tarayıcı onları doğrudan ister. Mağazaların noktaları ve uzaklıkları ise OpenSearch'ten gelir.
+          İkisini aynı ekranda birleştiren tarayıcıdır.
+        best: >-
+          Mağazaların asıl kaydı tek yerde tutulur ve arama index'i ondan beslenir. Harita ve adres çevirisi için yönetilen bir
+          servis (Amazon Location Service) kullanılır; dış harita karolarının kullanım koşulları ve kotası ayrıca kontrol edilir.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              Mağazalar sayfasını açtın. Açılırken oturumun güncellendi.
+            engines: [elasticache]
+          - text: >-
+              Tarayıcın haritayı İstanbul'un ortasına odakladı; zemindeki harita karolarını doğrudan OpenStreetMap'ten (AWS dışı
+              bir servis) indirdi. Bu karolar bir veritabanından gelmiyor.
+          - text: >-
+              Aynı anda tarayıcın uygulamaya "bu noktaya 25 km içindeki mağazalar" dedi; uygulama OpenSearch'e geo_distance
+              sorgusunu gönderdi. Simülasyonun sol şeridi bu istek. 3 İstanbul mağazası haritada işaretlendi.
+            engines: [opensearch]
+          - text: >-
+              Sonra "100 km" butonuna bastın. Tarayıcın aynı noktayla km=100 istedi; uygulama aynı sorguyu daha büyük bir
+              daireyle gönderdi. Simülasyonun sağ şeridi bu istek. Bursa'daki 3 mağaza da listeye girdi.
+            engines: [opensearch]
+      sim:
+        kind: geo
+        caption: >-
+          Gerçek mağazalardan 8'i, İstanbul merkezine göre bir düzlemde. Haritayı 4×4 kareye bölüyoruz (gerçek index çok daha
+          ince bölünür). İki şerit iki ayrı gerçek istek: soldaki sayfa açılırken (25 km), sağdaki senin tıklamanla (100 km).
+          Uzaklıklar gerçek koordinatlardan hesaplandı.
+        center: {lat: 41.0082, lon: 28.9784, label: İstanbul merkez}
+        stores:
+          - {id: S010, name: İstanbul Mağaza 2, city: İstanbul, lat: 41.07989, lon: 28.90559}
+          - {id: S001, name: İstanbul Mağaza 1, city: İstanbul, lat: 41.07272, lon: 29.07395}
+          - {id: S019, name: İstanbul Mağaza 3, city: İstanbul, lat: 40.89754, lon: 28.94886}
+          - {id: S022, name: Bursa Mağaza 3, city: Bursa, lat: 40.32254, lon: 29.12761}
+          - {id: S004, name: Bursa Mağaza 1, city: Bursa, lat: 40.26288, lon: 28.9117}
+          - {id: S013, name: Bursa Mağaza 2, city: Bursa, lat: 40.25907, lon: 28.91654}
+          - {id: S003, name: İzmir Mağaza 1, city: İzmir, lat: 38.47421, lon: 27.11965}
+          - {id: S002, name: Ankara Mağaza 1, city: Ankara, lat: 39.82101, lon: 33.00533}
+        lanes:
+          - id: km25
+            title: "t-1 · İstek 1 · Sayfa açılınca · 25 km"
+            km: 25
+            window: 50
+            send: >-
+              Mağazalar sayfasını açtın. Tarayıcın "İstanbul merkeze 25 km içindeki mağazalar" dedi; uygulama OpenSearch'e
+              geo_distance sorgusunu gönderiyor.
+            back: Uygulama 3 mağazayı uzaklıklarıyla tarayıcına gönderdi; harita işaretleri çizilecek.
+          - id: km100
+            title: "t0 · İstek 2 · Senin tıklaman · 100 km"
+            km: 100
+            window: 200
+            send: >-
+              "100 km" butonuna bastın. Tarayıcın aynı noktayla km=100 istedi; uygulama aynı sorguyu daha büyük bir daireyle
+              gönderiyor.
+            back: Uygulama 6 mağazayı uzaklıklarıyla tarayıcına gönderdi; daire büyüyecek, Bursa işaretleri eklenecek.
+        summary: >-
+          İki aramada da uzak kareler hiç açılmadı: İzmir ve Ankara mağazalarının uzaklığı hesaplanmadı bile. Daire büyüyünce
+          daireye değen kare sayısı arttı ve Bursa mağazaları hesaba girdi. Sonuç her seferinde en yakından uzağa sıralandı.
+      wire:
+        what: >-
+          Uygulama arama isteğini HTTPS ile OpenSearch'e gönderir (opensearch-py kütüphanesi). Her istek, uygulamanın IAM
+          kimliğiyle imzalanır.
+        dst: "vpc-dbws-search-shmosucy37orsjafn7t226ewjm.eu-central-1.es.amazonaws.com : 443"
+        dst_note: >-
+          OpenSearch domain'inin VPC içindeki adresi. Domain internete kapalı; sadece bu uygulama sunucusundan gelen bağlantıyı
+          kabul ediyor.
+        rows:
+          - [Şifreleme, TLS (HTTPS), gerçek, OpenSearch domain'i sadece şifreli bağlantı kabul eder.]
+          - [Protokol, "HTTP, POST /stores/_search (JSON)", gerçek, "Konum araması da bir web isteğidir; nokta ve uzaklık JSON gövdede gider."]
+          - [Kimlik, "IAM, SigV4 imzası (servis: es)", gerçek, "Şifre yok. İsteğe, geçici AWS kimliğiyle hesaplanmış bir imza eklenir."]
+        body_label: İsteğin içeriği (okunur hâle getirilmiş)
+        body: |-
+          POST /stores/_search HTTP/1.1
+          Authorization: AWS4-HMAC-SHA256 Credential=…/eu-central-1/es/aws4_request, …
+
+          { "query": { "geo_distance": { "distance": "100km", "location": { "lat": 41.0082, "lon": 28.9784 } } },
+            "sort":  [ { "_geo_distance": { "location": { "lat": 41.0082, "lon": 28.9784 }, "order": "asc", "unit": "km" } } ],
+            "size": 20 }
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. İki istek de aynı
+        kodu çalıştırır; fark adresteki km değeri.
+      app_code:
+        - file: engines/opensearch.py
+          func: api_stores
+          title: Mağaza arama isteği (iki istekte de aynı kod)
+          sub: Adresteki km=25 ya da km=100 dairenin büyüklüğünü belirler.
+          lines:
+            - {match: '@bp.get("/api/stores")', say: "Mağaza arama isteği buraya gelir; adres noktayı ve km'yi taşır.", tag: Tarayıcı → Uygulama}
+            - {match: 'lat, lon = float(request.args.get("lat"', say: "Noktanın enlem ve boylamını okur (verilmezse İstanbul merkez).", tag: Uygulamanın içinde, hl: radius}
+            - {match: 'km = int(request.args.get("km", 25))', say: Dairenin yarıçapını okur., tag: Uygulamanın içinde, hl: radius}
+            - {match: 'body = {"query": {"geo_distance":', say: "Sorguyu kurar: bu noktaya km içindekiler; sırayı uzaklık versin; en fazla 20.", tag: Uygulamanın içinde, hl: sort}
+            - {match: 'r = client().search(index="stores", body=body)', say: "Sorgu OpenSearch'e gider; mağazalar uzaklıklarıyla döner.", tag: [Uygulama → OpenSearch, OpenSearch → Uygulama]}
+            - {match: 'stores = [{"store_id": h["_id"], "distance_km": round(h["sort"][0], 1)', say: "Her mağazanın uzaklığını sıralama değerinden alır ve bir basamağa yuvarlar.", tag: Uygulamanın içinde}
+            - {match: 'return jsonify(trace.payload(stores))', say: Mağazalar tarayıcıya gider., tag: Uygulama → Tarayıcı}
+      live:
+        title: Gerçek index'te ne oldu?
+        intro: >-
+          Sayfa açılırken giden 25 km araması ve senin tıklamanla giden 100 km araması. Index'te İstanbul, Bursa, İzmir, Ankara ve Frankfurt gibi şehirlerde mağazalar var.
+        runs:
+          - label: 25 km (sayfa açılınca)
+            page_call: {path: /opensearch/api/stores, query: {km: "25"}}
+            metrics: [[Bulunan mağaza, items], [En yakın, data.0.distance_km], [Süre, ms]]
+          - label: 100 km (senin tıklaman)
+            trigger: true
+            metrics: [[Bulunan mağaza, items], [En uzak, data.5.distance_km], [Süre, ms]]
+        reading: >-
+          25 km'de İstanbul'daki 3 mağaza, 100 km'de Bursa'dakilerle birlikte 6 mağaza bulundu; liste en yakından uzağa. Uzaklıklar
+          km olarak, bir basamak yuvarlanmış. Süre her istekte biraz değişir.
+      query:
+        title: Sayfa OpenSearch'e ne dedi?
+        intro: >-
+          İki sütun, simülasyondaki iki isteğin sorgusu. Tek fark yarıçap. Bir parçanın üzerine gelince cümlede, kodda ve
+          açıklamada aynı yer parlar.
+        cards_title: Parça parça
+        parts:
+          - id: g25
+            say: İstanbul merkeze 25 km içindeki mağazaları bırak,
+            code: '{ "query": { "geo_distance": { "distance": "25km", "location": { "lat": 41.0082, "lon": 28.9784 } } },'
+            name: Hangileri?
+            note: geo_distance filtresi; location alanı geo_point. Daireye hiç değmeyen bölgeler açılmaz.
+            hl: radius
+          - id: g100
+            say: İstanbul merkeze 100 km içindeki mağazaları bırak,
+            code: '{ "query": { "geo_distance": { "distance": "100km", "location": { "lat": 41.0082, "lon": 28.9784 } } },'
+            name: Hangileri?
+            note: Aynı filtre, dört kat büyük bir daire.
+            hl: radius
+            tag: sadece sağdaki sorguda var
+          - id: srt
+            say: merkeze uzaklığa göre en yakından sırala,
+            code: '  "sort": [ { "_geo_distance": { "location": { … }, "order": "asc", "unit": "km" } } ],'
+            name: Hangi sırayla?
+            note: asc, en yakın önce. unit km olduğu için her sonuçta uzaklık km olarak döner.
+            hl: sort
+          - id: sz
+            say: en fazla 20 tane getir.
+            code: '  "size": 20 }'
+            name: Kaç tane?
+            note: Liste en fazla 20 mağaza gösterir.
+            hl: sort
+        columns:
+          - label: 25 km
+            sub: Sayfa açılırken giden sorgu.
+            via: Uygulama bu sorguyu opensearch-py kütüphanesinin search() metoduyla gönderir.
+            parts: [g25, srt, sz]
+          - label: 100 km
+            sub: Senin "100 km" tıklamanla giden sorgu.
+            via: Aynı search() çağrısı; uygulama sadece mesafeyi değiştirdi.
+            parts: [g100, srt, sz]
+            mark: [g100]
+        note: >-
+          Dikkat: sorguda "her mağazanın uzaklığını hesapla" yazmıyor. OpenSearch index'teki yapıyla önce uzak bölgeleri eler;
+          uzaklığı sadece daireye yakın mağazalar için hesaplar. Sıralama için ayrı bir sort parçası gerekir.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          OpenSearch'ün işi mağazaları verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: OpenSearch → Uygulama
+            text: "{items} mağaza geldi; her birinin yanında sıralama değeri olarak uzaklığı (km)."
+          - who: Uygulama
+            text: Uzaklıkları bir basamağa yuvarladı ve mağaza bilgileriyle birleştirdi.
+          - who: Uygulama → Tarayıcın
+            text: Mağazaları ve isteğin kaydını tek bir JSON cevabında gönderdi.
+          - who: Tarayıcın
+            text: >-
+              Haritadaki daireyi 100 km'ye büyüttü, her mağaza için bir işaret koydu ve altındaki listeyi en yakından uzağa çizdi.
+          - who: Tarayıcın → OpenStreetMap
+            text: >-
+              Daire büyüyünce haritanın görünmeyen kısımları için yeni karolar indirildi. Bunlar AWS dışı bir harita servisinden
+              gelir; işaretleri (OpenSearch) karoların üstüne koyan tarayıcıdır.
+          - who: Sonra
+            text: >-
+              Haritada başka bir yere tıklarsan ya da Ankara, Frankfurt gibi bir şehir seçersen aynı sorgu o noktayla tekrarlanır.
+      remember: >-
+        Konumu geo_point olarak sakla; "şu noktaya X km içindekiler, en yakın önce" sorusunu arama motoru, uzak bölgeleri hiç
+        açmadan cevaplar. Filtre eler, sıralamayı ayrıca _geo_distance verir.
+      why_db: >-
+        Neden OpenSearch? Mağaza bulucu; uzaklık filtresi, uzaklığa göre sıralama ve gerekirse metin aramasını bir arada ister.
+        OpenSearch bunları aynı index'te sunar. Bedeli: harita görüntüsü ve adres çevirisi onun işi değildir; ayrı bir servis gerekir.
 
   # ---------------------------------------------------------------- Product: DocumentDB, Keyspaces, Neptune, DynamoDB
   - page: product

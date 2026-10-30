@@ -583,6 +583,70 @@
     return { html, lanes, paint, final: showSum };
   }
 
+  /* ---------- geo: a distance search. The index splits the map into cells; cells the circle never touches are not opened,
+   * the stores of the other cells get their distance checked, the hits are sorted by distance.
+   * spec.center {lat, lon, label}, spec.stores [{id, name, city, lat, lon}], spec.lanes [{id, title, km, window, send, back}]. */
+  function geo(spec) {
+    const DB = spec.engine_label || "OpenSearch", c = spec.center, rad = Math.PI / 180;
+    const xy = (p) => ({ x: (p.lon - c.lon) * Math.cos(c.lat * rad) * 111.32, y: (p.lat - c.lat) * 110.57 });
+    const dist = (p) => { const dLat = (p.lat - c.lat) * rad, dLon = (p.lon - c.lon) * rad;                // haversine, km
+      const h = Math.sin(dLat / 2) ** 2 + Math.cos(c.lat * rad) * Math.cos(p.lat * rad) * Math.sin(dLon / 2) ** 2; return 2 * 6371 * Math.asin(Math.sqrt(h)); };
+    const stores = spec.stores.map((st) => ({ ...st, ...xy(st), d: Math.round(dist(st) * 10) / 10 }));
+    const lanes = {}, views = {};
+    spec.lanes.forEach((ln) => {
+      const W = ln.window, n = 4, size = (2 * W) / n, cells = [];
+      for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+        const x0 = -W + i * size, y0 = -W + j * size, nx = Math.max(x0, Math.min(0, x0 + size)), ny = Math.max(y0, Math.min(0, y0 + size));
+        cells.push({ x0, y0, size, touch: Math.hypot(nx, ny) <= ln.km });
+      }
+      const inCell = (st) => cells.findIndex((q) => st.x >= q.x0 && st.x < q.x0 + q.size && st.y >= q.y0 && st.y < q.y0 + q.size);
+      const cand = stores.filter((st) => { const k = inCell(st); return k >= 0 && cells[k].touch; });
+      views[ln.id] = { W, cells };
+      const fr = [{ say: START, pruned: false, checked: [], hit: [], miss: [], order: [] }];
+      let s = { ...fr[0], pruned: true, say: `Harita karelere bölünmüş (index'in BKD ağacı). ${ln.km} km'lik dairenin hiç değmediği kareler açılmadı; ${stores.length - cand.length} mağaza hiç okunmadı.` };
+      fr.push(s);
+      cand.forEach((st) => {
+        const ok = st.d <= ln.km;
+        s = { ...s, active: st.id, checked: [...s.checked, st.id], hit: ok ? [...s.hit, st.id] : s.hit, miss: ok ? s.miss : [...s.miss, st.id],
+          say: `${st.name}: daireye değen bir karede. Uzaklığı hesaplandı: ${st.d} km. ${ok ? `✓ ${ln.km} km içinde.` : `✗ ${ln.km} km'nin dışında.`}` };
+        fr.push(s);
+      });
+      const order = stores.filter((st) => s.hit.includes(st.id)).sort((p, q) => p.d - q.d).map((st) => st.id);
+      fr.push({ ...s, active: null, order, done: true, say: `Daire içindeki ${order.length} mağaza uzaklığa göre sıralandı (_geo_distance sort): en yakın en üstte.` });
+      lanes[ln.id] = actorize(fr, ln.send || "Uygulama geo_distance sorgusunu gönderiyor.", ln.back || "Uygulama mağazaları tarayıcıya gönderdi.", DB, { active: null });
+    });
+    const svgOf = (ln) => {
+      const { W, cells } = views[ln.id], S = 260, k = S / (2 * W), X = (x) => (x + W) * k, Y = (y) => (W - y) * k;
+      return `<svg class="gs-geomap" viewBox="0 0 ${S} ${S}" role="img" aria-label="Harita">
+        ${cells.map((q, i) => `<rect data-cell="${i}" class="${q.touch ? "touch" : "far"}" x="${X(q.x0)}" y="${Y(q.y0 + q.size)}" width="${q.size * k}" height="${q.size * k}"/>`).join("")}
+        <circle class="radius" data-hl="radius" cx="${X(0)}" cy="${Y(0)}" r="${ln.km * k}"/>
+        <circle class="center" cx="${X(0)}" cy="${Y(0)}" r="4"/><text x="${X(0) + 6}" y="${Y(0) - 6}">${esc(c.label)}</text>
+        ${stores.filter((st) => Math.abs(st.x) < W && Math.abs(st.y) < W).map((st) => `<g data-st="${esc(st.id)}"><circle cx="${X(st.x)}" cy="${Y(st.y)}" r="5"/></g>`).join("")}
+      </svg>`;
+    };
+    const list = (ln) => `<table class="gs-table"><thead><tr><th>Mağaza</th><th>Şehir</th><th data-hl="sort">Uzaklık</th><th class="gs-mark"></th></tr></thead><tbody>
+      ${stores.map((st) => `<tr data-st="${esc(st.id)}"><td>${esc(st.name)}</td><td>${esc(st.city)}</td><td data-hl="sort">${st.d} km</td><td class="gs-mark"></td></tr>`).join("")}</tbody></table>`;
+    const html = `${actorBar(DB)}<div class="gs-lanes">${spec.lanes.map((ln) => shell(ln.id, ln.title, `<div class="gs-geo-wrap">${svgOf(ln)}${list(ln)}</div>`,
+      { hl: ln.id, count: "Uzaklığı hesaplanan mağaza", result: spec.result_title || "Sonuç (en yakın önce)", col: true })).join("")}</div>${summary(spec.summary || "")}`;
+    function paint(root, id, f) {
+      const L = laneOf(root, id);
+      L.querySelector(".gs-count b").textContent = `${(f.checked || []).length} / ${stores.length}`;
+      L.classList.toggle("done", !!f.done);
+      L.querySelector(".gs-geomap").classList.toggle("pruned", !!f.pruned);
+      L.querySelectorAll("[data-st]").forEach((el) => {
+        const x = el.dataset.st;
+        el.classList.toggle("active", f.active === x);
+        el.classList.toggle("hit", (f.hit || []).includes(x));
+        el.classList.toggle("miss", (f.miss || []).includes(x));
+        el.classList.toggle("gs-pruned", !!f.pruned && !(f.checked || []).includes(x) && !!f.done);
+        const m = el.querySelector(".gs-mark"); if (m) m.textContent = (f.hit || []).includes(x) ? "✓" : (f.miss || []).includes(x) ? "✗" : "";
+      });
+      chips(L, (f.order || []).map((x) => { const st = stores.find((y) => y.id === x); return `<li>${esc(st.name)} <small>${st.d} km</small></li>`; }));
+      sayWho(L, f);
+    }
+    return { html, lanes, paint, final: showSum };
+  }
+
   /* ---------- Who works in a frame (owner rule: work of the app is never credited to the database).
    * actorize(frames, send, back, db): after START the app sends, every middle frame is the database's (unless it names
    * its own `who`), the last frame is the app sending the answer on. actorBar(db) is the bar above the lanes;
@@ -602,7 +666,7 @@
     root.querySelectorAll(".gs-actors [data-a]").forEach((x) => x.classList.toggle("on", ws.includes(x.dataset.a)));
   }
 
-  const KINDS = { facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
+  const KINDS = { geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
 
   function render(box, spec) {
     const kind = KINDS[spec.kind];
