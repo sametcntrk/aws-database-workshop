@@ -1,7 +1,7 @@
 """Engine descriptors and pages of all ten Engines. No database driver here, so every Engine App can import it.
 
 The DocumentDB Engine App is the default ALB target. It renders the Home hub, the E2E tutorials and every page of the
-Guided and Free e-commerce apps. The pages are shells: the browser calls each Engine App API (ADR-0002).
+Guided e-commerce app. The pages are shells: the browser calls each Engine App API (ADR-0002).
 """
 ENGINE_IDS = ["docdb", "opensearch", "dynamodb", "aurora", "redshift", "elasticache", "keyspaces", "influxdb", "neptune", "s3"]
 

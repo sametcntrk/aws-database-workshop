@@ -3,7 +3,7 @@
 "How to Choose Database" infografiğinin AWS sütunundaki her veri tipi için bir **Engine** ve ona bağlı bir **Engine App** (EC2) vardır.
 On Engine App birlikte **Lale Market** adlı bir e-ticaret sitesini oluşturur. Sitenin her bölümü farklı bir veritabanını kullanır.
 Sağdaki **Behind the scenes** paneli her tıklamada hangi veritabanına hangi sorgunun gittiğini, süresini, ağ yolunu ve maliyetini gösterir.
-Her bölümde adım adım bir **Tutorial**, karşılaştırma yapılabilen **Experiment**'lar ve uçtan uca bir **Guided journey** vardır.
+Site iki bölümdür: her Engine için bir **E2E tutorial** ve mağazada adım adım ilerleyen **Guided e-commerce app** (her adımın "Perde arkası" sekmesiyle). Bölümlerde karşılaştırma yapılabilen **Experiment**'lar vardır.
 
 | Veri tipi | Kategori | Engine | Sitedeki bölüm | Yollar |
 |---|---|---|---|---|
@@ -32,7 +32,7 @@ QLDB (destek sonu 31.07.2025), CloudSearch ve Timestream for LiveAnalytics (yeni
 | `docs/adr/` | Mimari kararlar (zero-ETL, sayfaların tarayıcıda birleşmesi) |
 | `cloudformation/workshop.yaml` | Eğitmen için tek parça CloudFormation template |
 | `guide/` | Katılımcılar için adım adım Console rehberi (aynı yapı, aynı değerler) |
-| `app/` | Engine App kodu: Flask, engine başına bir modül, Tutorial metinleri (`app/engine_app/tutorials/`) |
+| `app/` | Engine App kodu: Flask, engine başına bir modül, Guided görevin adımları (`app/engine_app/tutorials/guided.yaml`) |
 | `GLOSSARY.md` | Workshop terimleri |
 
 ## Eğitmen: tek adımda kurulum

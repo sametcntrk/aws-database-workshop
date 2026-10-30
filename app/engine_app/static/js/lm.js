@@ -1,5 +1,5 @@
 /* Lale Market core: Visitor and Persona, API calls with the Behind-the-Scenes Panel, shop links of the current app,
- * the per-page Tutorial (Free e-commerce app) and the locked Mission (Guided e-commerce app, mission.js). */
+ * and the locked Mission (Guided e-commerce app, mission.js). */
 (function () {
   "use strict";
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -9,10 +9,10 @@
     elasticache: "ElastiCache", keyspaces: "Keyspaces", s3: "S3", redshift: "Redshift", influxdb: "InfluxDB" };
 
   /* ---------------- Shop links. The pages use plain shop paths ("/cart", "/p/P0001").
-   * The app base ("/free-e-commerce-app" or "/guided-e-commerce-app") goes in front of each one, also in HTML that a
+   * The app base ("/guided-e-commerce-app") goes in front of each one, also in HTML that a
    * page renders later. Engine paths ("/dynamodb/...") and site paths stay as they are. */
   const BASE = (LM.mode && LM.mode.base) || "";
-  const KEEP = new RegExp(`^/(?:${Object.keys(ENGINE_LABEL).join("|")})(?:/|$)|^/e2etutorial|^/guided-e-commerce-app|^/free-e-commerce-app`);
+  const KEEP = new RegExp(`^/(?:${Object.keys(ENGINE_LABEL).join("|")})(?:/|$)|^/e2etutorial|^/guided-e-commerce-app`);
   const u = (path) => (BASE && path.startsWith("/") && !path.startsWith("//") && !KEEP.test(path) ? BASE + path : path);
   function fixLinks(root) {
     if (!BASE || !root.querySelectorAll) return;
@@ -171,72 +171,6 @@
     }, 250);
   });
   document.addEventListener("click", (e) => { if (!sug.contains(e.target)) sug.hidden = true; });
-
-  /* ---------------- Tutorial
-   * The header toggle turns the Tutorial on or off for all pages (lm_tutor_off).
-   * Close and Finish close it for this page only (lm_tutor_done_<page>). */
-  const tutor = $("#tutor");
-  if (tutor) {
-  const tut = LM.tutorial || {};
-  const steps = tut.steps || [];
-  const tKey = `lm_tutor_${LM.page.id}`, doneKey = `lm_tutor_done_${LM.page.id}`;
-  let stepNo = Number(localStorage.getItem(tKey) || 0);
-  const tutorOn = () => localStorage.getItem("lm_tutor_off") !== "1";
-  const pageDone = () => localStorage.getItem(doneKey) === "1";
-  const smooth = () => (matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth");
-  const mini = $("#tutor-mini"), nav = $("#tutor .tutor-nav"), topbar = $(".topbar");
-  let navVisible = true;
-  const syncMini = () => { mini.hidden = tutor.hidden || navVisible; };
-  function renderTutor(move = false) {
-    document.querySelectorAll(".spotlight").forEach((el) => el.classList.remove("spotlight"));
-    if (!steps.length || !tutorOn() || pageDone()) { tutor.hidden = true; mini.hidden = true; syncToggle(); return; }
-    stepNo = Math.max(0, Math.min(stepNo, steps.length - 1));
-    const s = steps[stepNo], last = stepNo === steps.length - 1;
-    tutor.hidden = false;
-    $("#tutor-step").textContent = `Step ${stepNo + 1} of ${steps.length}`;
-    $("#tutor-dots").innerHTML = steps.map((_, i) => `<i class="${i < stepNo ? "done" : i === stepNo ? "now" : ""}"></i>`).join("");
-    $("#tutor-title").textContent = s.title;
-    $("#tutor-text").textContent = s.text;
-    $("#tutor-mini-text").textContent = `Step ${stepNo + 1} of ${steps.length}: ${s.title}`;
-    document.querySelectorAll("[data-tutor=back]").forEach((b) => { b.disabled = stepNo === 0; });
-    document.querySelectorAll("[data-tutor=next]").forEach((b) => { b.textContent = last ? "Finish" : "Next"; });
-    tutor.classList.remove("tick"); void tutor.offsetWidth; tutor.classList.add("tick");
-    const targets = s.target ? [...document.querySelectorAll(s.target)] : [];
-    targets.forEach((el) => el.classList.add("spotlight"));
-    if (move && targets[0]) targets[0].scrollIntoView({ behavior: smooth(), block: "center" });
-    localStorage.setItem(tKey, String(stepNo));
-    syncToggle();
-    checkNav();
-  }
-  function closeForPage() { localStorage.setItem(doneKey, "1"); localStorage.removeItem(tKey); renderTutor(); }
-  document.querySelectorAll("[data-tutor=next]").forEach((b) => b.addEventListener("click", () => {
-    if (stepNo === steps.length - 1) { closeForPage(); return; }
-    stepNo += 1; renderTutor(true);
-  }));
-  document.querySelectorAll("[data-tutor=back]").forEach((b) => b.addEventListener("click", () => { stepNo -= 1; renderTutor(true); }));
-  document.querySelectorAll("[data-tutor=close]").forEach((b) => b.addEventListener("click", closeForPage));
-  const toggle = $("#tutor-toggle");
-  function syncToggle() { toggle.setAttribute("aria-pressed", tutor.hidden ? "false" : "true"); }
-  toggle.addEventListener("click", () => {
-    if (!tutor.hidden) localStorage.setItem("lm_tutor_off", "1");
-    else { localStorage.setItem("lm_tutor_off", "0"); localStorage.removeItem(doneKey); stepNo = 0; }
-    renderTutor();
-    if (!tutor.hidden) window.scrollTo({ top: 0, behavior: smooth() });
-  });
-  // When the Tutorial buttons are not fully visible below the sticky header (the step target is lower on the page),
-  // a small bar keeps Back, Next and Close near. Without it the buttons sit under the header and a click hits the header.
-  function checkNav() {
-    const n = nav.getBoundingClientRect(), h = topbar.getBoundingClientRect();
-    const stuck = h.top <= 0.5;                       // the sticky header sits at the top and covers what scrolls under it
-    navVisible = n.bottom > 0 && n.top >= 0 && !(stuck && n.top < h.bottom);
-    syncMini();
-  }
-  let navTick = 0;
-  const onScroll = () => { if (!navTick) navTick = requestAnimationFrame(() => { navTick = 0; checkNav(); }); };
-  addEventListener("scroll", onScroll, { passive: true });
-  addEventListener("resize", onScroll);
-  renderTutor();
-  }
 
   /* ---------------- Session (ElastiCache, background call on each page) */
   api("/elasticache/api/session", { body: { page: location.pathname }, label: "Update the session", background: true }).catch(() => {});

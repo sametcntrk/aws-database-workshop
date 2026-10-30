@@ -50,7 +50,7 @@ The panel next to the Storefront that shows, for each Visitor action, what the E
 _Avoid_: debug panel, console
 
 **Tutorial**:
-The step-by-step guide on top of a Storefront Section. Each Tutorial Step tells the Visitor what to do and explains what happens in the Engine. A Visitor can close the Tutorial and use the Section freely.
+Removed on 2026-10-31 together with the Free e-commerce app. The step-by-step guide is now the Guided mission (see Guided journey); an E2E tutorial is a separate page per Engine.
 
 **Experiment**:
 A choice on a Storefront Section that changes how the Engine App uses its Engine (for example strongly vs eventually consistent reads), so the Visitor can compare the results in the Behind-the-Scenes Panel.

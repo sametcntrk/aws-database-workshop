@@ -8,8 +8,8 @@ renders the site pages for all ten Engines (catalog.py has no database driver):
   /e2etutorial, /e2etutorial/<e>     End-to-end tutorial of each Engine
   /guided-e-commerce-app/...         Lale Market with a locked, step-by-step mission
   /guided-e-commerce-app/perde-arkasi/<n>  the "Perde arkası" tab of Guided step n
-  /free-e-commerce-app/...           Lale Market with free navigation and per-page Tutorials
-The old friendly paths (/cart, /search, ...) redirect to the Free e-commerce app.
+The old friendly paths (/cart, /search, ...) and the removed Free e-commerce app (/free-e-commerce-app/...) redirect to the
+Guided e-commerce app.
 The browser composes pages from several Engine Apps (docs/adr/0002-browser-composes-storefront.md).
 """
 import importlib
@@ -49,12 +49,6 @@ REPORTS = [
 
 
 @lru_cache(maxsize=None)
-def tutorials(engine):
-    path = HERE / "tutorials" / f"{engine}.yaml"
-    return yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else {}
-
-
-@lru_cache(maxsize=None)
 def lessons(engine):
     """101 lessons of one Engine (lessons/<engine>.yaml, English). Every Engine App has every file, so any app can list all."""
     path = HERE / "lessons" / f"{engine}.yaml"
@@ -77,11 +71,11 @@ def find_lesson(engine, method, api, op):
 ENGINE_IDS = catalog.ENGINE_IDS
 SITE_ENGINE = "docdb"   # default ALB target: serves the site pages
 
-# The two e-commerce apps share the pages. `base` is the path prefix of every shop link.
+# The e-commerce app. `base` is the path prefix of every shop link. (The Free e-commerce app was removed on 2026-10-31.)
 MODES = {
     "guided": {"id": "guided", "base": "/guided-e-commerce-app", "label": "Guided e-commerce app"},
-    "free": {"id": "free", "base": "/free-e-commerce-app", "label": "Free e-commerce app"},
 }
+REMOVED_BASE = "/free-e-commerce-app"
 
 
 def lesson_index():
@@ -227,7 +221,6 @@ def create_app():
         trace.configure(catalog.META[e])
         return render_template(
             f"pages/{page['template']}.html", meta=catalog.META[e], page=page, args=kwargs, prefix=f"/{e}", mode=mode,
-            tutorial=tutorials(e).get(page["id"], {}) if mode["id"] == "free" else {},
             mission=mission() if mode["id"] == "guided" else None, owners=page_owner(),
             nav=NAV, reports=REPORTS, modes=MODES, personas=visitor.PERSONAS)
 
@@ -237,22 +230,28 @@ def create_app():
         view.__name__ = f"page_{mode['id']}_{page['id']}"
         return view
 
-    def to_free(**_):
+    def to_guided(rest="", **_):
         qs = request.query_string.decode()
-        return redirect(MODES["free"]["base"] + request.path + (f"?{qs}" if qs else ""), 302)
+        path = request.path[len(REMOVED_BASE):] if request.path.startswith(REMOVED_BASE) else request.path
+        return redirect(MODES["guided"]["base"] + (path or "/") + (f"?{qs}" if qs else ""), 302)
 
-    # Old friendly paths of this Engine: they go to the Free e-commerce app.
+    # Old friendly paths of this Engine: they go to the Guided e-commerce app.
     for page in engine.PAGES:
         for path in page["paths"]:
             if path != "/":
-                app.add_url_rule(path, view_func=to_free, endpoint=f"old:{path}")
+                app.add_url_rule(path, view_func=to_guided, endpoint=f"old:{path}")
 
     if engine_id == SITE_ENGINE:
         ctx = lambda **kw: dict(modes=MODES, engines=catalog.META, e2e=e2e_index(), images=e2e_images(), prefix=prefix, **kw)  # noqa: E731
 
         @app.get("/")
         def hub():
-            return render_template("site/hub.html", **ctx())
+            return render_template("site/hub.html", mission_steps=len(mission()["steps"]), **ctx())
+
+        # The removed Free e-commerce app: its links (bookmarks, old pages) open the same page of the Guided app.
+        app.add_url_rule(REMOVED_BASE, view_func=to_guided, endpoint="removed:bare")
+        app.add_url_rule(REMOVED_BASE + "/", view_func=to_guided, endpoint="removed:root")
+        app.add_url_rule(REMOVED_BASE + "/<path:rest>", view_func=to_guided, endpoint="removed:any")
 
         @app.get("/e2etutorial")
         @app.get("/e2etutorial/")
