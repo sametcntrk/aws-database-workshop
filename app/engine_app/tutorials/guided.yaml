@@ -1,11 +1,11 @@
-# Mission of the Guided e-commerce app (static/js/mission.js, coach marks). ASD-STE100 English.
+# Mission of the Guided e-commerce app (static/js/mission.js, coach marks and the "Perde arkası" panel). Turkish, 101 level.
 # Each step: page (page id), path (shop path; the app base goes in front), engines, use_case, title,
 #   why (the idea before the action), do (one instruction), target (CSS selector of the ONE control that is lit),
 #   action: click | look | type | change,
 #   wait: the Engine call that completes the action {method, path ("*" at the end = prefix), query, body ("*" = any value), any}
 #         or {click: true} / {change: true} / {value: "5"} for a control with no Engine call,
 #   focus (selector that is lit after the action: the result), result (the "Behind the scenes" text),
-#   quiz (q, options with about the same length, answer = index, why).
+#   panel: the "Perde arkası" panel (see static/js/mission.js). Steps with no panel show `result` in the small card.
 finish_url: /e2etutorial
 steps:
   # ---------------------------------------------------------------- Home: DocumentDB, ElastiCache
@@ -22,14 +22,6 @@ steps:
     action: look
     wait: {method: GET, path: /docdb/api/home}
     result: The pipeline has a $group stage. DocumentDB counted the documents of each category and sent only the counts and the lowest prices to the Engine App.
-    quiz:
-      q: Where does DocumentDB count the products of each category?
-      options:
-        - In the browser, after it reads every product
-        - On the database server, in the pipeline
-        - In the Engine App, with a Python loop
-      answer: 1
-      why: The $group stage runs inside DocumentDB. The Engine App receives five small result documents.
 
   - page: home
     path: /
@@ -44,38 +36,96 @@ steps:
     action: look
     wait: {method: GET, path: /elasticache/api/deal}
     result: HGETALL lm:deal returned the fields of the deal hash. GET lm:deal:stock returned the counter. Look at the time of each command.
-    quiz:
-      q: Why does the shop keep the deal stock in ElastiCache?
-      options:
-        - Memory reads are fast for many readers
-        - ElastiCache keeps data safe for many years
-        - ElastiCache joins tables for the report
-      answer: 0
-      why: Many Visitors read and change one small value. An in-memory store answers in microseconds.
 
   # ---------------------------------------------------------------- Category: DocumentDB indexes
   - page: category
     path: /c/Elektronik
     engines: [docdb]
-    use_case: Filter with an index
-    title: Turn off the index
+    use_case: Index ile filtreleme
+    title: Index'i kapat
     why: >-
-      The page asks for the products of one category, sorted by rating. A compound index on {category, rating} takes DocumentDB
-      straight to the matching documents. Without the index, DocumentDB must examine every document.
-    do: Click the lit button "Collection scan".
+      Bu sayfadaki ürünler DocumentDB adlı veritabanından geliyor. Sayfa sadece Elektronik ürünlerini istiyor ve puanı en
+      yüksek olanı en üste koyuyor. Bunu hızlı yapmak için veritabanı bir index kullanıyor. Index, kitabın sonundaki dizin
+      gibidir: aradığın kelimenin hangi sayfalarda olduğunu söyler, kitabı baştan sona okuman gerekmez. Şimdi aynı listeyi
+      index olmadan isteyeceğiz ve veritabanının ne kadar fazla iş yaptığını göreceğiz.
+    do: Aydınlık "Collection scan" butonuna tıkla. "Collection scan", index'i kullanmadan bütün ürünleri tek tek okumak demek.
     target: "#exp-index [data-value=off]"
     action: click
     wait: {method: GET, path: /docdb/api/products, query: {index: "off"}}
     focus: "#products"
-    result: The explain line shows "docs examined". With the index, it equals the number of results. With the collection scan, it equals the full catalog.
-    quiz:
-      q: What did the collection scan change?
-      options:
-        - Docs examined became the full collection size
-        - The result list got more products
-        - The products came back without a price
-      answer: 0
-      why: The result is the same. Only the work is larger, because DocumentDB reads each document to test the filter.
+    # Perde arkası paneli (mission.js + guided-sim.js). Sıra: need, concept, sim, live, query, remember, why_db.
+    panel:
+      need: >-
+        Sayfa, 200 ürünlük katalogdan sadece "Elektronik" kategorisindekileri istiyor ve onları puana göre büyükten küçüğe
+        sıralı istiyor. Az önce aynı listeyi iki farklı yolla aldın: önce index ile (sayfa açılırken), şimdi index olmadan.
+        Ekrandaki ürünler iki seferde de aynı. Farkı görmek için perde arkasına bakmak gerekiyor.
+      concept:
+        term: Index (dizin)
+        text: >-
+          Index, kitabın sonundaki dizine benzer. "Elektronik" kelimesini dizinde bulursun, dizin sana hangi sayfalara
+          bakacağını söyler ve sadece o sayfaları açarsın. Dizin yoksa kitabı ilk sayfadan son sayfaya kadar okuman gerekir.
+          Bu katalogdaki index iki alanı birlikte tutuyor: önce kategori, sonra puan. Bu yüzden index'te Elektronik ürünleri
+          yan yana ve zaten puan sırasında duruyor.
+        terms:
+          - [Doküman, "Bir ürünün bütün bilgisi. DocumentDB her ürünü bir JSON dokümanı olarak saklar. Tablodaki her satır bir doküman."]
+          - [Koleksiyon, "Aynı türden dokümanların bulunduğu yer. Burada adı products."]
+          - [Collection scan, "Index kullanmadan koleksiyondaki dokümanları baştan sona tek tek okumak."]
+      sim:
+        kind: index-vs-scan
+        caption: >-
+          Gerçek katalogdan alınmış 8 ürünlük bir kesit. Sol tarafta DocumentDB index'i kullanıyor, sağ tarafta index'i
+          kullanmıyor. İki taraf aynı hızda adım atıyor: her adımda en fazla bir doküman okunuyor.
+        columns: [[id, Ürün no], [name, Ürün], [category, Kategori], [rating, Puan]]
+        filter: [category, Elektronik]
+        sort: [rating, desc]
+        index_name: "{ category: 1, rating: -1 }"
+        rows:
+          - {id: P0014, name: Python ile Veri, category: Kitap, rating: 4.7}
+          - {id: P0021, name: Akıllı Saat, category: Elektronik, rating: 4.8}
+          - {id: P0052, name: Kahve Makinesi, category: Ev & Yaşam, rating: 4.9}
+          - {id: P0061, name: Powerbank, category: Elektronik, rating: 4.5}
+          - {id: P0083, name: Spor Çantası, category: Spor, rating: 4.7}
+          - {id: P0105, name: Deri Ceket, category: Moda, rating: 4.8}
+          - {id: P0131, name: Mekanik Klavye, category: Elektronik, rating: 4.8}
+          - {id: P0176, name: Bluetooth Hoparlör, category: Elektronik, rating: 4.7}
+      live:
+        title: Gerçek katalogda ne oldu?
+        intro: >-
+          Simülasyonda 8 ürün vardı. Gerçek katalogda 200 ürün var. Aşağıdaki sayılar, senin tıklamanla DocumentDB'ye giden
+          gerçek isteklerden geliyor. Sayfa bunları DocumentDB'nin explain komutuyla ölçüyor: explain, veritabanına
+          "bu sorguyu nasıl çalıştırdın, kaç doküman okudun?" diye sorar.
+        runs:
+          - {label: Index ile, fetch: "/docdb/api/products?category=Elektronik&index=on&sort=rating"}
+          - {label: Index olmadan, trigger: true}
+        reading: >-
+          İki çalıştırmada da 40 ürün döndü, ekrandaki liste aynı. Fark okunan doküman sayısında: index ile DocumentDB sadece
+          eşleşen 40 dokümanı okudu. Index olmadan 200 dokümanın hepsini okudu, 160'ını "Elektronik değil" diye attı, sonra
+          kalan 40'ı bellekte puana göre sıraladı. Süre (ms) her denemede biraz değişir ve 200 ürünlük küçük bir katalogda fark
+          küçüktür. Asıl önemli ölçü okunan doküman sayısıdır: katalog 100 kat büyürse index olmadan okunan doküman sayısı da
+          100 kat artar. Index ile sadece eşleşen dokümanlar okunur.
+        stages:
+          IXSCAN: "Index'te arama: dizinde doğru bölüme gider, sadece eşleşen dokümanları okur."
+          COLLSCAN: "Koleksiyon taraması: dokümanları baştan sona tek tek okur ve filtreyi her birinde dener."
+          SORT: "Bellekte sıralama: eşleşen dokümanları okuduktan sonra puana göre ayrıca dizer."
+          LIMIT_SKIP: "Sınır: sonuçtan en fazla 48 dokümanı alır."
+      query:
+        intro: Sayfanın DocumentDB'ye gönderdiği komut bu. Bir satırın üzerine gelince simülasyonda ilgili yer parlar.
+        lines:
+          - [db.products.find(, "products koleksiyonunda doküman ara.", table]
+          - ['  { category: "Elektronik" },', "Filtre: sadece kategorisi Elektronik olan dokümanlar.", filter]
+          - ["  <kart alanları> )", "Sadece ürün kartının ihtiyaç duyduğu alanları getir (ad, fiyat, puan...). Bu yüzden daha az veri taşınır.", columns]
+          - [".sort({ rating: -1 })", "Puana göre sırala. -1, büyükten küçüğe demek.", sort]
+          - [".limit(48)", "En fazla 48 doküman getir.", result]
+          - [".hint({ $natural: 1 })", "Bu satır sadece index kapalıyken eklenir. \"Index kullanma, dokümanları diskte durdukları sırayla oku\" demek. Collection scan'i bu satır yaptırır.", scan]
+        raw: Uygulamanın gönderdiği gerçek komut
+      remember: >-
+        Sonuç aynı, yapılan iş farklı. Index olmadan veritabanı her dokümanı okumak zorunda kalır. Index, sık kullanılan bir
+        filtre ve sıralama için doğru bölüme doğrudan gitmeyi sağlar.
+      why_db: >-
+        Neden DocumentDB? Ürünler farklı yapılarda bilgi taşıyor: kulaklığın pil süresi, ceketin bedeni ve rengi var. DocumentDB
+        her ürünü kendi alanlarıyla tek bir doküman olarak saklar ve bu alanlar üzerinde index kurmana izin verir. Index'in de
+        bir bedeli var: her yeni ürün yazıldığında index de güncellenir. Bu yüzden sadece sık kullanılan filtreler için index
+        kurulur.
 
   - page: category
     path: /c/Elektronik
@@ -106,14 +156,6 @@ steps:
     wait: {method: GET, path: /opensearch/api/search, query: {analyzer: standard}}
     focus: "#hits"
     result: The same products came back, but the score of each one is about half. With the standard analyzer, only "kablosuz" matches the name now.
-    quiz:
-      q: Why is the score lower with the standard analyzer?
-      options:
-        - Only "kablosuz" matches the product name now
-        - The standard analyzer removes the product names
-        - The standard analyzer sorts the hits by price
-      answer: 0
-      why: The field name.std has the token "kulaklık". For it, "kulaklik" is a different word. The products still match through "kablosuz" and the description.
 
   - page: search
     path: /search?q=kulaklk
@@ -158,14 +200,6 @@ steps:
     wait: {method: GET, path: /opensearch/api/stores, query: {km: "100"}}
     focus: "#map"
     result: The geo_distance query now has distance 100km. More stores are inside the circle, and the list is sorted by distance.
-    quiz:
-      q: Which field type lets OpenSearch filter by distance?
-      options:
-        - A keyword field with the city
-        - A geo_point field with the location
-        - A text field with the address
-      answer: 1
-      why: Only a geo_point (or geo_shape) field stores coordinates that a distance query can use.
 
   # ---------------------------------------------------------------- Product: DocumentDB, Keyspaces, Neptune, DynamoDB
   - page: product
@@ -195,14 +229,6 @@ steps:
     action: look
     wait: {method: GET, path: /keyspaces/api/recent}
     result: The SELECT has WHERE user_id = ? and a LIMIT. Keyspaces read one partition and stopped after the limit.
-    quiz:
-      q: Why is "the newest events of one user" a fast read?
-      options:
-        - The rows of one user are in one sorted partition
-        - Keyspaces keeps a copy of every table in memory
-        - The browser sends the events with each request
-      answer: 0
-      why: The partition key (user_id) finds the partition. The clustering order (event_time DESC) gives the newest rows first.
 
   - page: product
     path: /p/P0001
@@ -218,14 +244,6 @@ steps:
     wait: {method: GET, path: /neptune/api/recs, query: {mode: persona}}
     focus: "#recs-wrap"
     result: The openCypher query starts at your persona vertex and follows three hops of BOUGHT edges. Each hop would be one more JOIN in SQL.
-    quiz:
-      q: What does a persona with no orders get?
-      options:
-        - No personal recommendation, because no edges exist
-        - The best recommendation, because the graph is empty
-        - An error, because Neptune needs a SQL table
-      answer: 0
-      why: A walk starts at the persona vertex. With no BOUGHT edges, it finds nothing. This is the cold-start problem.
 
   - page: product
     path: /p/P0001
@@ -266,14 +284,6 @@ steps:
     wait: {method: POST, path: /dynamodb/api/cart/items, body: {qty: "5"}}
     focus: "#add-msg"
     result: DynamoDB refused the write with ConditionalCheckFailedException, and the item kept quantity 1. A refused conditional write still costs write capacity.
-    quiz:
-      q: What happened to the cart item?
-      options:
-        - DynamoDB refused the write and kept quantity 1
-        - DynamoDB wrote quantity 6 and sent a warning
-        - DynamoDB deleted the item from the cart
-      answer: 0
-      why: 1 + 5 = 6 breaks the condition, so DynamoDB did not write. The rule holds on the server, also when the browser has a bug.
 
   # ---------------------------------------------------------------- Cart: DynamoDB
   - page: cart
@@ -289,14 +299,6 @@ steps:
     wait: {method: GET, path: /dynamodb/api/cart, query: {consistent: "false"}}
     focus: "#cart"
     result: The Query used half the read request units (RRU). Checkout still reads the cart strongly consistent, because the order must have the last quantity.
-    quiz:
-      q: When is an eventually consistent read a good choice?
-      options:
-        - When a short delay in the data is acceptable
-        - When the read must show the write before it
-        - When the table has no partition key at all
-      answer: 0
-      why: A cart preview can be one second old. Checkout cannot.
 
   - page: cart
     path: /cart
@@ -351,14 +353,6 @@ steps:
     wait: {method: POST, path: /elasticache/api/deal/simulate, body: {mode: naive}, any: true}
     focus: "#sim-out"
     result: Compare the sold count with the stock. GET and SET are two commands, and other buyers ran theirs in between. The atomic mode sells exactly the stock.
-    quiz:
-      q: Why does "Read, then write" sell more pieces than the stock?
-      options:
-        - Two buyers read the same value before a write
-        - Valkey loses some writes when memory is full
-        - The browser sends each purchase two times
-      answer: 0
-      why: Between GET and SET, other commands run. DECR is one command, so it is atomic.
 
   - page: deals
     path: /deals
@@ -409,14 +403,6 @@ steps:
     wait: {method: POST, path: /aurora/api/orders, body: {fail_after_stock: "true"}}
     focus: "#flow"
     result: The calls show BEGIN, the UPDATE of the stock, then ROLLBACK. No order row exists, the stock is back, and your cart did not change.
-    quiz:
-      q: What is the stock after the rollback?
-      options:
-        - The same as before the order
-        - Lower by the ordered quantity
-        - Zero for each product in the order
-      answer: 0
-      why: Atomicity is the "A" in ACID. All statements of a transaction commit together, or none of them stays.
 
   - page: checkout
     path: /checkout
@@ -443,14 +429,6 @@ steps:
     wait: {method: POST, path: /neptune/api/purchase}
     focus: "#flow"
     result: Six Engines stored the part of the order that each one is good at. Aurora holds the official order. The others hold copies or counters for their own job.
-    quiz:
-      q: Which Engine is the system of record for the order?
-      options:
-        - Aurora PostgreSQL, with the committed transaction
-        - ElastiCache, with the leaderboard sorted set
-        - InfluxDB, with the orders per minute point
-      answer: 0
-      why: Only Aurora has the full order with its constraints. The other Engines keep copies or counters for one purpose each.
 
   - page: orders
     path: /orders
@@ -491,14 +469,6 @@ steps:
     wait: {method: GET, path: /keyspaces/api/activity, query: {consistency: LOCAL_ONE}}
     focus: "#feed"
     result: The result is the same here, because nobody wrote to this partition in the last moment. The read cost is half.
-    quiz:
-      q: Which consistency level costs less for a read?
-      options:
-        - LOCAL_ONE, because it reads one replica
-        - LOCAL_QUORUM, because it reads two replicas
-        - Both cost the same in Keyspaces
-      answer: 0
-      why: A LOCAL_ONE read uses half the read capacity units of a LOCAL_QUORUM read.
 
   # ---------------------------------------------------------------- Reports: Redshift
   - page: reports
@@ -514,14 +484,6 @@ steps:
     wait: {method: GET, path: /redshift/api/report, query: {dim: city}}
     focus: "#chart-wrap"
     result: The SQL has GROUP BY city. Redshift scanned many rows but only the columns that the query needs.
-    quiz:
-      q: Why is a columnar store good for this report?
-      options:
-        - The query reads few columns of many rows
-        - The query reads all columns of one row
-        - The query changes many rows in one transaction
-      answer: 0
-      why: Analytic queries scan many rows but few columns. Row stores are better for one-row reads and writes.
 
   - page: reports
     path: /admin/reports
@@ -590,14 +552,6 @@ steps:
     wait: {method: GET, path: /influxdb/api/series, query: {window: 1h}}
     focus: "#temp-wrap"
     result: The Flux query has range, filter and aggregateWindow. Fewer, smoother points came back. The raw points stay in the bucket.
-    quiz:
-      q: What does a larger window do to the result?
-      options:
-        - It returns fewer points, each one a mean
-        - It returns more points, each one a raw value
-        - It deletes the raw points from the bucket
-      answer: 0
-      why: The query aggregates at read time. The raw points stay until the retention period ends.
 
   # ---------------------------------------------------------------- Graph: Neptune
   - page: graph
@@ -627,14 +581,6 @@ steps:
     wait: {method: GET, path: /s3/api/presign/*}
     focus: "#direct"
     result: The URL host is the S3 endpoint. The query string has X-Amz-Signature and X-Amz-Expires.
-    quiz:
-      q: Who downloads the image bytes with a presigned URL?
-      options:
-        - The browser, straight from S3
-        - The Engine App, then the browser
-        - DocumentDB, from the product document
-      answer: 0
-      why: The Engine App only signs. The signature in the URL gives the browser time-limited access to one object.
 
   - page: seller
     path: /seller

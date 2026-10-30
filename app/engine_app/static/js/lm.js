@@ -30,8 +30,11 @@
 
   /* ---------------- Visitor and Persona (cookies, read by every Engine App) */
   function cookie(name) { return (document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]*)")) || [])[1]; }
-  function setCookie(name, value) { document.cookie = `${name}=${value}; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Lax; Secure`; }
-  if (!cookie("lm_visitor")) setCookie("lm_visitor", crypto.randomUUID());
+  function setCookie(name, value) { document.cookie = `${name}=${value}; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Lax${location.protocol === "https:" ? "; Secure" : ""}`; }
+  // crypto.randomUUID exists only on HTTPS and localhost; a plain-HTTP preview uses the fallback.
+  const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) =>
+    (c ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (c / 4)))).toString(16)));
+  if (!cookie("lm_visitor")) setCookie("lm_visitor", uuid());
   const visitor = cookie("lm_visitor");
 
   function persona() { return LM.personas.find((p) => p.id === cookie("lm_persona")); }
