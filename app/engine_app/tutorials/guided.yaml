@@ -6307,42 +6307,667 @@ steps:
   - page: reports
     path: /admin/reports
     engines: [redshift]
-    use_case: Analytics on history
-    title: Group the history by city
+    use_case: Geçmiş üzerinde analiz
+    title: Satış geçmişini şehre göre topla
     why: >-
-      Redshift stores each column in separate blocks. A report that groups revenue by city reads two columns, not the full rows.
-    do: Click the lit button "City".
+      Raporlar sayfasındasın. Bir yıllık satışlar aya göre toplanmış bir grafikte görünüyor. Şimdi aynı satışları şehre göre
+      toplatacaksın.
+    do: Aydınlık "City" (şehir) butonuna tıkla.
     target: "#exp-dim [data-value=city]"
     action: click
     wait: {method: GET, path: /redshift/api/report, query: {dim: city}}
     focus: "#chart-wrap"
-    result: The SQL has GROUP BY city. Redshift scanned many rows but only the columns that the query needs.
+    result: The SQL has GROUP BY city. Redshift scanned many rows but only the needed columns.
+    panel:
+      need: >-
+        Rapor, bir yılın bütün satış kalemlerini okuyup şehre göre toplamalı: binlerce, büyük mağazalarda milyarlarca satır. Bu
+        sorgu her satırın sadece birkaç alanını kullanır (şehir, sipariş, adet, tutar). Satırları baştan sona okumak, gerekmeyen
+        alanları da diskten okumak demek; rapor yavaşlar ve aynı veritabanındaki siparişleri de yavaşlatır.
+      concept:
+        term: Sütun bazlı depolama (columnar)
+        text: >-
+          Redshift bir tabloyu satır satır değil, sütun sütun saklar: bütün şehirler bir blokta, bütün tutarlar başka bir blokta.
+          Bir rapor sadece kullandığı sütunların bloklarını okur. Bir tablodaki "tutar" sütununu toplamak için bütün tabloyu değil,
+          sadece o sütunu bir cetvelle aşağı doğru okumak gibi. Aynı türden değerler yan yana durduğu için çok iyi sıkışır.
+        terms:
+          - [Sütun bazlı (columnar), "Her sütun ayrı bloklarda saklanır; sorgu sadece gereken sütunları okur."]
+          - [GROUP BY, "Satırları bir sütuna göre gruplayıp toplamak (şehre göre ciro)."]
+          - [SORTKEY / DISTKEY, "Satırların diskte hangi sırayla ve hangi düğümlere dağıtılarak durduğu."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde analiz deposu için hazırlık
+        intro: >-
+          Rapor hiç açılmadan, satış tablosu analiz sorgularına göre kurulur ve doldurulur. Aşağıdaki beş adım bu hazırlığın
+          sırasıdır.
+        text:
+          - title: Önce raporların soruları yazılır
+            text: >-
+              "Aya göre", "kategoriye göre", "şehre göre" ciro, sipariş ve adet. Hepsi çok satırı okuyup az sayıda sütunu toplayan
+              sorgular; tek bir satırı bulmak isteyen yok.
+            code: |-
+              SELECT city, count(DISTINCT order_id), sum(qty), sum(amount) FROM sales GROUP BY 1 ORDER BY 4 DESC
+          - title: Tablo raporlara uygun kurulur
+            text: >-
+              Raporların çoğu bir tarih aralığı seçtiği için tarih SORTKEY olur: Redshift gereksiz blokları tarihe bakarak atlar.
+              Sık JOIN edilen anahtar DISTKEY olur: aynı müşterinin satırları aynı düğümde durur.
+            code: |-
+              CREATE TABLE sales (order_id varchar(16), order_date date SORTKEY, customer_id varchar(8) DISTKEY,
+                                  city varchar(32), category varchar(32), product_id varchar(8), qty smallint, amount decimal(12,2));
+          - title: Veri toplu yüklenir
+            text: >-
+              Analiz deposuna satır satır INSERT yapılmaz; dosyalar S3'e konur ve COPY ile paralel yüklenir. Canlı veri ise
+              işlemsel veritabanından zero-ETL ile akar (Adım 30).
+            code: |-
+              COPY sales FROM 's3://bucket/sales/' IAM_ROLE '…' FORMAT AS PARQUET;
+          - title: Kapasite iş yüküne göre seçilir
+            text: >-
+              Redshift Serverless'ta sunucu seçilmez; taban kapasite (RPU) verilir ve sorgu geldikçe ölçeklenir, boşta ödeme
+              yapılmaz. Sürekli yoğun panolar için sağlanan (provisioned) cluster daha ekonomik olabilir.
+          - title: Sorgu planı ve süre izlenir
+            text: >-
+              EXPLAIN ile sorgunun hangi sütunları taradığı ve verinin düğümler arasında taşınıp taşınmadığı görülür; sistem
+              tablolarında (SYS_QUERY_HISTORY) sorgu süreleri izlenir.
+      feed:
+        title: Veri nereden geliyor?
+        writes: >-
+          Kullanıcı yazmaz. Geçmiş satışlar toplu yükleme ile (ör. S3'ten COPY) gelir; canlı siparişler işlemsel veritabanından
+          zero-ETL ile kendiliğinden kopyalanır.
+        reads: Rapor ekranları, panolar ve analistlerin sorguları.
+        kind: >-
+          Motordan motora: Aurora'nın değişiklikleri zero-ETL entegrasyonuyla Redshift'e akar; arada uygulama ya da yazılmış bir
+          veri hattı yoktur. Geçmiş veri ise toplu yüklemeyle gelir.
+        with: >-
+          Raporun her satırı başka bir veritabanında doğdu: sipariş Aurora'da yazıldı, Redshift onun kopyasını tutuyor. Aynı
+          sipariş Keyspaces'te olay, ElastiCache'te sıralama puanı olarak da durur; rapor için doğru kaynak Redshift'teki kopyadır.
+        best: >-
+          Analiz sorguları işlemsel veritabanında değil, sütun bazlı bir analiz deposunda çalışır. İşlemsel veri ona zero-ETL ile
+          kod yazmadan, saniyeler içinde akar; ağır raporlar siparişleri hiç yavaşlatmaz.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              "Reports" (raporlar) sayfasını açtın. Açılırken oturumun güncellendi.
+            engines: [elasticache]
+          - text: >-
+              Sayfa "History (seeded)" ve "Month" seçiliyken raporu istedi; uygulama Redshift'e aya göre gruplayan bir sorgu
+              gönderdi ve grafik çizildi.
+            engines: [redshift]
+          - text: >-
+              "City" butonuna bastın. Tarayıcın aynı raporu dim=city ile istedi; uygulama sorguyu şehre göre gruplayacak şekilde
+              değiştirip gönderdi. Simülasyonun sol şeridi bu sorgu.
+            engines: [redshift]
+          - text: >-
+              Grafik ve tablo şehirlerle yeniden çizildi: her şehir için sipariş sayısı, adet ve ciro.
+            engines: [redshift]
+      sim:
+        kind: columnar
+        caption: >-
+          Satış tablosundan 8 satırlık örnek bir kesit; gerçek tabloda bir yıllık binlerce kalem var. Sorgu 8 sütundan 4'ünü
+          kullanıyor (altı çizili). Solda Redshift'in sütun bazlı okuması, sağda olsaydı: aynı sorgu satır bazlı bir veritabanında.
+        cols: [order_id, order_date, customer_id, city, category, product_id, qty, amount]
+        used: [city, order_id, qty, amount]
+        group: city
+        sum: amount
+        result_title: "Şehre göre ciro (₺)"
+        labels:
+          col: "t0 · Senin tıklaman · Sütun bazlı (Redshift)"
+          row: "Olsaydı · Aynı sorgu · Satır bazlı veritabanı"
+        send_col: >-
+          "City"ye bastın. Uygulama Redshift'e GROUP BY city sorgusunu gönderiyor.
+        back_col: Uygulama şehir satırlarını tarayıcına gönderdi; grafik yeniden çizilecek.
+        send_row: Olsaydı - aynı sorgu satır bazlı bir veritabanına gitseydi.
+        back_row: Sonuç aynı olurdu; ama her satır bütün alanlarıyla okunmuş olurdu.
+        rows:
+          - {order_id: O1001, order_date: "2026-03-02", customer_id: C00001, city: İstanbul, category: Elektronik, product_id: P0001, qty: 1, amount: 3373.84}
+          - {order_id: O1002, order_date: "2026-03-02", customer_id: C00417, city: Ankara, category: Kitap, product_id: P0084, qty: 2, amount: 794.84}
+          - {order_id: O1003, order_date: "2026-03-03", customer_id: C00205, city: İzmir, category: Moda, product_id: P0130, qty: 1, amount: 291.71}
+          - {order_id: O1003, order_date: "2026-03-03", customer_id: C00205, city: İzmir, category: Spor, product_id: P0113, qty: 1, amount: 194.94}
+          - {order_id: O1004, order_date: "2026-03-04", customer_id: C00002, city: Ankara, category: Ev & Yaşam, product_id: P0052, qty: 1, amount: 1786.90}
+          - {order_id: O1005, order_date: "2026-03-05", customer_id: C00731, city: Frankfurt, category: Elektronik, product_id: P0066, qty: 2, amount: 1903.84}
+          - {order_id: O1006, order_date: "2026-03-05", customer_id: C00088, city: İstanbul, category: Spor, product_id: P0143, qty: 1, amount: 478.65}
+          - {order_id: O1007, order_date: "2026-03-06", customer_id: C00512, city: Frankfurt, category: Kitap, product_id: P0009, qty: 3, amount: 304.29}
+        summary: >-
+          Aynı sonuç: sütun bazlı okumada 32 hücre, satır bazlı okumada 64 hücre okundu. Gerçek tabloda sütun sayısı ve satır sayısı
+          arttıkça fark katlanır; ayrıca aynı türden değerler yan yana durduğu için sütun blokları çok daha iyi sıkışır.
+      wire:
+        what: >-
+          Uygulama her sorgu için Redshift Serverless'a yeni bir bağlantı açar (redshift_connector kütüphanesi), sorguyu gönderir,
+          satırları alır ve bağlantıyı kapatır.
+        dst: "dbws.179330777878.eu-central-1.redshift-serverless.amazonaws.com : 5439"
+        dst_note: >-
+          Redshift Serverless çalışma grubunun adresi (taban kapasite 8 RPU). İnternete kapalı veri alt ağında duruyor.
+        rows:
+          - [Şifreleme, "TLS (sslmode=verify-ca)", gerçek, Sunucunun sertifikası doğrulanarak bağlanılır.]
+          - [Protokol, PostgreSQL wire protokolü, gerçek, "Redshift, PostgreSQL istemcilerinin dilini konuşur; sorgu bir SQL mesajı olarak gider."]
+          - [Kimlik, "Kullanıcı adı + şifre, bağlantı açılırken", gerçek, "Şifre kodda yazmaz; uygulama onu AWS Secrets Manager'dan alır."]
+        body_label: Gönderilen SQL
+        body: |-
+          SELECT city AS city, count(DISTINCT order_id) AS orders, sum(qty) AS units, sum(amount) AS revenue
+          FROM sales GROUP BY 1 ORDER BY revenue DESC LIMIT 24;
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Gruplama sütununu
+        uygulama seçer; toplamayı Redshift yapar.
+      app_code:
+        - file: engines/redshift.py
+          func: api_report
+          title: Rapor isteği
+          sub: Adresteki dim=city hangi sütuna göre gruplanacağını seçer.
+          lines:
+            - {match: '@bp.get("/api/report")', say: "Rapor isteği buraya gelir; adres gruplama sütununu (dim) ve kaynağı taşır.", tag: Tarayıcı → Uygulama}
+            - {match: 'dim = request.args.get("dim", "month")', say: "Neye göre gruplanacak: ay, kategori ya da şehir.", tag: Uygulamanın içinde}
+            - {match: 'expr, alias = DIMENSIONS.get(dim, DIMENSIONS["month"])', say: "Seçime karşılık gelen SQL ifadesini alır (city).", tag: Uygulamanın içinde}
+            - {match: 'q = f"""SELECT {expr} AS {alias}, count(DISTINCT order_id)', say: "Sorguyu kurar: grupla, siparişleri say, adet ve tutarı topla, ciroya göre sırala.", tag: Uygulamanın içinde}
+            - {match: 'cols, rows = run("SELECT (report)", q, note)', say: "Sorgu Redshift'e gider (yeni bir bağlantıyla); toplamlar döner.", tag: [Uygulama → Redshift, Redshift → Uygulama]}
+            - {match: 'return jsonify(trace.payload({"columns": cols, "rows":', say: Sütun adları ve satırlar tarayıcıya gider., tag: Uygulama → Tarayıcı}
+      live:
+        title: Gerçek analiz deposunda ne oldu?
+        intro: Sayfa açılırken giden aya göre rapor ve senin tıklamanla giden şehre göre rapor.
+        runs:
+          - label: Aya göre (sayfa açılınca)
+            page_call: {path: /redshift/api/report, query: {dim: month}}
+            metrics: [[Dönen satır (ay), items], [Süre, ms]]
+          - label: Şehre göre (senin tıklaman)
+            trigger: true
+            metrics: [[Dönen satır (şehir), items], [Süre, ms]]
+        reading: >-
+          Bir yıllık binlerce satış kalemi okundu ama uygulamaya sadece ay ya da şehir sayısı kadar satır döndü. Süre birkaç yüz
+          milisaniye; bunun bir kısmı her sorguda yeni bağlantı kurulmasından. Redshift Serverless bir süre boşta kaldıysa ilk
+          sorgu daha uzun sürebilir. Süre her istekte değişir.
+      query:
+        title: Uygulama Redshift'e ne dedi?
+        intro: >-
+          İki sütun, iki isteğin sorgusu. Tek fark gruplama sütunu. Bir parçanın üzerine gelince cümlede, kodda ve açıklamada aynı
+          yer parlar.
+        cards_title: Parça parça
+        parts:
+          - id: m
+            say: Her ay için
+            code: "SELECT date_trunc('month', order_date)::date AS month,"
+            name: Neye göre?
+            note: Tarihi ayın ilk gününe yuvarlar; aynı aydaki satırlar bir grup olur.
+            hl: col
+          - id: c
+            say: Her şehir için
+            code: "SELECT city AS city,"
+            name: Neye göre?
+            note: Şehir sütunu. Redshift sadece bu sütunun bloğunu okur.
+            hl: col
+            tag: sadece sağdaki sorguda var
+          - id: agg
+            say: sipariş sayısını, adet ve ciro toplamını hesapla,
+            code: "  count(DISTINCT order_id) AS orders, sum(qty) AS units, sum(amount) AS revenue"
+            name: Ne hesaplansın?
+            note: Üç toplam; Redshift bunları paralel olarak, sadece order_id, qty ve amount sütunlarını okuyarak hesaplar.
+            hl: col
+          - id: frm
+            say: satış tablosunda grupla ve en yüksek ciro üstte olsun.
+            code: "FROM sales GROUP BY 1 ORDER BY revenue DESC LIMIT 24"
+            name: Nereden ve nasıl?
+            note: GROUP BY 1, "SELECT'teki ilk sütuna göre grupla" demek.
+            hl: col
+        columns:
+          - label: Aya göre
+            sub: Sayfa açılırken giden sorgu.
+            via: Uygulama bu sorguyu redshift_connector kütüphanesinin cursor.execute() metoduyla gönderir.
+            parts: [m, agg, frm]
+          - label: Şehre göre
+            sub: Senin "City" tıklamanla giden sorgu.
+            via: Aynı çağrı; uygulama sadece gruplama ifadesini değiştirdi.
+            parts: [c, agg, frm]
+            mark: [c]
+        note: >-
+          Dikkat: sorguda "sadece şu sütunları oku" diye bir şey yok. SELECT'te ve GROUP BY'da geçen sütunlar, okunacak blokları
+          kendiliğinden belirler. SELECT * yazmak bu avantajı yok eder.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          Redshift'in işi toplamları verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: Redshift → Uygulama
+            text: "{items} satır geldi: her şehir için sipariş, adet ve ciro."
+          - who: Uygulama
+            text: Bağlantıyı kapattı; sayıları JSON'a uygun biçime çevirdi.
+          - who: Uygulama → Tarayıcın
+            text: Sütun adlarını, satırları ve isteğin kaydını tek bir JSON cevabında gönderdi.
+          - who: Tarayıcın
+            text: Grafiği ve tabloyu şehirlerle yeniden çizdi.
+          - who: Sonra
+            text: >-
+              Bu rapor kurulumda yüklenen geçmişi okuyor. Bir sonraki adımda Aurora'nın canlı kopyasını okuyacaksın; senin siparişin
+              de orada.
+      remember: >-
+        Çok satırı okuyup az sütunu toplayan sorgular sütun bazlı bir analiz deposunda çalışır: sorgu sadece kullandığı sütunları
+        okur ve aynı türden değerler yan yana sıkıştırılmış durur.
+      why_db: >-
+        Neden Redshift? Satış raporu milyonlarca satırı birkaç sütun üzerinden toplar; Redshift bunu sütun bazlı depolama ve
+        paralel işleme ile yapar. Bedeli: tek bir satırı hızlıca bulmak ya da sık güncellemek için uygun değildir; o iş işlemsel
+        veritabanınındır.
 
   - page: reports
     path: /admin/reports
     engines: [redshift, aurora]
     use_case: Zero-ETL
-    title: Read the live copy of Aurora
-    why: The zero-ETL integration copies changes from Aurora to Redshift in near real time. You write no pipeline code.
-    do: Click the lit button "Live from Aurora".
+    title: Aurora'nın canlı kopyasını oku
+    why: >-
+      Raporlar sayfasındasın; şimdiye kadar kurulumda yüklenen geçmişe baktın. Şimdi aynı raporu, siparişlerin gerçekten yazıldığı
+      veritabanının canlı kopyasından isteyeceksin. Adım 25'te verdiğin sipariş de orada.
+    do: Aydınlık "Live from Aurora" (Aurora'dan canlı) butonuna tıkla.
     target: "#exp-src [data-value=live]"
     action: click
     wait: {method: GET, path: /redshift/api/report, query: {source: live}}
     focus: "#chart-wrap"
-    result: This query reads the Aurora tables that zero-ETL copied into Redshift. Your order from checkout is in it.
+    result: This query reads the Aurora tables that zero-ETL copied into Redshift.
+    panel:
+      need: >-
+        Rapor güncel olmalı: az önce verilen sipariş birkaç saniye içinde rapora girmeli. Ama ağır rapor sorguları siparişlerin
+        yazıldığı veritabanında çalışırsa ödeme sayfasını yavaşlatır. Verinin kopyası analiz deposuna, kod yazmadan ve sürekli
+        akmalı.
+      concept:
+        term: Zero-ETL entegrasyonu
+        text: >-
+          Zero-ETL, Aurora'daki her değişikliği (yeni sipariş, güncellenen stok) Redshift'e kendiliğinden ve birkaç saniye içinde
+          taşır. Aurora değişiklikleri zaten bir kayıt defterine (log) yazar; entegrasyon bu defteri okur ve Redshift'teki kopyaya
+          uygular. Bir mağazanın satış fişlerinin kopyasının otomatik olarak muhasebeye gitmesi gibi: kasada kimse ekstra bir şey
+          yapmaz.
+        terms:
+          - [Zero-ETL, "Kaynaktan analiz deposuna, veri hattı kodu yazmadan, sürekli ve otomatik kopyalama."]
+          - [CDC (değişiklik yakalama), "Kaynağın değişiklik kaydını okuyup her değişikliği hedefe uygulama."]
+          - [aurora_live, "Redshift'te, Aurora'nın kopyalanan tablolarının durduğu veritabanı."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde zero-ETL için hazırlık
+        intro: >-
+          Canlı rapor hiç açılmadan, kaynak veritabanı ve analiz deposu birbirine bağlanır. Aşağıdaki beş adım bu hazırlığın
+          sırasıdır.
+        text:
+          - title: Önce hangi tabloların raporlanacağı belirlenir
+            text: >-
+              Siparişler, kalemler, ürünler ve müşteriler raporun kaynağı. Bunlar işlemsel veritabanında normalize durur; rapor onları
+              analiz deposunda JOIN'leyecek.
+          - title: Kaynak veritabanı hazırlanır
+            text: >-
+              Aurora'da gelişmiş mantıksal çoğaltma (enhanced logical replication) açılır; değişiklikler kayıt defterinden
+              okunabilir hâle gelir. Kopyalanacak tablolarda birincil anahtar olmalıdır.
+            code: |-
+              rds.logical_replication = 1        (cluster parametre grubu)
+              aurora.enhanced_logical_replication = 1
+          - title: Entegrasyon bir kez kurulur
+            text: >-
+              Aurora ile Redshift arasında bir entegrasyon oluşturulur ve Redshift'te bu entegrasyondan bir veritabanı yaratılır. Önce
+              bütün tablolar bir kez kopyalanır, sonra her değişiklik sürekli akar.
+            code: |-
+              aws rds create-integration --source-arn <aurora cluster> --target-arn <redshift namespace> …
+              CREATE DATABASE aurora_live FROM INTEGRATION '<integration id>' DATABASE shop;
+          - title: Raporlar kopyayı okur
+            text: >-
+              Rapor sorguları aurora_live veritabanındaki tablolara yazılır; Aurora'ya hiçbir rapor sorgusu gitmez. Kopya salt
+              okunurdur.
+          - title: Gecikme ve durum izlenir
+            text: >-
+              svv_integration görünümü entegrasyonun durumunu, kopyalanan ve hata veren tablo sayısını gösterir. Gecikme genelde
+              saniyeler düzeyindedir ve izlenir (Adım 31).
+      feed:
+        title: Veri nereden geliyor?
+        writes: >-
+          Kullanıcı yazmaz. Geçmiş satışlar toplu yükleme ile (ör. S3'ten COPY) gelir; canlı siparişler işlemsel veritabanından
+          zero-ETL ile kendiliğinden kopyalanır.
+        reads: Rapor ekranları, panolar ve analistlerin sorguları.
+        kind: >-
+          Motordan motora: Aurora'nın değişiklikleri zero-ETL entegrasyonuyla Redshift'e akar; arada uygulama ya da yazılmış bir
+          veri hattı yoktur. Geçmiş veri ise toplu yüklemeyle gelir.
+        with: >-
+          Raporun her satırı başka bir veritabanında doğdu: sipariş Aurora'da yazıldı, Redshift onun kopyasını tutuyor. Aynı
+          sipariş Keyspaces'te olay, ElastiCache'te sıralama puanı olarak da durur; rapor için doğru kaynak Redshift'teki kopyadır.
+        best: >-
+          Analiz sorguları işlemsel veritabanında değil, sütun bazlı bir analiz deposunda çalışır. İşlemsel veri ona zero-ETL ile
+          kod yazmadan, saniyeler içinde akar; ağır raporlar siparişleri hiç yavaşlatmaz.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              Adım 25'te bir sipariş verdin: Aurora onu tek transaction'da yazdı ve COMMIT etti.
+            engines: [aurora]
+          - text: >-
+              Senin hiçbir şey yapmana gerek kalmadan zero-ETL bu değişikliği Aurora'nın kayıt defterinden okudu ve birkaç saniye
+              içinde Redshift'teki aurora_live kopyasına uyguladı.
+            engines: [aurora, redshift]
+          - text: >-
+              Şimdi "Live from Aurora" butonuna bastın. Tarayıcın raporu source=live ile istedi; uygulama Redshift'e aurora_live
+              tablolarını JOIN'leyen bir sorgu gönderdi. Aurora'ya hiçbir sorgu gitmedi.
+            engines: [redshift]
+          - text: >-
+              Grafik ve tablo canlı veriyle yeniden çizildi; senin siparişin de şehrinin toplamına eklenmiş durumda.
+            engines: [redshift]
+      sim:
+        kind: replicate
+        title: Aurora → zero-ETL → Redshift (aurora_live)
+        caption: >-
+          Siparişler tablosundan küçük bir kesit (satırlar örnek). Önce Adım 25'teki siparişinin Aurora'dan Redshift'e akışı, sonra
+          senin tıklamanla giden rapor sorgusu oynuyor.
+        cols: [order_id, city, total]
+        src:
+          label: Aurora (shop.orders)
+          rows:
+            - {order_id: W1793390012, city: Ankara, total: 1299.90}
+            - {order_id: W1793380550, city: İstanbul, total: 951.92}
+        dst: {label: Redshift (aurora_live.orders)}
+        row: {order_id: W1793396741, city: İstanbul, total: 3373.84}
+        lag_s: 10
+        write_say: "Adım 25: Aurora siparişini COMMIT etti (W1793396741, İstanbul, 3373,84 ₺)."
+        log_entry: "INSERT orders W1793396741 …"
+        log_say: Değişiklik Aurora'nın kayıt defterine yazıldı; zero-ETL bu defteri sürekli okuyor.
+        apply_say: zero-ETL değişikliği Redshift'teki kopyaya uyguladı; arada uygulama ya da yazılmış bir program yok.
+        send: '"Live from Aurora"ya bastın. Uygulama Redshift''e aurora_live tablolarını JOIN''leyen rapor sorgusunu gönderiyor.'
+        query_say: Redshift raporu kopyadan hesapladı; Aurora'ya hiçbir rapor sorgusu gitmedi.
+        out: [[İstanbul, "+ 3373,84 ₺ senin siparişin"], [Ankara, "1299,90 ₺"]]
+        back: Uygulama raporu tarayıcına gönderdi; grafik canlı veriyle çizilecek.
+        summary: >-
+          Sipariş Aurora'ya bir kez yazıldı; kopyalamayı zero-ETL yaptı, raporu Redshift hesapladı. Uygulama ne veri taşıdı ne de
+          Aurora'ya rapor sorgusu gönderdi.
+      wire:
+        what: >-
+          Uygulama her sorgu için Redshift Serverless'a yeni bir bağlantı açar (redshift_connector kütüphanesi), sorguyu gönderir,
+          satırları alır ve bağlantıyı kapatır.
+        dst: "dbws.179330777878.eu-central-1.redshift-serverless.amazonaws.com : 5439"
+        dst_note: >-
+          Redshift Serverless çalışma grubunun adresi (taban kapasite 8 RPU). İnternete kapalı veri alt ağında duruyor.
+        rows:
+          - [Şifreleme, "TLS (sslmode=verify-ca)", gerçek, Sunucunun sertifikası doğrulanarak bağlanılır.]
+          - [Protokol, PostgreSQL wire protokolü, gerçek, "Redshift, PostgreSQL istemcilerinin dilini konuşur; sorgu bir SQL mesajı olarak gider."]
+          - [Kimlik, "Kullanıcı adı + şifre, bağlantı açılırken", gerçek, "Şifre kodda yazmaz; uygulama onu AWS Secrets Manager'dan alır."]
+        body_label: Gönderilen SQL (kopyalanan Aurora tablolarının üzerinde)
+        body: |-
+          SELECT c.city AS city, count(DISTINCT o.order_id) AS orders, sum(oi.qty) AS units, sum(oi.qty * oi.unit_price) AS revenue
+          FROM aurora_live.public.orders o
+          JOIN aurora_live.public.order_items oi ON oi.order_id = o.order_id
+          JOIN aurora_live.public.products p ON p.product_id = oi.product_id
+          JOIN aurora_live.public.customers c ON c.customer_id = o.customer_id
+          WHERE o.status <> 'cancelled' GROUP BY 1 ORDER BY revenue DESC LIMIT 24;
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Uygulamada kopyalama
+        kodu yok; sadece sorgunun hangi veritabanını okuyacağı değişiyor.
+      app_code:
+        - file: engines/redshift.py
+          func: api_report
+          title: Rapor isteği (canlı kaynak)
+          sub: Adresteki source=live sorguyu aurora_live tablolarına yönlendirir.
+          lines:
+            - {match: '@bp.get("/api/report")', say: "Rapor isteği buraya gelir.", tag: Tarayıcı → Uygulama}
+            - {match: 'source = request.args.get("source", "history")', say: "Kaynak: kurulumdaki geçmiş mi, Aurora'nın canlı kopyası mı?", tag: Uygulamanın içinde}
+            - {match: 'if source == "live":', say: "Canlıysa sorgu aurora_live veritabanındaki tablolara yazılır.", tag: Uygulamanın içinde}
+            - {match: 'FROM {LIVE_DB}.public.orders o', say: "Kopyalanan orders tablosu (Aurora'nın shop.orders tablosunun kopyası).", tag: Uygulamanın içinde, hl: dst}
+            - {match: 'cols, rows = run("SELECT (report)", q, note)', say: "Sorgu Redshift'e gider; Aurora'ya hiçbir şey gitmez.", tag: [Uygulama → Redshift, Redshift → Uygulama]}
+            - {match: 'return jsonify(trace.payload({"columns": cols, "rows":', say: Satırlar tarayıcıya gider., tag: Uygulama → Tarayıcı}
+      live:
+        title: Gerçek sistemde ne oldu?
+        intro: Senin tıklamanla Redshift'e giden canlı rapor sorgusu.
+        runs:
+          - label: Canlı rapor (senin tıklaman)
+            trigger: true
+            metrics: [[Dönen satır, items], [İlk satır, data.rows.0.0], [İlk satırın cirosu, data.rows.0.3], [Süre, ms]]
+        reading: >-
+          Canlı sorgu dört kopyalanmış tabloyu JOIN'lediği için geçmiş tablosuna göre daha uzun sürer (bir iki saniye). Sayılar
+          geçmiş raporundakilere yakındır, çünkü kurulumdaki siparişler Aurora'da da var; fark, sonradan verilen siparişlerdir
+          (seninki dahil). Süre her istekte değişir.
+      query:
+        title: Uygulama Redshift'e ne dedi?
+        intro: >-
+          Tek bir SQL, parça parça. Bir parçanın üzerine gelince cümlede, kodda ve açıklamada aynı yer parlar.
+        cards_title: Parça parça
+        parts:
+          - id: sel
+            say: Her şehir için sipariş, adet ve ciroyu hesapla;
+            code: "SELECT c.city, count(DISTINCT o.order_id), sum(oi.qty), sum(oi.qty * oi.unit_price)"
+            name: Ne hesaplansın?
+            note: Ciroyu kalemlerin adet × birim fiyatından hesaplar; tablolar normalize olduğu için hazır bir tutar sütunu yok.
+            hl: dst
+          - id: frm
+            say: Aurora'nın kopyalanan sipariş, kalem, ürün ve müşteri tablolarını birleştirerek;
+            code: "FROM aurora_live.public.orders o JOIN …order_items … JOIN …products … JOIN …customers …"
+            name: Nereden?
+            note: aurora_live, zero-ETL'in Redshift'te yarattığı veritabanı. Şehir müşteriler tablosundan gelir.
+            hl: dst
+          - id: wh
+            say: iptal edilenleri dışarıda bırak ve en yüksek ciroyu üste koy.
+            code: "WHERE o.status <> 'cancelled' GROUP BY 1 ORDER BY revenue DESC LIMIT 24"
+            name: Hangileri, nasıl?
+            note: İptal siparişler ciroya girmez.
+            hl: dst
+        columns:
+          - label: Canlı rapor
+            sub: Senin "Live from Aurora" tıklamanla giden sorgu.
+            via: Uygulama bu sorguyu redshift_connector kütüphanesiyle, Redshift'e yeni bir bağlantı açarak gönderir.
+            parts: [sel, frm, wh]
+        note: >-
+          Dikkat: sorgu Aurora'ya değil, Redshift'e gidiyor; ama tablolar Aurora'nın tablolarıyla aynı. Kopyalama için uygulamada
+          tek satır kod yok.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          Redshift'in işi raporu verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: Redshift → Uygulama
+            text: "{items} satır geldi; canlı veriyle şehre (ya da seçili sütuna) göre toplamlar."
+          - who: Uygulama → Tarayıcın
+            text: Satırları ve isteğin kaydını gönderdi.
+          - who: Tarayıcın
+            text: Grafiği ve tabloyu canlı veriyle yeniden çizdi.
+          - who: Sonra
+            text: Bir sonraki adımda kopyanın ne kadar güncel olduğunu ölçeceksin.
+      remember: >-
+        İşlemsel veritabanı siparişi yazar, analiz deposu raporlar; aradaki kopyayı zero-ETL kod yazmadan ve saniyeler içinde
+        taşır. Rapor sorguları hiçbir zaman siparişlerin yazıldığı veritabanına gitmez.
+      why_db: >-
+        Neden Redshift + zero-ETL? Raporun güncel olması ama siparişleri yavaşlatmaması gerekiyor. Zero-ETL kopyayı otomatik taşır,
+        Redshift ağır sorguyu kendi kaynaklarıyla çalıştırır. Bedeli: kopya birkaç saniye geriden gelir ve salt okunurdur.
 
   - page: reports
     path: /admin/reports
     engines: [redshift, aurora]
     use_case: Zero-ETL
-    title: How fresh is the copy?
-    why: The status shows how long ago Redshift received the newest order.
-    do: Click the lit button that refreshes the status.
-    target: "#repl-refresh"
-    action: click
+    title: Kopya ne kadar güncel?
+    why: >-
+      Canlı rapor çizildi. Sayfanın altındaki "Zero-ETL replication" kutusu kopyalamanın durumunu ve en yeni siparişin Redshift'e
+      ne zaman ulaştığını gösteriyor. Bu adımda tıklama yok, sadece bakacaksın.
+    do: Aydınlık "Zero-ETL replication" kutusuna bak. Sonra kartın altındaki butonla perde arkasını aç.
+    target: "#repl"
+    action: look
     wait: {method: GET, path: /redshift/api/replication}
     focus: "#repl"
-    result: Compare the time of your order with the time in Redshift. The difference is the replication lag.
+    result: Compare the time of your order with the time in Redshift.
+    panel:
+      need: >-
+        Rapora güvenmek için kopyanın sağlıklı ve güncel olduğunu bilmek gerekir: entegrasyon çalışıyor mu, kaç tablo kopyalanıyor,
+        hata var mı, en yeni değişiklik ne zaman geldi?
+      concept:
+        term: Entegrasyon durumu ve gecikme (lag)
+        text: >-
+          Redshift entegrasyonun durumunu bir sistem görünümünde (svv_integration) tutar: durumu, kopyalanan ve hata veren tablo
+          sayısı, son uygulanan değişikliğin işareti. Gecikme, kaynaktaki bir değişiklikle onun kopyada görünmesi arasındaki süredir;
+          bir mektubun postaya verildiği an ile ulaştığı an arasındaki fark gibi.
+        terms:
+          - [svv_integration, "Redshift'te zero-ETL entegrasyonlarının durumunu gösteren sistem görünümü."]
+          - [CdcRefreshState, "Entegrasyonun ilk kopyalamayı bitirip değişiklikleri sürekli uyguladığı durum."]
+          - [Gecikme (replication lag), "Kaynaktaki değişiklik ile kopyadaki görünmesi arasındaki süre."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde kopyanın izlenmesi için hazırlık
+        intro: >-
+          Rapora güvenmeden önce kopyanın nasıl izleneceği belirlenir. Aşağıdaki dört adım bu hazırlığın sırasıdır.
+        text:
+          - title: Durum görünümü okunur
+            text: >-
+              svv_integration entegrasyonun durumunu ve tablo sayılarını verir. "total_tables_failed" sıfırdan büyükse bir tablo
+              kopyalanamıyordur (ör. birincil anahtarı yok).
+            code: |-
+              SELECT integration_id, target_database, state, total_tables_replicated, total_tables_failed FROM svv_integration;
+          - title: Gecikme ölçülür
+            text: >-
+              En basit ölçü: kopyadaki en yeni satırın zamanı ile şimdiki zaman arasındaki fark. CloudWatch'ta entegrasyonun gecikme
+              metriği de izlenir ve bir eşiğe alarm kurulur.
+            code: |-
+              SELECT max(order_date), datediff(second, max(order_date)::timestamp, getdate()) FROM aurora_live.public.orders;
+          - title: Rapor ekranına tazelik yazılır
+            text: >-
+              Kullanıcıya "veriler şu saate kadar günceldir" bilgisi gösterilir; gecikme büyürse ekran uyarır.
+          - title: Kaynaktaki şema değişikliği planlanır
+            text: >-
+              Aurora'da bir tablo değiştirildiğinde (sütun eklemek gibi) entegrasyon bunu taşır; bazı değişiklikler tablonun yeniden
+              kopyalanmasını gerektirir. Bu yüzden şema değişiklikleri sakin saatlerde yapılır ve durum izlenir.
+      feed:
+        title: Veri nereden geliyor?
+        writes: >-
+          Kullanıcı yazmaz. Geçmiş satışlar toplu yükleme ile (ör. S3'ten COPY) gelir; canlı siparişler işlemsel veritabanından
+          zero-ETL ile kendiliğinden kopyalanır.
+        reads: Rapor ekranları, panolar ve analistlerin sorguları.
+        kind: >-
+          Motordan motora: Aurora'nın değişiklikleri zero-ETL entegrasyonuyla Redshift'e akar; arada uygulama ya da yazılmış bir
+          veri hattı yoktur. Geçmiş veri ise toplu yüklemeyle gelir.
+        with: >-
+          Raporun her satırı başka bir veritabanında doğdu: sipariş Aurora'da yazıldı, Redshift onun kopyasını tutuyor. Aynı
+          sipariş Keyspaces'te olay, ElastiCache'te sıralama puanı olarak da durur; rapor için doğru kaynak Redshift'teki kopyadır.
+        best: >-
+          Analiz sorguları işlemsel veritabanında değil, sütun bazlı bir analiz deposunda çalışır. İşlemsel veri ona zero-ETL ile
+          kod yazmadan, saniyeler içinde akar; ağır raporlar siparişleri hiç yavaşlatmaz.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              Raporlar sayfasındasın; canlı rapor çizildi.
+            engines: [redshift]
+          - text: >-
+              Sayfa açılırken tarayıcın uygulamaya "zero-ETL durumunu ver" de demişti; uygulama Redshift'e iki sorgu gönderdi:
+              entegrasyonun durumu (svv_integration) ve kopyadaki en yeni ziyaretçi siparişinin zamanı. "Refresh the status"
+              butonu aynı isteği yeniden gönderir.
+            engines: [redshift]
+          - text: >-
+              Kutuda entegrasyonun durumu, kopyalanan tablo sayısı ve en yeni siparişin kaç saniye önce olduğu göründü.
+            engines: [redshift]
+      sim:
+        kind: replicate
+        title: Kopyanın tazeliği
+        caption: >-
+          Gecikmenin nasıl ölçüldüğü: Aurora'da COMMIT edilen sipariş, zero-ETL ile Redshift'e ulaşır; uygulama kopyadaki en yeni
+          siparişin zamanını sorar (satırlar örnek).
+        cols: [order_id, order_date, total]
+        src:
+          label: Aurora (shop.orders)
+          rows:
+            - {order_id: W1793380550, order_date: "10:12:04", total: 951.92}
+        dst: {label: Redshift (aurora_live.orders)}
+        row: {order_id: W1793396741, order_date: "10:25:41", total: 3373.84}
+        lag_s: 10
+        write_say: "Sipariş Aurora'da 10:25:41'de COMMIT edildi."
+        log_entry: "INSERT orders W1793396741 (10:25:41)"
+        log_say: Değişiklik Aurora'nın kayıt defterinde.
+        apply_say: "Değişiklik Redshift'e birkaç saniye sonra uygulandı; kopyadaki en yeni sipariş artık 10:25:41."
+        send: Sayfa açılırken uygulama Redshift'e svv_integration'ı ve kopyadaki en yeni siparişin zamanını soruyor.
+        query_say: >-
+          Redshift cevap verdi: durum CdcRefreshState, 4 tablo kopyalanıyor, 0 hata; en yeni sipariş 10:25:41. Şimdiki zamanla farkı
+          "kaç saniye önce" olarak hesaplandı.
+        out: [[durum, CdcRefreshState], [kopyalanan tablo, "4 · hata 0"], [en yeni sipariş, "10:25:41"]]
+        back: Uygulama durumu tarayıcına gönderdi; kutu güncellenecek.
+        summary: >-
+          Kopya sağlıklıysa durum CdcRefreshState ve hata sayısı 0'dır. "Kaç saniye önce", en yeni siparişten bu yana geçen süredir;
+          siparişini az önce verdiysen gecikmeye yakındır, uzun süre önce verdiysen o süreyi gösterir.
+      wire:
+        what: >-
+          Uygulama her sorgu için Redshift Serverless'a yeni bir bağlantı açar (redshift_connector kütüphanesi), sorguyu gönderir,
+          satırları alır ve bağlantıyı kapatır.
+        dst: "dbws.179330777878.eu-central-1.redshift-serverless.amazonaws.com : 5439"
+        dst_note: >-
+          Redshift Serverless çalışma grubunun adresi (taban kapasite 8 RPU). İnternete kapalı veri alt ağında duruyor.
+        rows:
+          - [Şifreleme, "TLS (sslmode=verify-ca)", gerçek, Sunucunun sertifikası doğrulanarak bağlanılır.]
+          - [Protokol, PostgreSQL wire protokolü, gerçek, "Redshift, PostgreSQL istemcilerinin dilini konuşur; sorgu bir SQL mesajı olarak gider."]
+          - [Kimlik, "Kullanıcı adı + şifre, bağlantı açılırken", gerçek, "Şifre kodda yazmaz; uygulama onu AWS Secrets Manager'dan alır."]
+        body_label: Gönderilen iki SQL
+        body: |-
+          SELECT integration_id, target_database, state, total_tables_replicated, total_tables_failed, last_replicated_checkpoint
+          FROM svv_integration;
+
+          SELECT max(order_date) AS newest, datediff(second, max(order_date)::timestamp, getdate()) AS seconds_ago
+          FROM aurora_live.public.orders WHERE visitor_id IS NOT NULL;
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi.
+      app_code:
+        - file: engines/redshift.py
+          func: api_replication
+          title: Zero-ETL durum isteği
+          sub: Sayfa açılırken (ve "Refresh the status" ile) gelen istek; iki sorgu gönderir.
+          lines:
+            - {match: '@bp.get("/api/replication")', say: "Durum isteği buraya gelir.", tag: Tarayıcı → Uygulama}
+            - {match: 'cols, rows = run("SELECT (integration status)",', say: "Birinci sorgu: entegrasyonun durumu ve tablo sayıları.", tag: [Uygulama → Redshift, Redshift → Uygulama], hl: dst}
+            - {match: '_, r2 = run("SELECT (newest live order)",', say: "İkinci sorgu: kopyadaki en yeni ziyaretçi siparişinin zamanı ve kaç saniye önce olduğu.", tag: [Uygulama → Redshift, Redshift → Uygulama], hl: dst}
+            - {match: 'lag = {"newest": str(r2[0][0]), "seconds_ago": r2[0][1]}', say: Sonucu okunur hâle getirir., tag: Uygulamanın içinde}
+            - {match: 'return jsonify(trace.payload({"integration": {k: str(v)', say: Durumu ve zamanı tarayıcıya gönderir., tag: Uygulama → Tarayıcı}
+      live:
+        title: Gerçek entegrasyonda ne oldu?
+        intro: Sayfa açılırken Redshift'e giden iki durum sorgusu.
+        runs:
+          - label: Durum (sayfa açılınca)
+            trigger: true
+            metrics: [[Durum, data.integration.state], [Kopyalanan tablo, data.integration.total_tables_replicated], [Hata veren tablo, data.integration.total_tables_failed], [En yeni sipariş (sn önce), data.newest_visitor_order.seconds_ago]]
+        reading: >-
+          Durum CdcRefreshState ise kopya değişiklikleri sürekli uyguluyor; 4 tablo (siparişler, kalemler, ürünler, müşteriler)
+          kopyalanıyor. "Sn önce", kopyadaki en yeni ziyaretçi siparişinden bu yana geçen süre: siparişini birkaç dakika önce
+          verdiysen o kadar dakikadır; gecikmeyi görmek için yeni bir sipariş verip hemen tekrar bak.
+      query:
+        title: Uygulama Redshift'e ne dedi?
+        intro: >-
+          İki sorgu. Bir parçanın üzerine gelince cümlede, kodda ve açıklamada aynı yer parlar.
+        cards_title: Parça parça
+        parts:
+          - id: st
+            say: Entegrasyonun durumunu ve kopyalanan tablo sayılarını getir,
+            code: "SELECT integration_id, target_database, state, total_tables_replicated, total_tables_failed FROM svv_integration"
+            name: Sağlıklı mı?
+            note: Redshift'in sistem görünümü; her entegrasyon için bir satır.
+            hl: dst
+          - id: lg
+            say: ve kopyadaki en yeni ziyaretçi siparişinin kaç saniye önce olduğunu hesapla.
+            code: "SELECT max(order_date), datediff(second, max(order_date)::timestamp, getdate()) FROM aurora_live.public.orders WHERE visitor_id IS NOT NULL"
+            name: Ne kadar güncel?
+            note: Kurulumdaki siparişlerin ziyaretçi kimliği yok; sadece mağazada verilen siparişler sayılır.
+            hl: dst
+        columns:
+          - label: Durum ve tazelik
+            sub: Sayfa açılırken giden iki sorgu.
+            via: Uygulama bu sorguları redshift_connector ile, her biri için yeni bir bağlantı açarak gönderir.
+            parts: [st, lg]
+        note: >-
+          Dikkat: "kaç saniye önce" doğrudan gecikme değildir; kopyadaki en yeni siparişten bu yana geçen süredir. Gecikmeyi ölçmek
+          için az önce verilmiş bir sipariş gerekir.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          Redshift'in işi iki cevabı verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: Redshift → Uygulama
+            text: Entegrasyonun durum satırı ve en yeni siparişin zamanı geldi.
+          - who: Uygulama → Tarayıcın
+            text: Durumu ve zamanı tek bir JSON cevabında gönderdi.
+          - who: Tarayıcın
+            text: Kutuya durumu, tablo sayısını ve "kaç saniye önce" bilgisini yazdı.
+          - who: Sonra
+            text: >-
+              Sipariş raporlarının işlemsel tarafına geçeceksin: Aurora'da bir sorgunun planını okuyacaksın (Adım 32).
+      remember: >-
+        Bir kopyaya güvenmeden önce durumunu ve tazeliğini ölç: entegrasyon sağlıklı mı, hata var mı, en yeni değişiklik ne zaman
+        geldi?
+      why_db: >-
+        Neden Redshift? Kopyanın durumu ve tazeliği de bir sorgu kadar uzaktadır; Redshift entegrasyonu sistem görünümleriyle
+        izlenebilir kılar. Bedeli: kopya her zaman birkaç saniye geriden gelir; anlık doğruluk gereken ekranlar işlemsel
+        veritabanını okur.
 
   - page: order_report
     path: /admin/orders

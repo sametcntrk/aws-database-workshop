@@ -961,6 +961,71 @@
     return { html, lanes, paint, final: showSum };
   }
 
+  /* ---------- columnar: the same report on column storage (left: only the needed column blocks are read) and on row storage
+   * (right, "what if": every row is read whole). spec.cols, spec.rows, spec.used (columns the query needs), spec.group,
+   * spec.sum, spec.labels {col, row}. The count is the cells read. */
+  function columnar(spec) {
+    const DB = spec.engine_label || "Redshift", cols = spec.cols, rows = spec.rows, used = spec.used, Lb = spec.labels || {};
+    const agg = () => { const g = {}; rows.forEach((r) => { g[r[spec.group]] = Math.round(((g[r[spec.group]] || 0) + Number(r[spec.sum])) * 100) / 100; });
+      return Object.entries(g).sort((p, q) => q[1] - p[1]); };
+    const colFr = [{ say: START, readCols: [], readRows: [], cells: 0 }];
+    let s = { ...colFr[0] };
+    used.forEach((c) => { s = { ...s, readCols: [...s.readCols, c], cells: s.cells + rows.length, say: `"${c}" sütununun bloğu okundu: ${rows.length} değer, yan yana ve sıkıştırılmış. Diğer sütunların bloklarına dokunulmadı.` }; colFr.push(s); });
+    colFr.push({ ...s, out: agg(), done: true, say: `GROUP BY ${spec.group}: toplamlar hesaplandı. Okunan hücre: ${s.cells} (${used.length} sütun × ${rows.length} satır).` });
+    const rowFr = [{ say: START, readCols: [], readRows: [], cells: 0 }];
+    let r = { ...rowFr[0] };
+    rows.forEach((x, k) => { r = { ...r, readRows: [...r.readRows, k], cells: r.cells + cols.length, say: `${k + 1}. satır baştan sona okundu: ${cols.length} alan; sorgu bunlardan sadece ${used.length} tanesini kullanıyor.` }; rowFr.push(r); });
+    rowFr.push({ ...r, out: agg(), done: true, say: `Aynı toplamlar. Okunan hücre: ${r.cells} (${rows.length} satır × ${cols.length} alan).` });
+    const lanes = {
+      col: actorize(colFr, spec.send_col || "Uygulama rapor sorgusunu gönderiyor.", spec.back_col || "Uygulama satırları tarayıcıya gönderdi.", DB, { readCols: [] }),
+      row: actorize(rowFr, spec.send_row || "Olsaydı: aynı sorgu satır bazlı bir veritabanında.", spec.back_row || "Sonuç aynı olurdu, okunan veri çok daha fazla.", DB, { readRows: [] }),
+    };
+    const table = `<table class="gs-table gs-colt"><thead><tr>${cols.map((c) => `<th data-c="${esc(c)}" class="${used.includes(c) ? "used" : ""}">${esc(c)}</th>`).join("")}</tr></thead><tbody>
+      ${rows.map((x, k) => `<tr data-k="${k}">${cols.map((c) => `<td data-c="${esc(c)}">${esc(x[c])}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+    const html = `${actorBar(DB)}<div class="gs-lanes">${shell("col", Lb.col || "Sütun bazlı (Redshift)", table, { hl: "col", count: "Okunan hücre", result: spec.result_title || "Sonuç", col: true })}${shell("row", Lb.row || "Olsaydı: satır bazlı", table, { hl: "row", count: "Okunan hücre", result: spec.result_title || "Sonuç", col: true })}</div>${summary(spec.summary || "")}`;
+    function paint(root, id, f) {
+      const L = laneOf(root, id);
+      L.querySelector(".gs-count b").textContent = f.cells || 0;
+      L.classList.toggle("done", !!f.done);
+      L.querySelectorAll("tbody tr").forEach((tr) => {
+        const k = Number(tr.dataset.k);
+        tr.querySelectorAll("td").forEach((td) => td.classList.toggle("rd", (f.readCols || []).includes(td.dataset.c) || (f.readRows || []).includes(k)));
+      });
+      chips(L, (f.out || []).map(([g, v]) => `<li>${esc(g)} <small>${v.toLocaleString("tr-TR")}</small></li>`));
+      sayWho(L, f);
+    }
+    return { html, lanes, paint, final: showSum };
+  }
+
+  /* ---------- replicate: a write in the source database reaches the analytics copy through the change log (zero-ETL); then a
+   * query reads the copy. spec.src {label, rows}, spec.dst {label}, spec.row (the new row), spec.lag_s, spec.query_say. One lane. */
+  function replicate(spec) {
+    const fr = [{ say: START, src: spec.src.rows, dst: spec.src.rows, log: [], q: false }];
+    let s = { ...fr[0] };
+    s = { ...s, who: spec.src.label, src: [...spec.src.rows, spec.row], fresh: "src", say: spec.write_say || `${spec.src.label}'da yeni bir satır COMMIT edildi.` }; fr.push(s);
+    s = { ...s, who: spec.src.label, log: [spec.log_entry || "INSERT orders …"], say: spec.log_say || "Değişiklik, veritabanının değişiklik kaydına (log) yazıldı." }; fr.push(s);
+    s = { ...s, who: "zero-ETL", log: [], dst: [...spec.src.rows, spec.row], fresh: "dst", say: spec.apply_say || `zero-ETL değişikliği ${spec.dst.label}'e uyguladı; yaklaşık ${spec.lag_s} saniye sonra.` }; fr.push(s);
+    s = { ...s, who: APP_NAME, fresh: null, q: true, say: spec.send || "Uygulama rapor sorgusunu analiz deposuna gönderiyor." }; fr.push(s);
+    s = { ...s, who: spec.dst.label, q: true, out: spec.out || [], say: spec.query_say || "Rapor kopyadan hesaplandı; asıl veritabanına hiçbir yük gitmedi." }; fr.push(s);
+    fr.push({ ...s, who: APP_NAME, done: true, say: spec.back || "Uygulama raporu tarayıcıya gönderdi." });
+    const cols = spec.cols;
+    const tb = (side, label) => `<div class="gs-rep-box" data-side="${side}"><b>${esc(label)}</b><table class="gs-table"><thead><tr>${cols.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody></tbody></table></div>`;
+    const html = `<div class="gs-actors" aria-hidden="true"><span data-a="app" data-hl="app">Uygulama</span><i>⇄</i><span data-a="db" data-hl="db">Veritabanları ve zero-ETL</span></div>
+      <div class="gs-lanes one">${shell("rep", spec.title || "Asıl veritabanı → analiz kopyası", `<div class="gs-rep">${tb("src", spec.src.label)}<div class="gs-rep-pipe"><span>zero-ETL</span><ol></ol></div>${tb("dst", spec.dst.label)}</div>`, { count: "Gecikme", result: spec.result_title || "Rapor", col: true })}</div>${summary(spec.summary || "")}`;
+    function paint(root, id, f) {
+      const L = laneOf(root, id);
+      L.querySelector(".gs-count b").textContent = f.fresh === "dst" || f.q ? `~${spec.lag_s} sn` : "—";
+      L.classList.toggle("done", !!f.done);
+      const fill = (side, list) => { L.querySelector(`[data-side="${side}"] tbody`).innerHTML = list.map((x) => `<tr class="${x === spec.row && f.fresh === side ? "fresh" : ""}">${cols.map((c) => `<td>${esc(x[c])}</td>`).join("")}</tr>`).join(""); };
+      fill("src", f.src || []); fill("dst", f.dst || []);
+      L.querySelector('[data-side="dst"]').classList.toggle("queried", !!f.q);
+      L.querySelector(".gs-rep-pipe ol").innerHTML = (f.log || []).map((x) => `<li><code>${esc(x)}</code></li>`).join("");
+      chips(L, (f.out || []).map(([g, v]) => `<li>${esc(g)} <small>${esc(v)}</small></li>`));
+      sayWho(L, { ...f, who: f.who === APP_NAME ? APP_NAME : f.who });
+    }
+    return { html, lanes: { rep: fr }, paint, final: showSum };
+  }
+
   /* ---------- Who works in a frame (owner rule: work of the app is never credited to the database).
    * actorize(frames, send, back, db): after START the app sends, every middle frame is the database's (unless it names
    * its own `who`), the last frame is the app sending the answer on. actorBar(db) is the bar above the lanes;
@@ -980,7 +1045,7 @@
     root.querySelectorAll(".gs-actors [data-a]").forEach((x) => x.classList.toggle("on", ws.includes(x.dataset.a)));
   }
 
-  const KINDS = { join, fanout, txn, spread, replicas, "ddb-items": ddbItems, projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
+  const KINDS = { columnar, replicate, join, fanout, txn, spread, replicas, "ddb-items": ddbItems, projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
 
   function render(box, spec) {
     const kind = KINDS[spec.kind];
