@@ -1026,6 +1026,28 @@
     return { html, lanes: { rep: fr }, paint, final: showSum };
   }
 
+  /* ---------- plan-tree: a query plan, run from the leaves up. spec.nodes [{id, depth, label, detail, rows, ms, say}] in
+   * execution order; spec.tree (ids top-down for display). One lane. */
+  function planTree(spec) {
+    const DB = spec.engine_label || "Aurora PostgreSQL", byId = Object.fromEntries(spec.nodes.map((n) => [n.id, n]));
+    const fr = [{ say: START, done: [], cur: null }];
+    let s = { ...fr[0] };
+    spec.nodes.forEach((n) => { s = { ...s, cur: n.id, done: [...s.done, n.id], say: n.say || `${n.label}: ${n.rows} satır.` }; fr.push(s); });
+    fr.push({ ...s, cur: null, end: true, say: spec.end_say || "Plan bitti." });
+    const lanes = { plan: actorize(fr, spec.send || "Uygulama sorguyu EXPLAIN ANALYZE ile gönderiyor.", spec.back || "Uygulama planı tarayıcıya gönderdi.", DB, { cur: null }) };
+    const body = `<ol class="gs-plan">${spec.tree.map((id) => { const n = byId[id];
+      return `<li data-id="${esc(id)}" style="--d:${n.depth}"><b>${esc(n.label)}</b><span>${esc(n.detail || "")}</span><em>${esc(n.rows)} satır · ${esc(n.ms)} ms</em></li>`; }).join("")}</ol>`;
+    const html = `${actorBar(DB)}<div class="gs-lanes one">${shell("plan", spec.title || "Sorgu planı", body, { count: "Çalışan adım", result: false, col: true })}</div>${summary(spec.summary || "")}`;
+    function paint(root, id, f) {
+      const L = laneOf(root, id);
+      L.querySelector(".gs-count b").textContent = `${(f.done || []).length} / ${spec.nodes.length}`;
+      L.classList.toggle("done", !!f.end);
+      L.querySelectorAll(".gs-plan li").forEach((li) => { li.classList.toggle("now", f.cur === li.dataset.id); li.classList.toggle("ran", (f.done || []).includes(li.dataset.id)); });
+      sayWho(L, f);
+    }
+    return { html, lanes, paint, final: showSum };
+  }
+
   /* ---------- Who works in a frame (owner rule: work of the app is never credited to the database).
    * actorize(frames, send, back, db): after START the app sends, every middle frame is the database's (unless it names
    * its own `who`), the last frame is the app sending the answer on. actorBar(db) is the bar above the lanes;
@@ -1045,7 +1067,7 @@
     root.querySelectorAll(".gs-actors [data-a]").forEach((x) => x.classList.toggle("on", ws.includes(x.dataset.a)));
   }
 
-  const KINDS = { columnar, replicate, join, fanout, txn, spread, replicas, "ddb-items": ddbItems, projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
+  const KINDS = { "plan-tree": planTree, columnar, replicate, join, fanout, txn, spread, replicas, "ddb-items": ddbItems, projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
 
   function render(box, spec) {
     const kind = KINDS[spec.kind];

@@ -6972,15 +6972,229 @@ steps:
   - page: order_report
     path: /admin/orders
     engines: [aurora]
-    use_case: Query plan
-    title: Read the query plan
-    why: "EXPLAIN ANALYZE shows how PostgreSQL ran the report: the join order, the scans and the time of each step."
-    do: Tick the lit check box that shows the plan.
+    use_case: Sorgu planı
+    title: Sorgu planını oku
+    why: >-
+      Sipariş raporu sayfasındasın: müşteri segmentlerine göre sipariş sayısı ve ciro. Şimdi veritabanından bu raporu nasıl
+      hesapladığını adım adım anlatmasını isteyeceksin.
+    do: Aydınlık "Show the query plan (EXPLAIN ANALYZE)" (sorgu planını göster) kutusunu işaretle.
     target: "#exp-explain"
     action: click
     wait: {method: GET, path: /aurora/api/report, query: {explain: "on"}}
     focus: "#plan-wrap"
-    result: Each plan node shows rows and time. Large reports on the checkout database compete with checkout traffic. This is why the big reports run in Redshift.
+    result: Each plan node shows rows and time.
+    panel:
+      need: >-
+        Bir rapor yavaşladığında ya da işlemsel veritabanını zorladığında nedenini bilmek gerekir: hangi tabloyu baştan sona
+        okudu, satırları nasıl birleştirdi, nerede sıraladı, hangi adım ne kadar sürdü? Bunu tahmin etmek yerine veritabanına
+        sormak gerekir.
+      concept:
+        term: Sorgu planı (EXPLAIN ANALYZE)
+        text: >-
+          SQL "ne istediğini" söyler; "nasıl yapılacağına" PostgreSQL'in planlayıcısı karar verir. EXPLAIN ANALYZE sorguyu gerçekten
+          çalıştırır ve her adımın kaç satır ürettiğini ve ne kadar sürdüğünü bir ağaç olarak döndürür. Ağaç aşağıdan yukarı okunur:
+          yapraklar tabloları okur, üstteki düğümler onları birleştirir, gruplar ve sıralar. Bir yemek tarifinin adımlarını,
+          her adımın süresiyle birlikte yazmak gibi.
+        terms:
+          - [Seq Scan, "Tabloyu baştan sona okumak. Küçük tablolarda ya da çoğu satır gerektiğinde en ucuz yol."]
+          - [Hash Join, "Küçük tabloyu bellekte bir sözlüğe (hash) koyup büyük tablonun her satırını orada aramak."]
+          - [GroupAggregate, "Sıralı satırları gruplayıp toplamları hesaplamak."]
+          - [Index Scan, "Index'le sadece gereken satırlara gitmek; az satır gerektiğinde ucuz."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde rapor sorguları için hazırlık
+        intro: >-
+          Rapor sayfası hiç açılmadan, işlemsel veritabanında hangi raporların çalışacağı ve nasıl izleneceği belirlenir. Aşağıdaki
+          beş adım bu hazırlığın sırasıdır.
+        text:
+          - title: Önce raporun sorusu ve büyüklüğü yazılır
+            text: >-
+              "Segmente göre sipariş ve ciro" bütün siparişleri okur. Birkaç bin sipariş için işlemsel veritabanında birkaç on
+              milisaniye sürer; yıllar ve milyonlarca satır için analiz deposuna gider.
+          - title: Planlayıcıya doğru istatistik verilir
+            text: >-
+              Planlayıcı tabloların büyüklüğünü ve değer dağılımını istatistiklerden bilir. ANALYZE (ve otomatik autovacuum) bu
+              istatistikleri günceller; eski istatistik yanlış plan demektir.
+            code: |-
+              ANALYZE orders;  ANALYZE order_items;
+          - title: Plan yayından önce okunur
+            text: >-
+              Yeni ya da değişen rapor sorgusu EXPLAIN ANALYZE ile çalıştırılır. Büyük tablolarda beklenmedik Seq Scan, tahmin
+              edilen ile gerçek satır sayısının çok farklı olması ya da diske taşan sıralama (Sort Method: external) uyarı
+              işaretidir.
+            code: |-
+              EXPLAIN (ANALYZE, BUFFERS) SELECT c.segment, … GROUP BY c.segment ORDER BY revenue DESC;
+          - title: Yavaş sorgular sürekli izlenir
+            text: >-
+              pg_stat_statements eklentisi her sorgunun kaç kez çalıştığını ve toplam süresini tutar; Aurora'da Performance
+              Insights hangi sorgunun veritabanını meşgul ettiğini gösterir.
+            code: |-
+              SELECT query, calls, mean_exec_time FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 10;
+          - title: Ağır raporlar ayrılır
+            text: >-
+              Raporlar okuma ucuna (reader) gönderilir; büyüdüklerinde zero-ETL ile analiz deposuna taşınır. İşlemsel veritabanının
+              yazma ucu siparişlere kalır.
+      feed:
+        title: Veri nereden geliyor?
+        writes: Uygulama, ödeme adımında (sipariş ve kalemler); müşteri bilgisi kayıt sırasında.
+        reads: Sipariş raporu ekranı (operasyon ekibi) ve siparişlerim sayfası.
+        kind: >-
+          Uygulama orkestrasyonu. Aurora siparişin asıl kaydıdır; değişikliklerini zero-ETL ile analiz deposuna (Redshift)
+          kendisi aktarır.
+        with: >-
+          Aynı sorunun büyük veri üzerindeki hâli Redshift'te çalışır (Adım 29–31); bu rapor işlemsel veritabanındaki güncel veriyi
+          anında okur.
+        best: >-
+          Küçük ve anlık operasyon raporları işlemsel veritabanının okuma ucunda, büyük ve tarihsel raporlar analiz deposunda
+          çalışır. Her iki tarafta da plan okunur ve yavaş sorgular izlenir.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              "Order report" (sipariş raporu) sayfasını açtın. Sayfa raporu istedi; uygulama Aurora'ya segment raporunu ve
+              workshop siparişlerinin saatlik özetini sordu. Tablolar çizildi.
+            engines: [aurora]
+          - text: >-
+              "Show the query plan" kutusunu işaretledin. Tarayıcın raporu explain=on ile yeniden istedi; uygulama aynı sorguyu bir
+              kez de EXPLAIN ANALYZE ile çalıştırdı. Simülasyon o planı oynatıyor.
+            engines: [aurora]
+          - text: >-
+              Planın metni sayfadaki kutuya yazıldı: her satır bir adım, yanında satır sayısı ve süre.
+            engines: [aurora]
+      sim:
+        kind: plan-tree
+        title: "Gerçek plan: segment raporu"
+        caption: >-
+          Aurora'nın bu rapor için seçtiği gerçek plan, aşağıdan yukarı çalışma sırasıyla. Satır sayıları ve süreler gerçek bir
+          çalıştırmadan; senin çalıştırmanda biraz farklı olabilir. Her düğümdeki ms, o düğümün bittiği andır ve altındaki
+          düğümlerin süresini de içerir.
+        tree: [sort2, agg, sort1, hj2, hj1, seq_items, hash_orders, seq_orders, hash_cust, seq_cust]
+        nodes:
+          - {id: seq_items, depth: 5, label: Seq Scan order_items, detail: bütün kalemler, rows: 12521, ms: 1.1, say: "order_items baştan sona okundu: 12.521 kalem. Raporun bütün kalemlere ihtiyacı olduğu için index'e gerek yok."}
+          - {id: seq_orders, depth: 6, label: Seq Scan orders, detail: "Filter: status <> 'cancelled'", rows: 4742, ms: 0.6, say: "orders okundu; iptal edilen 267 sipariş elendi, 4.742 sipariş kaldı."}
+          - {id: hash_orders, depth: 5, label: Hash, detail: siparişler bellekte, rows: 4742, ms: 1.0, say: "Siparişler bellekte order_id'ye göre bir sözlüğe (hash) kondu (320 kB)."}
+          - {id: hj1, depth: 4, label: Hash Join, detail: "oi.order_id = o.order_id", rows: 11887, ms: 4.2, say: "Her kalem sözlükte siparişiyle eşleştirildi: 11.887 satır (iptal siparişlerin kalemleri düştü)."}
+          - {id: seq_cust, depth: 6, label: Seq Scan customers, detail: bütün müşteriler, rows: 1000, ms: 0.1, say: "customers okundu: 1.000 müşteri."}
+          - {id: hash_cust, depth: 5, label: Hash, detail: müşteriler bellekte, rows: 1000, ms: 0.2, say: "Müşteriler bellekte customer_id'ye göre bir sözlüğe kondu."}
+          - {id: hj2, depth: 3, label: Hash Join, detail: "o.customer_id = c.customer_id", rows: 11887, ms: 6.4, say: "Her satıra müşterinin segmenti eklendi."}
+          - {id: sort1, depth: 2, label: Sort, detail: "segment, order_id (bellekte, 1 MB)", rows: 11887, ms: 20.3, say: "11.887 satır segmente ve siparişe göre sıralandı; en uzun adım bu (yaklaşık 14 ms)."}
+          - {id: agg, depth: 1, label: GroupAggregate, detail: "Group Key: c.segment", rows: 3, ms: 23.2, say: "Sıralı satırlar segmente göre gruplandı; her segment için sipariş sayısı, ciro ve ortalama hesaplandı: 3 satır."}
+          - {id: sort2, depth: 0, label: Sort, detail: revenue DESC, rows: 3, ms: 23.2, say: "3 satır ciroya göre sıralandı. Toplam yaklaşık 23 ms."}
+        send: >-
+          "Show the query plan" kutusunu işaretledin. Uygulama raporu çalıştırdıktan sonra aynı sorguyu EXPLAIN ANALYZE ile gönderiyor.
+        back: >-
+          Uygulama planın metnini tarayıcına gönderdi; sayfadaki kutuya yazılacak.
+        end_say: >-
+          Plan bitti: üç tablo baştan sona okundu, bellekte birleştirildi, sıralandı ve gruplandı. Bu küçük veride 23 ms; yıllarca
+          birikmiş veride aynı plan saniyeler sürer ve siparişlerle yarışır. O yüzden büyük raporlar Redshift'te.
+        summary: >-
+          Plan aşağıdan yukarı okunur: yapraklar tabloları okur, Hash Join'ler birleştirir, Sort ve GroupAggregate toplar. En pahalı
+          adım sıralamaydı. Her düğümde "kaç satır, kaç ms" yazdığı için darboğaz tahmin edilmez, görülür.
+      wire:
+        what: >-
+          Uygulama bu istek için Aurora'ya yeni bir bağlantı açar (psycopg kütüphanesi) ve üç SQL'i sırayla gönderir.
+        dst: "dbws-aurora.cluster-ccgs3qxfidad.eu-central-1.rds.amazonaws.com : 5432"
+        dst_note: >-
+          Aurora cluster'ının yazma adresi. Rapor sorguları okuma ucuna (cluster-ro) da gönderilebilirdi. Cluster internete kapalı.
+        rows:
+          - [Şifreleme, "TLS (sslmode=require)", gerçek, Bağlantı şifrelenmeden kurulmaz.]
+          - [Protokol, PostgreSQL wire protokolü, gerçek, "EXPLAIN ANALYZE'ın cevabı da satırlar hâlinde metin olarak döner."]
+          - [Kimlik, "Kullanıcı adı + şifre, bağlantı açılırken", gerçek, "Şifre kodda yazmaz; uygulama onu AWS Secrets Manager'dan alır."]
+        body_label: Gönderilen SQL'ler (sırasıyla)
+        body: |-
+          SELECT c.segment, count(DISTINCT o.order_id) AS orders, sum(oi.qty * oi.unit_price) AS revenue, round(avg(o.total), 2) AS avg_order
+          FROM orders o JOIN customers c USING (customer_id) JOIN order_items oi USING (order_id)
+          WHERE o.status <> 'cancelled' GROUP BY c.segment ORDER BY revenue DESC;
+          EXPLAIN ANALYZE <aynı sorgu>;
+          SELECT date_trunc('hour', order_date) AS hour, count(*), sum(total) FROM orders WHERE visitor_id IS NOT NULL GROUP BY 1 ORDER BY 1;
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi.
+      app_code:
+        - file: engines/aurora.py
+          func: api_report
+          title: Sipariş raporu isteği
+          sub: Adresteki explain=on planı da ister.
+          lines:
+            - {match: '@bp.get("/api/report")', say: "Rapor isteği buraya gelir.", tag: Tarayıcı → Uygulama}
+            - {match: 'explain = request.args.get("explain") == "on"', say: "Plan istendi mi, ona bakar.", tag: Uygulamanın içinde}
+            - {match: 'sql(cur, "SELECT (report)", q,', say: "Segment raporunu Aurora'ya gönderir.", tag: [Uygulama → Aurora, Aurora → Uygulama]}
+            - {match: 'sql(cur, "EXPLAIN ANALYZE", "EXPLAIN ANALYZE " + q)', say: "Plan istendiyse aynı sorguyu EXPLAIN ANALYZE ile bir kez daha çalıştırır.", tag: [Uygulama → Aurora, Aurora → Uygulama]}
+            - {match: 'plan = "\n".join(r[0] for r in cur.fetchall())', say: Planın satırlarını tek bir metinde birleştirir., tag: Uygulamanın içinde}
+            - {match: 'sql(cur, "SELECT (workshop orders)", today)', say: "Üçüncü sorgu: mağazada verilen siparişlerin saatlik özeti.", tag: [Uygulama → Aurora, Aurora → Uygulama]}
+            - {match: 'return jsonify(trace.payload({"segments": seg, "workshop": hours, "plan": plan}))', say: Rapor, özet ve plan tarayıcıya gider., tag: Uygulama → Tarayıcı}
+      live:
+        title: Gerçek veritabanında ne oldu?
+        intro: Senin işaretlemenle Aurora'ya giden üç gerçek sorgu.
+        runs:
+          - label: Rapor + plan (senin işaretlemen)
+            trigger: true
+            metrics: [[Segment raporu, ms], [EXPLAIN ANALYZE, e1.ms], [Saatlik özet, e2.ms], [Segment sayısı, items]]
+        reading: >-
+          Segment raporu birkaç on milisaniye sürdü; EXPLAIN ANALYZE aynı sorguyu bir kez daha çalıştırdığı için onun da süresi
+          benzer. Bu küçük veride rapor işlemsel veritabanında rahat çalışıyor. Süre her istekte değişir.
+      query:
+        title: Uygulama Aurora'ya ne dedi?
+        intro: >-
+          Raporun SQL'i ve planı isteyen ek parça. Bir parçanın üzerine gelince cümlede, kodda ve açıklamada aynı yer parlar.
+        cards_title: Parça parça
+        parts:
+          - id: ex
+            say: Şu sorguyu gerçekten çalıştır ve her adımı ölçerek anlat;
+            code: "EXPLAIN ANALYZE"
+            name: Ne istensin?
+            note: ANALYZE olmadan sadece tahmini plan gelir; ANALYZE ile sorgu çalışır ve gerçek satır sayıları ile süreler gelir.
+            hl: app
+          - id: sel
+            say: her segment için sipariş sayısını, ciroyu ve ortalama sipariş tutarını,
+            code: "SELECT c.segment, count(DISTINCT o.order_id), sum(oi.qty * oi.unit_price), round(avg(o.total), 2)"
+            name: Ne hesaplansın?
+            note: Üç toplam; GroupAggregate düğümü bunları hesaplar.
+            hl: app
+          - id: frm
+            say: siparişleri müşteriler ve kalemlerle birleştirerek,
+            code: "FROM orders o JOIN customers c USING (customer_id) JOIN order_items oi USING (order_id)"
+            name: Nereden?
+            note: İki JOIN; planda iki Hash Join düğümü.
+            hl: app
+          - id: wh
+            say: iptal edilenleri dışarıda bırakıp en yüksek ciro üstte olacak şekilde.
+            code: "WHERE o.status <> 'cancelled' GROUP BY c.segment ORDER BY revenue DESC"
+            name: Hangileri, nasıl?
+            note: Filtre, Seq Scan orders düğümünde uygulanır; sıralama en üstteki Sort düğümü.
+            hl: app
+        columns:
+          - label: Rapor + plan
+            sub: Senin işaretlemenle giden sorgu.
+            via: Uygulama bu sorguyu psycopg kütüphanesinin cursor.execute() metoduyla, başına EXPLAIN ANALYZE ekleyerek gönderir.
+            parts: [ex, sel, frm, wh]
+        note: >-
+          Dikkat: sorguda "hash join kullan" ya da "önce şunu oku" yazmıyor. Planı PostgreSQL seçti; tablolar büyüyünce ya da
+          index eklenince aynı sorgu için başka bir plan seçebilir.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          Aurora'nın işi rapor ve planı verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: Aurora → Uygulama
+            text: Segment satırları, planın satırları ve saatlik özet geldi.
+          - who: Uygulama
+            text: Planın satırlarını tek bir metne birleştirdi.
+          - who: Uygulama → Tarayıcın
+            text: Raporu, özeti ve planı tek bir JSON cevabında gönderdi.
+          - who: Tarayıcın
+            text: Planı sayfadaki kutuya olduğu gibi yazdı.
+          - who: Sonra
+            text: Canlı ekrana geçeceksin; orada sıralama her yazmada bellekte hazır tutuluyor (Adım 33).
+      remember: >-
+        SQL ne istediğini söyler, planı veritabanı seçer. EXPLAIN ANALYZE o planı gerçek satır sayıları ve sürelerle gösterir;
+        yavaşlığın nedeni tahmin edilmez, okunur.
+      why_db: >-
+        Neden Aurora PostgreSQL? Operasyon raporları güncel siparişleri JOIN'lerle hemen okumak ister; PostgreSQL'in planlayıcısı ve
+        EXPLAIN ANALYZE bunu ölçülebilir kılar. Bedeli: veri büyüdükçe bu raporlar siparişlerle yarışır; büyük raporlar analiz
+        deposuna taşınır.
 
   # ---------------------------------------------------------------- Live: ElastiCache sorted set
   - page: live
