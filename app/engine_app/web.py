@@ -93,9 +93,13 @@ def app_code(spec):
     spec: {file: engines/<x>.py, func: <name>, lines: [{match, say}, ...]}. Each match is a piece of one source line, in order;
     a missing piece raises, so the page can never show code that drifted away from the repo."""
     src = (HERE / spec["file"]).read_text().splitlines()
-    start = next(i for i, x in enumerate(src) if x.lstrip().startswith(f"def {spec['func']}("))
-    base = len(src[start]) - len(src[start].lstrip())
-    end = next((i for i in range(start + 1, len(src)) if src[i].strip() and len(src[i]) - len(src[i].lstrip()) <= base), len(src))
+    if "start" in spec:                                               # a block of a non-Python file (a page script): from a line to the end
+        start = next(i for i, x in enumerate(src) if spec["start"] in x)
+        base, end = len(src[start]) - len(src[start].lstrip()), len(src)
+    else:
+        start = next(i for i, x in enumerate(src) if x.lstrip().startswith(f"def {spec['func']}("))
+        base = len(src[start]) - len(src[start].lstrip())
+        end = next((i for i in range(start + 1, len(src)) if src[i].strip() and len(src[i]) - len(src[i].lstrip()) <= base), len(src))
     while start > 0 and src[start - 1].lstrip().startswith("@"):      # the route decorator says which URL the function answers
         start -= 1
     out, at = [], start

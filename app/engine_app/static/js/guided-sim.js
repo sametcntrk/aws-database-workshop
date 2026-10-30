@@ -868,6 +868,37 @@
     return { html, lanes, paint, final: showSum };
   }
 
+  /* ---------- fanout: one action, several databases one after the other. spec.steps [{engine (id), label, cmd, say_send,
+   * say_done, fail}], the actor of each database frame is that database. One lane. */
+  function fanout(spec) {
+    const fr = [{ say: START, cur: null, done: [], failed: [] }];
+    let s = { ...fr[0] };
+    spec.steps.forEach((x, k) => {
+      s = { ...s, cur: k, who: spec.sender || APP_NAME, say: x.say_send || `${x.label}: istek gönderiliyor.` };
+      fr.push(s);
+      s = { ...s, who: x.label, done: x.fail ? s.done : [...s.done, k], failed: x.fail ? [...s.failed, k] : s.failed, say: x.say_done || `${x.label} yazdı.` };
+      fr.push(s);
+    });
+    fr.push({ ...s, cur: null, who: spec.sender || APP_NAME, done: s.done, end: true, say: spec.back || "Bitti." });
+    const html = `<div class="gs-actors" aria-hidden="true"><span data-a="app" data-hl="app">${esc(spec.sender_label || "Tarayıcıdaki sayfa + uygulama")}</span><i>⇄</i><span data-a="db" data-hl="db">Veritabanları</span></div>
+      <div class="gs-lanes one">${shell("fan", spec.title || "Bir sipariş, altı veritabanı", `<ol class="gs-fan">${spec.steps.map((x, k) =>
+        `<li data-k="${k}" class="eng-${esc(x.engine)}"><span class="chip">${esc(x.label)}</span><code>${esc(x.cmd)}</code><em></em></li>`).join("")}</ol>`, { count: "Tamamlanan", result: false, col: true })}</div>${summary(spec.summary || "")}`;
+    function paint(root, id, f) {
+      const L = laneOf(root, id);
+      L.querySelector(".gs-count b").textContent = `${(f.done || []).length} / ${spec.steps.length}`;
+      L.classList.toggle("done", !!f.end);
+      L.querySelectorAll(".gs-fan li").forEach((li) => {
+        const k = Number(li.dataset.k);
+        li.classList.toggle("now", f.cur === k);
+        li.classList.toggle("ok", (f.done || []).includes(k));
+        li.classList.toggle("bad", (f.failed || []).includes(k));
+        li.querySelector("em").textContent = (f.done || []).includes(k) ? "✓" : (f.failed || []).includes(k) ? "✗" : f.cur === k ? "…" : "";
+      });
+      sayWho(L, { ...f, who: f.who === (spec.sender || APP_NAME) ? APP_NAME : f.who });
+    }
+    return { html, lanes: { fan: fr }, paint, final: showSum };
+  }
+
   /* ---------- Who works in a frame (owner rule: work of the app is never credited to the database).
    * actorize(frames, send, back, db): after START the app sends, every middle frame is the database's (unless it names
    * its own `who`), the last frame is the app sending the answer on. actorBar(db) is the bar above the lanes;
@@ -887,7 +918,7 @@
     root.querySelectorAll(".gs-actors [data-a]").forEach((x) => x.classList.toggle("on", ws.includes(x.dataset.a)));
   }
 
-  const KINDS = { txn, spread, replicas, "ddb-items": ddbItems, projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
+  const KINDS = { fanout, txn, spread, replicas, "ddb-items": ddbItems, projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
 
   function render(box, spec) {
     const kind = KINDS[spec.kind];

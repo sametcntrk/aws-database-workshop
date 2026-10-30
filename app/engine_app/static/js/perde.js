@@ -194,7 +194,7 @@
     return (list || []).map((c) => `<div class="pa-code"><h4>${esc(c.title || "")}</h4>${c.sub ? `<p class="gq-sub">${esc(c.sub)}</p>` : ""}
       <ol>${c.lines.map((l) => `${l.gap ? `<li class="pa-gap">…</li>` : ""}<li ${l.hl ? `data-hl="${esc(l.hl)}"` : ""}><code><b>${l.no}</b>${esc(l.code.trim())}</code>
         <span>${[].concat(l.tag || []).map((t) => `<em class="${/içinde/.test(t) ? "in" : "go"}">${esc(t)}</em>`).join("")}${esc(l.say)}</span></li>`).join("")}</ol>
-      <small>Kaynak: ${esc(c.file)} (repodaki gerçek kod; sadece bu adımla ilgili satırlar)</small></div>`).join("");
+      <small>Kaynak: ${esc(c.file)}${c.where ? ` (${esc(c.where)})` : ""} (repodaki gerçek kod; sadece bu adımla ilgili satırlar)</small></div>`).join("");
   }
 
   /* ---------- t+1: the answer goes back. {read}, {items}, {ms} in a text come from the call that completed the step. */

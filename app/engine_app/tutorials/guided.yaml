@@ -5299,10 +5299,12 @@ steps:
   - page: checkout
     path: /checkout
     engines: [aurora]
-    use_case: One order, six Engines
-    title: Let the payment succeed
-    why: Now place a real order.
-    do: Clear the lit check box.
+    use_case: Bir sipariş, altı veritabanı
+    title: Ödemenin başarılı olmasına izin ver
+    why: >-
+      Şimdi gerçek bir sipariş vereceksin. Önce, bir önceki adımda işaretlediğin "ödemeyi başarısız yap" kutusunu
+      kaldıracaksın.
+    do: Aydınlık "Make the payment fail" kutusunun işaretini kaldır.
     target: "#exp-fail"
     action: click
     wait: {click: true}
@@ -5310,17 +5312,292 @@ steps:
   - page: checkout
     path: /checkout
     engines: [aurora, dynamodb, elasticache, keyspaces, influxdb, neptune]
-    use_case: One order, six Engines
-    title: Place the order
+    use_case: Bir sipariş, altı veritabanı
+    title: Siparişi ver
     why: >-
-      Aurora commits the order. Then five more Engines get an update: DynamoDB empties the cart, ElastiCache updates the leaderboard,
-      Keyspaces records a purchase event, InfluxDB counts the order, and Neptune adds BOUGHT edges.
-    do: Click the lit button "Place the order".
+      Kutu boş: bu kez ödeme başarılı olacak. Siparişi verince altı veritabanının sırayla güncellendiğini sayfadaki listede
+      göreceksin.
+    do: Aydınlık "Place the order" (siparişi ver) butonuna tıkla.
     target: "#place"
     action: click
     wait: {method: POST, path: /neptune/api/purchase}
     focus: "#flow"
-    result: Six Engines stored the part of the order that each one is good at. Aurora holds the official order. The others hold copies or counters for their own job.
+    result: Six databases stored the part of the order that each one is good at.
+    panel:
+      need: >-
+        Bir sipariş verildiğinde mağazanın birçok parçası bunu öğrenmeli: siparişin asıl kaydı yazılmalı, sepet boşalmalı, canlı
+        sıralama güncellenmeli, alışveriş geçmişine eklenmeli, operasyon grafiğinde sayılmalı ve öneriler bu alışverişi
+        bilmeli. Her biri farklı bir veritabanında, kendi işine en uygun yerde. Önemli olan, asıl sipariş kesinleşmeden hiçbirine
+        dokunulmaması ve biri başarısız olsa da siparişin bozulmaması.
+      concept:
+        term: Asıl kayıt ve yayılma (fan-out)
+        text: >-
+          Siparişin tek bir asıl kaydı vardır: ilişkisel veritabanındaki transaction. O kesinleşince (COMMIT) diğer sistemlere
+          haber verilir ve her biri kendi kopyasını ya da sayacını günceller. Bir düğün davetiyesi gibi: önce tarih kesinleşir,
+          sonra herkese haber gider; davetiyelerden biri geç ulaşsa da düğünün tarihi değişmez. Bu adımda haber vermeyi
+          tarayıcıdaki sayfa sırayla yapıyor; gerçek sistemlerde bu iş bir kuyruğa ya da olay yoluna verilir.
+        terms:
+          - [Asıl kayıt (source of truth), "Bir bilginin doğru kabul edilen tek yeri. Sipariş için Aurora."]
+          - [Fan-out, "Bir olayın birden fazla sisteme yayılması."]
+          - [Outbox, "Siparişle aynı transaction'da yazılan \"haber verilecek olaylar\" tablosu; bir program onu okuyup dağıtır."]
+          - [Uygulama, "Mağazanın arka uç programı. Her veritabanı için ayrı bir uygulama sunucusu var; tarayıcı her birine ayrı istek gönderir."]
+      prior:
+        title: Gerçek bir sistemde siparişin yayılması için hazırlık
+        intro: >-
+          Sipariş butonuna hiç basılmadan, asıl kaydın nerede olacağı ve diğer sistemlere nasıl haber verileceği belirlenir.
+          Aşağıdaki beş adım bu hazırlığın sırasıdır.
+        text:
+          - title: Önce kimin neyi bilmesi gerektiği yazılır
+            text: >-
+              Sipariş kimleri ilgilendiriyor? Sepet (boşalsın), canlı sıralama (tutar eklensin), alışveriş geçmişi (olay),
+              operasyon ölçümü (sayaç), öneriler (BOUGHT kenarı), analiz (rapor). Her biri için "geç kalırsa ne olur?" sorulur.
+          - title: Tek bir asıl kayıt seçilir
+            text: >-
+              Sipariş ve stok tek bir ilişkisel veritabanında, tek transaction'da yazılır. Diğerleri asıl kayıt değil; kopyadır,
+              sayaçtır ya da özettir ve gerekirse asıl kayıttan yeniden kurulur.
+          - title: Haber, kesinleşmeden sonra ve kayıpsız verilir
+            text: >-
+              Siparişle aynı transaction'da bir outbox satırı yazılır; COMMIT'ten sonra bir program onu okur ve olayı bir kuyruğa
+              ya da olay yoluna (Amazon SQS, Amazon EventBridge) bırakır. Böylece sipariş geri alınırsa haber de hiç çıkmaz;
+              sipariş kesinleşirse haber kaybolmaz.
+            code: |-
+              BEGIN;
+                INSERT INTO orders …;  INSERT INTO order_items …;
+                INSERT INTO outbox (event, payload) VALUES ('OrderPlaced', '{"order_id": "W…", …}');
+              COMMIT;
+          - title: Her alıcı kendi kuyruğundan okur
+            text: >-
+              Olay her ilgili sisteme ayrı bir kuyrukla dağıtılır (EventBridge kuralları ya da SNS → SQS). Biri yavaşlasa ya da
+              dursa diğerleri etkilenmez; duran sistem kaldığı yerden devam eder.
+          - title: Alıcılar tekrarlanan olaya hazırlıklıdır
+            text: >-
+              Kuyruklar bir olayı nadiren iki kez teslim edebilir. Her alıcı olayı sipariş numarasıyla tanır ve ikinci kez
+              işlemez (idempotent): sepeti iki kez boşaltmak sorun değildir, ama tutarı sıralamaya iki kez eklemek sorundur.
+      feed:
+        title: Veri nereden geliyor?
+        writes: >-
+          Siparişin asıl kaydını uygulama Aurora'ya yazar. Diğer beş veritabanı bu siparişten türeyen bilgiyi alır.
+        reads: >-
+          Her veritabanını kendi ekranı okur: sipariş geçmişi (Aurora), sepet (DynamoDB), canlı sıralama (ElastiCache),
+          hareketlerim (Keyspaces), operasyon grafiği (InfluxDB), öneriler (Neptune), raporlar (Redshift).
+        kind: >-
+          Motorlar birbirinden kendiliğinden veri çekmez; yayılmayı olay altyapısı yapar. Motorlar arasındaki yaygın doğrudan
+          bağlantı analiz tarafındadır: ilişkisel veritabanından analiz deposuna zero-ETL (ör. Aurora → Redshift).
+        with: >-
+          Bu sayfada altı veritabanı birlikte çalışır; yedincisi (Redshift) siparişi Aurora'dan zero-ETL ile birkaç saniye
+          içinde kendisi alır. Ödeme sayfası sepeti de DynamoDB'den okumuştu.
+        best: >-
+          Asıl kayıt tek transaction'da; yayılma COMMIT'ten sonra, outbox + kuyruk ya da olay yoluyla; her alıcı kendi
+          kuyruğundan ve idempotent okur. Yayılmayı tarayıcıya bırakmak güvenli değildir: sayfa kapanırsa yarım kalır.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              Ödeme sayfasındasın; sepetin DynamoDB'den okunmuştu. Bir önceki adımda "ödemeyi başarısız yap" kutusunun
+              işaretini kaldırdın.
+            engines: [dynamodb]
+          - text: >-
+              "Place the order" butonuna bastın. Tarayıcın sepetteki ürünleri Aurora'nın uygulama sunucusuna gönderdi; Aurora
+              stoğu düşürüp siparişi ve kalemlerini tek transaction'da yazdı ve COMMIT etti. Sipariş numarası geldi.
+            engines: [aurora]
+          - text: >-
+              Sipariş kesinleşince tarayıcıdaki sayfa beş isteği sırayla gönderdi; her biri o veritabanının kendi uygulama
+              sunucusuna gitti: sepeti boşalt, sıralamaya tutarı ekle, satın alma olayını yaz, siparişi say, BOUGHT kenarlarını
+              ekle.
+            engines: [dynamodb, elasticache, keyspaces, influxdb, neptune]
+          - text: >-
+              Sayfadaki listede her satır sırayla yeşile döndü. Birkaç saniye içinde Redshift de siparişi Aurora'dan zero-ETL
+              ile aldı (raporlar sayfası).
+            engines: [redshift]
+      sim:
+        kind: fanout
+        title: "Bir sipariş, altı veritabanı (senin siparişinin sırası)"
+        sender: Tarayıcıdaki sayfa
+        sender_label: Tarayıcıdaki sayfa (ödeme sayfası)
+        caption: >-
+          Senin siparişinde gerçekten olan sıra. Her satır ayrı bir istek ve ayrı bir veritabanı; sayfa birini bitirince
+          diğerine geçiyor. Üstteki etiketler o anda işi kimin yaptığını gösterir.
+        steps:
+          - engine: aurora
+            label: Aurora PostgreSQL
+            cmd: "BEGIN; UPDATE products …; INSERT INTO orders …; INSERT INTO order_items …; COMMIT;"
+            say_send: '"Place the order"a bastın. Sayfa siparişi Aurora''nın uygulama sunucusuna gönderiyor.'
+            say_done: "Aurora tek transaction'da stoğu düşürdü, siparişi ve kalemleri yazdı ve COMMIT etti. Asıl kayıt hazır."
+          - engine: dynamodb
+            label: DynamoDB
+            cmd: "BatchWriteItem: sepetteki her item için DeleteItem"
+            say_send: Sipariş kesinleşti. Sayfa ikinci isteği gönderiyor - sepeti boşalt.
+            say_done: DynamoDB sepetin item'larını sildi.
+          - engine: elasticache
+            label: ElastiCache
+            cmd: "ZINCRBY lm:leaderboard <tutar> <müşteri>;  INCR lm:orders:today"
+            say_send: Üçüncü istek - canlı sıralamaya tutarı ekle.
+            say_done: ElastiCache sıralamada müşterinin puanını artırdı ve bugünün sipariş sayacını bir artırdı.
+          - engine: keyspaces
+            label: Keyspaces
+            cmd: "INSERT INTO activity_by_user (…, event_type) VALUES (…, 'purchase')"
+            say_send: Dördüncü istek - alışveriş geçmişine bir satın alma olayı yaz.
+            say_done: Keyspaces senin partition'ına bir "purchase" satırı ekledi.
+          - engine: influxdb
+            label: Timestream for InfluxDB
+            cmd: "orders,channel=workshop count=1i <zaman>"
+            say_send: Beşinci istek - operasyon grafiği için siparişi say.
+            say_done: InfluxDB zaman damgalı bir nokta yazdı (count = 1).
+          - engine: neptune
+            label: Neptune
+            cmd: "UNWIND $rows … CREATE (c)-[:BOUGHT {order_id, qty}]->(p)"
+            say_send: Altıncı istek - önerilerin bilmesi için BOUGHT kenarlarını ekle.
+            say_done: Neptune müşteriden her ürüne bir BOUGHT kenarı ekledi; bir sonraki öneri bunu bilir.
+        back: >-
+          Altı istek de bitti; sayfa "Order … is placed" (sipariş verildi) yazdı. Biri başarısız olsaydı listede kırmızı görünürdü
+          ama sipariş yine geçerli olurdu - asıl kayıt Aurora'da.
+        summary: >-
+          Asıl kayıt önce ve tek başına kesinleşti; diğer beşi ondan türedi. Burada yayılmayı tarayıcı sırayla yaptı. Gerçek bir
+          sistemde bu iş COMMIT'ten sonra bir kuyruğa verilir; sayfa kapansa ya da bir veritabanı dursa da haber kaybolmaz.
+      wire:
+        what: >-
+          Altı ayrı istek, altı ayrı uygulama sunucusu, altı ayrı protokol. Paket 3 son isteği (Neptune) gösteriyor; diğerlerinin
+          özeti aşağıda.
+        dst: "dbws-neptune.cluster-ccgs3qxfidad.eu-central-1.neptune.amazonaws.com : 8182"
+        dst_note: >-
+          Son isteğin hedefi Neptune. Her veritabanı kendi uç noktasında ve internete kapalı veri alt ağında duruyor.
+        rows:
+          - [Şifreleme, Hepsinde TLS, gerçek, Altı bağlantının hepsi şifreli.]
+          - [Protokol, "Her motorun kendi dili", gerçek, "PostgreSQL, DynamoDB HTTP/JSON, RESP, CQL, InfluxDB HTTP, openCypher HTTP."]
+          - [Kimlik, "IAM (SigV4) ya da şifre", gerçek, "DynamoDB, Keyspaces, Neptune IAM ile; Aurora, ElastiCache, InfluxDB Secrets Manager'daki şifreyle."]
+        body_label: Altı isteğin hedefleri (sırasıyla)
+        body: |-
+          1. Aurora      dbws-aurora.cluster-….rds.amazonaws.com:5432            PostgreSQL, TLS, şifre
+          2. DynamoDB    dynamodb.eu-central-1.amazonaws.com:443                 HTTPS + SigV4 (BatchWriteItem)
+          3. ElastiCache dbws-cache-qtkvec.serverless.euc1.cache.amazonaws.com:6379   RESP, TLS, ACL kullanıcısı
+          4. Keyspaces   cassandra.eu-central-1.amazonaws.com:9142               CQL, TLS, SigV4
+          5. InfluxDB    f9a4tsktku-….timestream-influxdb.eu-central-1.on.aws:8086   HTTPS, kullanıcı adı + şifre
+          6. Neptune     dbws-neptune.cluster-….neptune.amazonaws.com:8182       HTTPS + SigV4 (openCypher)
+      code_intro: >-
+        Kod bilmen gerekmiyor. Bu adımda yayılmayı yöneten kod uygulamada değil, tarayıcıya gelen ödeme sayfasının içinde.
+        Solda o sayfanın gerçek kodundan satırlar, sağda Türkçesi. Gri etiketli satırlar tarayıcının kendi içinde çalışır.
+      app_code:
+        - file: templates/pages/checkout.html
+          where: tarayıcıda çalışan sayfa kodu
+          start: '$("#place").addEventListener("click", async () => {'
+          title: '"Siparişi ver" düğmesinin kodu (tarayıcıda)'
+          sub: Altı isteği sırayla gönderen kod.
+          lines:
+            - {match: 'order = await api("/aurora/api/orders"', say: "Önce siparişi Aurora'nın uygulama sunucusuna gönderir ve cevabı bekler.", tag: [Tarayıcı → Uygulama (Aurora), Uygulama (Aurora) → Tarayıcı]}
+            - {match: 'if (order.result !== "committed") {', say: "Aurora geri aldıysa burada durur; diğer veritabanlarına hiçbir şey gitmez.", tag: Tarayıcının içinde}
+            - {match: '["dynamodb", () => api("/dynamodb/api/cart", { method: "DELETE"', say: Sepeti boşaltma isteği., tag: Tarayıcı → Uygulama (DynamoDB)}
+            - {match: '["elasticache", () => api("/elasticache/api/leaderboard/add"', say: Sıralamaya tutar ekleme isteği., tag: Tarayıcı → Uygulama (ElastiCache)}
+            - {match: '["keyspaces", () => api("/keyspaces/api/events", { body: { type: "purchase"', say: Satın alma olayı isteği., tag: Tarayıcı → Uygulama (Keyspaces)}
+            - {match: '["influxdb", () => api("/influxdb/api/orders-metric"', say: Siparişi sayma isteği., tag: Tarayıcı → Uygulama (InfluxDB)}
+            - {match: '["neptune", () => api("/neptune/api/purchase"', say: BOUGHT kenarları isteği., tag: Tarayıcı → Uygulama (Neptune)}
+            - {match: 'try { await fn(); mark(step, true, "done"); } catch (e) { mark(step, false, "failed"); }', say: "Hepsini sırayla çalıştırır; biri başarısız olursa satırı kırmızı yapar ve devam eder.", tag: Tarayıcının içinde}
+      live:
+        title: Gerçek sistemde ne oldu?
+        intro: >-
+          Senin siparişinle giden altı gerçek istek. Her kutu bir veritabanı.
+        runs:
+          - label: Aurora (sipariş)
+            page_call: {path: /aurora/api/orders}
+            metrics: [[Sonuç, data.result], [Toplam (₺), data.total]]
+          - label: DynamoDB (sepeti boşalt)
+            page_call: {path: /dynamodb/api/cart}
+            metrics: [[Silinen item, items], [Süre, ms]]
+          - label: ElastiCache (sıralama)
+            page_call: {path: /elasticache/api/leaderboard/add}
+            metrics: [[ZINCRBY, ms], [INCR, e1.ms]]
+          - label: Keyspaces (olay)
+            page_call: {path: /keyspaces/api/events}
+            metrics: [[Yazılan satır, items], [Süre, ms]]
+          - label: InfluxDB (sayaç)
+            page_call: {path: /influxdb/api/orders-metric}
+            metrics: [[Yazılan nokta, items], [Süre, ms]]
+          - label: Neptune (kenarlar)
+            trigger: true
+            metrics: [[Eklenen kenar, items], [Süre, ms]]
+        reading: >-
+          Aurora siparişi "committed" olarak yazdı; ardından beş istek sırayla bitti. Süreler veritabanından veritabanına ve
+          istekten isteğe değişir. Ödeme sayfası açılırken sepet de okunmuştu; DynamoDB kutusu boşsa sepet boş olabilir.
+      query:
+        title: Sayfa veritabanlarına ne dedi?
+        intro: >-
+          Altı isteğin her biri kendi veritabanının dilinde. Bir parçanın üzerine gelince cümlede, kodda ve açıklamada aynı yer
+          parlar.
+        cards_title: Parça parça
+        parts:
+          - id: au
+            say: Aurora'da siparişi tek transaction'da yaz,
+            code: "BEGIN; UPDATE products …; INSERT INTO orders …; INSERT INTO order_items …; COMMIT;"
+            name: 1. Asıl kayıt
+            note: Stok, sipariş ve kalemler birlikte; ya hepsi ya hiçbiri (Adım 23).
+            hl: app
+          - id: dd
+            say: DynamoDB'de sepeti boşalt,
+            code: "BatchWriteItem: DeleteItem × <sepetteki item>"
+            name: 2. Sepet
+            note: Senin partition'ındaki bütün item'lar tek toplu istekle silinir.
+            hl: app
+          - id: ec
+            say: ElastiCache'te sıralamaya tutarı ekle,
+            code: "ZINCRBY lm:leaderboard <tutar> <müşteri>; INCR lm:orders:today"
+            name: 3. Canlı sıralama
+            note: Sorted set'te müşterinin puanı artar; sıralama her yazmada hazır kalır (Adım 33).
+            hl: app
+          - id: ks
+            say: Keyspaces'e satın alma olayını yaz,
+            code: "INSERT INTO activity_by_user (…) VALUES (…, 'purchase', …)"
+            name: 4. Geçmiş
+            note: Senin partition'ına yeni bir satır (Adım 10, 27).
+            hl: app
+          - id: ix
+            say: InfluxDB'de siparişi say,
+            code: "orders,channel=workshop count=1i <zaman>"
+            name: 5. Ölçüm
+            note: Line protocol; ölçüm adı, etiket, alan ve zaman damgası (Adım 34).
+            hl: app
+          - id: np
+            say: ve Neptune'a BOUGHT kenarlarını ekle.
+            code: "UNWIND $rows AS r MATCH (c {~id: r.c}) MATCH (p {~id: r.p}) CREATE (c)-[:BOUGHT {order_id: r.o, qty: 1}]->(p)"
+            name: 6. Öneriler
+            note: Her ürün için bir kenar; bir sonraki öneri hemen değişir (Adım 11).
+            hl: app
+        columns:
+          - label: Bir sipariş, altı istek
+            sub: Senin "Place the order" tıklamanla, sırayla giden istekler.
+            via: >-
+              Sayfa her isteği fetch ile ilgili veritabanının uygulama sunucusuna gönderir; her uygulama kendi kütüphanesiyle
+              (psycopg, boto3, redis-py, cassandra-driver, influxdb-client, requests) kendi veritabanına konuşur.
+            parts: [au, dd, ec, ks, ix, np]
+        note: >-
+          Dikkat: veritabanları birbirine hiç konuşmuyor; hiçbiri diğerinden veri çekmiyor. Her birine haber veren tarayıcıdaki
+          sayfa. Tek istisna analiz tarafı: Redshift siparişi Aurora'dan zero-ETL ile kendisi alır.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          Altı cevabın her biri sayfadaki listede bir satırı yeşile çevirdi. Bundan sonrası tarayıcında ve diğer ekranlarda.
+        steps:
+          - who: Altı veritabanı → Tarayıcın
+            text: Her uygulama kendi cevabını gönderdi; sayfa her satırı sırayla "done" yaptı.
+          - who: Tarayıcın
+            text: >-
+              Sepet sayacını sıfırladı ve "Order … is placed" yazdı; sipariş geçmişine ve rapora giden bağlantıları gösterdi.
+          - who: Aurora → Redshift
+            text: >-
+              Birkaç saniye içinde zero-ETL siparişi Redshift'e kopyaladı; raporlar sayfası onu gösterecek (Adım 30, 31). Bu,
+              workshop'taki tek motor-motor bağlantısı.
+          - who: Sonra
+            text: >-
+              Siparişin "Orders" sayfasında (Aurora, Adım 26), "My activity"de (Keyspaces), canlı sıralamada (ElastiCache) ve
+              önerilerde (Neptune) göründüğünü görebilirsin.
+      remember: >-
+        Siparişin tek bir asıl kaydı var ve o önce kesinleşir. Diğer sistemler ondan türeyen bilgiyi sonra alır. Gerçek bir
+        sistemde bu yayılma tarayıcıya değil, outbox ve kuyruğa verilir.
+      why_db: >-
+        Neden altı veritabanı? Her biri siparişin bir parçasını en iyi yaptığı işle tutuyor: Aurora kesin kaydı, DynamoDB hızlı
+        sepeti, ElastiCache anlık sıralamayı, Keyspaces kişi başı geçmişi, InfluxDB zaman serisini, Neptune ilişkileri. Bedeli:
+        aralarındaki tutarlılığı mimari sağlamalıdır; hiçbiri diğerini kendiliğinden güncellemez.
 
   - page: orders
     path: /orders
