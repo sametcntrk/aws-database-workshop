@@ -118,6 +118,7 @@
 
   /* ---------- race: many buyers take the last pieces of one counter. Left: read, then write. Right: one atomic DECR. */
   function race(spec) {
+    const DB = spec.engine_label || "ElastiCache";
     const stock = spec.stock, buyers = spec.buyers, key = spec.key || "stok";
     const naive = [{ counter: stock, rows: buyers.map(() => ({})), active: null, sold: 0, say: START }];
     let s = { counter: stock, rows: buyers.map(() => ({})), sold: 0 };
@@ -125,16 +126,16 @@
       const pair = [i, i + 1].filter((k) => k < buyers.length);
       pair.forEach((k) => {
         const rows = s.rows.map((r) => ({ ...r })); rows[k].read = s.counter;
-        s = { ...s, rows, active: k, op: "get",
+        s = { ...s, rows, active: k, op: "get", who: DB,
           say: `${buyers[k]}: GET ${key} → ${s.counter}. "Stokta ${s.counter} parça var" diye düşünüyor.${pair.length > 1 && k === pair[1] ? ` ${buyers[pair[0]]} henüz yazmadı, o yüzden ikisi de aynı değeri gördü.` : ""}` };
         naive.push(s);
       });
       pair.forEach((k) => {
         const rows = s.rows.map((r) => ({ ...r })), read = rows[k].read;
         if (read > 0) { rows[k].wrote = read - 1; rows[k].won = true; } else rows[k].lost = true;
-        s = { ...s, rows, active: k, op: "set", counter: read > 0 ? read - 1 : s.counter, sold: s.sold + (read > 0 ? 1 : 0),
-          say: read > 0 ? `${buyers[k]}: SET ${key} ${read - 1}. Satın aldı.${k === pair[1] && pair.length > 1 ? ` Ama ${buyers[pair[0]]} de aynı ${read} değerinden ${read - 1} yazmıştı: iki kişi tek bir parçayı aldı, sayaç sadece 1 azaldı.` : ""}`
-            : `${buyers[k]}: okuduğu değer 0, satın alamadı.` };
+        s = { ...s, rows, active: k, op: "set", counter: read > 0 ? read - 1 : s.counter, sold: s.sold + (read > 0 ? 1 : 0), who: APP_NAME,
+          say: read > 0 ? `${buyers[k]}: uygulama okunan ${read} değerine bakıp karar verdi ve SET ${key} ${read - 1} gönderdi. Satın aldı.${k === pair[1] && pair.length > 1 ? ` Ama ${buyers[pair[0]]} de aynı ${read} değerinden ${read - 1} yazmıştı: iki kişi tek bir parçayı aldı, sayaç sadece 1 azaldı.` : ""}`
+            : `${buyers[k]}: uygulama okunan değere baktı: 0, satın alamadı.` };
         naive.push(s);
       });
     }
@@ -146,16 +147,20 @@
     buyers.forEach((b, k) => {
       const rows = a.rows.map((r) => ({ ...r })), v = a.counter - 1;
       rows[k].decr = v; if (v >= 0) rows[k].won = true; else rows[k].lost = true;
-      a = { ...a, rows, active: k, op: "decr", counter: v, sold: a.sold + (v >= 0 ? 1 : 0),
+      a = { ...a, rows, active: k, op: "decr", counter: v, sold: a.sold + (v >= 0 ? 1 : 0), who: DB,
         say: `${b}: DECR ${key} → ${v}. ${v >= 0 ? "Sonuç 0 veya üstü: satın aldı." : "Sonuç 0'ın altında: parça kalmadı, satın alamadı."} Okuma ve yazma tek komut, araya kimse giremez.` };
       atomic.push(a);
     });
     atomic.push({ ...a, active: null, done: true, say: `Bitti. Tam ${a.sold} kişi satın aldı, stok kadar. Sayaç ${a.counter}'e indi ama eksi değerde kimse ürün almadı.` });
 
+    const sendR = spec.send || `Uygulama ${buyers.length} alıcıyı aynı anda başlatıyor; her alıcı için ElastiCache'e kendi komutlarını gönderecek.`;
+    const backR = spec.back || "Uygulama kazananları saydı, fazla satışı hesapladı ve sonucu tarayıcıya gönderdi.";
+    naive.splice(0, naive.length, ...actorize(naive, sendR, backR, DB, { active: null }));
+    atomic.splice(0, atomic.length, ...actorize(atomic, sendR, backR, DB, { active: null }));
     const table = (cols, kind) => `<table class="gs-table"><thead><tr>${cols.map(([k, l]) => `<th data-hl="${k}">${esc(l)}</th>`).join("")}</tr></thead>
       <tbody>${buyers.map((b, i) => `<tr data-i="${i}">${cols.map(([k]) => `<td data-k="${k}" data-hl="${k}">${k === "buyer" ? esc(b) : ""}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
     const counter = `<div class="gs-counter" data-hl="counter"><span>${esc(key)}</span><b>${stock}</b><small>bellekteki sayaç</small></div>`;
-    const html = `<div class="gs-lanes">${shell("naive", spec.labels?.naive || "Önce oku, sonra yaz", counter + table([["buyer", "Alıcı"], ["get", "GET ile okudu"], ["set", "SET ile yazdı"], ["res", "Sonuç"]]), { hl: "naive", count: "Satılan", result: false, col: true })}
+    const html = `${actorBar(DB)}<div class="gs-lanes">${shell("naive", spec.labels?.naive || "Önce oku, sonra yaz", counter + table([["buyer", "Alıcı"], ["get", "GET ile okudu"], ["set", "SET ile yazdı"], ["res", "Sonuç"]]), { hl: "naive", count: "Satılan", result: false, col: true })}
       ${shell("atomic", spec.labels?.atomic || "Atomik DECR", counter + table([["buyer", "Alıcı"], ["decr", "DECR sonucu"], ["res", "Sonuç"]]), { hl: "atomic", count: "Satılan", result: false, col: true })}</div>
       ${summary(`Aynı ${buyers.length} alıcı, aynı ${stock} parça: "önce oku, sonra yaz" yolu ${s.sold} parça sattı, atomik DECR tam ${a.sold}.`)}`;
     function paint(root, id, f) {
@@ -172,7 +177,7 @@
         set("res", r.won ? "✓ aldı" : r.lost ? "✗ alamadı" : "");
       });
       L.classList.toggle("over", !!f.done && f.sold > stock);
-      L.querySelector(".gs-say").textContent = f.say;
+      sayWho(L, f);
     }
     return { html, lanes: { naive, atomic }, paint, final: showSum };
   }

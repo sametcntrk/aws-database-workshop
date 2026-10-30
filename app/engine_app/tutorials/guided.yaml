@@ -1304,16 +1304,90 @@ steps:
           - [GET / SET, "GET sayacı okur, SET sayaca bir değer yazar. İki ayrı komut."]
           - [DECR, "Sayacı 1 azaltır ve yeni değeri döndürür. Okuma ve yazma tek komut."]
           - [ElastiCache (Valkey), "Veriyi bellekte tutan, mikrosaniyeler içinde cevap veren anahtar-değer veritabanı."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde fırsat stoğu nasıl tutulur?
+        intro: >-
+          İzdiham başlamadan önce hazır olması gerekenler: bellekteki sayaç ve onu değiştirme kuralı.
+        text:
+          - >-
+            Stok sayacı bellekte tek bir anahtardır. Fırsat ürününün kalan adedi ElastiCache'te bir tamsayı olarak tutulur ve
+            satış başlamadan önce asıl stok kaydından (veritabanından) kurulur. Bellekte durduğu için binlerce alıcıya
+            aynı anda mikrosaniyeler içinde cevap verir.
+          - >-
+            Paylaşılan değer tek bir atomik komutla değişir: DECR, INCR. Birden fazla şey birlikte kontrol edilecekse (ör.
+            hem stok hem "kişi başı en fazla 1") bunlar Valkey'de tek bir Lua betiği ya da fonksiyon olarak, yine tek
+            hamlede çalıştırılır. "Önce oku, sonra yaz" yapılmaz.
+          - >-
+            Sayaç kapıdaki ilk elemedir, asıl kayıt değildir. Satışın asıl kaydı (sipariş, ödeme) ilişkisel bir veritabanına
+            transaction ile yazılır. Ödeme başarısız olursa sayaç INCR ile geri artırılır.
+          - >-
+            Tek bir anahtar tek bir yerde durur. ElastiCache yüke göre büyür ve anahtarları parçalara (shard) dağıtır, ama
+            tek bir sayaç her zaman tek bir parçadadır. Çok büyük kampanyalarda stok birkaç anahtara bölünür.
+      feed:
+        title: Veri nereden geliyor?
+        writes: >-
+          Satış başlarken sayacı asıl stok kaydından kuran bir iş; satış sırasında her alıcının isteğiyle uygulama (DECR).
+        reads: Uygulama, fırsat sayfasındaki "kalan adet" için.
+        kind: >-
+          Uygulama orkestrasyonu. ElastiCache başka bir veritabanından kendiliğinden veri çekmez; içine ne yazılırsa onu
+          tutar.
+        best: >-
+          Asıl gerçek her zaman veritabanındadır. Satış bitince satılan adetler veritabanındaki siparişlerle karşılaştırılır.
+          Sayaç kaybolursa (ör. bir bakım sırasında) asıl kayıttan yeniden kurulur.
       sim:
         kind: race
         caption: >-
           Küçük bir örnek: 3 parçalık stok ve 6 alıcı. Gerçek denemede 300 alıcı ve 10 parça var; burada her adımı
-          görebilmen için sayılar küçük. Alıcılar ikişer ikişer neredeyse aynı anda geliyor.
+          görebilmen için sayılar küçük. Alıcılar ikişer ikişer neredeyse aynı anda geliyor. İki şerit, senin tek bir
+          gerçek isteğinin içindeki iki tur: önce senin seçtiğin "önce oku, sonra yaz" yolu, hemen ardından aynı alıcı ve
+          stokla atomik DECR. Üstteki etiketler o anda işi kimin yaptığını gösterir: uygulama mı, ElastiCache mi.
         key: lm:sim
         stock: 3
         buyers: [Ayşe, Mert, Elif, Lukas, Zeynep, Can]
         tick_ms: 1100
-        labels: {naive: '"Önce oku, sonra yaz" (senin seçtiğin)', atomic: Atomik DECR}
+        labels: {naive: 't0 · 1. tur · Senin seçtiğin · "Önce oku, sonra yaz"', atomic: "t0 · 2. tur · Aynı istekte · Atomik DECR"}
+      wire:
+        what: >-
+          Uygulama, ElastiCache'e açık tuttuğu bağlantılar üzerinden komutları gönderir (redis-py kütüphanesi, cluster
+          istemcisi). 300 alıcı 48 iş parçacığına bölünür; komutlar aynı anda yola çıkar.
+        dst: "dbws-cache-qtkvec.serverless.euc1.cache.amazonaws.com : 6379"
+        dst_note: >-
+          ElastiCache Serverless'ın adresi. Bu ad, VPC'nin içindeki uç noktaya çözülür; cache internete kapalıdır.
+        rows:
+          - [Şifreleme, TLS, gerçek, ElastiCache Serverless sadece şifreli bağlantı kabul eder.]
+          - [Protokol, RESP (Redis/Valkey protokolü), gerçek, "Her komut kısa bir metin çerçevesidir: komut adı ve parametreleri. HTTP değil."]
+          - [Kimlik, "ACL kullanıcısı + şifre, bağlantı açılırken", gerçek, "Şifre kodda yazmaz; uygulama onu çalışırken AWS Secrets Manager'dan alır."]
+        body_label: Bir alıcının komutları (okunur hâle getirilmiş; sağda cevap)
+        body: |-
+          "Önce oku, sonra yaz":
+            GET lm:sim:7f3a…               → "10"
+            (uygulama işi 1–4 ms)
+            SET lm:sim:7f3a… 9 EX 600      → OK
+
+          Atomik:
+            DECR lm:sim:7f3a…              → 9
+
+          Ağdaki ham hâli (RESP): *2\r\n$4\r\nDECR\r\n$43\r\nlm:sim:7f3a…\r\n
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Her satırın
+        etiketi işin nerede olduğunu söyler: mor etiketli satırda bir şey bir yerden bir yere gider (tarayıcıdan uygulamaya,
+        uygulamadan ElastiCache'e ya da geri). Gri "Uygulamanın içinde" etiketli satırda iş uygulamanın kendi içinde
+        yapılır, hiçbir yere bir şey gitmez. Yarışın olduğu yer, iki mor satırın arasındaki gri satırlar.
+      app_code:
+        - file: engines/elasticache.py
+          func: api_simulate
+          title: '"İzdihamı başlat" isteği'
+          sub: Senin tıklamanla gelen istek; iki tur da bu kodda.
+          lines:
+            - {match: '@bp.post("/api/deal/simulate")', say: "\"İzdihamı başlat\" isteği buraya gelir: seçtiğin yol, alıcı sayısı ve stok.", tag: Tarayıcı → Uygulama}
+            - {match: 'r().set(key, stock, ex=600)', say: "Bu deneme için geçici bir sayaç kurulur: stok 10; 10 dakika sonra kendiliğinden silinir.", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], hl: counter}
+            - {match: 'won = r().decr(key) >= 0', say: "Atomik yol: tek komut. ElastiCache azaltır ve yeni değeri döner; 0 veya üstüyse satın aldı.", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], hl: decr}
+            - {match: 'current = int(r().get(key))', say: "\"Önce oku\": sayacın değeri istenir.", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], hl: get}
+            - {match: 'time.sleep(random.uniform(0.001, 0.004))', say: "Uygulama işi (ödeme kontrolü gibi) 1–4 ms sürer. Yarış tam bu aralıkta olur.", tag: Uygulamanın içinde, hl: naive}
+            - {match: 'won = current > 0', say: "Karar uygulamada verilir: okunan değer 0'dan büyükse \"satın aldı\".", tag: Uygulamanın içinde, hl: naive}
+            - {match: 'r().set(key, current - 1, ex=600)', say: "\"Sonra yaz\": okunan değerin bir eksiği yazılır. Arada başkası yazdıysa onunki ezilir.", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], hl: set}
+            - {match: 'return jsonify(trace.payload({"mode": mode', say: "İki turun sonuçları tek bir cevapta tarayıcıya gider.", tag: Uygulama → Tarayıcı}
       live:
         title: Gerçek izdihamda ne oldu?
         intro: >-
@@ -1371,14 +1445,37 @@ steps:
         columns:
           - label: '"Önce oku, sonra yaz"'
             sub: Senin "Read, then write" seçip "Start the rush" tıklamanla giden komutlar (her alıcı için).
+            via: >-
+              Uygulama bu komutları redis-py kütüphanesinin get() ve set() metotlarıyla gönderir. "0'dan büyükse" kararı
+              iki komutun arasında, uygulamada verilir.
             parts: [get, work, set]
           - label: Atomik DECR
             sub: '"Atomic DECR" seçiliyken giden komut (her alıcı için).'
+            via: Uygulama bu komutu redis-py'nin decr() metoduyla gönderir; karar için ElastiCache'in döndüğü sayıya bakar.
             parts: [decr]
         note: >-
           Dikkat: soldaki iki komut tek tek doğru çalışıyor; hata komutlarda değil, aralarındaki boşlukta. ElastiCache
           her komutu doğru yaptı, ama iki komutun arasında başka alıcıların komutları da çalıştı. Sağdaki tek komutta
           böyle bir boşluk yok.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          ElastiCache her komuta ayrı ayrı cevap verdi. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: ElastiCache → Uygulama
+            text: >-
+              Her alıcının komutuna tek tek cevap geldi: GET sayacın değerini, SET "OK", DECR sayacın yeni değerini döndü.
+          - who: Uygulama
+            text: >-
+              Kazananları saydı, fazla satışı (satılan − stok) ve süreleri (p50, p95) hesapladı. Aynı istekte atomik turu da
+              çalıştırdı ve sonunda geçici sayacı sildi.
+          - who: Uygulama → Tarayıcın
+            text: İki turun sonuçlarını tek bir JSON cevabında gönderdi.
+          - who: Tarayıcın
+            text: Sonuç kutusunu çizdi; Perde arkası iki turu yan yana gösteriyor.
+          - who: Sonra
+            text: >-
+              Gerçek fırsat stoğu bu denemeden etkilenmedi; deneme ayrı, geçici bir sayaçla çalıştı.
       remember: >-
         Bir değeri okuyup ona göre yazıyorsan, araya başkası girebilir. Sayaç gibi paylaşılan bir değeri tek bir atomik
         komutla (DECR, INCR) değiştir; okuma ile yazma arasında boşluk bırakma.
