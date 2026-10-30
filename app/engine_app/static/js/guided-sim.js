@@ -687,6 +687,55 @@
     return { html, lanes, paint, final: showSum };
   }
 
+  /* ---------- ddb-items: DynamoDB items grouped by partition key. spec.rows [{pk, sk, name, qty}], spec.ops: a list of
+   * {op: "update", pk, sk, name, add, say_send, say_find, say_write} or {op: "query", pk, say_send, say_read}. One lane. */
+  function ddbItems(spec) {
+    const DB = spec.engine_label || "DynamoDB";
+    let rows = spec.rows.map((r) => ({ ...r }));
+    const fr = [{ say: START, rows: rows.map((r) => ({ ...r })), litPk: null, active: null, read: [], fresh: null, wcu: 0, rcu: 0 }];
+    let s = { ...fr[0] };
+    spec.ops.forEach((o) => {
+      if (o.op === "update") {
+        s = { ...s, litPk: null, active: null, read: [], who: APP_NAME, say: o.say_send || `Uygulama UpdateItem gönderiyor: ${o.pk} / ${o.sk}.` };
+        fr.push(s);
+        const has = rows.find((r) => r.pk === o.pk && r.sk === o.sk);
+        s = { ...s, who: DB, litPk: o.pk, active: has ? `${o.pk}|${o.sk}` : null,
+          say: o.say_find || `pk = ${o.pk} değerinden partition bulundu; içinde sk = ${o.sk} ${has ? "var" : "yok"}. Başka partition'a bakılmadı.` };
+        fr.push(s);
+        if (has) has.qty += o.add; else rows = [...rows, { pk: o.pk, sk: o.sk, name: o.name, qty: o.add }];
+        rows.sort((p, q) => p.pk.localeCompare(q.pk) || p.sk.localeCompare(q.sk));
+        s = { ...s, who: DB, rows: rows.map((r) => ({ ...r })), active: `${o.pk}|${o.sk}`, fresh: has ? null : `${o.pk}|${o.sk}`, wcu: s.wcu + 1,
+          say: o.say_write || (has ? `Item vardı: qty ${o.add} arttı.` : `Item yoktu: ADD onu qty = ${o.add} ile oluşturdu.`) };
+        fr.push(s);
+      } else {
+        s = { ...s, active: null, fresh: null, who: APP_NAME, say: o.say_send || `Uygulama Query gönderiyor: pk = ${o.pk}.` };
+        fr.push(s);
+        const mine = rows.filter((r) => r.pk === o.pk).map((r) => `${r.pk}|${r.sk}`);
+        s = { ...s, who: DB, litPk: o.pk, read: mine, rcu: s.rcu + 1, say: o.say_read || `Partition'ın bütün item'ları sırayla okundu: ${mine.length} item.` };
+        fr.push(s);
+      }
+    });
+    fr.push({ ...s, who: APP_NAME, done: true, say: spec.back || "Uygulama sepeti tarayıcıya gönderdi." });
+    const pks = () => [...new Set(fr[fr.length - 1].rows.map((r) => r.pk))];
+    const body = `<div class="gs-parts">${pks().map((pk) => `<div class="gs-part" data-pk="${esc(pk)}"><div class="gs-part-key" data-hl="key">pk = <b>${esc(pk)}</b></div>
+      <table class="gs-table"><thead><tr><th data-hl="key">sk</th><th>name</th><th data-hl="add">qty</th></tr></thead><tbody></tbody></table></div>`).join("")}</div>`;
+    const html = `${actorBar(DB)}<div class="gs-lanes one">${shell("ddb", spec.title || `${DB} tablosu`, body, { count: "İşlem", result: false, col: true })}</div>${summary(spec.summary || "")}`;
+    function paint(root, id, f) {
+      const L = laneOf(root, id);
+      L.querySelector(".gs-count b").textContent = `${f.wcu || 0} yazma · ${f.rcu || 0} okuma`;
+      L.classList.toggle("done", !!f.done);
+      L.querySelectorAll(".gs-part").forEach((el) => {
+        const pk = el.dataset.pk;
+        el.classList.toggle("lit", f.litPk === pk); el.classList.toggle("dim", !!f.litPk && f.litPk !== pk);
+        el.querySelector("tbody").innerHTML = (f.rows || []).filter((r) => r.pk === pk).map((r) => { const k = `${r.pk}|${r.sk}`;
+          return `<tr class="${f.active === k ? "active" : ""} ${f.fresh === k ? "fresh" : ""} ${(f.read || []).includes(k) ? "read" : ""}"><td data-hl="key">${esc(r.sk)}</td><td>${esc(r.name)}</td><td data-hl="add">${esc(r.qty)}</td></tr>`; }).join("")
+          || '<tr><td colspan="3" class="empty">boş</td></tr>';
+      });
+      sayWho(L, f);
+    }
+    return { html, lanes: { ddb: fr }, paint, final: showSum };
+  }
+
   /* ---------- Who works in a frame (owner rule: work of the app is never credited to the database).
    * actorize(frames, send, back, db): after START the app sends, every middle frame is the database's (unless it names
    * its own `who`), the last frame is the app sending the answer on. actorBar(db) is the bar above the lanes;
@@ -706,7 +755,7 @@
     root.querySelectorAll(".gs-actors [data-a]").forEach((x) => x.classList.toggle("on", ws.includes(x.dataset.a)));
   }
 
-  const KINDS = { projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
+  const KINDS = { "ddb-items": ddbItems, projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
 
   function render(box, spec) {
     const kind = KINDS[spec.kind];
