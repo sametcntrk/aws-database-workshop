@@ -208,7 +208,7 @@
     let no = 0;
     const h = (title) => `<h3><span>${++no}</span>${esc(title)}</h3>`;
     const phase = (id, t, title, intro) => `<div class="pa-phase" id="${id}"><span>${t}</span><div><h2>${esc(title)}</h2>${intro ? `<p>${esc(intro)}</p>` : ""}</div></div>`;
-    const strip = [["pa-need", "", "Ne lazım?"], ["pa-t1", "t-1", "Önceden"], ["pa-t0", "t0", step.action === "look" ? "Sayfa açılınca" : "Tıklaman"],
+    const strip = [["pa-need", "", "Ne lazım?"], ...(P.prior || P.feed ? [["pa-t1", "t-1", "Önceden"]] : []), ["pa-t0", "t0", step.action === "look" ? "Sayfa açılınca" : "Tıklaman"],
       ...(P.back ? [["pa-t2", "t+1", "Cevap dönünce"]] : []), ["pa-keep", "", "Akılda kalsın"]];
     root.className = `gp pa-page eng-${(step.engines || [])[0] || "docdb"}`;
     root.innerHTML = `<header class="gp-head pa-head"><div><span class="gp-kicker">Perde arkası</span>${chips()}${step.use_case ? `<em>${esc(step.use_case)}</em>` : ""}
@@ -220,7 +220,7 @@
         <div class="gp-intro" id="pa-need"><section class="gp-sec">${h("Ne lazım?")}<p>${esc(P.need)}</p></section>
         <section class="gp-sec">${h(`Kavram: ${C.term || ""}`)}<p>${esc(C.text || "")}</p></section></div>
         ${(C.terms || []).length ? `<dl class="gp-terms">${C.terms.map(([t, d]) => `<div><dt>${esc(t)}</dt><dd>${esc(d)}</dd></div>`).join("")}</dl>` : ""}
-        ${phase("pa-t1", "t-1", "Önceden ne vardı?", (P.prior || {}).intro)}
+        ${P.prior || P.feed ? phase("pa-t1", "t-1", "Önceden ne vardı?", (P.prior || {}).intro) : ""}
         ${P.prior || P.feed ? `<section class="gp-sec">${h((P.prior || {}).title || "Bu adımdan önce")}${priorHtml(P.prior, P.feed)}</section>` : ""}
         ${phase("pa-t0", "t0", P.now_title || (step.action === "look" ? "Sayfa açılınca ne oldu?" : "Senin tıklamanla ne oldu?"), P.now_intro)}
         ${P.sim ? `<section class="gp-sec">${h("Simülasyon")}<div class="gp-sim"></div></section>` : ""}
