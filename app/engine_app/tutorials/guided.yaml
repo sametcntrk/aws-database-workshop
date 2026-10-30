@@ -856,7 +856,7 @@ steps:
         kurulur.
 
   - page: category
-    path: /c/Elektronik
+    path: /c/Elektronik?index=on
     engines: [docdb]
     use_case: İç içe alanla filtreleme
     title: Dokümanın içindeki bir alanla filtrele
@@ -949,7 +949,7 @@ steps:
           veritabanları var.
         steps:
           - text: >-
-              Elektronik kategorisindesin. Sayfa yeniden açıldığı için "Use the index" yine seçili. Açılırken oturumun
+              Elektronik kategorisindesin. Sayfa yeniden açıldı (bir önceki adımda index'i kapatmıştın); "Use the index" yine seçili. Açılırken oturumun
               güncellendi ve 40 ürün DocumentDB'den, görselleri S3'ten geldi.
             engines: [elasticache, docdb, s3]
           - text: >-
@@ -5036,11 +5036,12 @@ steps:
   - page: checkout
     path: /checkout
     engines: [aurora]
-    use_case: Transaction rollback
-    title: Make the payment fail
+    use_case: Transaction ve geri alma
+    title: Ödemeyi başarısız yap
     why: >-
-      Aurora PostgreSQL writes the order in one transaction. If one step fails, ROLLBACK cancels all the steps.
-    do: Tick the lit check box "Make the payment fail".
+      Ödeme sayfasındasın; sepetindeki ürünler ve toplam tutar listelendi. Önce, ödemenin yarıda başarısız olacağı bir deneme
+      hazırlayacaksın.
+    do: Aydınlık "Make the payment fail" (ödemeyi başarısız yap) kutusunu işaretle.
     target: "#exp-fail"
     action: click
     wait: {click: true}
@@ -5048,15 +5049,252 @@ steps:
   - page: checkout
     path: /checkout
     engines: [aurora]
-    use_case: Transaction rollback
-    title: Place the order and watch the rollback
-    why: The stock UPDATE runs first. Then the payment step fails.
-    do: Click the lit button "Place the order".
+    use_case: Transaction ve geri alma
+    title: Siparişi ver ve geri alınışını izle
+    why: >-
+      Kutu işaretli: ödeme, stok düşüldükten hemen sonra başarısız olacak. Şimdi siparişi verip veritabanının yarım kalan işi
+      nasıl topladığına bakacaksın.
+    do: Aydınlık "Place the order" (siparişi ver) butonuna tıkla.
     target: "#place"
     action: click
     wait: {method: POST, path: /aurora/api/orders, body: {fail_after_stock: "true"}}
     focus: "#flow"
-    result: The calls show BEGIN, the UPDATE of the stock, then ROLLBACK. No order row exists, the stock is back, and your cart did not change.
+    result: BEGIN, the stock UPDATE, then ROLLBACK. No order row exists and the stock is back.
+    panel:
+      need: >-
+        Bir sipariş birkaç yazmadan oluşur: stoğu düşür, sipariş satırını yaz, sipariş kalemlerini yaz. Bunların yarısı yapılıp
+        yarısı yapılamazsa (ör. ödeme stok düştükten sonra başarısız olursa) stok eksilir ama sipariş olmaz; mağaza olmayan bir
+        satışı stoktan düşmüş olur. Ya hepsi olmalı ya hiçbiri.
+      concept:
+        term: Transaction, COMMIT ve ROLLBACK
+        text: >-
+          Transaction, birden fazla komutu tek bir iş gibi çalıştırır. BEGIN ile başlar; aradaki değişiklikleri sadece bu
+          transaction görür. COMMIT hepsini birden kalıcı yapar; ROLLBACK hepsini birden geri alır. Bir kasada alışverişi
+          bitirmek gibi: ürünler okutulur ama ödeme olmazsa fiş iptal edilir ve hiçbir ürün eksilmiş sayılmaz. Bu garantilerin
+          adı ACID'dir.
+        terms:
+          - [BEGIN, "Transaction'ı başlatır. Bundan sonraki komutlar tek bir işin parçası."]
+          - [COMMIT, "Transaction'daki bütün değişiklikleri kalıcı ve herkese görünür yapar."]
+          - [ROLLBACK, "Transaction'daki bütün değişiklikleri geri alır; hiçbir şey olmamış gibi."]
+          - [Satır kilidi (row lock), "UPDATE edilen satırı transaction bitene kadar başka yazmalara kapatır; iki ödeme aynı son parçayı satamaz."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde sipariş veritabanı için hazırlık
+        intro: >-
+          Sipariş butonuna hiç basılmadan, tablolar, kurallar ve bağlantı düzeni hazırlanır. Aşağıdaki beş adım bu hazırlığın
+          sırasıdır.
+        text:
+          - title: Önce siparişin adımları yazılır
+            text: >-
+              "Sipariş ver" şu demektir: her ürünün stoğunu düşür (yeterliyse), bir sipariş satırı yaz, her ürün için bir
+              sipariş kalemi yaz. Hepsi tek bir transaction'da; biri bile başarısız olursa hiçbiri olmaz.
+            code: |-
+              BEGIN;
+                UPDATE products SET stock = stock - :qty WHERE product_id = :pid AND stock >= :qty;
+                INSERT INTO orders …;  INSERT INTO order_items …;
+              COMMIT;   -- ya da hata olursa ROLLBACK;
+          - title: Kurallar tabloya yazılır
+            text: >-
+              Stok eksiye düşemez (CHECK), her sipariş kalemi var olan bir siparişe ve ürüne bağlıdır (FOREIGN KEY). Kurallar
+              veritabanında olunca hangi uygulama yazarsa yazsın bozulmaz.
+            code: |-
+              CREATE TABLE products (product_id text PRIMARY KEY, …, stock int NOT NULL CHECK (stock >= 0));
+              CREATE TABLE order_items (order_id text REFERENCES orders ON DELETE CASCADE,
+                                        product_id text REFERENCES products, qty int, unit_price numeric(10,2),
+                                        PRIMARY KEY (order_id, product_id));
+          - title: Stok güncellemesi koşulla yazılır
+            text: >-
+              "Önce oku, sonra düşür" yapılmaz; düşürme koşulla tek komutta yapılır (AND stock >= qty). Komut 0 satır
+              etkilediyse stok yetmemiştir ve transaction geri alınır. UPDATE satırı kilitler; aynı anda gelen ikinci ödeme o
+              satırı bekler.
+          - title: Bağlantılar havuzdan kullanılır
+            text: >-
+              Her istekte yeni bağlantı açmak (TLS + kimlik doğrulama) pahalıdır ve ani yükte veritabanının bağlantı sınırını
+              doldurur. Uygulama bir bağlantı havuzu kullanır ya da araya Amazon RDS Proxy konur; bağlantılar yeniden kullanılır.
+          - title: Yazma ve okuma uç noktaları ayrılır
+            text: >-
+              Aurora'nın bir yazma (writer) ve bir okuma (reader) uç noktası vardır. Siparişler yazma ucuna, raporlar ve
+              listeler okuma ucuna gider. Veri tek bir paylaşılan depolamada, üç Availability Zone'da altı kopya olarak tutulur.
+      feed:
+        title: Veri nereden geliyor?
+        writes: Uygulama, ödeme adımında (sipariş ve stok). Stok ayrıca depo ve tedarik sistemlerinden güncellenir.
+        reads: Uygulama, sipariş geçmişi ve sipariş detayı için; raporlar okuma ucundan.
+        kind: >-
+          Uygulama orkestrasyonu. Aurora siparişin asıl kaydıdır. Kendi değişikliklerini dışarı verebilir: zero-ETL ile analiz
+          veritabanına (Redshift) birkaç saniye içinde kopyalanır.
+        with: >-
+          Ödeme sayfası sepeti DynamoDB'den güçlü tutarlı okur. Sipariş Aurora'da onaylanınca (COMMIT) beş veritabanı daha
+          güncellenir (Adım 25). Sipariş geri alınırsa (ROLLBACK) onlara hiçbir şey gönderilmez ve sepet olduğu gibi kalır.
+        best: >-
+          Asıl sipariş tek bir ilişkisel veritabanında, tek transaction'da yazılır. Diğer sistemlere sadece COMMIT'ten sonra
+          ve olay olarak (kuyruk ya da outbox) haber verilir; böylece geri alınan bir sipariş başka hiçbir yerde iz bırakmaz.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              Sepetten "Checkout" (ödeme) sayfasına geçtin. Açılırken oturumun güncellendi ve sepetin DynamoDB'den güçlü
+              tutarlı okundu; ürünler ve toplam listelendi.
+            engines: [elasticache, dynamodb]
+          - text: >-
+              Bir önceki adımda "Make the payment fail" kutusunu işaretledin. Bu sadece sayfadaki bir seçimdi; istek gitmedi.
+          - text: >-
+              "Place the order" butonuna bastın. Tarayıcın uygulamaya sepetteki ürünleri ve "ödeme başarısız olsun" bilgisini
+              gönderdi. Uygulama Aurora'ya bir bağlantı açtı ve transaction'ı başlattı (BEGIN).
+            engines: [aurora]
+          - text: >-
+              Stok düşürüldü (UPDATE); satır kilitlendi. Tam o anda deneme gereği ödeme başarısız oldu ve uygulama ROLLBACK
+              gönderdi. Stok eski hâline döndü, sipariş satırı hiç yazılmadı. Simülasyonun sol şeridi bu istek.
+            engines: [aurora]
+          - text: >-
+              Sipariş olmadığı için diğer veritabanlarına hiçbir şey gönderilmedi; sepetin DynamoDB'de olduğu gibi kaldı. Sayfada
+              "The transaction rolled back" (transaction geri alındı) yazdı.
+            engines: [aurora]
+      sim:
+        kind: txn
+        caption: >-
+          Aurora'daki iki tablodan küçük bir kesit (stok değeri örnek). Solda senin denemen: ödeme stok düştükten sonra
+          başarısız oluyor. Sağda olsaydı: ödeme başarılı olsaydı; bunu Adım 25'te gerçekten yapacaksın.
+        tables:
+          products: {key: product_id, cols: [product_id, name, stock], rows: [{product_id: P0001, name: Alpen Kablosuz Kulaklık 1, stock: 128}]}
+          orders: {key: order_id, cols: [order_id, customer_id, status, total], rows: [{order_id: W17933…a1, customer_id: C00002, status: delivered, total: 1299.90}]}
+        lanes:
+          - id: fail
+            title: "t0 · Senin denemen · Ödeme başarısız → ROLLBACK"
+            send: >-
+              "Place the order"a bastın. Uygulama Aurora'ya bir bağlantı açtı ve komutları sırayla gönderiyor.
+            ops:
+              - {do: begin, sql: "BEGIN;", say: "Transaction başladı. Bundan sonraki değişiklikleri sadece bu transaction görür."}
+              - {do: update, table: products, key: P0001, set: {stock: 127}, sql: "UPDATE products SET stock = stock - 1 WHERE product_id = 'P0001' AND stock >= 1;", say: "Stok 128'den 127'ye düştü ama henüz kalıcı değil; satır kilitlendi. Başka bir ödeme bu satırı bekler."}
+              - {do: fail, sql: "-- ödeme adımı: HATA", say: "Deneme gereği ödeme başarısız oldu. Uygulama devam etmiyor; sipariş satırı yazılmayacak."}
+              - {do: rollback, sql: "ROLLBACK;", say: "ROLLBACK: transaction'daki bütün değişiklikler geri alındı. Stok yine 128, kilit kalktı."}
+            end_say: Hiçbir şey olmamış gibi - stok aynı, sipariş yok.
+            back: >-
+              Uygulama "rolled back" sonucunu tarayıcına gönderdi; sayfa diğer veritabanlarına hiçbir istek göndermeyecek.
+          - id: ok
+            title: "Olsaydı · Ödeme başarılı → COMMIT (Adım 25)"
+            send: Olsaydı - uygulama aynı transaction'ı başlatırdı.
+            ops:
+              - {do: begin, sql: "BEGIN;", say: Transaction başladı.}
+              - {do: update, table: products, key: P0001, set: {stock: 127}, sql: "UPDATE products SET stock = stock - 1 WHERE … AND stock >= 1;", say: "Stok 127 oldu (beklemede)."}
+              - {do: insert, table: orders, row: {order_id: W17933…7c, customer_id: C00001, status: processing, total: 3373.84}, sql: "INSERT INTO orders VALUES ('W17933…7c', 'C00001', …, 'processing', 3373.84);", say: Sipariş satırı yazıldı (beklemede).}
+              - {do: commit, sql: "COMMIT;", say: "COMMIT: stok ve sipariş birlikte kalıcı oldu ve herkese göründü."}
+            end_say: İkisi birlikte kalıcı oldu.
+            back: Uygulama sipariş numarasını tarayıcına gönderirdi; sayfa diğer beş veritabanını güncellemeye başlardı.
+        summary: >-
+          Aynı başlangıç, iki son. Ödeme başarısız olunca ROLLBACK bütün değişiklikleri tek hamlede geri aldı; başarılı olunca
+          COMMIT hepsini birlikte kalıcı yaptı. Arada yarım kalmış bir durum hiçbir zaman başkalarına görünmedi.
+      wire:
+        what: >-
+          Uygulama bu istek için Aurora'ya yeni bir bağlantı açar (psycopg kütüphanesi): TLS el sıkışması ve kullanıcı adı/şifre
+          doğrulaması her istekte yeniden yapılır. Sonra SQL komutlarını bu bağlantı üzerinden sırayla gönderir.
+        dst: "dbws-aurora.cluster-ccgs3qxfidad.eu-central-1.rds.amazonaws.com : 5432"
+        dst_note: >-
+          Aurora cluster'ının yazma (writer) adresi; yazmalar her zaman bu adrese gider. Cluster internete kapalı veri alt
+          ağında duruyor ve kapasitesini yüke göre değiştiriyor (Serverless v2, 0,5–4 ACU).
+        rows:
+          - [Şifreleme, "TLS (sslmode=require)", gerçek, Bağlantı şifrelenmeden kurulmaz.]
+          - [Protokol, PostgreSQL wire protokolü, gerçek, "PostgreSQL istemcilerinin konuştuğu ikili dil; her SQL komutu bir mesaj olarak gider."]
+          - [Kimlik, "Kullanıcı adı + şifre, bağlantı açılırken", gerçek, "Şifre kodda yazmaz; uygulama onu AWS Secrets Manager'dan alır."]
+        body_label: Bu bağlantı üzerinden giden komutlar (sırasıyla)
+        body: |-
+          BEGIN;
+          UPDATE products SET stock = stock - 1 WHERE product_id = 'P0001' AND stock >= 1;   → UPDATE 1
+          -- ödeme adımı başarısız
+          ROLLBACK;
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Hatayı yakalayıp
+        ROLLBACK gönderen uygulamadır; geri almayı yapan veritabanıdır.
+      app_code:
+        - file: engines/aurora.py
+          func: api_order
+          title: '"Siparişi ver" isteği'
+          sub: Senin tıklamanla gelen istek.
+          lines:
+            - {match: '@bp.post("/api/orders")', say: "Sipariş isteği buraya gelir: ürünler, adetler, fiyatlar ve \"ödeme başarısız olsun\" seçimi.", tag: Tarayıcı → Uygulama}
+            - {match: 'with conn() as c, c.cursor() as cur:', say: "Aurora'ya yeni bir bağlantı açar (TLS + kullanıcı adı/şifre).", tag: [Uygulama → Aurora, Aurora → Uygulama]}
+            - {match: 'sql(cur, "BEGIN", "BEGIN;"', say: "Transaction'ı başlatır.", tag: [Uygulama → Aurora, Aurora → Uygulama], hl: sql}
+            - {match: 'sql(cur, "UPDATE (stock)"', say: "Her ürünün stoğunu, yetiyorsa, tek komutta düşürür.", tag: [Uygulama → Aurora, Aurora → Uygulama], hl: sql}
+            - {match: 'if cur.rowcount == 0:', say: "Komut hiçbir satırı değiştirmediyse stok yetmemiştir: hata.", tag: Uygulamanın içinde}
+            - {match: 'raise RuntimeError("Experiment: the payment step failed after the stock update.")', say: "Deneme seçiliyse ödeme adımı burada başarısız olur.", tag: Uygulamanın içinde}
+            - {match: 'sql(cur, "ROLLBACK", "ROLLBACK;",', say: "Herhangi bir hatada ROLLBACK gönderir; Aurora bütün değişiklikleri geri alır.", tag: [Uygulama → Aurora, Aurora → Uygulama], hl: sql}
+            - {match: 'return jsonify(trace.payload({"order_id": order_id if result == "committed" else None', say: "Sonucu (\"committed\" ya da \"rolled back\") tarayıcıya gönderir.", tag: Uygulama → Tarayıcı}
+      live:
+        title: Gerçek veritabanında ne oldu?
+        intro: Senin tıklamanla Aurora'ya giden gerçek komutlar.
+        runs:
+          - label: Sipariş denemesi (senin tıklaman)
+            trigger: true
+            metrics: [[Sonuç, data.result], ["BEGIN", ms], ["UPDATE (değişen satır)", e1.items], ["UPDATE süresi", e1.ms], ["ROLLBACK", e2.ms]]
+        reading: >-
+          UPDATE 1 satırı değiştirdi (stok yetiyordu), ardından ROLLBACK geldi ve değişiklik geri alındı. Sipariş numarası yok,
+          stok değişmedi. Komutların her biri birkaç milisaniye sürer; bağlantı her istekte yeniden açıldığı için isteğin toplam
+          süresi komutların toplamından uzundur. Sepetin boşsa sipariş verilemez; önce Adım 12'de bir ürün ekle.
+      query:
+        title: Uygulama Aurora'ya ne dedi?
+        intro: >-
+          Senin denemende sırayla giden üç SQL komutu. Bir parçanın üzerine gelince cümlede, kodda ve açıklamada aynı yer parlar.
+        cards_title: Parça parça
+        parts:
+          - id: bg
+            say: Bir transaction başlat;
+            code: "BEGIN;"
+            name: Ne zaman başlasın?
+            note: Bundan sonraki komutlar tek bir işin parçası; değişiklikleri sadece bu bağlantı görür.
+            hl: sql
+          - id: up
+            say: P0001'in stoğunu 1 azalt,
+            code: "UPDATE products SET stock = stock - 1"
+            name: Ne değişsin?
+            note: Stoğu okuyup yazmaz; düşürmeyi tek komutta yapar. Satır transaction bitene kadar kilitlenir.
+            hl: sql
+          - id: wh
+            say: ama sadece stok yetiyorsa;
+            code: "  WHERE product_id = 'P0001' AND stock >= 1;"
+            name: Hangi koşulla?
+            note: Stok yetmiyorsa komut 0 satır değiştirir; uygulama bunu görüp siparişi durdurur.
+            hl: sql
+            indent: 2
+          - id: rb
+            say: ödeme başarısız oldu, her şeyi geri al.
+            code: "ROLLBACK;"
+            name: Nasıl bitsin?
+            note: BEGIN'den beri yapılan bütün değişiklikler geri alınır; kilit kalkar.
+            hl: sql
+        columns:
+          - label: Senin denemen
+            sub: Senin "Place the order" tıklamanla giden komutlar ("Make the payment fail" işaretli).
+            via: Uygulama bu komutları psycopg kütüphanesinin cursor.execute() metoduyla, aynı bağlantı üzerinden sırayla gönderir.
+            parts: [bg, up, wh, rb]
+        note: >-
+          Dikkat: ROLLBACK'te "stoğu geri artır" diye bir komut yok. Geri almayı veritabanı kendisi yapar; uygulama sadece
+          "vazgeçtim" der. Bu yüzden yarım kalan bir sipariş hiçbir zaman başkalarına görünmez.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          Aurora'nın işi ROLLBACK'i onaylayınca bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: Aurora → Uygulama
+            text: Her komutun onayı geldi; ROLLBACK'ten sonra bağlantı kapandı.
+          - who: Uygulama → Tarayıcın
+            text: '"rolled back" sonucunu ve hata mesajını tek bir JSON cevabında gönderdi.'
+          - who: Tarayıcın
+            text: >-
+              Akıştaki Aurora satırını kırmızı yaptı ve "The transaction rolled back. Nothing else ran, and your cart is
+              unchanged." yazdı. Diğer veritabanlarına istek göndermedi.
+          - who: Sonra
+            text: >-
+              Bir sonraki adımda kutunun işaretini kaldırıp gerçek bir sipariş vereceksin; o zaman COMMIT olacak ve beş veritabanı
+              daha güncellenecek (Adım 25).
+      remember: >-
+        Birlikte olması gereken yazmaları tek bir transaction'a koy: ya hepsi olur (COMMIT) ya hiçbiri (ROLLBACK). Geri almayı
+        veritabanı yapar; yarım kalmış bir sipariş hiçbir zaman görünmez.
+      why_db: >-
+        Neden Aurora PostgreSQL? Sipariş, stok ve kalemler arasındaki ilişkiler ve "ya hepsi ya hiçbiri" garantisi ilişkisel
+        bir veritabanının temel işidir. Aurora bunu PostgreSQL uyumlu olarak ve altı kopyalı bir depolamayla sunar. Bedeli: tek
+        bir yazma ucu vardır ve bağlantılar dikkatle yönetilmelidir.
 
   - page: checkout
     path: /checkout

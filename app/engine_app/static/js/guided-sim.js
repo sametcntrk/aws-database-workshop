@@ -821,6 +821,53 @@
     return { html, lanes, paint, final: showSum };
   }
 
+  /* ---------- txn: a relational transaction. Changes inside BEGIN … are pending (only this transaction sees them); COMMIT
+   * makes them durable and visible, ROLLBACK undoes them. spec.tables {name: {cols: [...], key, rows: [...]}},
+   * spec.lanes [{id, title, ops: [{sql, say, do: "begin"|"update"|"insert"|"fail"|"commit"|"rollback", table, key, set, row}], send, back}]. */
+  function txn(spec) {
+    const DB = spec.engine_label || "Aurora PostgreSQL", tabs = spec.tables, names = Object.keys(tabs);
+    const clone = (o) => JSON.parse(JSON.stringify(o));
+    const lanes = {};
+    spec.lanes.forEach((ln) => {
+      const base = Object.fromEntries(names.map((n) => [n, tabs[n].rows]));
+      const fr = [{ say: START, data: clone(base), pend: {}, phase: "", sqlNow: "", log: [] }];
+      let s = clone(fr[0]);
+      ln.ops.forEach((o) => {
+        const n = clone(s);
+        n.sqlNow = o.sql || ""; n.say = o.say || ""; n.log = [...s.log, o.sql || o.do];
+        if (o.do === "begin") n.phase = "open";
+        if (o.do === "update") { const r = n.data[o.table].find((x) => String(x[tabs[o.table].key]) === String(o.key)); Object.assign(r, o.set); n.pend[`${o.table}|${o.key}`] = "upd"; }
+        if (o.do === "insert") { n.data[o.table].push(o.row); n.pend[`${o.table}|${o.row[tabs[o.table].key]}`] = "ins"; }
+        if (o.do === "fail") n.phase = "fail";
+        if (o.do === "commit") { n.phase = "commit"; n.pend = Object.fromEntries(Object.keys(n.pend).map((k) => [k, "ok"])); }
+        if (o.do === "rollback") { n.phase = "rollback"; n.data = clone(base); n.undone = Object.keys(s.pend); n.pend = {}; }
+        s = n; fr.push(s);
+      });
+      fr.push({ ...s, done: true, say: ln.end_say || s.say });
+      lanes[ln.id] = actorize(fr, ln.send || "Uygulama transaction'ı başlatıyor.", ln.back || "Uygulama sonucu tarayıcıya gönderdi.", DB, { phase: "" });
+    });
+    const tableHtml = (n) => `<div class="gs-tx-t"><b>${esc(n)}</b><table class="gs-table" data-t="${esc(n)}"><thead><tr>${tabs[n].cols.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody></tbody></table></div>`;
+    const body = `<div class="gs-tx-phase"></div><div class="gs-tx">${names.map(tableHtml).join("")}</div><pre class="gs-tx-sql" data-hl="sql"></pre>`;
+    const html = `${actorBar(DB)}<div class="gs-lanes${spec.lanes.length === 1 ? " one" : ""}">${spec.lanes.map((ln) => shell(ln.id, ln.title, body, { hl: ln.id, count: "Komut", result: false, col: true })).join("")}</div>${summary(spec.summary || "")}`;
+    const PH = { "": "", open: "Transaction açık: değişiklikleri sadece bu transaction görüyor", fail: "Hata: transaction yarıda kaldı", commit: "COMMIT: değişiklikler kalıcı ve herkese görünür", rollback: "ROLLBACK: bütün değişiklikler geri alındı" };
+    function paint(root, id, f) {
+      const L = laneOf(root, id);
+      L.querySelector(".gs-count b").textContent = (f.log || []).length;
+      L.classList.toggle("done", !!f.done);
+      const ph = L.querySelector(".gs-tx-phase"); ph.textContent = PH[f.phase || ""]; ph.className = `gs-tx-phase ${f.phase || ""}`;
+      names.forEach((n) => {
+        const key = tabs[n].key;
+        L.querySelector(`table[data-t="${CSS.escape(n)}"] tbody`).innerHTML = ((f.data || {})[n] || []).map((r) => {
+          const st = (f.pend || {})[`${n}|${r[key]}`] || ((f.undone || []).includes(`${n}|${r[key]}`) ? "undone" : "");
+          return `<tr class="tx-${st}">${tabs[n].cols.map((c) => `<td>${esc(r[c] ?? "")}</td>`).join("")}</tr>`;
+        }).join("") || `<tr><td colspan="${tabs[n].cols.length}" class="empty">satır yok</td></tr>`;
+      });
+      L.querySelector(".gs-tx-sql").textContent = f.sqlNow || "";
+      sayWho(L, f);
+    }
+    return { html, lanes, paint, final: showSum };
+  }
+
   /* ---------- Who works in a frame (owner rule: work of the app is never credited to the database).
    * actorize(frames, send, back, db): after START the app sends, every middle frame is the database's (unless it names
    * its own `who`), the last frame is the app sending the answer on. actorBar(db) is the bar above the lanes;
@@ -840,7 +887,7 @@
     root.querySelectorAll(".gs-actors [data-a]").forEach((x) => x.classList.toggle("on", ws.includes(x.dataset.a)));
   }
 
-  const KINDS = { spread, replicas, "ddb-items": ddbItems, projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
+  const KINDS = { txn, spread, replicas, "ddb-items": ddbItems, projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
 
   function render(box, spec) {
     const kind = KINDS[spec.kind];
