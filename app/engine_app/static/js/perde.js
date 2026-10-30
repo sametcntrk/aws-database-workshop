@@ -103,17 +103,17 @@
         ${x.tag ? `<em>${esc(x.tag)}</em>` : ""}</header><p>${esc(x.note)}</p></li>`).join("")}</ol></section>`;
   }
 
-  /* ---------- The path of the request: browser → load balancer → Engine App → database, from the trace entry */
+  /* ---------- The path of the request: browser → load balancer → app → database, from the trace entry */
   const AUTH = [
-    [/IAM/i, "IAM rolü: şifre yok. Engine App, AWS'nin verdiği geçici kimlikle her isteği imzalıyor (SigV4). Veritabanı imzayı kontrol ediyor."],
-    [/Password/i, "Şifre: Engine App şifreyi çalışırken AWS Secrets Manager'dan alıyor. Şifre kodda ya da sunucuda yazılı durmuyor."],
+    [/IAM/i, "IAM rolü: şifre yok. Uygulama, AWS'nin verdiği geçici kimlikle her isteği imzalıyor (SigV4). Veritabanı imzayı kontrol ediyor."],
+    [/Password/i, "Şifre: Uygulama şifreyi çalışırken AWS Secrets Manager'dan alıyor. Şifre kodda ya da sunucuda yazılı durmuyor."],
   ];
   // The last stop, by the kind of endpoint in the trace path (catalog.META[engine].via)
   const last = (via) => (/gateway endpoint/i.test(via)
-    ? "Bu, AWS'nin bölge çapında çalışan bir servisi. Engine App ona internete çıkmadan, VPC'nin gateway endpoint'i (AWS'nin iç ağına açılan özel bir kapı) üzerinden ulaşıyor."
+    ? "Bu, AWS'nin bölge çapında çalışan bir servisi. Uygulama ona internete çıkmadan, VPC'nin gateway endpoint'i (AWS'nin iç ağına açılan özel bir kapı) üzerinden ulaşıyor."
     : /interface endpoint/i.test(via)
-      ? "Bu, AWS'nin bölge çapında çalışan bir servisi. Engine App ona internete çıkmadan, özel ağdaki bir interface endpoint (servise açılan özel bir ağ kartı) üzerinden ulaşıyor."
-      : "Veritabanı internete kapalı veri alt ağında duruyor. Güvenlik grubu kuralı sadece bu motorun Engine App'inden gelen bağlantıya izin veriyor.");
+      ? "Bu, AWS'nin bölge çapında çalışan bir servisi. Uygulama ona internete çıkmadan, özel ağdaki bir interface endpoint (servise açılan özel bir ağ kartı) üzerinden ulaşıyor."
+      : "Veritabanı internete kapalı veri alt ağında duruyor. Güvenlik grubu kuralı sadece bu veritabanının uygulama sunucusundan gelen bağlantıya izin veriyor.");
   function pathHtml(d) {
     const trig = d && d.trig, e = entryOf(trig);
     if (!e || !e.path) return `<p class="gp-wait">Yol, mağaza sekmesindeki istek bitince burada görünür.</p>`;
@@ -123,9 +123,9 @@
     return `<div class="pa-path">
         ${box("Tarayıcın", "", `${step.action === "look" ? "Sayfayı açtığın" : "Butona tıkladığın"} yer. Tarayıcı veritabanına hiçbir zaman doğrudan bağlanmaz.`)}
         <span class="pa-arrow">HTTPS →</span>
-        ${box("Yük dengeleyici (ALB)", location.host, "İsteği karşılayan kapı. Hangi Engine App'e gideceğine adrese bakarak karar verir.")}
+        ${box("Yük dengeleyici (ALB)", location.host, "İsteği karşılayan kapı. İsteği hangi veritabanının uygulama sunucusuna göndereceğine adrese bakarak karar verir.")}
         <span class="pa-arrow">→</span>
-        ${box("Engine App (EC2)", m[1] ? `özel ağdaki IP ${m[1]}` : "", "Mağazanın arka uç kodu. İnternetten doğrudan erişilemeyen özel bir ağda çalışır.")}
+        ${box("Uygulama (EC2 sunucusu)", m[1] ? `özel ağdaki IP ${m[1]}` : "", "Mağazanın arka uç programı. İsteği alır, veritabanına komutu gönderir, cevabı hazırlar. İnternetten doğrudan erişilemeyen özel bir ağda çalışır.")}
         <span class="pa-arrow">→</span>
         ${box(e.engine || "Veritabanı", m[2] || "", last(m[2] || ""))}
       </div>
@@ -135,7 +135,7 @@
         <div><dt>Veritabanında geçen süre</dt><dd>${esc(e.ms)} ms</dd></div>
       </dl>
       <p class="gp-reading">Toplam süre, isteğin tarayıcından çıkıp cevabın geri gelmesine kadar geçen süre: internet, yük dengeleyici ve
-        Engine App de bu süreye dahil. Veritabanında geçen süre ise sadece Engine App ile veritabanı arasındaki kısım. Aradaki fark,
+        Uygulama da bu süreye dahil. Veritabanında geçen süre ise sadece uygulama ile veritabanı arasındaki kısım. Aradaki fark,
         çoğu zaman ağın ve uygulamanın payıdır.</p>`;
   }
 
@@ -143,7 +143,7 @@
   function priorHtml(R, F) {
     const paras = [].concat((R && R.text) || []).map((x) => `<p>${esc(x)}</p>`).join("");
     const feed = F ? `<div class="pa-feed"><h4>${esc(F.title || "Veri nereden geliyor?")}</h4><dl>
-        ${[["Kim yazıyor?", F.writes], ["Kim okuyor?", F.reads], ["Nasıl besleniyor?", F.kind], ["Bu workshop'ta", F.here], ["Gerçek bir mağazada", F.real]]
+        ${[["Kim yazıyor?", F.writes], ["Kim okuyor?", F.reads], ["Nasıl besleniyor?", F.kind], ["En iyi uygulama", F.best]]
           .filter(([, v]) => v).map(([t, v]) => `<div><dt>${esc(t)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl></div>` : "";
     return paras + feed;
   }
@@ -170,13 +170,13 @@
         ["Şifreleme", "TLS 1.3 (ya da 1.2)", false, "ALB sadece TLS 1.2 ve 1.3 kabul eder. Hangisinin seçildiğini tarayıcı ile ALB anlaşır."],
         ["SNI", host, hostLive, "Şifreleme başlamadan önce tarayıcının söylediği site adı. ALB doğru sertifikayı buna göre seçer."],
       ], { label: "Şifrenin içindeki istek (ALB açar)", text: `${method} ${path} HTTP/1.1\nHost: ${host}\nCookie: lm_visitor=7f3a…   (bu tarayıcının kimliği)\nAccept: application/json` });
-    const p2 = packet(2, "ALB → Engine App (EC2)",
-      `ALB şifreyi çözer ve adrese bakar: ${path.split("/")[1] ? `"/${path.split("/")[1]}/..." ile başlayan istekler bu motorun Engine App'ine gider.` : "adrese göre doğru Engine App'i seçer."} İstek artık AWS'nin içindeki özel ağda.`, [
+    const p2 = packet(2, "ALB → Uygulama (EC2 sunucusu)",
+      `ALB şifreyi çözer ve adrese bakar: ${path.split("/")[1] ? `"/${path.split("/")[1]}/..." ile başlayan istekler bu veritabanıyla konuşan uygulama sunucusuna gider.` : "adrese göre doğru uygulamayı seçer."} İstek artık AWS'nin içindeki özel ağda.`, [
         ["Kaynak", `${net.lb || "10.20.x.x"} : rastgele port`, !!net.lb, "ALB'nin özel ağdaki adresi."],
-        ["Hedef", `${appIp || "10.20.x.x"} : ${net.app_port || 8000}`, !!appIp, "Engine App'in çalıştığı EC2 sunucusu ve uygulamanın dinlediği kapı."],
+        ["Hedef", `${appIp || "10.20.x.x"} : ${net.app_port || 8000}`, !!appIp, "Uygulamanın çalıştığı EC2 sunucusu ve uygulamanın dinlediği kapı."],
         ["Protokol", "HTTP (şifresiz, özel ağ içinde)", true, "Bu ağa internetten girilemez; güvenlik grubu sadece ALB'den gelen bağlantıyı kabul eder."],
       ], { label: "ALB'nin isteğe eklediği satırlar", text: `X-Forwarded-For: ${net.client || "88.230.14.x"}   (isteğin asıl sahibi: sen)\nX-Forwarded-Proto: ${net.proto || "https"}   (tarayıcı HTTPS ile gelmişti)` });
-    const p3 = packet(3, `Engine App → ${(e && e.engine) || "Veritabanı"}`, W.what || "Engine App veritabanına bağlanır ve komutu gönderir.", [
+    const p3 = packet(3, `Uygulama → ${(e && e.engine) || "Veritabanı"}`, W.what || "Uygulama veritabanına bağlanır ve komutu gönderir.", [
         ["Kaynak", `${appIp || "10.20.x.x"}`, !!appIp, "Aynı EC2 sunucusu."],
         ["Hedef", W.dst || m[2] || "?", !!(W.dst || m[2]), W.dst_note || last(m[2] || "")],
         ...(W.rows || []).map((r) => [r[0], r[1], r[2] !== "örnek", r[3]]),
@@ -188,7 +188,7 @@
   function codeHtml(list) {
     return (list || []).map((c) => `<div class="pa-code"><h4>${esc(c.title || "")}</h4>${c.sub ? `<p class="gq-sub">${esc(c.sub)}</p>` : ""}
       <ol>${c.lines.map((l) => `${l.gap ? `<li class="pa-gap">…</li>` : ""}<li ${l.hl ? `data-hl="${esc(l.hl)}"` : ""}><code><b>${l.no}</b>${esc(l.code.trim())}</code>
-        <span>${l.tag ? `<em>${esc(l.tag)}</em>` : ""}${esc(l.say)}</span></li>`).join("")}</ol>
+        <span>${[].concat(l.tag || []).map((t) => `<em class="${/içinde/.test(t) ? "in" : "go"}">${esc(t)}</em>`).join("")}${esc(l.say)}</span></li>`).join("")}</ol>
       <small>Kaynak: ${esc(c.file)} (repodaki gerçek kod; sadece bu adımla ilgili satırlar)</small></div>`).join("");
   }
 
@@ -227,8 +227,8 @@
         <section class="gp-sec pa-route">${h("İstek nereden geçti?")}<p>${step.action === "look" ? "Sayfa açılırken giden" : "Senin tıklamanla giden"}
           istek, veritabanına ulaşana kadar bu duraklardan geçti. Bilgiler isteğin kendi kaydından geliyor.</p><div class="pa-path-box"></div>
           <h4 class="gq-cards-title">Yoldaki paketler</h4><p>Aynı yolculuk, ağın gördüğü hâliyle: her durakta bir paket. "gerçek" yazan değerler senin isteğinden ve bu kurulumdan,
-          "örnek" yazanlar Engine App'in göremediği ama gerçekte buna benzeyen değerler.</p><div class="pa-pkts-box"></div></section>
-        ${PA.code ? `<section class="gp-sec">${h(P.code_title || "Engine App'in içinde: gerçek koddan kısa bir kesit")}<p>${esc(P.code_intro || "")}</p>
+          "örnek" yazanlar uygulamanın göremediği ama gerçekte buna benzeyen değerler.</p><div class="pa-pkts-box"></div></section>
+        ${PA.code ? `<section class="gp-sec">${h(P.code_title || "Uygulamanın içinde: gerçek koddan kısa bir kesit")}<p>${esc(P.code_intro || "")}</p>
           <div class="${PA.code.length > 1 ? "gq-two" : "gq-one"}">${codeHtml(PA.code)}</div></section>` : ""}
         ${P.query ? queryHtml(P.query, ++no) : ""}
         ${P.live ? `<section class="gp-sec">${h(P.live.title || "Sistemde gerçekte ne oldu?")}<p>${esc(P.live.intro || "")}</p>
