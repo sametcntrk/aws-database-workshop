@@ -1,13 +1,13 @@
-/* Mission of the Guided e-commerce app (tutorials/guided.yaml): coach marks and the "Perde arkası" panel. Turkish, 101 level.
+/* Mission of the Guided e-commerce app (tutorials/guided.yaml): coach marks. Turkish, 101 level.
  *
  * The page goes dark. Only the control of the current step stays lit and accepts input. A small coach card next to it says
- * what to do. When the page makes the expected Engine call, the lit part moves to the top of the window and the
- * "Perde arkası" panel opens at the bottom: need, concept, simulation (guided-sim.js), live numbers, the query line by
- * line, "Akılda kalsın" and why this database. It shows only the calls that fill the lit part. A step with no `panel`
- * shows its `result` text in the small card.
+ * what to do. A step with a `panel` has its "Perde arkası" in its own browser tab (perde.js): the click on the lit control
+ * opens /guided-e-commerce-app/perde-arkasi/<n> (the click is the user gesture a new tab needs), and when the page makes
+ * the expected Engine call this tab writes the call to localStorage "lm_perde_<n>" for that tab. A "look" step has no click:
+ * its card offers a button. A step with no `panel` shows its `result` text in the small card.
  * Step fields: page, path, engines, use_case, title, why, do, target (CSS selector of the control),
  *   action: click | look | type | change,  wait: {method, path, query, body, count, any} | {click} | {change} | {value},
- *   focus (selector to light after the action), result (short text, steps with no panel), panel {need, concept, sim, live, query, remember, why_db}.
+ *   focus (selector to light after the action), result (short text, steps with no panel), panel (perde.js).
  * State: localStorage lm_mission_v2 = {"i": step index, "done": {index: true}}. ?adim=N opens step N.
  */
 (function () {
@@ -29,14 +29,14 @@
 
   const ENGINE_LABEL = { docdb: "DocumentDB", opensearch: "OpenSearch", neptune: "Neptune", dynamodb: "DynamoDB", aurora: "Aurora PostgreSQL",
     elasticache: "ElastiCache (Valkey)", keyspaces: "Keyspaces", s3: "S3", redshift: "Redshift", influxdb: "Timestream for InfluxDB" };
-  let last, actionDone, phase, calls, w, seen, from = 0, sim = null;
+  let last, actionDone, phase, calls, w, seen, from = 0, tabOpen = false;
 
   /* ---------- Top bar: progress only */
   const bar = () => { $("#mission").innerHTML = `<div class="mission-head"><span class="tutor-badge">Görev</span><span class="mission-step">Adım ${st.i + 1} / ${steps.length}</span>
     <ol class="mission-dots" aria-hidden="true">${steps.map((_, k) => `<li class="${k < st.i ? "done" : k === st.i ? "now" : ""}"></li>`).join("")}</ol>
     <span class="mission-hint">Aydınlık kontrolü ve yanındaki kartı takip et.</span></div>`; };
 
-  /* ---------- Dark layer with a hole, the small coach card and the bottom panel */
+  /* ---------- Dark layer with a hole, and the small coach card */
   const layer = document.createElement("div");
   layer.className = "coach-layer";
   layer.innerHTML = `<div class="coach-block" data-b="t"></div><div class="coach-block" data-b="l"></div><div class="coach-block" data-b="r"></div>
@@ -45,16 +45,10 @@
   card.className = "coach-card";
   card.setAttribute("role", "dialog");
   card.setAttribute("aria-live", "polite");
-  const sheet = document.createElement("section");
-  sheet.className = "gp";
-  sheet.setAttribute("role", "dialog");
-  sheet.setAttribute("aria-label", "Perde arkası");
-  sheet.hidden = true;
-  document.body.append(layer, card, sheet);
+  document.body.append(layer, card);
   const ring = $(".coach-ring", layer), cover = $(".coach-cover", layer);
   const blocks = Object.fromEntries([...layer.querySelectorAll(".coach-block")].map((b) => [b.dataset.b, b]));
 
-  const panelOpen = () => !sheet.hidden && !sheet.classList.contains("min");
   const lit = () => document.querySelector(phase === "look-result" && step.focus ? step.focus : step.target) || document.querySelector(step.target);
   const PAD = 8;
   function place() {
@@ -74,6 +68,8 @@
     let top = t + h + 12, left = Math.min(Math.max(12, l), window.innerWidth - cw - 12);
     if (top + ch > window.innerHeight - 12) top = t - ch - 12;
     if (top < 12) { top = Math.max(12, Math.min(window.innerHeight - ch - 12, t)); left = l + w + 12 + cw < window.innerWidth ? l + w + 12 : Math.max(12, l - cw - 12); }
+    top = Math.max(12, Math.min(top, window.innerHeight - ch - 12));   // the card always stays in the window
+    if (top < t + h && top + ch > t && left < l + w && left + cw > l) left = window.innerWidth - cw - 12;   // over the lit part: to the right edge, where shop rows are empty
     Object.assign(card.style, { top: `${top}px`, left: `${left}px`, width: `${cw}px` });
   }
   let raf = 0;
@@ -83,15 +79,21 @@
   new ResizeObserver(schedule).observe(document.body);
   function scrollToLit() {
     const el = lit();
-    const smooth = matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
-    const head = document.querySelector(".topbar");                                     // sticky: the lit part goes below it
-    const below = head ? head.getBoundingClientRect().height : 0;
-    if (el && panelOpen()) window.scrollTo({ top: window.scrollY + el.getBoundingClientRect().top - below - 20, behavior: smooth });   // the lit part goes to the top, the panel is below
-    else if (el) el.scrollIntoView({ behavior: smooth, block: "center" });
+    if (el) el.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
     setTimeout(place, 450);
   }
 
-  /* ---------- The small card (before the action, and for steps with no panel) */
+  /* ---------- The "Perde arkası" tab of the step */
+  const tabUrl = (fresh) => `${BASE}/perde-arkasi/${st.i + 1}${fresh ? `?t=${Date.now()}` : ""}`;
+  const openTab = (fresh) => { tabOpen = !!window.open(tabUrl(fresh), `perde-${st.i + 1}`); };   // one tab per step; the same step reuses it
+  function handOver() {                                         // what the tab needs: the call of the lit part and the page's calls
+    try {
+      const slim = (c) => c && { method: c.method, path: c.path, query: c.query, body: c.body, ok: c.ok, data: c.data, entries: c.entries, ms: c.ms, label: c.label };
+      localStorage.setItem(`lm_perde_${st.i + 1}`, JSON.stringify({ at: Date.now(), trig: slim(calls[from]), page: lm.calls.map(slim) }));
+    } catch (e) { /* storage full: the tab shows the parts that need no data */ }
+  }
+
+  /* ---------- The small card */
   function chips() { return (step.engines || []).map((e) => `<span class="chip eng-${e}">${esc(ENGINE_LABEL[e] || e)}</span>`).join(""); }
   function nav() {
     return `<button type="button" class="quiet" data-c="restart">Baştan başla</button><span></span>
@@ -109,145 +111,25 @@
       `<li><b>${esc(e.op)}</b> <span>${esc(e.engine || "")} · ${e.ms} ms${e.items !== undefined ? ` · ${e.items} kayıt` : ""}${e.capacity ? ` · ${esc(String(e.capacity).replace(/\s*\(.*\)$/, ""))}` : ""}</span></li>`)).join("");
     return `<div class="coach-bts"><b>Perde arkası</b><p>${esc(step.result || "")}</p>${lines ? `<ol>${lines}</ol>` : ""}</div>`;
   }
+  function tabBox() {
+    return `<div class="coach-bts coach-tab"><b>Perde arkası</b><p>${tabOpen
+      ? "Bu adımın perde arkası yeni bir sekmede açıldı: simülasyon, gerçek ölçümler, komutun açıklaması ve isteğin yolu orada. Okuduktan sonra bu sekmeye dön ve İleri'ye bas."
+      : "Bu adımın perde arkası yeni bir sekmede açılır: simülasyon, gerçek ölçümler, komutun açıklaması ve isteğin yolu. Okuduktan sonra bu sekmeye dön ve İleri'ye bas."}</p>
+      <button type="button" class="coach-tab-btn" data-c="tab">${tabOpen ? "Perde arkası sekmesine git" : "Perde arkasını yeni sekmede aç"} ↗</button></div>`;
+  }
   function renderCard() {
-    card.hidden = actionDone && !!step.panel;
-    if (card.hidden) return;
     card.innerHTML = `<header><span>${chips()}${step.use_case ? `<em>${esc(step.use_case)}</em>` : ""}</span><small>${st.i + 1} / ${steps.length}</small></header>
       <h2>${esc(step.title)}</h2>
       ${actionDone ? "" : `<p>${esc(step.why || "")}</p>`}
       <p class="coach-do ${actionDone ? "done" : ""}">${esc(step.do || "Aydınlık bölüme bak, sonra İleri'ye bas.")}</p>
-      ${actionDone ? shortResult() : ""}
+      ${actionDone ? (step.panel ? tabBox() : shortResult()) : ""}
       <footer>${nav()}</footer>`;
     wire(card);
-  }
-
-  /* ---------- The "Perde arkası" panel */
-  const STAGE_RE = /"stage":\s*"(\w+)"/g;
-  function entryOf(c) { return (c && c.entries && c.entries[0]) || null; }
-  // One measured run: the first trace entry and the response data of one call. A metric names its source:
-  // "ms", "items", "capacity" (trace entry), "examined", "returned" (DocumentDB explain), "data.<field>" (response body).
-  const runOf = (c) => (c ? { e: entryOf(c) || {}, data: c.data || {} } : null);
-  function metric(run, key) {
-    const e = run.e;
-    if (key.startsWith("data.")) return key.slice(5).split(".").reduce((o, k) => (o == null ? undefined : o[k]), run.data);   // "data.atomic.winners"
-    const m = /docs examined:\s*(\d+),\s*returned:\s*(\d+)/.exec(e.explain || "");
-    if (key === "examined") return m ? Number(m[1]) : undefined;
-    if (key === "returned") return m ? Number(m[2]) : e.items;
-    if (key === "ms") return e.ms !== undefined ? `${e.ms} ms` : undefined;
-    if (key === "capacity") return e.capacity ? String(e.capacity).replace(/\s*\(.*\)$/, "") : undefined;   // "1 WRU (a failed ...)" → "1 WRU"
-    return e[key];
-  }
-  const METRICS = [["Okunan doküman", "examined"], ["Dönen doküman", "returned"], ["Süre", "ms"]];
-  function liveHtml(L, runs) {
-    const metrics = L.metrics || METRICS;
-    const max = L.bar ? Math.max(...runs.map((r) => (r && !r.error && Number(metric(r, L.bar))) || 0), 1) : 1;
-    return `<div class="gp-runs">${L.runs.map((r, k) => {
-      const run = runs[k];
-      if (!run) return `<div class="gp-run"><h4>${esc(r.label)}</h4><p class="gp-wait">Ölçüm alınıyor…</p></div>`;
-      if (run.error) return "";                                    // a failed measurement is left out
-      const stages = [...String(run.e.plan || "").matchAll(STAGE_RE)].map((x) => x[1]).reverse().filter((x) => L.stages && L.stages[x]);   // the plan is outer → inner
-      return `<div class="gp-run"><h4>${esc(r.label)}</h4>
-        <dl>${(r.metrics || metrics).map(([label, key, map]) => {             // map {set, empty}: a text for a filled or an empty value
-          const v = metric(run, key);
-          return `<div><dt>${esc(label)}</dt><dd>${esc(map ? (v ? map.set : map.empty) : v ?? "?")}</dd></div>`;
-        }).join("")}</dl>
-        ${L.bar ? `<div class="gp-bar" aria-hidden="true"><span style="width:${Math.round(100 * (Number(metric(run, L.bar)) || 0) / max)}%"></span></div>` : ""}
-        ${stages.length ? `<p class="gp-stages-cap">${esc(L.stages_cap || "Veritabanının yaptığı işler, sırasıyla:")}</p><ol class="gp-stages">${stages.map((x) =>
-          `<li><code>${esc(x)}</code> ${esc(L.stages[x])}</li>`).join("")}</ol>` : ""}</div>`;
-    }).join("")}</div>`;
-  }
-  /* Section 5: each command as a Turkish sentence and as code, in the order of the simulation (one column per lane or
-   * per command), then one card per piece. The same colour marks one piece in every place (q0..q5). */
-  function queryHtml(Q) {
-    const parts = Q.parts || [];
-    const byId = Object.fromEntries(parts.map((x) => [x.id, x]));
-    const col = (k) => `q${k % 6}`;
-    const piece = (x) => `data-q="${esc(x.id)}" tabindex="0"`;
-    const column = (c) => {
-      const list = (c.parts || []).map((id) => byId[id]).filter(Boolean);
-      const say = list.map((x) => `<span class="${col(parts.indexOf(x))}" ${piece(x)}>${esc(x.say)}</span>`).join(" ");
-      const code = list.map((x) => `<span class="gq-line ${col(parts.indexOf(x))}${(c.mark || []).includes(x.id) ? " added" : ""}" ${piece(x)}><b>${parts.indexOf(x) + 1}</b>${" ".repeat(x.indent || 0)}${esc(x.code)}</span>`).join("");
-      return `<div class="gq-col"><h4>${esc(c.label || "")}</h4>${c.sub ? `<p class="gq-sub">${esc(c.sub)}</p>` : ""}
-        <span class="gq-label">Türkçesi</span><p class="gq-say">${say}${list.length && /[.!?]$/.test(list[list.length - 1].say) ? "" : "."}</p>
-        <span class="gq-label">Komut</span><pre class="gq-code">${code}</pre></div>`;
-    };
-    const cols = Q.columns || [];
-    return `<section class="gp-sec gq"><h3><span>5</span>${esc(Q.title || "Sorgu")}</h3><p>${esc(Q.intro || "")}</p>
-      <div class="${cols.length > 1 ? "gq-two" : "gq-one"}">${cols.map(column).join("")}</div>
-      ${Q.note ? `<p class="gq-diff-note">${esc(Q.note)}</p>` : ""}
-      <h4 class="gq-cards-title">${esc(Q.cards_title || "Parça parça")}</h4>
-      <ol class="gq-cards">${parts.map((x, k) => `<li class="${col(k)}" ${piece(x)}><header><b>${k + 1}</b><strong>${esc(x.name || "")}</strong><code>${esc(x.code)}</code>
-        ${x.tag ? `<em>${esc(x.tag)}</em>` : ""}</header><p>${esc(x.note)}</p></li>`).join("")}</ol></section>`;
-  }
-  function renderPanel() {
-    const P = step.panel;
-    const trig = calls[from];
-    const C = P.concept || {};
-    sheet.className = `gp eng-${(step.engines || [])[0] || "docdb"}`;
-    sheet.hidden = false;
-    sheet.innerHTML = `<header class="gp-head"><div><span class="gp-kicker">Perde arkası</span>${chips()}${step.use_case ? `<em>${esc(step.use_case)}</em>` : ""}
-        <h2>${esc(step.title)}</h2></div>
-      <div class="gp-nav"><small>Adım ${st.i + 1} / ${steps.length}</small><button type="button" class="quiet" data-c="min" aria-expanded="true">Paneli küçült</button>${nav()}</div></header>
-      <div class="gp-body">
-        <div class="gp-intro"><section class="gp-sec"><h3><span>1</span>Ne lazım?</h3><p>${esc(P.need)}</p></section>
-        <section class="gp-sec"><h3><span>2</span>Kavram: ${esc(C.term || "")}</h3><p>${esc(C.text || "")}</p></section></div>
-        ${(C.terms || []).length ? `<dl class="gp-terms">${C.terms.map(([t, d]) => `<div><dt>${esc(t)}</dt><dd>${esc(d)}</dd></div>`).join("")}</dl>` : ""}
-        ${P.sim ? `<section class="gp-sec"><h3><span>3</span>Simülasyon</h3><div class="gp-sim"></div></section>` : ""}
-        ${P.live ? `<section class="gp-sec"><h3><span>4</span>${esc(P.live.title || "Sistemde gerçekte ne oldu?")}</h3><p>${esc(P.live.intro || "")}</p>
-          <div class="gp-live"></div><p class="gp-reading">${esc(P.live.reading || "")}</p></section>` : ""}
-        ${P.query ? queryHtml(P.query) : ""}
-        <section class="gp-sec gp-keep"><h3>Akılda kalsın</h3><p>${esc(P.remember || "")}</p>${P.why_db ? `<p class="gp-why">${esc(P.why_db)}</p>` : ""}</section>
-      </div>`;
-    wire(sheet);
-    const minBtn = sheet.querySelector("[data-c=min]");
-    minBtn.addEventListener("click", () => {
-      const min = sheet.classList.toggle("min");
-      minBtn.textContent = min ? "Paneli aç" : "Paneli küçült";
-      minBtn.setAttribute("aria-expanded", String(!min));
-      document.body.classList.toggle("gp-on", !min);
-      schedule();
-    });
-    if (P.sim && window.GuidedSim) {
-      sim = GuidedSim.render(sheet.querySelector(".gp-sim"), P.sim);
-      const io = new IntersectionObserver((seen) => {             // the simulation plays once, when it comes into view in the panel
-        if (seen.some((x) => x.isIntersecting)) { io.disconnect(); setTimeout(() => sim.play(), 400); }
-      }, { root: sheet.querySelector(".gp-body"), threshold: 0.35 });
-      io.observe(sheet.querySelector(".gp-sim"));
-    }
-    sheet.querySelectorAll(".gq [data-q]").forEach((el) => {     // one piece of the command: the sentence, the code and the card light up together
-      const part = (P.query.parts || []).find((x) => x.id === el.dataset.q) || {};
-      const on = () => { sheet.querySelectorAll(`.gq [data-q="${el.dataset.q}"]`).forEach((x) => x.classList.add("on")); if (sim) sim.highlight(part.hl); };
-      const off = () => { sheet.querySelectorAll(".gq .on").forEach((x) => x.classList.remove("on")); if (sim) sim.highlight(null); };
-      el.addEventListener("mouseenter", on); el.addEventListener("focus", on);
-      el.addEventListener("mouseleave", off); el.addEventListener("blur", off);
-    });
-    if (P.live) fillLive(P.live, trig);
-    document.body.classList.add("gp-on");
-  }
-  // Sources of a run: trigger (the call that completed the step), page_call {path, query} (a call the page made before),
-  // fetch (a measurement for the panel only, not a shop call: GET, or method + body, body_from_trigger merges over the
-  // body of the trigger call).
-  async function fillLive(L, trig) {
-    const box = sheet.querySelector(".gp-live");
-    const same = (c, pc) => c.path === pc.path && Object.entries(pc.query || {}).every(([k, v]) => String(c.query[k]) === String(v));
-    const runs = L.runs.map((r) => (r.trigger ? (trig && trig.ok === false ? { error: true } : runOf(trig))      // a refused call: no box
-      : r.page_call ? runOf([...lm.calls].reverse().find((c) => same(c, r.page_call))) : null));
-    box.innerHTML = liveHtml(L, runs);
-    await Promise.all(L.runs.map(async (r, k) => {
-      if (!r.fetch) return;
-      try {
-        const body = r.body_from_trigger ? { ...((trig && trig.body) || {}), ...r.body_from_trigger } : r.body;
-        const init = body ? { method: r.method || "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {};
-        const j = await (await fetch(r.fetch, init)).json();
-        runs[k] = j.ok === false ? { error: true } : runOf({ entries: j.trace, data: j.data });
-      } catch (e) { runs[k] = { error: true }; }
-    }));
-    box.innerHTML = liveHtml(L, runs);
+    const tb = card.querySelector("[data-c=tab]");
+    if (tb) tb.addEventListener("click", () => { openTab(false); renderCard(); schedule(); });
   }
   function render() {
     renderCard();
-    if (actionDone && step.panel) renderPanel();
-    else { sheet.hidden = true; document.body.classList.remove("gp-on"); }
     cover.hidden = !(step.action === "look" || actionDone);       // after the action, the lit part is for reading only
     schedule();
   }
@@ -255,9 +137,11 @@
     if (actionDone) return;
     actionDone = true;
     st.done[st.i] = true; save(st);
+    if (step.panel) handOver();
     if (step.focus) phase = "look-result";
     render();
     scrollToLit();
+    setTimeout(scrollToLit, 1200);                               // parts of the page that load later can move the lit part
   }
   function next() {
     if (last) { save({ i: 0, done: {}, finished: true }); window.location.href = LM.mission.finish_url || "/"; return; }
@@ -287,8 +171,9 @@
   const inLit = (el) => { const t = lit(); return t && (t === el || t.contains(el)); };
   function guard(e) {
     const el = e.target instanceof Element ? e.target : e.target && e.target.parentElement;
-    if (!el || el.closest(".coach-card, .gp, dialog")) return;
+    if (!el || el.closest(".coach-card, dialog")) return;
     if (!actionDone && step.action !== "look" && inLit(el)) {
+      if (e.type === "click" && step.panel && !tabOpen && step.action === "click") openTab(true);   // the click is the gesture the new tab needs
       const link = el.closest("a[href]");
       if (link && !link.target) { e.preventDefault(); e.stopPropagation(); return; }   // pages change only with İleri
       if (e.type === "click" && w.click && !w.path) setTimeout(complete, 50);
@@ -297,11 +182,10 @@
       return;
     }
     e.preventDefault(); e.stopPropagation();
-    const box = sheet.hidden ? card : sheet;
-    box.classList.remove("shake"); void box.offsetWidth; box.classList.add("shake");
+    card.classList.remove("shake"); void card.offsetWidth; card.classList.add("shake");
   }
   ["click", "submit", "change", "input", "keydown", "dblclick", "contextmenu"].forEach((t) => document.addEventListener(t, (e) => {
-    if (t === "keydown" && !["Enter", " ", "Spacebar"].includes(e.key) && !e.target.closest?.(".coach-card, .gp") && inLit(e.target)) return;  // typing in the lit field
+    if (t === "keydown" && !["Enter", " ", "Spacebar"].includes(e.key) && !e.target.closest?.(".coach-card") && inLit(e.target)) return;  // typing in the lit field
     if (t === "keydown" && e.key === "Tab") return;
     guard(e);
   }, true));
@@ -312,7 +196,7 @@
     step = steps[st.i];
     last = st.i === steps.length - 1;
     w = step.wait || {};
-    actionDone = !step.wait; phase = "do"; calls = []; seen = 0; from = 0; sim = null;
+    actionDone = !step.wait; phase = "do"; calls = []; seen = 0; from = 0; tabOpen = false;
     bar();
     if (step.action === "look" && !w.fresh) lm.calls.forEach(onCall);   // a "look" step waits for a call that the page made at load; other steps wait for the user's own action
     if (actionDone && step.focus) phase = "look-result";

@@ -7,6 +7,7 @@ renders the site pages for all ten Engines (catalog.py has no database driver):
   /                                  Home hub with the three sections
   /e2etutorial, /e2etutorial/<e>     End-to-end tutorial of each Engine
   /guided-e-commerce-app/...         Lale Market with a locked, step-by-step mission
+  /guided-e-commerce-app/perde-arkasi/<n>  the "Perde arkası" tab of Guided step n
   /free-e-commerce-app/...           Lale Market with free navigation and per-page Tutorials
 The old friendly paths (/cart, /search, ...) redirect to the Free e-commerce app.
 The browser composes pages from several Engine Apps (docs/adr/0002-browser-composes-storefront.md).
@@ -241,6 +242,15 @@ def create_app():
                                                sims=e2e_sims.SIMS[eid](lang) if eid in e2e_sims.SIMS else {},
                                                sample_data=e2e_sims.tables(), usecases=e2e_sims.usecases(eid, lang),
                                                glossary=e2e_glossary() if eid == "glossary" else []))
+
+        @app.get(MODES["guided"]["base"] + "/perde-arkasi/<int:n>")
+        def perde_arkasi(n):
+            """The "Perde arkası" of Guided step n, in its own tab (static/js/perde.js). The shop tab hands over the calls."""
+            m = mission()
+            if not 1 <= n <= len(m["steps"]):
+                abort(404)
+            return render_template("site/perde.html", prefix=prefix, mission=m, n=n, step=m["steps"][n - 1],
+                                   modes=MODES, mode=MODES["guided"])
 
         for mode in MODES.values():
             for e in ENGINE_IDS:
