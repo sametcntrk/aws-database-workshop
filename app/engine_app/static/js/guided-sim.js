@@ -647,6 +647,46 @@
     return { html, lanes, paint, final: showSum };
   }
 
+  /* ---------- projection: one document read by _id; the projection decides which fields travel to the app.
+   * spec.doc {field: value}, spec.lanes [{id, title, fields (null = all), send, back}]. The count is the bytes that travel. */
+  function projection(spec) {
+    const DB = spec.engine_label || "DocumentDB", doc = spec.doc, keys = Object.keys(doc);
+    const size = (k) => new TextEncoder().encode(`"${k}":${JSON.stringify(doc[k])}`).length;
+    const lanes = {};
+    spec.lanes.forEach((ln) => {
+      const fr = [{ say: START, found: false, sent: [], cut: [], bytes: 0 }];
+      let s = { ...fr[0], found: true, say: `_id = "${doc._id}" ile doküman doğrudan bulundu (_id'nin index'i her koleksiyonda hazırdır). Tek okuma.` };
+      fr.push(s);
+      keys.forEach((k) => {
+        const keep = !ln.fields || ln.fields.includes(k) || k === "_id";
+        s = { ...s, active: k, sent: keep ? [...s.sent, k] : s.sent, cut: keep ? s.cut : [...s.cut, k], bytes: s.bytes + (keep ? size(k) : 0),
+          say: keep ? `${k} cevaba kondu (${size(k)} bayt).` : `${k} projection'da yok, cevaba konmadı.` };
+        fr.push(s);
+      });
+      fr.push({ ...s, active: null, done: true, say: `Bitti. Doküman bir kez okundu; uygulamaya ${s.sent.length} alan, yaklaşık ${s.bytes} bayt gitti.` });
+      lanes[ln.id] = actorize(fr, ln.send || "Uygulama find_one komutunu gönderiyor.", ln.back || "Uygulama ürünü tarayıcıya gönderdi.", DB, { found: false });
+    });
+    const show = (v) => (typeof v === "object" ? JSON.stringify(v) : String(v));
+    const body = `<table class="gs-table gs-doc" data-hl="table"><thead><tr><th>Alan</th><th>Değer</th><th class="gs-mark"></th></tr></thead><tbody>
+      ${keys.map((k) => `<tr data-k="${esc(k)}"><td data-hl="${k === "_id" ? "id" : "field"}"><code>${esc(k)}</code></td><td>${esc(show(doc[k]).slice(0, 80))}</td><td class="gs-mark"></td></tr>`).join("")}</tbody></table>`;
+    const html = `${actorBar(DB)}<div class="gs-lanes">${spec.lanes.map((ln) => shell(ln.id, ln.title, body, { hl: ln.id, count: "Ağdan giden (yaklaşık bayt)", result: false, col: true })).join("")}</div>${summary(spec.summary || "")}`;
+    function paint(root, id, f) {
+      const L = laneOf(root, id);
+      L.querySelector(".gs-count b").textContent = f.bytes || 0;
+      L.classList.toggle("done", !!f.done);
+      L.querySelectorAll("tbody tr").forEach((tr) => {
+        const k = tr.dataset.k;
+        tr.classList.toggle("active", f.active === k);
+        tr.classList.toggle("hit", (f.sent || []).includes(k));
+        tr.classList.toggle("miss", (f.cut || []).includes(k));
+        tr.classList.toggle("read", !!f.found);
+        tr.querySelector(".gs-mark").textContent = (f.sent || []).includes(k) ? "→" : (f.cut || []).includes(k) ? "✗" : "";
+      });
+      sayWho(L, f);
+    }
+    return { html, lanes, paint, final: showSum };
+  }
+
   /* ---------- Who works in a frame (owner rule: work of the app is never credited to the database).
    * actorize(frames, send, back, db): after START the app sends, every middle frame is the database's (unless it names
    * its own `who`), the last frame is the app sending the answer on. actorBar(db) is the bar above the lanes;
@@ -666,7 +706,7 @@
     root.querySelectorAll(".gs-actors [data-a]").forEach((x) => x.classList.toggle("on", ws.includes(x.dataset.a)));
   }
 
-  const KINDS = { geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
+  const KINDS = { projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
 
   function render(box, spec) {
     const kind = KINDS[spec.kind];

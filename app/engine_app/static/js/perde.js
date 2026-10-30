@@ -29,6 +29,7 @@
   function metric(run, key) {
     const e = run.e;
     if (key.startsWith("data.")) return key.slice(5).split(".").reduce((o, k) => (o == null ? undefined : o[k]), run.data);
+    if (key === "bytes") return `${new TextEncoder().encode(JSON.stringify(run.data)).length} bayt`;   // size of the response data
     const nth = /^e(\d)\.(\w+)$/.exec(key);                     // "e1.ms": a field of the call's second trace entry
     if (nth) { const x = (run.all || [])[Number(nth[1])] || {}; return nth[2] === "ms" && x.ms !== undefined ? `${x.ms} ms` : x[nth[2]]; }
     const m = /docs examined:\s*(\d+),\s*returned:\s*(\d+)/.exec(e.explain || "");

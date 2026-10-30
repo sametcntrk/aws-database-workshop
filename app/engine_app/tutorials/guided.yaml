@@ -2249,16 +2249,250 @@ steps:
   - page: product
     path: /p/P0001
     engines: [docdb]
-    use_case: One read for one product
-    title: Read fewer fields
+    use_case: Bir ürün için tek okuma
+    title: Daha az alan oku
     why: >-
-      The product, its attributes and its tags are in one document. One read by _id returns all of it. A projection returns only the fields that you ask for.
-    do: Click the lit button "Card fields only".
+      Bir ürünün sayfasındasın: adı, fiyatı, açıklaması ve özellikleri tek seferde geldi. Şimdi aynı ürünü sadece kartta
+      görünen bilgilerle isteyeceksin ve veritabanından ne kadar az veri geldiğine bakacaksın.
+    do: Aydınlık "Card fields only" (sadece kart alanları) butonuna tıkla.
     target: "#exp-proj [data-value=card]"
     action: click
     wait: {method: GET, path: /docdb/api/product/*, query: {projection: card}}
     focus: "#pdp"
-    result: The document size in the note is smaller now. The card projection has no description and no attributes, so less data goes over the network.
+    result: The card projection has no description and no attributes, so less data goes over the network.
+    panel:
+      need: >-
+        Ürün sayfası bir ürünün bütün bilgisini gösteriyor: ad, fiyat, stok, açıklama, renk, garanti, etiketler. Liste ve kart
+        gibi yerlerde ise sadece birkaç alan gerekiyor. Her yerde bütün dokümanı taşımak, ürün sayısı ve doküman boyutu
+        büyüdükçe ağı ve belleği gereksiz yere doldurur.
+      concept:
+        term: Tek okuma ve projection
+        text: >-
+          DocumentDB'de bir ürünün bütün bilgisi tek bir dokümanda durur; ürünü getirmek için tablolar birleştirilmez, _id ile
+          tek bir okuma yeter. Projection ise "bu dokümanın sadece şu alanlarını getir" demektir. Bir dosya dolabından bütün
+          dosyayı değil, sadece kapak sayfasının fotokopisini istemek gibi: dosya yine bir kez açılır, ama elinize daha az
+          kâğıt gelir.
+        terms:
+          - [_id, "Her dokümanın benzersiz anahtarı. Burada ürün numarası (P0001). Üzerinde her zaman bir index vardır."]
+          - [find_one, "Tek bir doküman getiren okuma."]
+          - [Projection, "Okumada hangi alanların döneceğini seçmek. 1 \"getir\" demek; yazılmayan alanlar gelmez."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde ürün dokümanı için hazırlık
+        intro: >-
+          Ürün sayfası hiç açılmadan, dokümanın şekli ve hangi ekranın hangi alanları okuyacağı belirlenir. Aşağıdaki beş adım bu
+          hazırlığın sırasıdır.
+        text:
+          - title: Önce ekranların soruları yazılır
+            text: >-
+              Ürün sayfası "bu ürünün her şeyi", kart ve listeler "ad, fiyat, puan, stok" ister. İki soru aynı dokümandan,
+              farklı projection'larla cevaplanır.
+            code: |-
+              db.products.findOne({ _id: "P0001" })                                         // ürün sayfası
+              db.products.findOne({ _id: "P0001" }, { name: 1, price: 1, rating: 1, stock: 1 }) // kart
+          - title: Birlikte okunan bilgi birlikte saklanır
+            text: >-
+              Ürün sayfası özellikleri ve etiketleri her zaman ürünle birlikte gösterir; bu yüzden onlar ayrı koleksiyonda değil,
+              dokümanın içinde durur. Böylece sayfa tek okumayla, JOIN olmadan çizilir.
+            code: |-
+              { _id: "P0001", name: "…", price: 3373.84, tags: ["hızlı kargo", "çevreci"],
+                attributes: { renk: "siyah", garanti_ay: 12, agirlik_kg: 2.45 }, description: "…" }
+          - title: Sınırsız büyüyen listeler ayrılır
+            text: >-
+              Yorumlar ya da fiyat geçmişi gibi zamanla sınırsız büyüyen listeler dokümanın içine konmaz; ayrı bir koleksiyonda,
+              ürün numarasıyla tutulur. Bir doküman en fazla 16 MB olabilir ve büyük doküman her okumada daha çok veri taşır.
+          - title: Her ekran kendi projection'ını kullanır
+            text: >-
+              Liste ve kartlar sadece gereken alanları ister. Böylece hem ağdan daha az veri geçer hem uygulama sunucusunun
+              belleği daha az dolar. Uzun açıklama gibi büyük alanlar sadece ürün sayfasında okunur.
+          - title: Okuma kopyalara dağıtılır
+            text: >-
+              Ürün sayfası çok okunur. Okuma tercihi secondaryPreferred olur: okumalar replica'lara gider, ana kopya yazmalara
+              kalır. _id ile okuma her zaman index'le, tek bir dokümana doğrudan gider.
+      feed:
+        title: Veri nereden geliyor?
+        writes: >-
+          Katalog yönetimi: ürün ekleyen, fiyat, stok ve açıklama güncelleyen arka ofis ekranları ya da tedarikçi dosyalarını
+          aktaran bir iş. Hepsi uygulama üzerinden yazar.
+        reads: Uygulama, ürün sayfası, kartlar ve sepete ekleme sırasında ürün bilgisi için.
+        kind: >-
+          Uygulama orkestrasyonu. DocumentDB başka bir veritabanından kendiliğinden veri çekmez. Kendi değişikliklerini ise
+          change streams ile dışarı verebilir.
+        with: >-
+          Ürün sayfası beş veritabanına dokunur: ürünün kendisi DocumentDB'den, görseli nesne deposundan (S3), "baktın" kaydı ve
+          "son baktıkların" bir olay tablosundan (Keyspaces), öneriler bir graf veritabanından (Neptune), oturum bellekten
+          (ElastiCache). Sayfa bunları ayrı isteklerle alır ve tarayıcı birleştirir.
+        best: >-
+          Katalog tek yerde tutulur. Ürün bilgisinin kopyası başka yerlere (sepet, olay kaydı, arama index'i) sadece gereken
+          alanlarla ve yazıldığı anki değeriyle konur; asıl değer her zaman katalogdan okunur.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              Bir ürün kartına (Alpen Kablosuz Kulaklık 1) tıkladın ve /p/P0001 açıldı. Açılırken oturumun güncellendi.
+            engines: [elasticache]
+          - text: >-
+              Sayfa önce ürünün kendisini istedi; "Full document" (bütün doküman) seçiliydi. Uygulama DocumentDB'ye _id ile tek
+              bir okuma gönderdi ve bütün doküman geldi. Simülasyonun sol şeridi bu istek. Büyük görsel ayrıca S3'ten geldi.
+            engines: [docdb, s3]
+          - text: >-
+              Ürün gelince sayfa "baktın" kaydını Keyspaces'e yazdırdı, "Son baktıkların" şeridini ve Neptune'dan önerileri istedi
+              (sonraki adımlarda bunlara bakacaksın).
+            engines: [keyspaces, neptune]
+          - text: >-
+              Sonra "Card fields only" butonuna bastın. Tarayıcın aynı ürünü projection=card ile istedi; uygulama aynı okumayı
+              projection'la gönderdi. Simülasyonun sağ şeridi bu istek. Açıklama ve özellikler sayfadan kalktı.
+            engines: [docdb]
+      sim:
+        kind: projection
+        caption: >-
+          Gerçek ürün dokümanı (P0001). İki şerit iki ayrı gerçek istek: soldaki sayfa açılırken bütün dokümanı, sağdaki senin
+          tıklamanla sadece kart alanlarını istedi. Bayt sayıları alanların JSON hâlinden hesaplanır.
+        doc:
+          _id: P0001
+          name: Alpen Kablosuz Kulaklık 1
+          category: Elektronik
+          brand: Alpen
+          type: Kablosuz Kulaklık
+          price: 3373.84
+          stock: 128
+          color: siyah
+          rating: 4.8
+          attributes: {renk: siyah, garanti_ay: 12, agirlik_kg: 2.45}
+          tags: [hızlı kargo, çevreci]
+          description: Alpen markalı siyah kablosuz kulaklık. Elektronik kategorisinde, şık bir ürün.
+        lanes:
+          - id: full
+            title: "t-1 · İstek 1 · Sayfa açılınca · Bütün doküman"
+            fields: null
+            send: >-
+              Ürün sayfasını açtın. Tarayıcın ürünü istedi; uygulama DocumentDB'ye find_one({ _id: "P0001" }) gönderiyor,
+              projection yok.
+            back: Uygulama bütün dokümanı tarayıcına gönderdi; sayfa adı, fiyatı, açıklamayı ve özellikleri çizecek.
+          - id: card
+            title: "t0 · İstek 2 · Senin tıklaman · Sadece kart alanları"
+            fields: [name, price, rating, category, brand, tags, stock]
+            send: >-
+              "Card fields only" butonuna bastın. Tarayıcın ürünü projection=card ile istedi; uygulama aynı okumayı yedi alanlık
+              bir projection'la gönderiyor.
+            back: Uygulama sadece kart alanlarını tarayıcına gönderdi; açıklama ve özellikler sayfadan kalkacak.
+        summary: >-
+          İki istekte de doküman bir kez, _id ile okundu. Fark ağdan geçen veride: projection yalnızca istenen alanları gönderdi.
+          Gerçek ölçümde kart alanları bütün dokümanın yarısından az (aşağıdaki "Gerçek dokümanda ne oldu?" kutusu).
+      wire:
+        what: >-
+          Uygulama, DocumentDB'ye açık tuttuğu bağlantılar üzerinden komutu gönderir (pymongo kütüphanesi).
+        dst: "dbws-docdb.cluster-ccgs3qxfidad.eu-central-1.docdb.amazonaws.com : 27017"
+        dst_note: >-
+          DocumentDB cluster'ının adresi. Okuma tercihi "secondaryPreferred" olduğu için bu okuma replica'ya gider.
+        rows:
+          - [Şifreleme, TLS, gerçek, DocumentDB'nin sertifikası AWS'nin sertifika dosyasıyla kontrol edilir.]
+          - [Protokol, MongoDB wire protokolü (OP_MSG), gerçek, "MongoDB sürücülerinin konuştuğu ikili dil. DocumentDB bu dili anlar."]
+          - [Kimlik, "Kullanıcı adı + şifre, bağlantı açılırken", gerçek, "Şifre kodda yazmaz; uygulama onu çalışırken AWS Secrets Manager'dan alır."]
+        body_label: Çerçevenin içeriği (okunur hâle getirilmiş)
+        body: |-
+          OP_MSG   veritabanı: shop
+          { find: "products",
+            filter: { _id: "P0001" },
+            projection: { name: 1, price: 1, rating: 1, category: 1, brand: 1, tags: 1, stock: 1 },
+            limit: 1,
+            $readPreference: { mode: "secondaryPreferred" } }
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. İki istek de aynı
+        kodu çalıştırır; fark adresteki projection seçimi.
+      app_code:
+        - file: engines/docdb.py
+          func: api_product
+          title: Ürün isteği (iki istekte de aynı kod)
+          sub: Adresteki projection=full ya da projection=card hangi alanların geleceğini seçer.
+          lines:
+            - {match: '@bp.get("/api/product/<pid>")', say: "Ürün isteği buraya gelir; adres ürün numarasını ve projection seçimini taşır.", tag: Tarayıcı → Uygulama}
+            - {match: 'full = request.args.get("projection", "full") == "full"', say: "Bütün doküman mı, sadece kart alanları mı, ona bakar.", tag: Uygulamanın içinde}
+            - {match: 'd = db().products.find_one({"_id": pid}, None if full else CARD)', say: "Tek okuma DocumentDB'ye gider: _id ile, gerekiyorsa kart alanları projection'ıyla.", tag: [Uygulama → DocumentDB, DocumentDB → Uygulama], hl: id}
+            - {match: 'size = len(json.dumps(d', say: Gelen dokümanın boyutunu bayt olarak hesaplar (isteğin kaydı için)., tag: Uygulamanın içinde}
+            - {match: 'return jsonify(ok=False, error=f"Product {pid} does not exist."', say: "Ürün yoksa \"böyle bir ürün yok\" cevabı döner.", tag: Uygulama → Tarayıcı}
+            - {match: 'return jsonify(trace.payload(_doc(d)))', say: "_id'nin adını product_id yapar ve ürünü tarayıcıya gönderir.", tag: Uygulama → Tarayıcı}
+      live:
+        title: Gerçek dokümanda ne oldu?
+        intro: >-
+          Sayfa açılırken bütün dokümanla giden okuma ve senin tıklamanla kart alanlarıyla giden okuma.
+        runs:
+          - label: Bütün doküman (sayfa açılınca)
+            page_call: {path: /docdb/api/product/P0001, query: {projection: full}}
+            metrics: [[Okunan doküman, items], [Cevaptaki ürün verisi, bytes], [Süre, ms]]
+          - label: Sadece kart alanları (senin tıklaman)
+            trigger: true
+            metrics: [[Okunan doküman, items], [Cevaptaki ürün verisi, bytes], [Süre, ms]]
+        reading: >-
+          İki okumada da tek doküman okundu ve süre birkaç milisaniye. Fark taşınan veride: kart alanları bütün dokümanın yarısından
+          az. Tek bir üründe bu birkaç yüz bayt; bir listede 48 ürün ve büyük açıklamalarla fark katlanır. Süre her istekte biraz
+          değişir.
+      query:
+        title: Sayfa DocumentDB'ye ne dedi?
+        intro: >-
+          İki sütun, simülasyondaki iki isteğin komutu. Tek fark projection parçası. Bir parçanın üzerine gelince cümlede, kodda ve
+          açıklamada aynı yer parlar.
+        cards_title: Parça parça
+        parts:
+          - id: one
+            say: products koleksiyonundan _id'si P0001 olan tek ürünü
+            code: 'db.products.findOne({ _id: "P0001" }'
+            name: Hangisi?
+            note: _id ile okuma. _id'nin index'i her koleksiyonda hazırdır; veritabanı doğrudan o dokümana gider.
+            hl: id
+          - id: all
+            say: bütün alanlarıyla getir.
+            code: )
+            name: Hangi alanlar?
+            note: Projection yok; dokümanın bütün alanları gelir.
+            hl: field
+          - id: crd
+            say: sadece ad, fiyat, puan, kategori, marka, etiket ve stok alanlarıyla getir.
+            code: ', { name: 1, price: 1, rating: 1, category: 1, brand: 1, tags: 1, stock: 1 })'
+            name: Hangi alanlar?
+            note: Projection. 1 "getir" demek; açıklama, özellikler ve tür gelmez. _id her zaman gelir.
+            hl: field
+            tag: sadece sağdaki komutta var
+        columns:
+          - label: Bütün doküman
+            sub: Sayfa açılırken giden komut.
+            via: Uygulama bu komutu pymongo kütüphanesinin find_one() metoduyla gönderir.
+            parts: [one, all]
+          - label: Sadece kart alanları
+            sub: Senin "Card fields only" tıklamanla giden komut.
+            via: Aynı find_one() çağrısı; uygulama ikinci parametre olarak kart alanlarının listesini ekledi.
+            parts: [one, crd]
+            mark: [crd]
+        note: >-
+          Dikkat: projection okunan doküman sayısını değiştirmez; doküman yine bir kez okunur. Değişen, okunduktan sonra
+          uygulamaya gönderilen alanlardır.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          DocumentDB'nin işi dokümanı verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: DocumentDB → Uygulama
+            text: Sadece yedi kart alanı ve _id geldi.
+          - who: Uygulama
+            text: Boyutu isteğin kaydına yazdı ve _id'nin adını product_id yaptı.
+          - who: Uygulama → Tarayıcın
+            text: Ürünü ve isteğin kaydını tek bir JSON cevabında gönderdi.
+          - who: Tarayıcın
+            text: >-
+              Adı, fiyatı ve puanı yeniden yazdı. Açıklama yerine "The card projection does not return the description" (kart
+              projection'ı açıklamayı getirmez) yazdı; özellik listesi kısaldı.
+          - who: Sonra
+            text: >-
+              Görsel değişmedi; S3'ten bir kez gelmişti. "Full document" butonuna basarsan bütün doküman yeniden gelir.
+      remember: >-
+        Bir ürünün bütün bilgisi tek dokümanda olunca tek okuma yeter. Her ekran sadece ihtiyacı olan alanları projection'la
+        ister; doküman yine bir kez okunur ama ağdan daha az veri geçer.
+      why_db: >-
+        Neden DocumentDB? Ürünün farklı yapıdaki bütün bilgisi tek bir dokümanda ve _id ile tek okumada geliyor; projection
+        gereken alanları seçiyor. Bedeli: sınırsız büyüyen listeler (yorumlar) dokümana konmaz, ayrı tutulur.
 
   - page: product
     path: /p/P0001
