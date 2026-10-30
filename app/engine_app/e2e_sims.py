@@ -487,7 +487,8 @@ def aurora(lang):
 
 
 def _aurora(lang):
-    return {**{uc["sim"]: usecase_scorecard(lang, uc) for uc in _uc.AURORA_USECASES if uc["sim"]},
+    return {**{uc["sim"]: usecase_scorecard(lang, uc) for uc in _uc.AURORA_USECASES if uc["sim"]},   # model 1, old English page
+            **({uc["sim"]: weighted_scorecard(lang, uc) for uc in _ucw.AURORA_W if uc["sim"]} if lang == "tr" else {}),   # model 2, Turkish page
             "decide_checkout": decide(lang, "checkout"), "decide_dashboard": decide(lang, "dashboard"), "decide_sessions": decide(lang, "sessions"),   # old English page only
             "where": where_city(lang), "index": seq_vs_index(lang), "join": join_order(lang), "group": group_by_category(lang),
             "constraints": constraints(lang), "tx": tx_rollback(lang), "lost": last_piece(lang, False), "locked": last_piece(lang, True),
@@ -1133,19 +1134,24 @@ def _pts(p, w):
     return _ucw.fmt(p * w / 10)
 
 
+R1C = _ucw.R1_CATALOG
+
+
 def weighted_scorecard(lang, uc):
     """The M7 simulation of a weighted use case card (model 2): the same rows, weights, points and reasons as the card.
     Each step opens one row: its weight and why, then each candidate's points and weighted contribution."""
     cands = [SVC[c] for c in uc["cands"]]
     rows = uc["rows"]
     labels = [r["label"] for r in rows]
-    cols = [T(lang, "candidate", "aday")] + labels + [T(lang, "points /100", "puan /100"), T(lang, "place", "sıra")]
-    board = [[c] + [""] * len(rows) + ["0", ""] for c in cands]
+    r1w = sum(r["w"] for r in rows if r["code"] in R1C)
+    cols = [T(lang, "candidate", "aday")] + labels + [T(lang, f"R1 subtotal /{r1w}", f"R1 ara toplam /{r1w}"), T(lang, "points /100", "puan /100"), T(lang, "place", "sıra")]
+    board = [[c] + [""] * len(rows) + ["0", "0", ""] for c in cands]
     total = {c: 0.0 for c in uc["cands"]}
+    r1tot = {c: 0.0 for c in uc["cands"]}
     rules = T(lang, "Rules: every row has a weight from the priorities of this workload (sum 100). Each candidate gets 0-10 points per row; "
-                    "contribution = points x weight / 10. There is no disqualification: a weak candidate loses on the total.",
+                    "contribution = points x weight / 10. There is no must row: a weak candidate loses on the total.",
               "Kurallar: her satırın bu iş yükünün önceliğinden gelen bir ağırlığı var (toplam 100). Her aday her satırda 0-10 puan alır; "
-              "katkı = puan x ağırlık / 10. Diskalifiye yoktur: zayıf aday toplamda kaybeder.")
+              "katkı = puan x ağırlık / 10. Zorunlu satır yoktur: zayıf aday toplamda kaybeder.")
     steps = [{"say": T(lang, "Workload. ", "İş yükü. ") + T(lang, *uc["story"]) + "\n" + rules + "\n" + T(lang, "Weights: ", "Ağırlıklar: ") + T(lang, *uc["wnote"]),
               "marks": {}, "rows": {"board": deepcopy(board)}, "out": [], "count": {T(lang, "rows scored", "puanlanan satır"): f"0 / {len(rows)}", T(lang, "weight opened", "açılan ağırlık"): "0 / 100"}}]
     opened = 0
@@ -1155,6 +1161,9 @@ def weighted_scorecard(lang, uc):
         for k, c in enumerate(uc["cands"]):
             p, why = uc["scores"][c][i]
             total[c] += p * r["w"] / 10
+            if r["code"] in R1C:
+                r1tot[c] += p * r["w"] / 10
+                board[k][-3] = _ucw.fmt(r1tot[c])
             board[k][i + 1] = f"{p}→{_pts(p, r['w'])}"
             board[k][-2] = _ucw.fmt(total[c])
             detail.append([cands[k], f"{p}/10 → {_pts(p, r['w'])}", T(lang, *why)])
@@ -1182,7 +1191,7 @@ def weighted_scorecard(lang, uc):
             "tables": [{"id": "req", "name": T(lang, "rows and weights", "satırlar ve ağırlıklar"), "cols": ["id", T(lang, "weight", "ağırlık"), T(lang, "what is scored", "ne puanlanır")],
                         "rows": [[r["label"], r["w"], _wrow_name(lang, r).split(" ", 1)[1].lstrip("· ")] for r in rows], "key": [0], "ref": []},
                        {"id": "board", "name": T(lang, "scorecard: points → contribution", "puan tablosu: puan → katkı"), "cols": cols,
-                        "rows": [[c] + [""] * len(rows) + ["0", ""] for c in cands], "key": [0], "ref": []}],
+                        "rows": [[c] + [""] * len(rows) + ["0", "0", ""] for c in cands], "key": [0], "ref": []}],
             "out": {"name": T(lang, "this row for each candidate (at the end: the ranking)", "bu satır her aday için (sonda: sıralama)"),
                     "cols": [T(lang, "candidate", "aday"), T(lang, "points → contribution", "puan → katkı"), T(lang, "reason (at the end: place)", "gerekçe (sonda: sıra)")]},
             "steps": steps}
