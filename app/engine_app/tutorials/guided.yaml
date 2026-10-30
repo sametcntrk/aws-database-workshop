@@ -7679,15 +7679,241 @@ steps:
   - page: graph
     path: /admin/graph
     engines: [neptune]
-    use_case: Relationship analysis
-    title: The neighbourhood of a customer
-    why: Lukas Weber buys books only. Other customers bought the same books. A graph query follows edges. It does not join tables.
-    do: Select "Lukas Weber" in the lit list.
+    use_case: İlişki analizi
+    title: Bir müşterinin çevresi
+    why: >-
+      Müşteri grafı ekranındasın; seçili müşterinin aldığı ürünler ve aynı ürünleri alan başka müşteriler bir ağ olarak çiziliyor.
+      Şimdi başka bir müşteriyi seçip onun çevresine bakacaksın.
+    do: Aydınlık listeden "Lukas Weber"i seç.
     target: "#who"
     action: change
     wait: {method: GET, path: /neptune/api/graph, query: {persona: C00004}}
     focus: "#graph"
     result: The graph shows Lukas, his books, and other buyers of the same books.
+    panel:
+      need: >-
+        "Bu müşteri neler aldı ve aynı şeyleri başka kimler aldı?" sorusu, müşteri ilişkilerini anlamak ve topluluklar bulmak için
+        sorulur. Cevap tek bir kayıtta değil; müşteriden ürünlere, ürünlerden başka müşterilere giden bağlantılarda. Bu
+        bağlantıların tablolar birleştirilmeden, doğrudan takip edilmesi gerekiyor.
+      concept:
+        term: Çevre (neighbourhood) ve kenar takibi
+        text: >-
+          Bir düğümün çevresi, ona birkaç kenar uzaklıktaki düğümlerdir. Lukas'ın 1 adım ötesinde aldığı kitaplar, 2 adım ötesinde
+          aynı kitapları alan müşteriler var. Neptune Lukas'ın düğümünden başlar ve kenarları takip eder; tablolar arasında arama
+          yapmaz. Bir arkadaşının arkadaşlarını, onun telefon rehberinden bakarak bulmak gibi.
+        terms:
+          - [Düğüm ve kenar, "Müşteri ve ürün düğüm; satın alma BOUGHT kenarı."]
+          - [OPTIONAL MATCH, "Eşleşme yoksa satırı düşürmeden devam etmek; çevresi boş bir ürün de listede kalır."]
+          - ["collect(...)[0..3]", "Bir ürünün diğer alıcılarından sadece ilk üçünü almak; ağ okunabilir kalsın diye."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde müşteri grafı için hazırlık
+        intro: >-
+          Graf ekranı hiç açılmadan, model, sınırlar ve bu ekranın sorgusu hazırlanır. Aşağıdaki beş adım bu hazırlığın sırasıdır.
+        text:
+          - title: Önce ekranın sorusu yazılır
+            text: >-
+              "Bu müşterinin aldığı ürünler ve her ürünü alan birkaç başka müşteri". Çıktı bir ağ: düğümler ve kenarlar.
+            code: |-
+              MATCH (me:Customer {`~id`: $cid})-[:BOUGHT]->(p:Product)
+              OPTIONAL MATCH (p)<-[:BOUGHT]-(o:Customer) WHERE o <> me
+              WITH me, p, collect(DISTINCT o)[0..3] AS others
+              RETURN … LIMIT 12
+          - title: Ağ boyutu sınırlanır
+            text: >-
+              Çok satan bir ürünün binlerce alıcısı olabilir (süper düğüm). Ekran için ürün başına birkaç alıcı ve toplamda birkaç
+              ürün alınır (collect(...)[0..3], LIMIT 12); bütün çevre çizilmez.
+          - title: Plan ve süre kontrol edilir
+            text: >-
+              openCypher explain ile sorgunun hangi düğümden başladığı ve kaç kenar dolaştığı görülür. Başlangıç düğümü ~id ile
+              verildiği için arama doğrudan oradan başlar.
+          - title: Soğuk başlangıç hesaba katılır
+            text: >-
+              Neptune Serverless bir süre sorgu almazsa kapasitesini düşürür ve veri bellekten çıkar; ilk sorgu birkaç saniye
+              sürebilir, sonrakiler hızlanır. Kullanıcıya bekleme göstergesi gösterilir; kritik ekranlar için en düşük kapasite
+              yükseltilir.
+          - title: Ağır analizler ayrı çalışır
+            text: >-
+              Topluluk bulma ya da merkezilik gibi bütün grafı tarayan analizler uygulamanın isteğinde değil, ayrı bir işte (ör.
+              Neptune Analytics) çalışır; sonuçlar düğümlere özellik olarak yazılır.
+      feed:
+        title: Veri nereden geliyor?
+        writes: >-
+          Asıl sipariş kaydı ilişkisel veritabanına yazılır; grafa her yeni siparişin BOUGHT kenarlarını bir besleme süreci ekler.
+        reads: Uygulama, müşteri grafı ekranı ve öneri şeritleri için.
+        kind: >-
+          Neptune başka bir veritabanından kendiliğinden veri çekmez; graf dışarıdan beslenir (değişiklik akışı ya da outbox ile).
+        with: >-
+          Müşteri adları ve ürün kategorileri graftaki düğümlerde kopya olarak durur; asıl müşteri kaydı ilişkisel veritabanında
+          (Aurora), ürünün asıl kaydı katalogda (DocumentDB).
+        best: >-
+          İlişki soruları grafta, kısa ve sınırlı yürüyüşlerle; bütün grafı tarayan analizler ayrı bir işte. Graf asıl kayıttan
+          beslenir ve gerekirse ondan yeniden kurulur.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              "Customer graph" (müşteri grafı) ekranını açtın. Sayfa seçili persona'nın (ör. Ayşe) çevresini istedi; uygulama
+              Neptune'a bir openCypher sorgusu gönderdi ve ağ çizildi.
+            engines: [neptune]
+          - text: >-
+              Listeden "Lukas Weber"i seçtin. Tarayıcın aynı isteği persona=C00004 ile gönderdi; uygulama aynı sorguyu Lukas'ın
+              düğümünden başlatarak gönderdi. Simülasyon bu yürüyüşü gösteriyor.
+            engines: [neptune]
+          - text: >-
+              Ağ yeniden çizildi: ortada Lukas, çevresinde kitapları, kitapların çevresinde aynı kitapları alan müşteriler. Lukas
+              sadece kitap alıyor.
+            engines: [neptune]
+      sim:
+        kind: graph-walk
+        caption: >-
+          Gerçek graftan Lukas Weber'in çevresi: aldığı 12 kitaptan 4'ü ve her kitabı alan 3 müşteri (sorgu da kitap başına en
+          fazla 3 müşteri alıyor).
+        tick_ms: 1500
+        summary: >-
+          Yürüyüş Lukas'tan başladı, 2 adımda bitti ve sadece onun çevresine dokundu. Gerçek grafta 1000 müşteri ve 200 ürün var;
+          sorgu bunların çok küçük bir kısmını okudu.
+        lanes:
+          - id: lukas
+            title: "t0 · Senin seçimin · Lukas Weber'in çevresi (2 hop)"
+            start: {id: C00004, label: Lukas Weber, type: me}
+            start_title: Seçilen müşteri
+            start_say: Yürüyüş Lukas Weber'in düğümünden başlıyor.
+            send_say: >-
+              Listeden Lukas Weber'i seçtin. Tarayıcın grafı persona=C00004 ile istedi; uygulama Neptune'a openCypher sorgusunu
+              gönderiyor.
+            back_say: >-
+              Uygulama gelen satırları düğüm ve kenar listesine çevirdi ve tarayıcına gönderdi; ağ yeniden çizilecek.
+            result_title: Ortak kitap sayısı
+            hops:
+              - title: Aldığı kitaplar
+                say: "1. hop: Lukas'ın BOUGHT kenarları takip edildi; aldığı kitaplara ulaşıldı (burada 4'ü)."
+                nodes:
+                  - {id: P0009, label: Python ile Veri 9, type: product, from: [C00004]}
+                  - {id: P0019, label: Bulut Mimarisi 19, type: product, from: [C00004]}
+                  - {id: P0029, label: Veritabanı Tasarımı 29, type: product, from: [C00004]}
+                  - {id: P0039, label: Dağıtık Sistemler 39, type: product, from: [C00004]}
+              - title: Aynı kitabı alanlar
+                say: "2. hop: her kitaba gelen BOUGHT kenarları takip edildi; her kitap için en fazla 3 başka müşteri alındı."
+                nodes:
+                  - {id: C00422, label: Mehmet Şahin, type: customer, from: [P0009]}
+                  - {id: C00760, label: İrem Fischer, type: customer, from: [P0009]}
+                  - {id: C00062, label: İrem Aydın, type: customer, from: [P0019]}
+                  - {id: C00378, label: Naz Yılmaz, type: customer, from: [P0019]}
+                  - {id: C00910, label: Umut Weber, type: customer, from: [P0029]}
+                  - {id: C00829, label: Mert Arslan, type: customer, from: [P0039]}
+            end_say: >-
+              Ağ hazır. Her müşterinin Lukas'la kaç ortak kitabı olduğu sayılabilir; burada her biri bir kitapta buluşuyor.
+      wire:
+        what: >-
+          Uygulama sorguyu HTTPS ile Neptune'a gönderir (requests kütüphanesi); her istek uygulamanın IAM kimliğiyle imzalanır.
+        dst: "dbws-neptune.cluster-ccgs3qxfidad.eu-central-1.neptune.amazonaws.com : 8182"
+        dst_note: >-
+          Neptune cluster'ının adresi (Serverless, 1–8 NCU). İnternete kapalı veri alt ağında duruyor.
+        rows:
+          - [Şifreleme, TLS (HTTPS), gerçek, Neptune sadece şifreli bağlantı kabul eder.]
+          - [Protokol, "HTTP, POST /openCypher", gerçek, "Sorgu ve parametreleri form alanları olarak gider."]
+          - [Kimlik, "IAM, SigV4 imzası (servis: neptune-db)", gerçek, "Şifre yok. İsteğe geçici AWS kimliğiyle hesaplanmış bir imza eklenir."]
+        body_label: İsteğin içeriği (okunur hâle getirilmiş)
+        body: |-
+          POST /openCypher HTTP/1.1
+          Authorization: AWS4-HMAC-SHA256 Credential=…/eu-central-1/neptune-db/aws4_request, …
+
+          query=MATCH (me:Customer {`~id`: $cid})-[:BOUGHT]->(p:Product)
+                OPTIONAL MATCH (p)<-[:BOUGHT]-(o:Customer) WHERE o <> me
+                WITH me, p, collect(DISTINCT o)[0..3] AS others
+                RETURN me.name AS me, p.`~id` AS pid, p.name AS pname, p.category AS cat, [x IN others | {id: x.`~id`, name: x.name}] AS others LIMIT 12
+          &parameters={"cid": "C00004"}
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Neptune satır satır
+        cevap verir; ağı (düğüm ve kenar listesi) uygulama kurar.
+      app_code:
+        - file: engines/neptune.py
+          func: api_graph
+          title: Graf isteği
+          sub: Listeden müşteri seçince gelen istek.
+          lines:
+            - {match: '@bp.get("/api/graph")', say: "Graf isteği buraya gelir; adres seçilen müşteriyi taşır.", tag: Tarayıcı → Uygulama}
+            - {match: 'cid = request.args.get("persona") or persona_id()', say: "Başlangıç düğümü: seçilen müşteri (yoksa çerezdeki persona).", tag: Uygulamanın içinde, hl: start}
+            - {match: 'rows = _q(query, {"cid": cid})', say: "Sorgu Neptune'a gider; her ürün için bir satır döner (en fazla 12).", tag: [Uygulama → Neptune, Neptune → Uygulama], hl: hop1}
+            - {match: 'nodes, edges, seen = [{"id": cid', say: "Ağı kurmaya başlar: ilk düğüm müşterinin kendisi.", tag: Uygulamanın içinde}
+            - {match: 'edges.append({"from": cid, "to": r["pid"]})', say: "Her ürün için müşteriden ürüne bir kenar ekler.", tag: Uygulamanın içinde, hl: hop1}
+            - {match: 'edges.append({"from": o["id"], "to": r["pid"]})', say: "Ürünü alan her başka müşteri için bir kenar ekler; aynı düğümü iki kez eklemez.", tag: Uygulamanın içinde, hl: hop2}
+            - {match: 'return jsonify(trace.payload({"nodes": nodes, "edges": edges}))', say: Düğüm ve kenar listesi tarayıcıya gider., tag: Uygulama → Tarayıcı}
+      live:
+        title: Gerçek grafta ne oldu?
+        intro: Senin seçiminle Neptune'a giden gerçek sorgu.
+        runs:
+          - label: Lukas'ın çevresi (senin seçimin)
+            trigger: true
+            metrics: [[Dönen satır (ürün), items], [Düğüm, data.nodes.length], [Kenar, data.edges.length], [Süre, ms]]
+        reading: >-
+          Neptune Lukas'ın 12 kitabını ve her biri için en fazla 3 başka alıcıyı döndürdü; uygulama bunlardan yaklaşık 49 düğüm ve 48
+          kenarlık bir ağ kurdu. Bu sorgu bir süredir sorulmadıysa ilk çalıştırma birkaç saniye sürebilir (Serverless kapasite ve
+          veri belleğe yükleniyor); sonrakiler hızlıdır.
+      query:
+        title: Uygulama Neptune'a ne dedi?
+        intro: >-
+          Tek bir openCypher sorgusu, parça parça. Bir parçanın üzerine gelince cümlede, kodda ve açıklamada aynı yer parlar.
+        cards_title: Parça parça
+        parts:
+          - id: m1
+            say: Lukas'ın düğümünden başla, aldığı ürünlere git;
+            code: "MATCH (me:Customer {`~id`: $cid})-[:BOUGHT]->(p:Product)"
+            name: Nereden? + 1. hop
+            note: $cid = C00004. Yürüyüş doğrudan bu düğümden başlar.
+            hl: hop1
+          - id: m2
+            say: her ürünü alan başka müşterilere de git (yoksa ürünü yine tut);
+            code: "OPTIONAL MATCH (p)<-[:BOUGHT]-(o:Customer) WHERE o <> me"
+            name: 2. hop
+            note: OPTIONAL, başka alıcısı olmayan ürünün de listede kalmasını sağlar. Lukas'ın kendisi hariç.
+            hl: hop2
+          - id: m3
+            say: her ürün için en fazla üç alıcı al;
+            code: "WITH me, p, collect(DISTINCT o)[0..3] AS others"
+            name: Ne kadar?
+            note: Ağ okunabilir kalsın diye ürün başına üç alıcı.
+            hl: hop2
+          - id: m4
+            say: müşterinin adını, ürünü ve alıcılarını en fazla 12 ürün için getir.
+            code: "RETURN me.name, p.`~id`, p.name, p.category, [x IN others | {id: x.`~id`, name: x.name}] AS others LIMIT 12"
+            name: Ne getirilsin?
+            note: Her satır bir ürün ve onun alıcıları; ağı uygulama bu satırlardan kurar.
+            hl: result
+        columns:
+          - label: Lukas'ın çevresi
+            sub: Senin seçiminle giden sorgu.
+            via: Uygulama bu sorguyu requests kütüphanesinin post() metoduyla, SigV4 imzalı bir HTTPS isteği olarak gönderir.
+            parts: [m1, m2, m3, m4]
+        note: >-
+          Dikkat: sorguda "JOIN" yok ve hiçbir tablo baştan sona okunmuyor. Yol çiziliyor; Neptune o yolu Lukas'tan başlayarak
+          takip ediyor.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          Neptune'un işi satırları verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: Neptune → Uygulama
+            text: "{items} satır geldi; her satır bir kitap ve onun en fazla üç alıcısı."
+          - who: Uygulama
+            text: Satırlardan düğüm ve kenar listesi kurdu; aynı müşteriyi iki kez eklemedi.
+          - who: Uygulama → Tarayıcın
+            text: Düğümleri, kenarları ve isteğin kaydını tek bir JSON cevabında gönderdi.
+          - who: Tarayıcın
+            text: Ağı çizdi; ürün düğümlerini kategorilerine göre renklendirdi.
+          - who: Sonra
+            text: >-
+              Satıcı ekranına geçeceksin; orada dosyalar (ürün görselleri) bir nesne deposunda, S3'te duruyor (Adım 36–37).
+      remember: >-
+        Bir düğümün çevresini bulmak için graf kenarları takip eder; başlangıç düğümünden yürür ve yürüyüş kısa ve sınırlı tutulur.
+      why_db: >-
+        Neden Neptune? "Kim neyi aldı, aynı şeyi başka kim aldı?" bir ilişki sorusudur; Neptune bunu kenarları takip ederek, sadece
+        başlangıç noktasının çevresini okuyarak cevaplar. Bedeli: toplamlar ve raporlar için uygun değildir; soğuk başlangıçta ilk
+        sorgu yavaş olabilir.
 
   # ---------------------------------------------------------------- Seller: S3
   - page: seller
