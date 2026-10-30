@@ -815,24 +815,41 @@ steps:
           - [openCypher, "Graf sorgulama dili. Yolu çizer gibi yazarsın: (müşteri)-[:BOUGHT]->(ürün)."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
       prior:
-        title: Gerçek bir sistemde öneri grafı nasıl kurulur ve beslenir?
+        title: Gerçek bir sistemde öneri grafı için hazırlık
         intro: >-
-          Sayfa açılmadan önce hazır olması gerekenler: grafın şekli ve içindeki satın almalar.
+          Öneri butonuna hiç basılmadan, graf bu sayfanın sorularına göre kurulur ve doldurulur. Aşağıdaki beş adım bu
+          hazırlığın sırasıdır.
         text:
-          - >-
-            Graf, sorulacak ilişkiye göre modellenir. Soru "kim neyi aldı?" olduğu için müşteri ve ürün birer düğüm
-            (vertex), her satın alma da müşteriden ürüne giden bir BOUGHT kenarı (edge) olur. Sipariş no ve adet gibi
-            bilgiler kenarın üzerine özellik (property) olarak yazılır.
-          - >-
-            Graf, asıl kaydın kopyasıdır. Siparişin kendisi (fiyat, ödeme, stok düşme) ilişkisel bir veritabanında, tek bir
-            transaction içinde tutulur. Graf sadece öneri için gereken ilişkileri tutar; kaybolursa asıl kayıttan yeniden
-            kurulabilir.
-          - >-
-            İlk yükleme toplu yapılır: geçmiş siparişler CSV dosyaları olarak Amazon S3'e konur ve Neptune bulk loader ile
-            tek seferde yüklenir. Sonrasında her yeni sipariş grafa tek tek, birkaç saniye içinde eklenir.
-          - >-
-            Yürüyüşler kısa tutulur. Çok satan bir ürün binlerce müşteriye bağlıdır (süper düğüm); her hop sonucu katlar.
-            Bu yüzden öneri sorguları 2–3 hop ile sınırlanır ve sonuç LIMIT ile kesilir.
+          - title: Önce sayfanın soruları yazılır
+            text: >-
+              Öneri şeridinin iki sorusu var: "bu ürünü alanlar başka ne aldı?" (herkese aynı) ve "benim gibi alanlar ne aldı?"
+              (kişiye özel). İkisi de ilişki üzerinden yürüyen sorulardır; graf bu sorular için kurulur.
+            code: |-
+              (ürün)<-[:BOUGHT]-(müşteri)-[:BOUGHT]->(öneri)                       -- 2 hop
+              (sen)-[:BOUGHT]->(ürün)<-[:BOUGHT]-(başkası)-[:BOUGHT]->(öneri)      -- 3 hop
+          - title: Model ilişkiye göre kurulur
+            text: >-
+              Müşteri ve ürün birer düğüm (vertex), her satın alma müşteriden ürüne giden bir BOUGHT kenarı (edge). Sipariş
+              no ve adet kenarın özelliğidir. Ürün düğümü sadece öneride gereken özellikleri taşır (ad, kategori); fiyat ve
+              stok katalogda kalır. Graf asıl kayıt değildir, sipariş veritabanının bir kopyasıdır.
+            code: |-
+              (:Customer {~id, name, city})-[:BOUGHT {order_id, qty}]->(:Product {~id, name, category})
+          - title: İlk yükleme toplu yapılır
+            text: >-
+              Geçmiş siparişler düğüm ve kenar dosyaları (openCypher CSV) olarak S3'e konur; Neptune bulk loader hepsini tek
+              bir işte yükler. Satır satır yazmaktan çok daha hızlıdır.
+            code: |-
+              POST https://<cluster>:8182/loader
+              { "source": "s3://bucket/graph/", "format": "opencypher", "iamRoleArn": "…", "region": "eu-central-1" }
+          - title: Yeni siparişler sürekli eklenir
+            text: >-
+              Sipariş veritabanına yazılan her sipariş birkaç saniye içinde grafa BOUGHT kenarı olarak eklenir: değişiklik akışı
+              (CDC) ya da siparişle aynı transaction'da yazılan bir "outbox" kaydı bir program tarafından okunur ve grafa
+              yazılır.
+          - title: Yürüyüş kısa ve sınırlı tutulur
+            text: >-
+              Çok satan bir ürün binlerce müşteriye bağlıdır (süper düğüm) ve her hop sonucu katlar. Öneri sorguları 2–3 hop ile
+              sınırlanır, sonuç LIMIT ile kesilir ve plan yayından önce Neptune'un openCypher explain'i ile kontrol edilir.
       feed:
         title: Veri nereden geliyor?
         writes: >-
@@ -842,10 +859,40 @@ steps:
         kind: >-
           Neptune başka bir veritabanından kendiliğinden veri çekmez; graf dışarıdan beslenir. Besleyen ya uygulama ya da
           sipariş veritabanının değişikliklerini dinleyen bir süreçtir.
+        with: >-
+          Öneri şeridi Neptune'un yanında başka veritabanlarıyla birlikte çalışır: sipariş asıl olarak ilişkisel veritabanında
+          (Aurora) durur ve grafı o besler; kartların görselleri nesne deposundan (S3, büyük sistemlerde bir CDN ile) gelir;
+          fiyat ve stok gibi sık değişen bilgiler katalogda (DocumentDB) kalır. Kartta fiyat gösterilecekse uygulama önerilen
+          ürün numaralarıyla katalogdan toplu bir okuma yapar ve iki sonucu birleştirir.
         best: >-
           Sipariş veritabanının değişiklik akışı (CDC) dinlenir: AWS DMS, Neptune'u hedef olarak alabilir; ya da siparişle
           aynı transaction'da bir "outbox" tablosuna yazılan olayı küçük bir program okuyup grafa ekler. Uygulamanın siparişi
           iki veritabanına ayrı ayrı yazması (dual write) önerilmez: ikinci yazma başarısız olursa iki kayıt birbirini tutmaz.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              Mağazada bir müşteri olarak geziyorsun. Seçtiğin müşteri (ör. Ayşe Yılmaz, C00001) tarayıcının lm_persona
+              çerezinde duruyor. Bu adımda önemli: "sana göre" yürüyüş bu müşterinin düğümünden başlayacak.
+          - text: >-
+              Kablosuz Kulaklık'ın sayfası açıktı. Açılırken oturumun güncellendi, ürün DocumentDB'den, görseli S3'ten geldi;
+              "baktın" satırı ve "Son baktıkların" şeridi Keyspaces'ten.
+            engines: [elasticache, docdb, s3, keyspaces]
+          - text: >-
+              Aynı anda "Customers who bought this also bought" (bunu alanlar şunları da aldı) şeridi için Neptune'a 2 hop'luk
+              bir sorgu gitti: bu üründen başla, onu alanlara git, onların aldıklarına git. Simülasyonun sol şeridi bu istek.
+            engines: [neptune]
+          - text: >-
+              Sonra "For my persona" (benim için) butonuna tıkladın. Tarayıcın aynı adrese bu kez mode=persona ile sordu.
+              Uygulama müşteri numaranı çerezden aldı ve Neptune'a 3 hop'luk sorguyu gönderdi. Simülasyonun sağ şeridi bu istek.
+            engines: [neptune]
+          - text: >-
+              Öneriler geldi ve kartlar çizildi. Kartlardaki ad ve kategori Neptune'daki ürün düğümlerinden geldi; görseller
+              her kart için ayrı bir istekle S3'ten. Kartlarda fiyat yok, çünkü fiyat grafta tutulmuyor.
+            engines: [neptune, s3]
       sim:
         kind: graph-walk
         caption: >-
@@ -864,6 +911,12 @@ steps:
             start: {id: P0001, label: Kablosuz Kulaklık, type: product}
             start_title: Bu ürün
             start_say: Yürüyüş bu sayfadaki ürünün düğümünden, Kablosuz Kulaklık'tan başlıyor.
+            send_say: >-
+              Kablosuz Kulaklık'ın sayfası açılırken tarayıcın önerileri istedi (mode=product). Uygulama Neptune'a 2 hop'luk
+              openCypher sorgusunu gönderiyor.
+            back_say: >-
+              Uygulama önerileri olduğu gibi tarayıcına gönderdi; sayma ve sıralama Neptune'da yapıldı. Tarayıcın kartları
+              çizecek, görselleri S3'ten isteyecek.
             hops:
               - title: Onu alanlar
                 say: "1. hop: Kablosuz Kulaklık'a gelen BOUGHT kenarları takip edildi. Bu ürünü alan 3 müşteriye ulaşıldı."
@@ -888,6 +941,12 @@ steps:
             start: {id: C00001, label: Ayşe Yılmaz, type: me}
             start_title: Sen
             start_say: Yürüyüş senin seçtiğin müşterinin, Ayşe Yılmaz'ın düğümünden başlıyor.
+            send_say: >-
+              "For my persona" butonuna tıkladın. Tarayıcın aynı adrese mode=persona ile sordu; uygulama müşteri numaranı
+              (C00001) çerezden aldı ve Neptune'a 3 hop'luk sorguyu gönderiyor.
+            back_say: >-
+              Uygulama sana özel önerileri olduğu gibi tarayıcına gönderdi; eleme, sayma ve sıralama Neptune'da yapıldı.
+              Kartların görselleri S3'ten gelecek.
             hops:
               - title: Senin aldıkların
                 say: "1. hop: Ayşe'nin BOUGHT kenarları takip edildi. Kesitte Ayşe'nin aldığı 3 ürün var."
@@ -1092,7 +1151,11 @@ steps:
           - who: Tarayıcın
             text: >-
               Önerileri "Recommended for …" (sana önerilenler) başlığıyla çizdi. Her kartın altındaki "shared customers"
-              (ortak müşteri) sayısı skordur.
+              (ortak müşteri) sayısı skordur. Kartta fiyat yok, çünkü Neptune'dan fiyat gelmez.
+          - who: Tarayıcın → S3
+            text: >-
+              Her kartın görselini ürün numarasından kurduğu adresle (/s3/api/img/P0063) ayrı ayrı istedi; görseller S3'ten
+              geldi. Kartta adı ve skoru (Neptune) görselle (S3) birleştiren tarayıcıdır.
           - who: Sonra
             text: >-
               Yeni bir sipariş grafa BOUGHT kenarı olarak eklendiği anda bir sonraki öneri değişir; grafı baştan hesaplamaya
