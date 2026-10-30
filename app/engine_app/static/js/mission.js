@@ -124,50 +124,60 @@
   /* ---------- The "Perde arkası" panel */
   const STAGE_RE = /"stage":\s*"(\w+)"/g;
   function entryOf(c) { return (c && c.entries && c.entries[0]) || null; }
-  function liveFacts(e) {
-    if (!e) return null;
+  // One measured run: the first trace entry and the response data of one call. A metric names its source:
+  // "ms", "items", "capacity" (trace entry), "examined", "returned" (DocumentDB explain), "data.<field>" (response body).
+  const runOf = (c) => (c ? { e: entryOf(c) || {}, data: c.data || {} } : null);
+  function metric(run, key) {
+    const e = run.e;
+    if (key.startsWith("data.")) return run.data[key.slice(5)];
     const m = /docs examined:\s*(\d+),\s*returned:\s*(\d+)/.exec(e.explain || "");
-    const stages = [...String(e.plan || "").matchAll(STAGE_RE)].map((x) => x[1]).reverse();   // the plan is outer → inner; show the order of work
-    return { examined: m ? Number(m[1]) : null, returned: m ? Number(m[2]) : e.items, ms: e.ms, stages, request: e.request };
+    if (key === "examined") return m ? Number(m[1]) : undefined;
+    if (key === "returned") return m ? Number(m[2]) : e.items;
+    if (key === "ms") return e.ms !== undefined ? `${e.ms} ms` : undefined;
+    if (key === "capacity") return e.capacity ? String(e.capacity).replace(/\s*\(.*\)$/, "") : undefined;   // "1 WRU (a failed ...)" → "1 WRU"
+    return e[key];
   }
-  function liveHtml(L, facts) {
-    const max = Math.max(...facts.map((f) => (f && f.examined) || 0), 1);
+  const METRICS = [["Okunan doküman", "examined"], ["Dönen doküman", "returned"], ["Süre", "ms"]];
+  function liveHtml(L, runs) {
+    const metrics = L.metrics || METRICS;
+    const max = L.bar ? Math.max(...runs.map((r) => (r && !r.error && Number(metric(r, L.bar))) || 0), 1) : 1;
     return `<div class="gp-runs">${L.runs.map((r, k) => {
-      const f = facts[k];
-      if (!f) return `<div class="gp-run"><h4>${esc(r.label)}</h4><p class="gp-wait">Ölçüm alınıyor…</p></div>`;
-      const stages = f.stages.filter((s) => L.stages && L.stages[s]);
+      const run = runs[k];
+      if (!run) return `<div class="gp-run"><h4>${esc(r.label)}</h4><p class="gp-wait">Ölçüm alınıyor…</p></div>`;
+      if (run.error) return `<div class="gp-run"><h4>${esc(r.label)}</h4><p class="gp-wait">${esc(L.error_text || "Bu ölçüm şu an alınamadı.")}</p></div>`;
+      const stages = [...String(run.e.plan || "").matchAll(STAGE_RE)].map((x) => x[1]).reverse().filter((x) => L.stages && L.stages[x]);   // the plan is outer → inner
       return `<div class="gp-run"><h4>${esc(r.label)}</h4>
-        <dl><div><dt>Okunan doküman</dt><dd>${f.examined ?? "?"}</dd></div><div><dt>Dönen doküman</dt><dd>${f.returned ?? "?"}</dd></div><div><dt>Süre</dt><dd>${f.ms} ms</dd></div></dl>
-        <div class="gp-bar" aria-hidden="true"><span style="width:${Math.round(100 * (f.examined || 0) / max)}%"></span></div>
-        ${stages.length ? `<p class="gp-stages-cap">DocumentDB'nin yaptığı işler, sırasıyla:</p><ol class="gp-stages">${stages.map((s) =>
-          `<li><code>${esc(s)}</code> ${esc(L.stages[s])}</li>`).join("")}</ol>` : ""}</div>`;
+        <dl>${(r.metrics || metrics).map(([label, key, map]) => {             // map {set, empty}: a text for a filled or an empty value
+          const v = metric(run, key);
+          return `<div><dt>${esc(label)}</dt><dd>${esc(map ? (v ? map.set : map.empty) : v ?? "?")}</dd></div>`;
+        }).join("")}</dl>
+        ${L.bar ? `<div class="gp-bar" aria-hidden="true"><span style="width:${Math.round(100 * (Number(metric(run, L.bar)) || 0) / max)}%"></span></div>` : ""}
+        ${stages.length ? `<p class="gp-stages-cap">${esc(L.stages_cap || "Veritabanının yaptığı işler, sırasıyla:")}</p><ol class="gp-stages">${stages.map((x) =>
+          `<li><code>${esc(x)}</code> ${esc(L.stages[x])}</li>`).join("")}</ol>` : ""}</div>`;
     }).join("")}</div>`;
   }
-  /* Section 5: the command as a Turkish sentence, as code, piece by piece, and the one difference between the two runs.
-   * The same colour marks one piece in all four places (q0..q5). */
+  /* Section 5: each command as a Turkish sentence and as code, in the order of the simulation (one column per lane or
+   * per command), then one card per piece. The same colour marks one piece in every place (q0..q5). */
   function queryHtml(Q) {
     const parts = Q.parts || [];
+    const byId = Object.fromEntries(parts.map((x) => [x.id, x]));
     const col = (k) => `q${k % 6}`;
-    const INDENT = new Set(["filter", "proj"]);
-    const D = Q.diff || {};
-    const codeLines = (list, mark) => list.map((x) => {
-      const k = parts.indexOf(x);
-      return `<span class="gq-line ${col(k)}${mark && x.only_off ? " added" : ""}" data-q="${esc(x.id)}" tabindex="0"><b>${k + 1}</b>${INDENT.has(x.id) ? "  " : ""}${esc(x.code)}</span>`;
-    }).join("");
-    const sentence = (list) => {
-      const txt = list.map((x) => `<span class="${col(parts.indexOf(x))}" data-q="${esc(x.id)}" tabindex="0">${esc(x.say)}</span>`).join(" ");
-      return /[.!?]$/.test(list[list.length - 1].say) ? txt : `${txt}.`;
+    const piece = (x) => `data-q="${esc(x.id)}" tabindex="0"`;
+    const column = (c) => {
+      const list = (c.parts || []).map((id) => byId[id]).filter(Boolean);
+      const say = list.map((x) => `<span class="${col(parts.indexOf(x))}" ${piece(x)}>${esc(x.say)}</span>`).join(" ");
+      const code = list.map((x) => `<span class="gq-line ${col(parts.indexOf(x))}${(c.mark || []).includes(x.id) ? " added" : ""}" ${piece(x)}><b>${parts.indexOf(x) + 1}</b>${" ".repeat(x.indent || 0)}${esc(x.code)}</span>`).join("");
+      return `<div class="gq-col"><h4>${esc(c.label || "")}</h4>${c.sub ? `<p class="gq-sub">${esc(c.sub)}</p>` : ""}
+        <span class="gq-label">Türkçesi</span><p class="gq-say">${say}${list.length && /[.!?]$/.test(list[list.length - 1].say) ? "" : "."}</p>
+        <span class="gq-label">Komut</span><pre class="gq-code">${code}</pre></div>`;
     };
-    // Two columns in the same order as the simulation: left with the index, right without it.
-    const col2 = (title, sub, list, mark) => `<div class="gq-col"><h4>${esc(title)}</h4><p class="gq-sub">${esc(sub || "")}</p>
-      <span class="gq-label">Türkçesi</span><p class="gq-say">${sentence(list)}</p>
-      <span class="gq-label">Komut</span><pre class="gq-code">${codeLines(list, mark)}</pre></div>`;
+    const cols = Q.columns || [];
     return `<section class="gp-sec gq"><h3><span>5</span>${esc(Q.title || "Sorgu")}</h3><p>${esc(Q.intro || "")}</p>
-      <div class="gq-two">${col2(D.label_on, D.sub_on, parts.filter((x) => !x.only_off), false)}${col2(D.label_off, D.sub_off, parts, true)}</div>
-      ${D.note ? `<p class="gq-diff-note">${esc(D.note)}</p>` : ""}
+      <div class="${cols.length > 1 ? "gq-two" : "gq-one"}">${cols.map(column).join("")}</div>
+      ${Q.note ? `<p class="gq-diff-note">${esc(Q.note)}</p>` : ""}
       <h4 class="gq-cards-title">${esc(Q.cards_title || "Parça parça")}</h4>
-      <ol class="gq-cards">${parts.map((x, k) => `<li class="${col(k)}" data-q="${esc(x.id)}" tabindex="0"><header><b>${k + 1}</b><strong>${esc(x.name || "")}</strong><code>${esc(x.code)}</code>
-        ${x.only_off ? `<em>${esc(D.only_off_tag || "sadece sağdaki komutta")}</em>` : ""}</header><p>${esc(x.note)}</p></li>`).join("")}</ol></section>`;
+      <ol class="gq-cards">${parts.map((x, k) => `<li class="${col(k)}" ${piece(x)}><header><b>${k + 1}</b><strong>${esc(x.name || "")}</strong><code>${esc(x.code)}</code>
+        ${x.tag ? `<em>${esc(x.tag)}</em>` : ""}</header><p>${esc(x.note)}</p></li>`).join("")}</ol></section>`;
   }
   function renderPanel() {
     const P = step.panel;
@@ -214,16 +224,24 @@
     if (P.live) fillLive(P.live, trig);
     document.body.classList.add("gp-on");
   }
+  // Sources of a run: trigger (the call that completed the step), page_call {path, query} (a call the page made before),
+  // fetch (a measurement for the panel only, not a shop call: GET, or method + body, body_from_trigger merges over the
+  // body of the trigger call).
   async function fillLive(L, trig) {
     const box = sheet.querySelector(".gp-live");
-    const facts = L.runs.map((r) => (r.trigger ? liveFacts(entryOf(trig)) : null));
-    box.innerHTML = liveHtml(L, facts);
+    const same = (c, pc) => c.path === pc.path && Object.entries(pc.query || {}).every(([k, v]) => String(c.query[k]) === String(v));
+    const runs = L.runs.map((r) => (r.trigger ? runOf(trig) : r.page_call ? runOf([...lm.calls].reverse().find((c) => same(c, r.page_call))) : null));
+    box.innerHTML = liveHtml(L, runs);
     await Promise.all(L.runs.map(async (r, k) => {
       if (!r.fetch) return;
-      try { const j = await (await fetch(r.fetch)).json(); facts[k] = liveFacts((j.trace || [])[0]); }   // a measurement for the panel only, not a shop call
-      catch (e) { facts[k] = null; }
+      try {
+        const body = r.body_from_trigger ? { ...((trig && trig.body) || {}), ...r.body_from_trigger } : r.body;
+        const init = body ? { method: r.method || "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {};
+        const j = await (await fetch(r.fetch, init)).json();
+        runs[k] = j.ok === false ? { error: true } : runOf({ entries: j.trace, data: j.data });
+      } catch (e) { runs[k] = { error: true }; }
     }));
-    box.innerHTML = liveHtml(L, facts);
+    box.innerHTML = liveHtml(L, runs);
   }
   function render() {
     renderCard();

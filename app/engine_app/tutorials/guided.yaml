@@ -97,6 +97,9 @@ steps:
         runs:
           - {label: Index ile, fetch: "/docdb/api/products?category=Elektronik&index=on&sort=rating"}
           - {label: Index olmadan, trigger: true}
+        metrics: [[Okunan doküman, examined], [Dönen doküman, returned], [Süre, ms]]
+        bar: examined
+        stages_cap: "DocumentDB'nin yaptığı işler, sırasıyla:"
         reading: >-
           İki çalıştırmada da 40 ürün döndü, ekrandaki liste aynı. Fark okunan doküman sayısında: index ile DocumentDB sadece
           eşleşen 40 dokümanı okudu. Index olmadan 200 dokümanın hepsini okudu, 160'ını "Elektronik değil" diye attı, sonra
@@ -115,8 +118,7 @@ steps:
           ile çalışan komut, sağda index olmadan çalışan komut. Önce komutun Türkçesini oku, sonra aynı renkteki kod parçasını
           bul. Bir parçanın üzerine gelince cümlede, kodda ve açıklamada aynı yer parlar.
         cards_title: Parça parça
-        # parts: one piece of the command each. say = the piece in the Turkish sentence, code = the piece in the command,
-        # note = what it does, hl = the part of the simulation it belongs to, only_off = the piece exists only without the index.
+        # parts: one piece of a command each (fields: ~/.claude/skills/guided-step/references/panel-schema.md).
         parts:
           - id: coll
             say: products koleksiyonundaki
@@ -127,12 +129,14 @@ steps:
           - id: filter
             say: kategorisi Elektronik olan ürünleri
             code: '{ category: "Elektronik" },'
+            indent: 2
             name: Hangileri?
             note: Filtre. Sadece category alanı "Elektronik" olan dokümanlar sonuca girer, diğerleri girmez.
             hl: filter
           - id: proj
             say: sadece kartta gereken bilgileriyle
             code: "{ name: 1, price: 1, rating: 1, category: 1, brand: 1, tags: 1, stock: 1 } )"
+            indent: 2
             name: Hangi bilgiler?
             note: >-
               Projection. 1 "bu alanı getir" demek. Ürün kartı ad, fiyat, puan, kategori, marka, etiket ve stok gösteriyor;
@@ -159,18 +163,20 @@ steps:
               sırayla, baştan sona oku" demek. Yani index'i bırak, collection scan yap. Bu parça sadece "Collection scan"
               seçiliyken eklenir.
             hl: scan
-            only_off: true
-        diff:
-          label_on: Index ile
-          sub_on: Sayfa ilk açıldığında giden komut ("Use the index" seçili).
-          label_off: Index olmadan (collection scan)
-          sub_off: Senin "Collection scan" tıklamanla giden komut.
-          only_off_tag: sadece sağdaki komutta var
-          note: >-
-            Dikkat: soldaki komutta "index" kelimesi hiç geçmiyor. Index'i komutta yazmazsın. DocumentDB komuttaki filtreye
-            (category) ve sıralamaya (rating) bakar, bunlara uyan bir index varsa onu kendisi seçer. Kategori filtresi iki
-            komutta da aynı, yani filtre index kullanıldığını göstermez. Sağdaki komutun tek farkı 6. parça: .hint ile
-            DocumentDB'ye "index'i bırak, baştan sona oku" diyoruz. Bu tek parça, okunan doküman sayısını 40'tan 200'e çıkardı.
+            tag: sadece sağdaki komutta var
+        columns:
+          - label: Index ile
+            sub: Sayfa ilk açıldığında giden komut ("Use the index" seçili).
+            parts: [coll, filter, proj, sort, limit]
+          - label: Index olmadan (collection scan)
+            sub: Senin "Collection scan" tıklamanla giden komut.
+            parts: [coll, filter, proj, sort, limit, hint]
+            mark: [hint]
+        note: >-
+          Dikkat: soldaki komutta "index" kelimesi hiç geçmiyor. Index'i komutta yazmazsın. DocumentDB komuttaki filtreye
+          (category) ve sıralamaya (rating) bakar, bunlara uyan bir index varsa onu kendisi seçer. Kategori filtresi iki
+          komutta da aynı, yani filtre index kullanıldığını göstermez. Sağdaki komutun tek farkı 6. parça: .hint ile
+          DocumentDB'ye "index'i bırak, baştan sona oku" diyoruz. Bu tek parça, okunan doküman sayısını 40'tan 200'e çıkardı.
       remember: >-
         Sonuç aynı, yapılan iş farklı. Index olmadan veritabanı her dokümanı okumak zorunda kalır. Index, sık kullanılan bir
         filtre ve sıralama için doğru bölüme doğrudan gitmeyi sağlar.
@@ -272,31 +278,362 @@ steps:
   - page: product
     path: /p/P0001
     engines: [keyspaces]
-    use_case: Event history per user
-    title: The page wrote a view event to Keyspaces
+    use_case: Kullanıcı başına olay geçmişi
+    title: Sayfa, baktığın ürünü Keyspaces'e yazdı
     why: >-
-      When this page opened, it wrote one "view" row to your partition in Keyspaces. The table has one partition per user,
-      and the rows of a partition are sorted by time, newest first.
-    do: Look at the lit "Recently viewed" strip.
+      Bu sayfa açılırken iki şey oldu: önce "bu ürüne baktın" bilgisi Keyspaces adlı veritabanına bir satır olarak yazıldı,
+      sonra "Son baktıkların" şeridi aynı yerden okundu. Keyspaces her kullanıcının satırlarını bir arada tutar, tıpkı
+      her kişinin ayrı bir defteri olması gibi. Bu deftere partition denir.
+    do: Aydınlık "Recently viewed" (son baktıkların) şeridine bak. Panel kendiliğinden açılacak.
     target: "#recent-wrap"
     action: look
     wait: {method: GET, path: /keyspaces/api/recent}
-    result: The SELECT has WHERE user_id = ? and a LIMIT. Keyspaces read one partition and stopped after the limit.
+    panel:
+      need: >-
+        Mağaza her ziyaretçinin ne yaptığını (baktığı, sepete eklediği, aradığı ürünleri) kaydediyor. Bu kayıtlar çok
+        sık yazılıyor ve hep aynı soruyla okunuyor: "bu kişinin son yaptıkları ne?". Binlerce ziyaretçinin milyonlarca
+        satırı arasından sadece senin satırlarını, en yenisi en üstte, hızlıca bulmak gerekiyor.
+      concept:
+        term: Partition (kişiye ait defter)
+        text: >-
+          Keyspaces tabloyu partition'lara böler. Her ziyaretçinin satırları kendi partition'ında, yani kendi defterinde
+          durur. Defterin hangisi olduğunu user_id söyler. Defterin içindeki satırlar da zamana göre sıralıdır: en yeni
+          sayfa en üstte. Yeni bir olay yazılınca deftere en üste eklenir; okurken sadece o defter açılır ve baştan okunur.
+          Başka kimsenin defterine bakılmaz.
+        terms:
+          - [Partition key, "Satırın hangi partition'a gideceğini belirleyen alan. Bu tabloda user_id."]
+          - [Clustering key, "Partition içindeki sırayı belirleyen alan. Bu tabloda event_time, yeniden eskiye."]
+          - [Keyspaces, "Amazon'un Apache Cassandra uyumlu, sunucusuz geniş sütunlu (wide column) veritabanı."]
+      sim:
+        kind: partition
+        title: "Keyspaces tablosu: dbws.activity_by_user"
+        caption: >-
+          Tablodan küçük bir kesit: üç ziyaretçinin partition'ı. Ayşe ve Mert'in satırları canlı tablodan; senin
+          partition'ındaki eski satırlar örnek. Önce sayfanın INSERT'i, sonra SELECT'i oynuyor.
+        result_title: Son baktıkların şeridi
+        partitions:
+          - label: C00002 · Mert
+            rows:
+              - {time: "26 Eki 09:12", type: view, product: P0090 Kahve Makinesi}
+              - {time: "25 Eki 18:40", type: purchase, product: P0044 Bulut Mimarisi}
+          - label: "7f3a… (bu tarayıcı)"
+            me: true
+            rows:
+              - {time: "2 dk önce", type: add_to_cart, product: P0021 Akıllı Saat}
+              - {time: "3 dk önce", type: view, product: P0021 Akıllı Saat}
+              - {time: "5 dk önce", type: view, product: P0131 Mekanik Klavye}
+              - {time: "6 dk önce", type: view, product: P0021 Akıllı Saat}
+          - label: C00001 · Ayşe
+            rows:
+              - {time: "26 Eki 10:39", type: search, product: P0084 Algoritmalar}
+              - {time: "26 Eki 02:00", type: purchase, product: P0147 Kahve Makinesi}
+              - {time: "25 Eki 20:13", type: search, product: P0173 Dambıl Seti}
+        insert: {time: "şimdi", type: view, product: P0001 Kablosuz Kulaklık}
+        summary: >-
+          Yazma da okuma da tek bir partition'a gitti. Tablo ne kadar büyürse büyüsün, senin geçmişini okumak için sadece
+          senin defterin açılır.
+      live:
+        title: Gerçek tabloda ne oldu?
+        intro: >-
+          Bu sayfa açılırken Keyspaces'e iki gerçek istek gitti. Sayılar o isteklerin kayıtlarından geliyor.
+        runs:
+          - label: "1. Yazma: INSERT"
+            page_call: {path: /keyspaces/api/events}
+            metrics: [[Yazılan satır, items], [Kapasite, capacity], [Süre, ms]]
+          - label: "2. Okuma: SELECT"
+            trigger: true
+            metrics: [[Şeritteki ürün, items], [Süre, ms]]
+        reading: >-
+          INSERT tek bir satır yazdı ve 1 WRU (write request unit, yazma birimi) harcadı. Keyspaces sunucusuz çalışır:
+          sunucu kiralamazsın, her okuma ve yazma birimi için ödersin. SELECT senin partition'ından en fazla 40 satır
+          okudu; uygulama bunların içinden "view" olanları ve tekrar etmeyenleri ayıklayıp en fazla 8 ürünü şeride koydu.
+          Sen bu tarayıcıyla ilk kez geziyorsan şeritte sadece bu ürün vardır. Süre her istekte biraz değişir.
+      query:
+        title: Sayfa Keyspaces'e ne dedi?
+        intro: >-
+          Simülasyondaki iki adım, iki gerçek CQL komutundan geliyor (CQL, Cassandra'nın SQL'e benzeyen sorgu dili).
+          Solda önce giden yazma, sağda sonra giden okuma var. Bir parçanın üzerine gelince cümlede, kodda ve açıklamada
+          aynı yer parlar.
+        cards_title: Parça parça
+        parts:
+          - id: ins
+            say: activity_by_user tablosuna
+            code: INSERT INTO dbws.activity_by_user
+            name: Nereye?
+            note: Olaylar tablosuna yeni bir satır yaz. dbws, tabloyu içeren keyspace (veritabanı gibi bir klasör).
+            hl: table
+          - id: cols
+            say: kim, ne zaman, ne yaptı ve hangi ürün bilgilerini içeren
+            code: (user_id, event_time, event_id, event_type, product_id, detail)
+            name: Hangi alanlar?
+            note: >-
+              Satırın alanları. user_id partition key: satırın hangi deftere gideceğini o belirler. event_time clustering
+              key: defterin içindeki sırayı belirler. event_id aynı anda iki olay olursa karışmasınlar diye.
+            hl: pk
+            indent: 2
+          - id: vals
+            say: yeni bir satır ekle.
+            code: VALUES (?, ?, ?, ?, ?, ?)
+            name: Hangi değerler?
+            note: >-
+              Her ? yerine uygulama gerçek değeri koyar: senin kimliğin, şu anki zaman, yeni bir kimlik, "view", ürün no
+              ve ürünün adı. Satır 7 gün sonra kendiliğinden silinir (tablonun TTL ayarı).
+            hl: insert
+            indent: 2
+          - id: sel
+            say: activity_by_user tablosundan ürün, açıklama ve olay türünü
+            code: SELECT product_id, detail, event_type FROM dbws.activity_by_user
+            name: Ne okunuyor?
+            note: Sadece şerit için gereken üç alanı oku.
+            hl: type
+          - id: where
+            say: sadece bu tarayıcının partition'ından
+            code: WHERE user_id = '7f3a…'
+            name: Hangi defter?
+            note: >-
+              Partition key ile filtre. Keyspaces bu değerden doğru partition'ı bulur ve sadece onu okur. Partition key
+              vermeden bu tabloda arama yapamazsın: Keyspaces hangi defteri açacağını bilemez.
+            hl: where
+            indent: 2
+          - id: limit
+            say: en fazla 40 satır oku.
+            code: LIMIT 40
+            name: Kaç tane?
+            note: >-
+              En yeni 40 satırda dur. Satırlar zaten yeniden eskiye sıralı durduğu için ORDER BY yazmaya gerek yok; ilk 40
+              satır en yeni 40 olaydır.
+            hl: ck
+            indent: 2
+        columns:
+          - label: "1. Yazma"
+            sub: Sayfa açılır açılmaz arka planda giden komut.
+            parts: [ins, cols, vals]
+          - label: "2. Okuma"
+            sub: Hemen ardından "Son baktıkların" şeridi için giden komut.
+            parts: [sel, where, limit]
+        note: >-
+          Dikkat: iki komutta da sıralama için bir şey yazmıyoruz. Sıra, tablo kurulurken bir kez belirlendi
+          (CLUSTERING ORDER BY event_time DESC). Keyspaces satırları yazarken o sıraya koyuyor, okurken sadece baştan okuyor.
+      remember: >-
+        Keyspaces'te soruyu tablo tasarlanırken seçersin. "Bu kişinin son olayları" sorusu için satırlar kişiye göre
+        partition'lara ayrılır ve zamana göre sıralı tutulur. Bu soru her ölçekte hızlıdır; tasarıma uymayan bir soru
+        (ör. "bu ürüne kimler baktı?") için ayrı bir tablo gerekir.
+      why_db: >-
+        Neden Keyspaces? Olay kayıtları çok sık yazılır, hiç güncellenmez ve hep kişiye göre okunur. Keyspaces bu tür
+        yoğun yazmayı sunucu yönetmeden karşılar ve eski satırları TTL ile kendisi siler. Bedeli: JOIN yok, esnek arama
+        yok; her yeni soru için tabloyu o soruya göre tasarlaman gerekir.
 
   - page: product
     path: /p/P0001
     engines: [neptune]
-    use_case: Recommendations
-    title: Recommendations are a walk on a graph
+    use_case: Öneriler
+    title: Öneriler bir graf üzerinde yürüyüştür
     why: >-
-      In Neptune, customers and products are vertices, and each purchase is a BOUGHT edge. "For my persona" starts at you:
-      your products, then the other buyers of those products, then their other products.
-    do: Click the lit button "For my persona".
+      "Bunu alanlar şunları da aldı" önerileri Neptune adlı bir graf veritabanından geliyor. Graf, bir arkadaşlık ağı
+      haritası gibidir: kişiler ve ürünler noktalar, "satın aldı" bilgisi de aralarındaki çizgilerdir. Şimdi önerileri
+      bu ürüne göre değil, senin seçtiğin müşteriye göre isteyeceğiz.
+    do: Aydınlık "For my persona" (benim için) butonuna tıkla.
     target: "#exp-recs [data-value=persona]"
     action: click
     wait: {method: GET, path: /neptune/api/recs, query: {mode: persona}}
     focus: "#recs-wrap"
-    result: The openCypher query starts at your persona vertex and follows three hops of BOUGHT edges. Each hop would be one more JOIN in SQL.
+    panel:
+      need: >-
+        İyi bir öneri için şu soru sorulur: "Benim gibi alışveriş yapanlar başka ne aldı?" Bunun cevabı tek bir kayıtta
+        yazmaz. Müşteriden aldığı ürünlere, oradan o ürünleri alan diğer müşterilere, oradan da onların aldıklarına
+        gitmek gerekir. Sayfa açılırken öneriler "bu ürüne göre" (2 adım) geldi; tıklamanla "sana göre" (3 adım) geldi.
+      concept:
+        term: Graf ve hop
+        text: >-
+          Bir graf, noktalar ve onları bağlayan çizgilerden oluşur. Noktalara düğüm (vertex), çizgilere kenar (edge)
+          denir. Burada her müşteri ve her ürün bir düğüm, her satın alma da müşteriden ürüne giden bir BOUGHT kenarı.
+          Bir kenar boyunca bir adım gitmeye hop denir. Neptune bir düğümden başlar ve kenarları takip eder, tıpkı bir
+          haritada yol takip etmek gibi. Hiçbir tabloyu baştan sona taramaz.
+        terms:
+          - [Düğüm (vertex), "Bir şey: bir müşteri ya da bir ürün."]
+          - [Kenar (edge), "İki düğüm arasındaki ilişki. Burada BOUGHT: bu müşteri bu ürünü aldı."]
+          - [openCypher, "Graf sorgulama dili. Yolu çizer gibi yazarsın: (müşteri)-[:BOUGHT]->(ürün)."]
+      sim:
+        kind: graph-walk
+        caption: >-
+          Gerçek graftan küçük bir kesit: canlı Neptune'dan okunan müşteriler ve alımları. Gerçek grafta her ürünü
+          onlarca müşteri almış; burada her yolu görebilmen için sadece birkaçı var. İki yürüyüş yan yana, aynı hızda.
+        tick_ms: 1600
+        summary: >-
+          Soldaki yürüyüş herkese aynı önerileri verir ve senin zaten aldıklarını da önerebilir. Sağdaki yürüyüş bir adım
+          daha uzun ama sana özel: aldıklarını eler, sana en çok benzeyenlerin seçtiklerini öne çıkarır.
+        lanes:
+          - id: product
+            title: Bu ürüne göre (2 hop)
+            start: {id: P0001, label: Kablosuz Kulaklık, type: product}
+            start_title: Bu ürün
+            start_say: Yürüyüş bu sayfadaki ürünün düğümünden, Kablosuz Kulaklık'tan başlıyor.
+            hops:
+              - title: Onu alanlar
+                say: "1. hop: Kablosuz Kulaklık'a gelen BOUGHT kenarları takip edildi. Bu ürünü alan 3 müşteriye ulaşıldı."
+                nodes:
+                  - {id: C00944, label: Ece Koç, type: customer, from: [P0001]}
+                  - {id: C00828, label: Selin Çelik, type: customer, from: [P0001]}
+                  - {id: C00630, label: Ozan Schmidt, type: customer, from: [P0001]}
+              - title: Onların aldıkları
+                say: "2. hop: bu 3 müşterinin BOUGHT kenarları takip edildi ve aldıkları ürünlere ulaşıldı. Powerbank'a iki ayrı yoldan gelindi."
+                nodes:
+                  - {id: P0066, label: Powerbank, type: product, from: [C00944, C00828]}
+                  - {id: P0053, label: Dambıl Seti, type: product, from: [C00944]}
+                  - {id: P0014, label: Python ile Veri, type: product, from: [C00944]}
+                  - {id: P0027, label: Masa Lambası, type: product, from: [C00828]}
+                  - {id: P0063, label: Alpen Spor Çantası, type: product, from: [C00630]}
+                  - {id: P0028, label: Toros Spor Çantası, type: product, from: [C00630]}
+            end_say: >-
+              Her ürün kaç farklı müşteriden ulaşıldığına göre sayıldı. Powerbank 2 ile en üstte. Python ile Veri ve
+              Toros Spor Çantası da listede, oysa Ayşe bunları zaten almış: bu yürüyüş kimin baktığını bilmez.
+          - id: persona
+            title: Sana göre (3 hop)
+            start: {id: C00001, label: Ayşe Yılmaz, type: me}
+            start_title: Sen
+            start_say: Yürüyüş senin seçtiğin müşterinin, Ayşe Yılmaz'ın düğümünden başlıyor.
+            hops:
+              - title: Senin aldıkların
+                say: "1. hop: Ayşe'nin BOUGHT kenarları takip edildi. Kesitte Ayşe'nin aldığı 3 ürün var."
+                nodes:
+                  - {id: P0001, label: Kablosuz Kulaklık, type: product, from: [C00001]}
+                  - {id: P0002, label: Hava Temizleyici, type: product, from: [C00001]}
+                  - {id: P0019, label: Toros Bulut Mimarisi, type: product, from: [C00001]}
+              - title: Aynılarını alanlar
+                say: "2. hop: bu ürünlere gelen kenarlar takip edildi. Ayşe ile aynı ürünü almış 5 müşteriye ulaşıldı."
+                nodes:
+                  - {id: C00630, label: Ozan Schmidt, type: customer, from: [P0001]}
+                  - {id: C00226, label: Can Weber, type: customer, from: [P0002]}
+                  - {id: C00040, label: Seda Yılmaz, type: customer, from: [P0002]}
+                  - {id: C00685, label: Kerem Çelik, type: customer, from: [P0002]}
+                  - {id: C00378, label: Naz Yılmaz, type: customer, from: [P0019]}
+              - title: Onların aldıkları
+                say: >-
+                  3. hop: bu 5 müşterinin aldıklarına gidildi. Ayşe'nin zaten aldığı ürünler elendi (üstü çizili).
+                  Alpen Spor Çantası'na dört ayrı yoldan gelindi.
+                nodes:
+                  - {id: P0063, label: Alpen Spor Çantası, type: product, from: [C00630, C00226, C00040, C00378]}
+                  - {id: P0114, label: Rhein Bulut Mimarisi, type: product, from: [C00226]}
+                  - {id: P0148, label: Yoga Matı, type: product, from: [C00685]}
+                  - {id: P0028, label: Toros Spor Çantası, type: product, from: [C00630, C00226], excluded: zaten aldın}
+                  - {id: P0030, label: Deri Ceket, type: product, from: [C00378], excluded: zaten aldın}
+            end_say: >-
+              Kalan ürünler kaç farklı müşteriden ulaşıldığına göre sayıldı. Alpen Spor Çantası 4 ile en üstte; canlı sonuçta
+              da Ayşe için ilk sıralarda bu ürün var.
+      live:
+        title: Gerçek grafta ne oldu?
+        intro: >-
+          İki gerçek sorgu: sayfa açılırken giden "bu ürüne göre" sorgusu ve senin tıklamanla giden "sana göre" sorgusu.
+          Gerçek grafta 1000 müşteri ve 200 ürün var.
+        runs:
+          - label: Bu ürüne göre (2 hop)
+            page_call: {path: /neptune/api/recs, query: {mode: product}}
+            metrics: [[Önerilen ürün, items], [Süre, ms]]
+          - label: Sana göre (3 hop)
+            trigger: true
+            metrics: [[Önerilen ürün, items], [Süre, ms]]
+        reading: >-
+          İki sorgu da en fazla 6 öneri döndürdü. Sağdaki bir hop daha uzun: daha çok kenar takip eder, bu yüzden genelde
+          daha uzun sürer. Bu kurulumda Neptune Serverless çalışıyor (en az 1 NCU) ve yük artınca kapasitesini kendisi
+          büyütüyor. Bir süre sorulmayan bir sorgunun ilk çalışması birkaç saniye sürebilir, çünkü veri henüz bellekte değildir;
+          sonraki çalıştırmalar hızlanır. Ekrandaki puanlar (örn. "71 shared customers") ortak müşteri sayısıdır:
+          simülasyondaki küçük sayıların gerçek grafta büyümüş hâli.
+      query:
+        title: Sayfa Neptune'a ne dedi?
+        intro: >-
+          İki sütun, simülasyondaki iki yürüyüşün gerçek openCypher sorguları. Yolu bir resim gibi okuyabilirsin: parantez
+          bir düğüm, köşeli parantez bir kenar, ok da kenarın yönü.
+        cards_title: Parça parça
+        parts:
+          - id: pstart
+            say: Bu ürünün düğümünden başla,
+            code: "MATCH (p:Product {`~id`: $pid})"
+            name: Nereden?
+            note: Başlangıç düğümü bu sayfanın ürünü. $pid yerine ürün no (P0001) gelir.
+            hl: start
+          - id: pback
+            say: onu alan müşterilere git,
+            code: "<-[:BOUGHT]-(c:Customer)"
+            name: 1. hop
+            note: Ürüne gelen BOUGHT kenarlarını geriye doğru takip et. Ok ürünü gösteriyor, çünkü kenar müşteriden ürüne gider.
+            hl: hop1
+            indent: 2
+          - id: pfwd
+            say: onların aldığı ürünlere git,
+            code: "-[:BOUGHT]->(rec:Product)"
+            name: 2. hop
+            note: Bu müşterilerin BOUGHT kenarlarını ileri doğru takip et; vardığın ürünler öneri adayları.
+            hl: hop2
+            indent: 2
+          - id: pwhere
+            say: bu ürünün kendisini çıkar,
+            code: "WHERE rec <> p"
+            name: Ne elensin?
+            note: Ürünün kendisini kendine önerme. Başka hiçbir şey elenmiyor; senin zaten aldıkların da listede kalabilir.
+            hl: exclude
+          - id: pret
+            say: her ürünü kaç farklı müşteri almış say ve en çok paylaşılan 6 ürünü getir.
+            code: "RETURN rec, count(DISTINCT c) AS score ORDER BY score DESC LIMIT 6"
+            name: Nasıl sıralansın?
+            note: >-
+              Her öneri adayına kaç ayrı müşteriden ulaşıldığını say (score), en yüksek 6'yı döndür. Gerçek sorguda
+              RETURN ürün no, ad ve kategoriyi de getirir.
+            hl: result
+          - id: mstart
+            say: Senin düğümünden başla, aldığın ürünlere git,
+            code: "MATCH (me:Customer {`~id`: $cid})-[:BOUGHT]->(:Product)"
+            name: Nereden? + 1. hop
+            note: Başlangıç senin seçtiğin müşteri ($cid = C00001). İlk kenar seni aldığın ürünlere götürür.
+            hl: hop1
+          - id: mback
+            say: aynı ürünleri alan diğer müşterilere git,
+            code: "<-[:BOUGHT]-(o:Customer)"
+            name: 2. hop
+            note: O ürünlere gelen kenarlarla, aynı ürünü almış diğer müşterilere (o) ulaş.
+            hl: hop2
+            indent: 2
+          - id: mfwd
+            say: onların aldıklarına git,
+            code: "-[:BOUGHT]->(rec:Product)"
+            name: 3. hop
+            note: Bu müşterilerin aldıkları ürünler öneri adayları.
+            hl: hop3
+            indent: 2
+          - id: mwhere
+            say: kendini ve zaten aldıklarını çıkar,
+            code: "WHERE o <> me AND NOT (me)-[:BOUGHT]->(rec)"
+            name: Ne elensin?
+            note: >-
+              İki eleme: yolu senin üzerinden geri dönen kendini sayma, ve senden rec'e zaten bir BOUGHT kenarı varsa o
+              ürünü önerme. Simülasyonda üstü çizilen ürünler bu satır yüzünden elendi.
+            hl: exclude
+            tag: sadece sağdaki sorguda var
+          - id: mret
+            say: her ürünü kaç farklı müşteri almış say ve en çok paylaşılan 6 ürünü getir.
+            code: "RETURN rec, count(DISTINCT o) AS score ORDER BY score DESC LIMIT 6"
+            name: Nasıl sıralansın?
+            note: "Soldakiyle aynı sayma: her adaya kaç ayrı müşteriden (o) ulaşıldı."
+            hl: result
+        columns:
+          - label: Bu ürüne göre (2 hop)
+            sub: Sayfa ilk açıldığında giden sorgu.
+            parts: [pstart, pback, pfwd, pwhere, pret]
+          - label: Sana göre (3 hop)
+            sub: Senin "For my persona" tıklamanla giden sorgu.
+            parts: [mstart, mback, mfwd, mwhere, mret]
+            mark: [mwhere]
+        note: >-
+          Dikkat: iki sorguda da "tabloyu tara" diyen bir şey yok. Sorgu bir yol çiziyor ve Neptune o yolu başlangıç
+          düğümünden takip ediyor. Sağdaki sorgunun farkı başlangıç noktası (ürün yerine sen), bir hop fazlası ve senin
+          aldıklarını eleyen NOT (me)-[:BOUGHT]->(rec) parçası.
+      remember: >-
+        İlişkiler üzerinden giden sorularda ("benim gibi alanlar ne aldı?") graf veritabanı yolu doğrudan takip eder.
+        Bir hop eklemek sorguya bir parça eklemek kadar kolaydır.
+      why_db: >-
+        Neden Neptune? Aynı soruyu ilişkisel bir veritabanında sorsaydık her hop, büyük bir alımlar tablosuna bir JOIN
+        daha demek olurdu; 3 hop, aynı tabloya 3 kez JOIN. Neptune kenarları düğümlerin yanında tutar ve sadece
+        başlangıç noktasının çevresini okur. Bedeli: toplamlar, raporlar ve sıradan tablo işleri için uygun değildir;
+        satış raporu gibi işler başka bir veritabanında yapılır.
 
   - page: product
     path: /p/P0001
@@ -315,11 +652,12 @@ steps:
   - page: product
     path: /p/P0001
     engines: [dynamodb]
-    use_case: Conditional write
-    title: Prepare a write that breaks a rule
+    use_case: Koşullu yazma
+    title: Kuralı bozacak bir yazma hazırla
     why: >-
-      The cart allows at most 5 pieces of one product. You have 1 piece now. Adding 5 more breaks the rule.
-    do: Type 5 into the lit quantity field.
+      Sepet kuralı: bir üründen en fazla 5 adet. Az önceki adımda sepete 1 adet ekledin. Şimdi 5 adet daha eklemeyi
+      deneyeceğiz; bu, toplamı 6 yapar ve kuralı bozar.
+    do: Aydınlık adet (quantity) kutusuna 5 yaz.
     target: "#qty"
     action: type
     wait: {value: "5"}
@@ -327,16 +665,120 @@ steps:
   - page: product
     path: /p/P0001
     engines: [dynamodb]
-    use_case: Conditional write
-    title: A condition stops a bad write
+    use_case: Koşullu yazma
+    title: Bir koşul kötü bir yazmayı durdurur
     why: >-
-      The UpdateItem carries a ConditionExpression: the new quantity must be 5 or less. DynamoDB tests the condition and writes in one step.
-    do: Click the lit button "Add to cart".
+      Sepet DynamoDB adlı veritabanında duruyor. Sayfa "5 adet ekle" derken yanına bir koşul da koyuyor: "sadece toplam 5'i
+      geçmeyecekse yaz". Bu, bir kapı görevlisine benzer: kontrol eder ve uygun değilse içeri almaz. Kontrol ve yazma tek
+      hamlede yapılır.
+    do: Aydınlık "Add to cart" (sepete ekle) butonuna tıkla. Üstteki "Limit 5 per product" kutusu işaretli kalsın.
     target: "#add"
     action: click
     wait: {method: POST, path: /dynamodb/api/cart/items, body: {qty: "5"}}
     focus: "#add-msg"
-    result: DynamoDB refused the write with ConditionalCheckFailedException, and the item kept quantity 1. A refused conditional write still costs write capacity.
+    panel:
+      need: >-
+        Sepete "5 adet daha" yazılmadan önce mevcut adedin kontrol edilmesi gerekiyor. Bunu uygulama yapsaydı, önce
+        okuyup sonra yazması gerekirdi; aynı anda iki sekmeden ekleme yapılırsa ikisi de eski değeri görüp kuralı
+        aşabilirdi. Kontrolün veritabanının içinde, yazmayla aynı anda yapılması gerekiyor.
+      concept:
+        term: Koşullu yazma (ConditionExpression)
+        text: >-
+          DynamoDB'ye bir yazma gönderirken yanına bir koşul ekleyebilirsin. DynamoDB önce koşulu, item'ın o anki
+          değerine bakarak kontrol eder. Koşul doğruysa yazar, yanlışsa hiçbir şey yazmaz ve "koşul tutmadı" der. Kontrol
+          ile yazma tek bir adımdır, arada başka bir yazma araya giremez. Item, DynamoDB'de bir kayıt (bir satır) demek.
+        terms:
+          - [Item, "DynamoDB'deki tek bir kayıt. Burada sepetindeki bir ürün."]
+          - ["pk + sk (anahtar)", "Item'ı bulmanın adresi. pk sepetin (CART#…), sk sepetteki ürün (ITEM#P0001)."]
+          - [WRU, "Write request unit: DynamoDB'de yazma başına ödenen birim. Reddedilen koşullu yazma da 1 WRU harcar."]
+      sim:
+        kind: condition-write
+        caption: >-
+          Sepet tablosundan örnek bir kesit: üç ziyaretçinin sepetindeki altı item. Senin sepetinde Kablosuz Kulaklık'tan
+          1 adet var. Solda senin isteğin (koşullu), sağda aynı istek koşulsuz gitseydi ne olurdu.
+        add: 5
+        max: 5
+        labels: {cond: Koşulla (senin isteğin), free: Koşulsuz ("Limit" kutusu kapalı olsaydı)}
+        rows:
+          - {pk: "CART#7f3a…", sk: ITEM#P0001, name: Kablosuz Kulaklık, qty: 1, target: true}
+          - {pk: "CART#7f3a…", sk: ITEM#P0131, name: Mekanik Klavye, qty: 2}
+          - {pk: "CART#c41e…", sk: ITEM#P0021, name: Akıllı Saat, qty: 1}
+          - {pk: "CART#c41e…", sk: ITEM#P0066, name: Powerbank, qty: 3}
+          - {pk: "CART#09bd…", sk: ITEM#P0105, name: Deri Ceket, qty: 1}
+          - {pk: "CART#09bd…", sk: ITEM#P0176, name: Bluetooth Hoparlör, qty: 4}
+        summary: >-
+          İki istek de aynı item'ı aynı anahtarla, tek okumada buldu. Fark tek bir şey: koşul. Koşul olunca DynamoDB
+          kuralı kendisi korudu; koşul olmasa sepete 6 adet yazılırdı.
+      live:
+        title: Gerçek tabloda ne oldu?
+        intro: Senin tıklamanla DynamoDB'ye giden gerçek istek ve cevabı.
+        runs:
+          - label: Senin isteğin (koşullu)
+            trigger: true
+            metrics: [[Sonuç, data.refused, {set: "Reddedildi ✗", empty: "Yazıldı ✓"}], [Kapasite, capacity], [Süre, ms]]
+        reading: >-
+          DynamoDB koşulu kontrol etti ve yazmayı reddetti; sepetinde hâlâ 1 adet var. Ekrandaki kırmızı mesaj bu
+          reddin sonucu. Reddedilen yazma da 1 WRU harcadı: DynamoDB kontrol için item'ı okumak zorundaydı. Sonuç
+          "Yazıldı" görünüyorsa sepetinde bu üründen hiç yoktu: önceki adımı (sepete 1 adet ekleme) atlamış olabilirsin.
+      query:
+        title: Sayfa DynamoDB'ye ne dedi?
+        intro: >-
+          İki sütun, simülasyondaki iki tarafın komutu. Solda senin gönderdiğin koşullu komut, sağda "Limit" kutusu
+          kapalıyken gidecek komut. Bir parçanın üzerine gelince cümlede, kodda ve açıklamada aynı yer parlar.
+        cards_title: Parça parça
+        parts:
+          - id: key
+            say: Bu sepetteki bu ürünün item'ını bul,
+            code: "table.update_item(Key={'pk': 'CART#7f3a…', 'sk': 'ITEM#P0001'},"
+            name: Hangi item?
+            note: >-
+              Anahtar: pk senin sepetin, sk sepetteki ürün. DynamoDB anahtarla item'a doğrudan gider; tabloyu taramaz.
+            hl: key
+          - id: upd
+            say: adedine 5 ekle, adını, fiyatını ve silinme zamanını yaz,
+            code: "UpdateExpression='ADD qty :q SET #n = :n, unit_price = :p, expires_at = :e',"
+            name: Ne yazılsın?
+            note: >-
+              ADD qty :q adedi :q (5) kadar artırır; item yoksa 5 ile oluşturur. SET diğer alanları yazar. expires_at,
+              sepetin 24 saat sonra kendiliğinden silinme zamanıdır (TTL).
+            hl: add
+            indent: 2
+          - id: cond
+            say: "ama sadece item yoksa ya da adedi 0'dan fazla değilse,"
+            code: "ConditionExpression='attribute_not_exists(qty) OR qty <= :max',"
+            name: Hangi koşulla?
+            note: >-
+              Koşul. attribute_not_exists(qty): sepette bu ürün hiç yoksa yaz. qty <= :max: varsa, adedi :max'ı
+              geçmiyorsa yaz. Uygulama :max'ı 5 − 5 = 0 olarak gönderdi; senin adedin 1, yani koşul tutmadı.
+            hl: cond
+            indent: 2
+            tag: sadece soldaki komutta var
+          - id: cap
+            say: ve ne kadar kapasite harcandığını da söyle.
+            code: "ReturnConsumedCapacity='TOTAL')"
+            name: Ek bilgi
+            note: DynamoDB'den bu isteğin kaç birim harcadığını cevapta geri istemek. Paneldeki "Kapasite" sayısı buradan geliyor.
+            hl: result
+            indent: 2
+        columns:
+          - label: Koşulla (senin isteğin)
+            sub: Senin "Add to cart" tıklamanla giden komut ("Limit 5 per product" işaretli).
+            parts: [key, upd, cond, cap]
+            mark: [cond]
+          - label: Koşulsuz
+            sub: '"Limit 5 per product" kutusu kapalıyken gidecek komut.'
+            parts: [key, upd, cap]
+        note: >-
+          Dikkat: kural "en fazla 5" ama komutta 5 yazmıyor, 0 yazıyor. Uygulama koşulu "şimdiki adet + eklenecek ≤ 5"
+          yerine "şimdiki adet ≤ 5 − eklenecek" olarak gönderiyor, çünkü DynamoDB koşulda item'ın şimdiki değerine bakar.
+          Sağdaki komutun tek farkı ConditionExpression parçasının olmaması: DynamoDB bu durumda hiçbir şeyi kontrol etmez.
+      remember: >-
+        Bir kuralı korumak için önce okuyup sonra yazma; kuralı yazmanın içine koşul olarak koy. Kontrol ve yazma tek
+        adımda olunca, aynı anda gelen iki istek kuralı birlikte aşamaz.
+      why_db: >-
+        Neden DynamoDB? Sepet, ziyaretçi başına küçük ve çok sık değişen bir veri. DynamoDB bunu anahtarla, her ölçekte
+        birkaç milisaniyede okur ve yazar; koşullu yazma ve TTL'yi kendisi sunar. Bedeli: anahtarı bilmeden esnek
+        sorgu yapamazsın ve tablo, hangi sorular sorulacağına göre önceden tasarlanır.
 
   # ---------------------------------------------------------------- Cart: DynamoDB
   - page: cart
@@ -385,11 +827,12 @@ steps:
   - page: deals
     path: /deals
     engines: [elasticache]
-    use_case: Race condition
-    title: Select the unsafe way
+    use_case: Yarış durumu
+    title: Güvensiz yolu seç
     why: >-
-      In "Read, then write" mode, each buyer reads the stock and then writes stock - 1. Two buyers can read the same value.
-    do: Click the lit button "Read, then write".
+      Fırsat ürününün stoğu ElastiCache'te bellekte duran bir sayaç. "Önce oku, sonra yaz" yolunda her alıcı önce stoğu
+      okur, sonra bir eksiğini yazar. Aynı anda iki alıcı aynı değeri okuyabilir.
+    do: Aydınlık "Read, then write" (önce oku, sonra yaz) butonuna tıkla.
     target: "#exp-mode [data-value=naive]"
     action: click
     wait: {click: true}
@@ -397,15 +840,116 @@ steps:
   - page: deals
     path: /deals
     engines: [elasticache]
-    use_case: Race condition
-    title: Start the rush
-    why: 300 buyers try to buy 10 pieces at the same time.
-    do: Click the lit button "Start the rush".
+    use_case: Yarış durumu
+    title: İzdihamı başlat
+    why: >-
+      Şimdi 300 alıcı aynı anda 10 parçalık stoğu almaya çalışacak. Bu bir yarış: herkes aynı sayaca aynı anda
+      koşuyor. Kazananı belirleyen şey, sayacın nasıl azaltıldığı.
+    do: Aydınlık "Start the rush" (izdihamı başlat) butonuna tıkla.
     target: "#sim-run"
     action: click
     wait: {method: POST, path: /elasticache/api/deal/simulate, body: {mode: naive}, any: true}
     focus: "#sim-out"
-    result: Compare the sold count with the stock. GET and SET are two commands, and other buyers ran theirs in between. The atomic mode sells exactly the stock.
+    panel:
+      need: >-
+        Fırsat ürününün stoğu sınırlı ve çok kişi aynı anda almak istiyor. Stoktan fazla satılmaması gerekiyor: 10 parça
+        varsa tam 10 kişi almalı. Sorun şu: "stoğu oku, 0'dan büyükse bir eksiğini yaz" iki ayrı adım ve iki adımın
+        arasında başka alıcılar da okuyabiliyor.
+      concept:
+        term: Yarış durumu (race condition) ve atomik işlem
+        text: >-
+          Bir dükkânda tek bir ürün kalmış ve iki satıcı aynı anda rafa bakıp "bir tane var" diyor. İkisi de ürünü
+          satıyor ama rafta sadece bir tane var. Buna yarış durumu denir. Çözüm, bakmak ve almak işini tek hamlede yapmak:
+          buna atomik işlem denir. ElastiCache'in (Valkey) DECR komutu sayacı tek hamlede azaltır ve yeni değeri söyler.
+          Valkey komutları tek tek sırayla çalıştırdığı için iki DECR asla aynı değeri göremez.
+        terms:
+          - [GET / SET, "GET sayacı okur, SET sayaca bir değer yazar. İki ayrı komut."]
+          - [DECR, "Sayacı 1 azaltır ve yeni değeri döndürür. Okuma ve yazma tek komut."]
+          - [ElastiCache (Valkey), "Veriyi bellekte tutan, mikrosaniyeler içinde cevap veren anahtar-değer veritabanı."]
+      sim:
+        kind: race
+        caption: >-
+          Küçük bir örnek: 3 parçalık stok ve 6 alıcı. Gerçek denemede 300 alıcı ve 10 parça var; burada her adımı
+          görebilmen için sayılar küçük. Alıcılar ikişer ikişer neredeyse aynı anda geliyor.
+        key: lm:sim
+        stock: 3
+        buyers: [Ayşe, Mert, Elif, Lukas, Zeynep, Can]
+        tick_ms: 1100
+        labels: {naive: '"Önce oku, sonra yaz" (senin seçtiğin)', atomic: Atomik DECR}
+      live:
+        title: Gerçek izdihamda ne oldu?
+        intro: >-
+          Soldaki sütun senin başlattığın gerçek deneme. Sağdaki sütun için panel aynı denemeyi atomik DECR ile bir kez de
+          kendisi çalıştırdı. İkisi de ElastiCache'te geçici bir sayaçla çalışır, gerçek stoğa dokunmaz.
+        runs:
+          - label: '"Önce oku, sonra yaz" (senin denemen)'
+            trigger: true
+          - label: Atomik DECR
+            fetch: /elasticache/api/deal/simulate
+            body_from_trigger: {mode: atomic}
+        metrics: [[Alıcı, data.buyers], [Stok, data.stock], [Satılan, data.winners], [Fazla satış, data.oversold], ["Süre (p50, ms)", data.p50_ms]]
+        error_text: >-
+          Bu ölçüm şu an alınamadı. Simülasyon her ziyaretçi için saatte 3 kez çalışabilir; sınır dolmuş olabilir.
+        reading: >-
+          Atomik DECR tam stok kadar sattı ve fazla satış 0. "Önce oku, sonra yaz" yolunda alıcılar okuma ile yazma
+          arasında birbirinin değerini ezdi ve stoktan fazla satıldı; fazla satış sayısı her denemede değişir, çünkü kimin
+          ne zaman araya girdiği şansa bağlı. Süre (p50), alıcıların yarısının bu süreden kısa sürede cevap aldığı süredir
+          (milisaniye). Güvensiz yol okuma ile yazma arasında uygulama işi yaptığı için daha yavaştır.
+      query:
+        title: Uygulama ElastiCache'e ne dedi?
+        intro: >-
+          Simülasyondaki iki tarafın komutları. Solda her alıcının gönderdiği iki ayrı komut, sağda tek komut. Bir
+          parçanın üzerine gelince cümlede, kodda ve açıklamada aynı yer parlar.
+        cards_title: Parça parça
+        parts:
+          - id: get
+            say: Sayacı oku,
+            code: v = GET lm:sim
+            name: 1. komut
+            note: Sayacın o anki değerini oku. Bu cevap yola çıktığı an eskimeye başlar; başka alıcılar sayacı değiştirebilir.
+            hl: get
+          - id: work
+            say: biraz iş yap,
+            code: "# ... uygulama işi (1–4 ms)"
+            name: Arada
+            note: >-
+              Gerçek bir uygulama okuma ile yazma arasında iş yapar (ödeme kontrolü gibi). Denemede bu 1–4 ms'lik bir
+              bekleme. Yarış tam bu aralıkta olur.
+            hl: naive
+          - id: set
+            say: 0'dan büyükse bir eksiğini yaz.
+            code: "if v > 0: SET lm:sim v-1"
+            name: 2. komut
+            note: >-
+              Okunan değerin bir eksiğini yaz. Bu arada başka bir alıcı da aynı v'yi okuduysa, ikisi de aynı değeri yazar:
+              iki satış olur, sayaç bir azalır.
+            hl: set
+          - id: decr
+            say: Sayacı tek hamlede bir azalt ve yeni değeri söyle; sonuç 0 veya üstüyse satın aldın.
+            code: "DECR lm:sim   → sonuç >= 0 ise kazandın"
+            name: Tek komut
+            note: >-
+              DECR okuma ve yazmayı tek komutta yapar. Valkey komutları sırayla çalıştırır, bu yüzden her alıcı farklı bir
+              sonuç görür: 2, 1, 0, sonra −1, −2... Eksi sonuç "parça kalmadı" demek.
+            hl: decr
+        columns:
+          - label: '"Önce oku, sonra yaz"'
+            sub: Senin "Read, then write" seçip "Start the rush" tıklamanla giden komutlar (her alıcı için).
+            parts: [get, work, set]
+          - label: Atomik DECR
+            sub: '"Atomic DECR" seçiliyken giden komut (her alıcı için).'
+            parts: [decr]
+        note: >-
+          Dikkat: soldaki iki komut tek tek doğru çalışıyor; hata komutlarda değil, aralarındaki boşlukta. ElastiCache
+          her komutu doğru yaptı, ama iki komutun arasında başka alıcıların komutları da çalıştı. Sağdaki tek komutta
+          böyle bir boşluk yok.
+      remember: >-
+        Bir değeri okuyup ona göre yazıyorsan, araya başkası girebilir. Sayaç gibi paylaşılan bir değeri tek bir atomik
+        komutla (DECR, INCR) değiştir; okuma ile yazma arasında boşluk bırakma.
+      why_db: >-
+        Neden ElastiCache? Fırsat stoğu çok sayıda kişinin aynı anda okuduğu ve değiştirdiği küçük bir değer. ElastiCache
+        bunu bellekte tutar, mikrosaniyeler içinde cevap verir ve DECR gibi atomik komutları hazır sunar. Bedeli: veri
+        bellekte durur; kalıcı kayıt (siparişin kendisi) Aurora gibi bir veritabanına yazılır.
 
   - page: deals
     path: /deals

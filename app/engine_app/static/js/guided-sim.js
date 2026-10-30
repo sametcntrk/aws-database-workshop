@@ -8,7 +8,7 @@
   "use strict";
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const TICK_MS = 900;
+  const TICK_MS = 900;   // a spec can set its own tick_ms
 
   /* ---------- index-vs-scan: the same filter + sort with an index (left) and with a collection scan (right) */
   function indexVsScan(spec) {
@@ -92,7 +92,214 @@
     return { html, lanes: { index: idx, scan }, paint, final: (root) => { root.querySelector(".gs-sum").hidden = false; } };
   }
 
-  const KINDS = { "index-vs-scan": indexVsScan };
+  /* ---------- Shared parts of the kinds below: a lane with a title, a count, a body, a result box and a narration line */
+  const shell = (id, title, body, o = {}) => `<section class="gs-lane" data-lane="${id}" data-hl="${o.hl || ""}">
+      <header><h4>${esc(title)}</h4><span class="gs-count">${esc(o.count || "Okunan")}: <b>0</b></span></header>
+      <div class="gs-body${o.col ? " col" : ""}">${body}</div>
+      ${o.result === false ? "" : `<div class="gs-result" data-hl="result"><span>${esc(o.result || "Sonuç")}</span><ol></ol></div>`}
+      <p class="gs-say" aria-live="polite"></p></section>`;
+  const START = "Başlamak için Oynat'a bas.";
+  const laneOf = (root, id) => root.querySelector(`[data-lane="${id}"]`);
+  const chips = (L, items) => { L.querySelector(".gs-result ol").innerHTML = items.length ? items.join("") : '<li class="empty">henüz boş</li>'; };
+  const summary = (text) => `<p class="gs-sum" hidden>${text}</p>`;
+  const showSum = (root) => { const s = root.querySelector(".gs-sum"); if (s) s.hidden = false; };
+
+  /* ---------- race: many buyers take the last pieces of one counter. Left: read, then write. Right: one atomic DECR. */
+  function race(spec) {
+    const stock = spec.stock, buyers = spec.buyers, key = spec.key || "stok";
+    const naive = [{ counter: stock, rows: buyers.map(() => ({})), active: null, sold: 0, say: START }];
+    let s = { counter: stock, rows: buyers.map(() => ({})), sold: 0 };
+    for (let i = 0; i < buyers.length; i += 2) {
+      const pair = [i, i + 1].filter((k) => k < buyers.length);
+      pair.forEach((k) => {
+        const rows = s.rows.map((r) => ({ ...r })); rows[k].read = s.counter;
+        s = { ...s, rows, active: k, op: "get",
+          say: `${buyers[k]}: GET ${key} → ${s.counter}. "Stokta ${s.counter} parça var" diye düşünüyor.${pair.length > 1 && k === pair[1] ? ` ${buyers[pair[0]]} henüz yazmadı, o yüzden ikisi de aynı değeri gördü.` : ""}` };
+        naive.push(s);
+      });
+      pair.forEach((k) => {
+        const rows = s.rows.map((r) => ({ ...r })), read = rows[k].read;
+        if (read > 0) { rows[k].wrote = read - 1; rows[k].won = true; } else rows[k].lost = true;
+        s = { ...s, rows, active: k, op: "set", counter: read > 0 ? read - 1 : s.counter, sold: s.sold + (read > 0 ? 1 : 0),
+          say: read > 0 ? `${buyers[k]}: SET ${key} ${read - 1}. Satın aldı.${k === pair[1] && pair.length > 1 ? ` Ama ${buyers[pair[0]]} de aynı ${read} değerinden ${read - 1} yazmıştı: iki kişi tek bir parçayı aldı, sayaç sadece 1 azaldı.` : ""}`
+            : `${buyers[k]}: okuduğu değer 0, satın alamadı.` };
+        naive.push(s);
+      });
+    }
+    const over = s.sold - stock;
+    naive.push({ ...s, active: null, done: true, say: `Bitti. Stokta ${stock} parça vardı, ${s.sold} kişi satın aldı: ${over > 0 ? `${over} parça, olmayan bir parçaydı.` : "fazla satış yok."}` });
+
+    const atomic = [{ counter: stock, rows: buyers.map(() => ({})), active: null, sold: 0, say: START }];
+    let a = { counter: stock, rows: buyers.map(() => ({})), sold: 0 };
+    buyers.forEach((b, k) => {
+      const rows = a.rows.map((r) => ({ ...r })), v = a.counter - 1;
+      rows[k].decr = v; if (v >= 0) rows[k].won = true; else rows[k].lost = true;
+      a = { ...a, rows, active: k, op: "decr", counter: v, sold: a.sold + (v >= 0 ? 1 : 0),
+        say: `${b}: DECR ${key} → ${v}. ${v >= 0 ? "Sonuç 0 veya üstü: satın aldı." : "Sonuç 0'ın altında: parça kalmadı, satın alamadı."} Okuma ve yazma tek komut, araya kimse giremez.` };
+      atomic.push(a);
+    });
+    atomic.push({ ...a, active: null, done: true, say: `Bitti. Tam ${a.sold} kişi satın aldı, stok kadar. Sayaç ${a.counter}'e indi ama eksi değerde kimse ürün almadı.` });
+
+    const table = (cols, kind) => `<table class="gs-table"><thead><tr>${cols.map(([k, l]) => `<th data-hl="${k}">${esc(l)}</th>`).join("")}</tr></thead>
+      <tbody>${buyers.map((b, i) => `<tr data-i="${i}">${cols.map(([k]) => `<td data-k="${k}" data-hl="${k}">${k === "buyer" ? esc(b) : ""}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+    const counter = `<div class="gs-counter" data-hl="counter"><span>${esc(key)}</span><b>${stock}</b><small>bellekteki sayaç</small></div>`;
+    const html = `<div class="gs-lanes">${shell("naive", spec.labels?.naive || "Önce oku, sonra yaz", counter + table([["buyer", "Alıcı"], ["get", "GET ile okudu"], ["set", "SET ile yazdı"], ["res", "Sonuç"]]), { hl: "naive", count: "Satılan", result: false, col: true })}
+      ${shell("atomic", spec.labels?.atomic || "Atomik DECR", counter + table([["buyer", "Alıcı"], ["decr", "DECR sonucu"], ["res", "Sonuç"]]), { hl: "atomic", count: "Satılan", result: false, col: true })}</div>
+      ${summary(`Aynı ${buyers.length} alıcı, aynı ${stock} parça: "önce oku, sonra yaz" yolu ${s.sold} parça sattı, atomik DECR tam ${a.sold}.`)}`;
+    function paint(root, id, f) {
+      const L = laneOf(root, id);
+      L.querySelector(".gs-count b").textContent = `${f.sold} / ${stock}`;
+      L.classList.toggle("done", !!f.done);
+      const c = L.querySelector(".gs-counter b"); c.textContent = f.counter; c.classList.toggle("neg", f.counter < 0);
+      L.querySelectorAll("tbody tr").forEach((tr) => {
+        const i = Number(tr.dataset.i), r = f.rows[i] || {};
+        tr.classList.toggle("active", f.active === i);
+        tr.classList.toggle("hit", !!r.won); tr.classList.toggle("miss", !!r.lost);
+        const set = (k, v) => { const td = tr.querySelector(`[data-k="${k}"]`); if (td) td.textContent = v ?? ""; };
+        set("get", r.read); set("set", r.wrote); set("decr", r.decr);
+        set("res", r.won ? "✓ aldı" : r.lost ? "✗ alamadı" : "");
+      });
+      L.classList.toggle("over", !!f.done && f.sold > stock);
+      L.querySelector(".gs-say").textContent = f.say;
+    }
+    return { html, lanes: { naive, atomic }, paint, final: showSum };
+  }
+
+  /* ---------- partition: Keyspaces / Cassandra wide rows. One INSERT into the user's partition, then one SELECT of it. */
+  function partition(spec) {
+    const parts = spec.partitions, me = parts.findIndex((p) => p.me), ins = spec.insert;
+    const rowsOf = (p, withNew) => (withNew && p.me ? [{ ...ins, fresh: true }, ...p.rows] : p.rows);
+    const frames = [{ say: START, phase: 0 }];
+    frames.push({ phase: 1, lit: me, say: `INSERT geldi: user_id = ${parts[me].label}. Keyspaces bu değere bakar ve satırın hangi partition'a gideceğini bulur. Diğer partition'lara dokunmaz.` });
+    frames.push({ phase: 2, lit: me, inserted: true, say: "Yeni satır partition'ın en üstüne girdi. Tablo satırları event_time'a göre yeniden eskiye sıralı tutuyor; sıralama yazarken yapılıyor, okurken değil." });
+    frames.push({ phase: 3, lit: me, inserted: true, select: true, touched: 1, say: `Şimdi sayfa "Son baktıkların" şeridi için SELECT ... WHERE user_id = ${parts[me].label} gönderiyor. Keyspaces yine sadece bu partition'a gider.` });
+    const seen = new Set(), result = [];
+    rowsOf(parts[me], true).forEach((r, k) => {
+      let why;
+      if (r.type !== "view") why = `${r.type} satırı: bakılan ürün değil, atlandı.`;
+      else if (seen.has(r.product)) why = `${r.product}: zaten listede, atlandı.`;
+      else { seen.add(r.product); result.push(r.product); why = `${r.product}: listeye eklendi.`; }
+      frames.push({ phase: 4, lit: me, inserted: true, select: true, touched: 1, read: k + 1, result: [...result],
+        say: `${k + 1}. satır okundu (${r.time}). ${why}` });
+    });
+    const total = parts.reduce((n, p) => n + rowsOf(p, true).length, 0);
+    frames.push({ ...frames[frames.length - 1], done: true,
+      say: `Bitti. Tabloda ${total} satır var, sadece ${rowsOf(parts[me], true).length} tanesi okundu: hepsi tek partition'dan, zaten yeniden eskiye sıralı.` });
+    const block = (p, i) => `<div class="gs-part" data-p="${i}" data-hl="pk${p.me ? " where" : ""}">
+      <div class="gs-part-key" data-hl="pk">user_id = <b>${esc(p.label)}</b>${p.me ? " <em>(sen)</em>" : ""}</div>
+      <table class="gs-table"><thead><tr><th data-hl="ck">event_time ↓</th><th data-hl="type">event_type</th><th>product</th></tr></thead><tbody>
+      ${rowsOf(p, true).map((r, k) => `<tr data-k="${k}" class="${r.fresh ? "fresh" : ""}" ${r.fresh ? 'data-hl="insert"' : ""}><td data-hl="ck">${esc(r.time)}</td><td data-hl="type">${esc(r.type)}</td><td>${esc(r.product)}</td></tr>`).join("")}
+      </tbody></table></div>`;
+    const html = `<div class="gs-lanes one">${shell("table", spec.title || "Keyspaces tablosu", `<div class="gs-parts">${parts.map(block).join("")}</div>`, { count: "Okunan satır", result: spec.result_title || "Son baktıkların" })}</div>
+      ${summary(spec.summary || "")}`;
+    function paint(root, id, f) {
+      const L = laneOf(root, id);
+      L.querySelector(".gs-count b").textContent = `${f.read || 0} · dokunulan partition: ${f.touched || (f.phase >= 1 ? 1 : 0)} / ${parts.length}`;
+      L.classList.toggle("done", !!f.done);
+      L.querySelectorAll(".gs-part").forEach((el) => {
+        const i = Number(el.dataset.p);
+        el.classList.toggle("lit", f.lit === i); el.classList.toggle("dim", f.lit !== undefined && f.lit !== i);
+        el.querySelectorAll("tbody tr").forEach((tr) => {
+          const k = Number(tr.dataset.k);
+          if (tr.classList.contains("fresh")) tr.hidden = !f.inserted;
+          tr.classList.toggle("active", i === me && f.read === k + 1);
+          tr.classList.toggle("read", i === me && (f.read || 0) > k);
+        });
+      });
+      chips(L, (f.result || []).map((x) => `<li>${esc(x)}</li>`));
+      L.querySelector(".gs-say").textContent = f.say;
+    }
+    return { html, lanes: { table: frames }, paint, final: showSum };
+  }
+
+  /* ---------- condition-write: DynamoDB UpdateItem with and without a ConditionExpression, on the same item */
+  function conditionWrite(spec) {
+    const rows = spec.rows, ti = rows.findIndex((r) => r.target), cur = rows[ti].qty, add = spec.add, max = spec.max;
+    const room = max - add, ok = cur <= room;
+    const base = (say) => ({ say, active: null, qty: cur });
+    const req = `UpdateItem geldi: ${rows[ti].name} için qty'ye ${add} ekle (ADD qty :q, :q = ${add}).`;
+    const find = "pk + sk ile doğrudan bu item bulundu. Anahtar bilindiği için diğer item'lara bakılmadı.";
+    const cond = [base(START), { ...base(req), req: true }, { ...base(find), req: true, active: ti, read: 1 },
+      { ...base(`Koşul: qty ≤ :max. Kural "en fazla ${max} adet" ve ${add} adet eklenecek, o yüzden :max = ${max} − ${add} = ${room}. Şu anki qty ${cur}. ${cur} ≤ ${room} mü? ${ok ? "Evet ✓" : "Hayır ✗"}`), req: true, active: ti, read: 1, check: ok ? "ok" : "fail" },
+      { ...base(ok ? `Yazıldı: qty = ${cur + add}.` : `Yazma yapılmadı, qty ${cur} kaldı. DynamoDB ConditionalCheckFailedException döndü. Kontrol ve yazma tek adımda yapıldı: arada başka bir yazma araya giremez.`),
+        req: true, active: ti, read: 1, check: ok ? "ok" : "fail", qty: ok ? cur + add : cur, done: true, refused: !ok }];
+    const free = [base(START), { ...base(req), req: true }, { ...base(find), req: true, active: ti, read: 1 },
+      { ...base("Koşul yok: DynamoDB hiçbir şeyi kontrol etmeden yazar."), req: true, active: ti, read: 1, check: "none" },
+      { ...base(`qty = ${cur} + ${add} = ${cur + add} yazıldı. Kural bozuldu: sepette ${cur + add} adet var.`), req: true, active: ti, read: 1, check: "none", qty: cur + add, done: true, broke: cur + add > max }];
+    const table = `<table class="gs-table"><thead><tr><th data-hl="key">pk</th><th data-hl="key">sk</th><th>name</th><th data-hl="add">qty</th></tr></thead><tbody>
+      ${rows.map((r, i) => `<tr data-i="${i}"><td data-hl="key">${esc(r.pk)}</td><td data-hl="key">${esc(r.sk)}</td><td>${esc(r.name)}</td><td data-hl="add" data-k="qty">${esc(r.qty)}</td></tr>`).join("")}</tbody></table>`;
+    const lane = (id, title) => shell(id, title, `<div class="gs-req" data-hl="add">ADD qty ${add}</div>${table}<div class="gs-check" data-hl="cond"></div>`, { hl: id, count: "Okunan item", result: false, col: true });
+    const html = `<div class="gs-lanes">${lane("cond", spec.labels?.cond || "Koşulla")}${lane("free", spec.labels?.free || "Koşulsuz")}</div>
+      ${summary(spec.summary || "")}`;
+    function paint(root, id, f) {
+      const L = laneOf(root, id);
+      L.querySelector(".gs-count b").textContent = f.read || 0;
+      L.classList.toggle("done", !!f.done); L.classList.toggle("broke", !!f.broke);
+      L.querySelector(".gs-req").classList.toggle("on", !!f.req && !f.done);
+      L.querySelectorAll("tbody tr").forEach((tr) => {
+        const i = Number(tr.dataset.i);
+        tr.classList.toggle("active", f.active === i && !f.done);
+        tr.classList.toggle("hit", f.active === i && f.done && !f.refused && !f.broke);
+        tr.classList.toggle("miss", f.active === i && (f.refused || f.broke) && !!f.done);
+        tr.classList.toggle("dimrow", f.active !== null && f.active !== i);
+        if (i === ti) tr.querySelector('[data-k="qty"]').textContent = f.qty;
+      });
+      const ck = L.querySelector(".gs-check");
+      ck.className = `gs-check ${f.check || ""}`;
+      ck.textContent = f.check === "fail" ? `${cur} ≤ ${room} ✗ koşul tutmadı` : f.check === "ok" ? "koşul tuttu ✓" : f.check === "none" ? "koşul yok" : "";
+      L.querySelector(".gs-say").textContent = f.say;
+    }
+    return { html, lanes: { cond, free }, paint, final: showSum };
+  }
+
+  /* ---------- graph-walk: Neptune follows edges hop by hop, then counts how many paths reach each product */
+  function graphWalk(spec) {
+    const lanes = {}, specs = spec.lanes;
+    specs.forEach((ln) => {
+      const fr = [{ hop: -1, say: START }, { hop: 0, edges: 0, say: ln.start_say || `Yürüyüş ${ln.start.label} düğümünden başlıyor.` }];
+      let edges = 0;
+      ln.hops.forEach((h, k) => {
+        edges += h.nodes.reduce((n, x) => n + (x.from || []).length, 0);
+        fr.push({ hop: k + 1, edges, say: h.say || h.title });
+      });
+      const last = ln.hops[ln.hops.length - 1].nodes.filter((x) => !x.excluded);
+      const tally = last.map((x) => ({ ...x, score: new Set(x.from).size })).sort((p, q) => q.score - p.score || String(p.id).localeCompare(String(q.id)));
+      fr.push({ hop: ln.hops.length, edges, tally, done: true, say: ln.end_say || "Her ürün, ona kaç farklı yoldan ulaşıldığına göre sayıldı. En çok yol, en güçlü öneri." });
+      lanes[ln.id] = fr;
+    });
+    const nodeHtml = (x, hop) => `<span class="gs-node ${x.type || ""}" data-id="${esc(x.id)}" data-hop="${hop}" ${x.excluded ? 'data-hl="exclude"' : ""} title="${esc(x.excluded || "")}">${esc(x.label)}${x.excluded ? `<small>${esc(x.excluded)}</small>` : ""}</span>`;
+    const laneHtml = (ln) => shell(ln.id, ln.title, `<div class="gs-graph"><svg class="gs-edges" aria-hidden="true"></svg>
+        <div class="gs-hop" data-hl="start"><h5>${esc(ln.start_title || "Başlangıç")}</h5>${nodeHtml(ln.start, 0)}</div>
+        ${ln.hops.map((h, k) => `<div class="gs-hop" data-hl="hop${k + 1}"><h5>${esc(h.title)}</h5>${h.nodes.map((x) => nodeHtml(x, k + 1)).join("")}</div>`).join("")}</div>`,
+      { hl: ln.id, count: "Yürünen kenar (edge)", result: ln.result_title || "Öneri (ortak müşteri sayısı)" });
+    const html = `<div class="gs-lanes">${specs.map(laneHtml).join("")}</div>${summary(spec.summary || "")}`;
+    function paint(root, id, f) {
+      const ln = specs.find((x) => x.id === id), L = laneOf(root, id), g = L.querySelector(".gs-graph");
+      L.querySelector(".gs-count b").textContent = f.edges || 0;
+      L.classList.toggle("done", !!f.done);
+      L.querySelectorAll(".gs-node").forEach((n) => { const h = Number(n.dataset.hop); n.classList.toggle("seen", h <= f.hop); n.classList.toggle("now", h === f.hop && !f.done); });
+      // edges of the reached hops, drawn between node centres
+      const svg = g.querySelector("svg"), box = g.getBoundingClientRect();
+      svg.setAttribute("width", box.width); svg.setAttribute("height", box.height);
+      const at = (hop, nid) => g.querySelector(`.gs-node[data-hop="${hop}"][data-id="${CSS.escape(nid)}"]`);
+      let lines = "";
+      ln.hops.forEach((h, k) => {
+        if (k + 1 > f.hop) return;
+        h.nodes.forEach((x) => (x.from || []).forEach((src) => {
+          const a = at(k, src), b = at(k + 1, x.id);
+          if (!a || !b) return;
+          const p = a.getBoundingClientRect(), q = b.getBoundingClientRect();
+          lines += `<line x1="${p.right - box.left}" y1="${p.top + p.height / 2 - box.top}" x2="${q.left - box.left}" y2="${q.top + q.height / 2 - box.top}" class="${k + 1 === f.hop && !f.done ? "now" : ""}${x.excluded ? " ex" : ""}"/>`;
+        }));
+      });
+      svg.innerHTML = lines;
+      chips(L, (f.tally || []).map((x) => `<li>${esc(x.label)} <small>${x.score}</small></li>`));
+      L.querySelector(".gs-say").textContent = f.say;
+    }
+    return { html, lanes, paint, final: showSum };
+  }
+
+  const KINDS = { "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
 
   function render(box, spec) {
     const kind = KINDS[spec.kind];
@@ -116,13 +323,14 @@
       if (t >= total) t = 0;
       if (REDUCED) { t = total; show(); return; }
       t += 1;
-      timer = setInterval(() => { t += 1; show(); }, TICK_MS);
+      timer = setInterval(() => { t += 1; show(); }, spec.tick_ms || TICK_MS);
       show();
     }
     root.querySelector("[data-g=play]").addEventListener("click", play);
     root.querySelector("[data-g=step]").addEventListener("click", () => { stop(); t = t >= total ? 0 : t + 1; show(); });
     root.querySelector("[data-g=reset]").addEventListener("click", () => { stop(); t = 0; show(); });
     show();
+    new ResizeObserver(() => { if (!timer) show(); }).observe(root);   // graph edges follow the layout
     return {
       play,
       highlight(key) {
