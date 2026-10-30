@@ -887,7 +887,7 @@ DDB_DECISIONS = {
               ("Every pipeline that you write is code that can break at night. A managed copy does this work for you.",
                "Yazdığın her pipeline gece bozulabilecek bir koddur. Yönetilen bir kopya bu işi ortadan kaldırır."),
               ddb=(0, "The orders are in Aurora. A pipeline must copy them to DynamoDB.", "Siparişler Aurora'da. Bir pipeline onları DynamoDB'ye kopyalamalı."),
-              rs=(2, "Zero-ETL from Aurora: new orders arrive within seconds, with no code.", "Aurora'dan zero-ETL: yeni siparişler kod olmadan saniyeler içinde gelir."),
+              rs=(2, "Zero-ETL from Aurora: new orders arrive within seconds, with no code.", "Aurora'dan zero-ETL: yeni siparişler kod olmadan, yaklaşık yarım dakikalık bir gecikmeyle gelir."),
               aur=(2, "It is the source itself.", "Kaynağın kendisidir."),
               os=(1, "An ingestion pipeline must copy and flatten the orders.", "Bir ingestion pipeline'ı siparişleri kopyalayıp düzleştirmeli."),
               doc=(0, "A pipeline must copy the orders.", "Bir pipeline siparişleri kopyalamalı.")),
