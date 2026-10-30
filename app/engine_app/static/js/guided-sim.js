@@ -248,10 +248,18 @@
     const free = [base(START), { ...base(req), req: true }, { ...base(find), req: true, active: ti, read: 1 },
       { ...base("Koşul yok: DynamoDB hiçbir şeyi kontrol etmeden yazar."), req: true, active: ti, read: 1, check: "none" },
       { ...base(`qty = ${cur} + ${add} = ${cur + add} yazıldı. Kural bozuldu: sepette ${cur + add} adet var.`), req: true, active: ti, read: 1, check: "none", qty: cur + add, done: true, broke: cur + add > max }];
+    const DB = spec.engine_label || "DynamoDB";
+    const sendC = spec.send_cond || `Uygulama kuralı koşula çeviriyor: :max = ${max} − ${add} = ${room}. Sonra UpdateItem'ı koşuluyla birlikte DynamoDB'ye gönderiyor.`;
+    const backC = spec.back_cond || (ok ? "Uygulama sepeti yeniden okudu (Query) ve tarayıcıya gönderdi." :
+      `Uygulama "koşul tutmadı" cevabını yakaladı, sepeti yeniden okudu (Query) ve "en fazla ${max} adet" mesajıyla tarayıcıya gönderdi.`);
+    const sendF = spec.send_free || "Uygulama aynı UpdateItem'ı koşulsuz gönderiyor.";
+    const backF = spec.back_free || `Uygulama sepeti yeniden okudu ve ${cur + add} adetlik sepeti tarayıcıya gönderdi; kimse uyarılmadı.`;
+    cond.splice(0, cond.length, ...actorize(cond, sendC, backC, DB, { active: null, qty: cur }));
+    free.splice(0, free.length, ...actorize(free, sendF, backF, DB, { active: null, qty: cur }));
     const table = `<table class="gs-table"><thead><tr><th data-hl="key">pk</th><th data-hl="key">sk</th><th>name</th><th data-hl="add">qty</th></tr></thead><tbody>
       ${rows.map((r, i) => `<tr data-i="${i}"><td data-hl="key">${esc(r.pk)}</td><td data-hl="key">${esc(r.sk)}</td><td>${esc(r.name)}</td><td data-hl="add" data-k="qty">${esc(r.qty)}</td></tr>`).join("")}</tbody></table>`;
     const lane = (id, title) => shell(id, title, `<div class="gs-req" data-hl="add">ADD qty ${add}</div>${table}<div class="gs-check" data-hl="cond"></div>`, { hl: id, count: "Okunan item", result: false, col: true });
-    const html = `<div class="gs-lanes">${lane("cond", spec.labels?.cond || "Koşulla")}${lane("free", spec.labels?.free || "Koşulsuz")}</div>
+    const html = `${actorBar(DB)}<div class="gs-lanes">${lane("cond", spec.labels?.cond || "Koşulla")}${lane("free", spec.labels?.free || "Koşulsuz")}</div>
       ${summary(spec.summary || "")}`;
     function paint(root, id, f) {
       const L = laneOf(root, id);
@@ -269,7 +277,7 @@
       const ck = L.querySelector(".gs-check");
       ck.className = `gs-check ${f.check || ""}`;
       ck.textContent = f.check === "fail" ? `${cur} ≤ ${room} ✗ koşul tutmadı` : f.check === "ok" ? "koşul tuttu ✓" : f.check === "none" ? "koşul yok" : "";
-      L.querySelector(".gs-say").textContent = f.say;
+      sayWho(L, f);
     }
     return { html, lanes: { cond, free }, paint, final: showSum };
   }

@@ -1026,11 +1026,44 @@ steps:
           - [Item, "DynamoDB'deki tek bir kayıt. Burada sepetindeki bir ürün."]
           - ["pk + sk (anahtar)", "Item'ı bulmanın adresi. pk sepetin (CART#…), sk sepetteki ürün (ITEM#P0001)."]
           - [WRU, "Write request unit: DynamoDB'de yazma başına ödenen birim. Reddedilen koşullu yazma da 1 WRU harcar."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde sepet tablosu nasıl kurulur?
+        intro: >-
+          Butona basılmadan önce hazır olması gerekenler: tablonun anahtarları ve sepet kuralları.
+        text:
+          - >-
+            Anahtar, sorulacak soruya göre seçilir. "Bu ziyaretçinin sepetini getir" sorusu için pk = CART#<ziyaretçi>,
+            sk = ITEM#<ürün> olur. Bir sepetin bütün item'ları aynı pk altında durur ve tek bir Query ile gelir; tek bir
+            ürüne de pk + sk ile doğrudan gidilir.
+          - >-
+            İş kuralı yazmanın içine konur. "Bir üründen en fazla 5 adet" gibi bir kural için önce okuyup sonra yazılmaz;
+            kural yazmaya ConditionExpression olarak eklenir. Birden fazla item birlikte değişecekse (ör. iki ürün aynı anda)
+            TransactWriteItems ile hepsi ya birlikte yazılır ya hiç yazılmaz.
+          - >-
+            Adet gibi sayılar ADD ile artırılır. ADD atomiktir: iki sekme aynı anda ekleme yapsa da eklemelerden biri
+            kaybolmaz.
+          - >-
+            Terk edilen sepetler TTL ile silinir. Her item'a bir silinme zamanı (expires_at) yazılır; DynamoDB süresi geçen
+            item'ları kendisi, ek yazma ücreti almadan siler. Silme birkaç gün gecikebileceği için uygulama okurken
+            expires_at'i ayrıca kontrol eder.
+      feed:
+        title: Veri nereden geliyor?
+        writes: Uygulama. Ürün sayfasındaki "sepete ekle", sepet sayfasındaki silme ve adet değiştirme.
+        reads: Uygulama. Sepet sayfası, başlıktaki sepet sayacı ve ödeme adımı.
+        kind: >-
+          Uygulama orkestrasyonu. DynamoDB başka bir veritabanından kendiliğinden veri çekmez. Ama kendi değişikliklerini
+          dışarı verebilir: DynamoDB Streams açıksa her yazma, 24 saat boyunca okunabilen bir değişiklik kaydı olur.
+        best: >-
+          Sipariş verilince sepet, siparişin asıl kaydına (ilişkisel veritabanı) dönüşür ve sepet boşaltılır. "Sepetini
+          unuttun" hatırlatması ya da analiz gibi işler için DynamoDB Streams'i bir AWS Lambda fonksiyonu okur; uygulama
+          bu işleri sayfanın isteğine eklemez, böylece sayfa yavaşlamaz.
       sim:
         kind: condition-write
         caption: >-
           Sepet tablosundan örnek bir kesit: üç ziyaretçinin sepetindeki altı item. Senin sepetinde Kablosuz Kulaklık'tan
-          1 adet var. Solda senin isteğin (koşullu), sağda aynı istek koşulsuz gitseydi ne olurdu.
+          1 adet var. Solda senin gerçek isteğin (koşullu), sağda aynı istek koşulsuz gitseydi ne olurdu; sağdaki gerçekte
+          gönderilmedi. Üstteki etiketler o anda işi kimin yaptığını gösterir: uygulama mı, DynamoDB mi.
         add: 5
         max: 5
         labels: {cond: Koşulla (senin isteğin), free: Koşulsuz ("Limit" kutusu kapalı olsaydı)}
@@ -1044,6 +1077,52 @@ steps:
         summary: >-
           İki istek de aynı item'ı aynı anahtarla, tek okumada buldu. Fark tek bir şey: koşul. Koşul olunca DynamoDB
           kuralı kendisi korudu; koşul olmasa sepete 6 adet yazılırdı.
+      wire:
+        what: >-
+          Uygulama komutu HTTPS ile DynamoDB'ye gönderir (AWS'nin Python kütüphanesi boto3). Her istek, uygulamanın IAM
+          kimliğiyle imzalanır.
+        dst: "dynamodb.eu-central-1.amazonaws.com : 443"
+        dst_note: >-
+          DynamoDB'nin bölge adresi. VPC'deki gateway endpoint sayesinde istek internete çıkmadan AWS'nin iç ağından gider.
+        rows:
+          - [Şifreleme, TLS (HTTPS), gerçek, DynamoDB sadece şifreli bağlantı kabul eder.]
+          - [Protokol, "HTTP, POST /  (JSON gövde)", gerçek, "Her komut bir web isteğidir. Hangi komut olduğunu X-Amz-Target başlığı söyler: UpdateItem."]
+          - [Kimlik, "IAM, SigV4 imzası (servis: dynamodb)", gerçek, "Şifre yok. İsteğe, geçici AWS kimliğiyle hesaplanmış bir imza eklenir."]
+        body_label: İsteğin içeriği (okunur hâle getirilmiş, bazı değerler kısaltıldı)
+        body: |-
+          POST / HTTP/1.1
+          Host: dynamodb.eu-central-1.amazonaws.com
+          X-Amz-Target: DynamoDB_20120810.UpdateItem
+          Content-Type: application/x-amz-json-1.0
+          Authorization: AWS4-HMAC-SHA256 Credential=…/eu-central-1/dynamodb/aws4_request, SignedHeaders=…, Signature=…
+
+          { "TableName": "dbws-cart",
+            "Key": { "pk": {"S": "CART#7f3a…"}, "sk": {"S": "ITEM#P0001"} },
+            "UpdateExpression": "ADD qty :q SET #n = :n, unit_price = :p, expires_at = :e",
+            "ConditionExpression": "attribute_not_exists(qty) OR qty <= :max",
+            "ExpressionAttributeValues": { ":q": {"N": "5"}, ":max": {"N": "0"}, … },
+            "ReturnValues": "ALL_NEW", "ReturnConsumedCapacity": "TOTAL" }
+
+          Koşul tutmazsa cevap: HTTP 400, "__type": "…#ConditionalCheckFailedException"
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Her satırın
+        etiketi işin nerede olduğunu söyler: mor etiketli satırda bir şey bir yerden bir yere gider (tarayıcıdan uygulamaya,
+        uygulamadan DynamoDB'ye ya da geri). Gri "Uygulamanın içinde" etiketli satırda iş uygulamanın kendi içinde yapılır,
+        hiçbir yere bir şey gitmez.
+      app_code:
+        - file: engines/dynamodb.py
+          func: api_add
+          title: '"Sepete ekle" isteği'
+          sub: Senin tıklamanla gelen istek.
+          lines:
+            - {match: '@bp.post("/api/cart/items")', say: "\"Sepete ekle\" isteği buraya gelir: ürün, adet (5) ve \"Limit\" kutusunun durumu.", tag: Tarayıcı → Uygulama}
+            - {match: 'UpdateExpression="ADD qty :q SET', say: "Ne yazılacağını hazırlar: adede 5 ekle; ad, fiyat ve silinme zamanını yaz.", tag: Uygulamanın içinde, hl: add}
+            - {match: 'kwargs["ConditionExpression"] = "attribute_not_exists(qty) OR qty <= :max"', say: "\"Limit\" kutusu işaretliyse komuta koşulu ekler.", tag: Uygulamanın içinde, hl: cond}
+            - {match: 'kwargs["ExpressionAttributeValues"][":max"] = MAX_QTY - qty', say: "Kuralı sayıya çevirir: :max = 5 − 5 = 0. Bu hesabı uygulama yapar, DynamoDB değil.", tag: Uygulamanın içinde, hl: cond}
+            - {match: 'resp = table().update_item(**kwargs)', say: "boto3 komutu gönderir. Koşul tutarsa DynamoDB yazar ve item'ın yeni hâlini döner.", tag: [Uygulama → DynamoDB, DynamoDB → Uygulama], hl: key}
+            - {match: 'except table().meta.client.exceptions.ConditionalCheckFailedException:', say: "Koşul tutmazsa DynamoDB bir hata döner; uygulama onu yakalar ve \"en fazla 5 adet\" mesajını hazırlar.", tag: Uygulamanın içinde, hl: cond}
+            - {match: 'items = get_cart(True)', say: "Sepetin güncel hâlini almak için DynamoDB'ye ikinci bir komut (Query) gider.", tag: [Uygulama → DynamoDB, DynamoDB → Uygulama]}
+            - {match: 'return jsonify(trace.payload({"items": items, "refused": refused}))', say: Sepet ve varsa ret mesajı tarayıcıya gider., tag: Uygulama → Tarayıcı}
       live:
         title: Gerçek tabloda ne oldu?
         intro: Senin tıklamanla DynamoDB'ye giden gerçek istek ve cevabı.
@@ -1098,15 +1177,39 @@ steps:
         columns:
           - label: Koşulla (senin isteğin)
             sub: Senin "Add to cart" tıklamanla giden komut ("Limit 5 per product" işaretli).
+            via: >-
+              Uygulama bu komutu boto3 kütüphanesinin update_item() metoduyla gönderir. :max değerini (5 − 5 = 0) hesaplayıp
+              koyan da uygulamadır.
             parts: [key, upd, cond, cap]
             mark: [cond]
           - label: Koşulsuz
             sub: '"Limit 5 per product" kutusu kapalıyken gidecek komut.'
+            via: Aynı update_item() çağrısı, ConditionExpression olmadan.
             parts: [key, upd, cap]
         note: >-
           Dikkat: kural "en fazla 5" ama komutta 5 yazmıyor, 0 yazıyor. Uygulama koşulu "şimdiki adet + eklenecek ≤ 5"
           yerine "şimdiki adet ≤ 5 − eklenecek" olarak gönderiyor, çünkü DynamoDB koşulda item'ın şimdiki değerine bakar.
           Sağdaki komutun tek farkı ConditionExpression parçasının olmaması: DynamoDB bu durumda hiçbir şeyi kontrol etmez.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          DynamoDB'nin işi cevabı verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: DynamoDB → Uygulama
+            text: >-
+              Koşul tutmadı: DynamoDB ConditionalCheckFailedException döndü ve hiçbir şey yazmadı. Bu kontrol de 1 WRU
+              harcadı. (Sepetinde bu üründen hiç yoksa koşul tutar ve 5 adet yazılır.)
+          - who: Uygulama
+            text: >-
+              Hatayı yakaladı ve "en fazla 5 adet" mesajını hazırladı. Sonra sepetin güncel hâlini okumak için DynamoDB'ye
+              ikinci bir komut (Query) gönderdi.
+          - who: Uygulama → Tarayıcın
+            text: Sepeti ve ret mesajını tek bir JSON cevabında gönderdi.
+          - who: Tarayıcın
+            text: Butonun altına kırmızı mesajı yazdı. Sepetteki adet değişmedi.
+          - who: Sonra
+            text: >-
+              Sepet item'ları 24 saat sonra TTL ile kendiliğinden silinir. Sipariş verilirse sepet boşaltılır.
       remember: >-
         Bir kuralı korumak için önce okuyup sonra yazma; kuralı yazmanın içine koşul olarak koy. Kontrol ve yazma tek
         adımda olunca, aynı anda gelen iki istek kuralı birlikte aşamaz.
