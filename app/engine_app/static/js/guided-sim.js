@@ -772,6 +772,52 @@
     return { html, lanes, paint, final: showSum };
   }
 
+  /* ---------- spread: many writes at once. Left: keys spread over many partitions, every partition stays under its limit.
+   * Right ("what if"): every write uses the same key, one partition takes them all and the excess is throttled.
+   * spec.partitions (boxes), spec.waves (ticks), spec.per_wave (writes per tick), spec.limit (writes per partition per tick). */
+  function spread(spec) {
+    const DB = spec.engine_label || "DynamoDB", P = spec.partitions || 8, W = spec.waves || 5, K = spec.per_wave || 16, lim = spec.limit || 4, Lb = spec.labels || {};
+    const lanes = {};
+    const mk = (hot) => {
+      const fr = [{ say: START, cnt: Array(P).fill(0), ok: 0, thr: 0, now: [] }];
+      let s = { ...fr[0] };
+      for (let w = 0; w < W; w++) {
+        const add = Array(P).fill(0);
+        for (let i = 0; i < K; i++) add[hot ? 0 : (w * K + i) % P] += 1;
+        const okNow = add.map((x) => Math.min(x, lim)), thrNow = add.map((x, i) => x - okNow[i]);
+        const cnt = s.cnt.map((c, i) => c + okNow[i]);
+        const ok = s.ok + okNow.reduce((a, b) => a + b, 0), thr = s.thr + thrNow.reduce((a, b) => a + b, 0);
+        s = { ...s, cnt, ok, thr, now: add.map((x, i) => (x ? i : -1)).filter((i) => i >= 0),
+          say: hot ? `${w + 1}. dalga: ${K} yazmanın hepsi aynı anahtara, yani aynı partition'a geldi. Partition bu anda en fazla ${lim} yazma alabiliyor: ${thrNow[0]} yazma geri çevrildi (throttle).`
+            : `${w + 1}. dalga: ${K} yazma, anahtarları farklı olduğu için ${s.now ? new Set(add.map((x, i) => (x ? i : -1)).filter((i) => i >= 0)).size : 0} partition'a dağıldı. Hiçbiri sınıra ulaşmadı.` };
+        fr.push(s);
+      }
+      fr.push({ ...s, now: [], done: true, say: hot ? `Bitti. ${s.ok} yazma kabul edildi, ${s.thr} yazma geri çevrildi; uygulama onları yeniden denemek zorunda.` : `Bitti. ${s.ok} yazmanın hepsi kabul edildi; yük partition'lara eşit dağıldı.` });
+      return fr;
+    };
+    lanes.spread = actorize(mk(false), spec.send_spread || "Uygulama yazmaları aynı anda gönderiyor.", spec.back_spread || "Uygulama ölçümleri tarayıcıya gönderdi.", DB, { now: [] });
+    lanes.hot = actorize(mk(true), spec.send_hot || "Olsaydı: aynı yazmalar tek bir anahtarla gönderilseydi.", spec.back_hot || "Uygulama geri çevrilen yazmaları yeniden denemek zorunda kalırdı.", DB, { now: [] });
+    const boxes = `<div class="gs-pgrid">${Array.from({ length: P }, (_, i) => `<div class="gs-pbox" data-i="${i}" data-hl="part"><span>Partition ${i + 1}</span><b>0</b><i></i></div>`).join("")}</div>
+      <p class="gs-pstat">Kabul edilen: <b class="ok">0</b> · Geri çevrilen: <b class="thr">0</b></p>`;
+    const html = `${actorBar(DB)}<div class="gs-lanes">${shell("spread", Lb.spread || "Anahtarlar dağınık", boxes, { hl: "spread", count: "Yazma", result: false, col: true })}${shell("hot", Lb.hot || "Olsaydı: tek anahtar", boxes, { hl: "hot", count: "Yazma", result: false, col: true })}</div>${summary(spec.summary || "")}`;
+    function paint(root, id, f) {
+      const L = laneOf(root, id);
+      L.querySelector(".gs-count b").textContent = (f.ok || 0) + (f.thr || 0);
+      L.classList.toggle("done", !!f.done);
+      L.querySelectorAll(".gs-pbox").forEach((el) => {
+        const i = Number(el.dataset.i), c = (f.cnt || [])[i] || 0;
+        el.querySelector("b").textContent = c;
+        el.querySelector("i").style.width = `${Math.min(100, (100 * c) / (lim * W))}%`;
+        el.classList.toggle("now", (f.now || []).includes(i));
+        el.classList.toggle("hot", id === "hot" && i === 0 && (f.thr || 0) > 0);
+      });
+      L.querySelector(".gs-pstat .ok").textContent = f.ok || 0;
+      L.querySelector(".gs-pstat .thr").textContent = f.thr || 0;
+      sayWho(L, f);
+    }
+    return { html, lanes, paint, final: showSum };
+  }
+
   /* ---------- Who works in a frame (owner rule: work of the app is never credited to the database).
    * actorize(frames, send, back, db): after START the app sends, every middle frame is the database's (unless it names
    * its own `who`), the last frame is the app sending the answer on. actorBar(db) is the bar above the lanes;
@@ -791,7 +837,7 @@
     root.querySelectorAll(".gs-actors [data-a]").forEach((x) => x.classList.toggle("on", ws.includes(x.dataset.a)));
   }
 
-  const KINDS = { replicas, "ddb-items": ddbItems, projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
+  const KINDS = { spread, replicas, "ddb-items": ddbItems, projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
 
   function render(box, spec) {
     const kind = KINDS[spec.kind];
