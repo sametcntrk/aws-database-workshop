@@ -70,11 +70,51 @@ steps:
           - [Doküman, "Bir ürünün bütün bilgisi. DocumentDB her ürünü bir JSON dokümanı olarak saklar. Tablodaki her satır bir doküman."]
           - [Koleksiyon, "Aynı türden dokümanların bulunduğu yer. Burada adı products."]
           - [Collection scan, "Index kullanmadan koleksiyondaki dokümanları baştan sona tek tek okumak."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde index'ler nasıl kurulur?
+        intro: >-
+          Sayfa açılmadan önce hazır olması gerekenler. Index'ler ürünler gelmeden, sorgular belli olunca kurulur.
+        text:
+          - >-
+            Index sorguya göre kurulur. Önce "sayfalar veritabanına hangi soruları soracak?" diye bakılır. Kategori sayfası
+            "bu kategorideki ürünler, puanı yüksek olan önce" diye soruyor; bunun için iki alanı birlikte tutan bir bileşik
+            index kurulur: { category: 1, rating: -1 }.
+          - >-
+            Alanların sırası önemlidir. Kural: önce eşitlikle aranan alan (category = "Elektronik"), sonra sıralama alanı
+            (rating), en sonda aralıkla aranan alan (ör. fiyat 100 ile 500 arası). Bu sırayla index hem filtreyi hem
+            sıralamayı karşılar; veritabanı sonucu bellekte ayrıca sıralamak zorunda kalmaz.
+          - >-
+            Her index'in bir bedeli vardır. Her yeni ürün ya da fiyat değişikliğinde index'ler de güncellenir; index'ler
+            disk ve bellek kaplar. Bu yüzden sadece sık sorulan sorular için index kurulur ve hiç kullanılmayan index'ler
+            düzenli aralıklarla bulunup silinir.
+          - >-
+            Katalog çok okunur, az yazılır. Okumalar kopyalara (replica) dağıtılır, ana kopya (primary) yazmalara kalır.
+            Böylece kampanya günü binlerce kişi aynı anda kategori sayfasını açsa da yazmalar yavaşlamaz.
+      feed:
+        title: Veri nereden geliyor?
+        writes: >-
+          Katalog yönetimi: ürün ekleyen, fiyat ve stok güncelleyen arka ofis ekranları ya da tedarikçiden gelen ürün
+          dosyalarını aktaran bir iş. Hepsi uygulama üzerinden yazar.
+        reads: Uygulama, mağaza sayfaları için (kategori, ürün sayfası, ana sayfa vitrini).
+        kind: >-
+          Uygulama orkestrasyonu. DocumentDB başka bir veritabanından kendiliğinden veri çekmez. Ama kendi değişikliklerini
+          dışarı verebilir: change streams açıksa her ekleme ve güncelleme sırayla okunabilen bir kayıt olarak çıkar.
+        best: >-
+          Katalog tek yerde (burada DocumentDB) tutulur, diğer sistemler oradan beslenir. Metin araması için ürünler
+          OpenSearch'e aktarılır: DocumentDB'nin OpenSearch ile zero-ETL entegrasyonu ya da change streams'i okuyan küçük
+          bir program bu işi yapar. Uygulama aynı ürünü iki yere ayrı ayrı yazmaz, çünkü biri unutulunca iki kopya birbirini
+          tutmaz.
       sim:
         kind: index-vs-scan
         caption: >-
-          Gerçek katalogdan alınmış 8 ürünlük bir kesit. Sol tarafta DocumentDB index'i kullanıyor, sağ tarafta index'i
-          kullanmıyor. İki taraf aynı hızda adım atıyor: her adımda en fazla bir doküman okunuyor.
+          Gerçek katalogdan alınmış 8 ürünlük bir kesit. İki şerit iki ayrı gerçek istek: soldaki sayfa açılırken giden,
+          sağdaki senin tıklamanla giden. Sorgu aynı; tek fark, sağdakinde DocumentDB'ye index'i kullanmaması söyleniyor.
+          İki taraf aynı hızda adım atıyor: her adımda en fazla bir doküman okunuyor. Üstteki etiketler o anda işi kimin
+          yaptığını gösterir: uygulama mı, DocumentDB mi.
+        labels:
+          index: "t-1 · İstek 1 · Sayfa açılınca · Index ile"
+          scan: "t0 · İstek 2 · Senin tıklaman · Index olmadan (collection scan)"
         columns: [[id, Ürün no], [name, Ürün], [category, Kategori], [rating, Puan]]
         filter: [category, Elektronik]
         sort: [rating, desc]
@@ -88,6 +128,47 @@ steps:
           - {id: P0105, name: Deri Ceket, category: Moda, rating: 4.8}
           - {id: P0131, name: Mekanik Klavye, category: Elektronik, rating: 4.8}
           - {id: P0176, name: Bluetooth Hoparlör, category: Elektronik, rating: 4.7}
+      wire:
+        what: >-
+          Uygulama, DocumentDB'ye açık tuttuğu bağlantılar üzerinden komutu gönderir (pymongo kütüphanesi). Bağlantılar her
+          istekte yeniden kurulmaz.
+        dst: "dbws-docdb.cluster-ccgs3qxfidad.eu-central-1.docdb.amazonaws.com : 27017"
+        dst_note: >-
+          DocumentDB cluster'ının adresi. Okuma tercihi "secondaryPreferred" olduğu için bu okuma, ana kopyaya değil
+          replica'ya (dbws-docdb-2) gider. Cluster internete kapalı veri alt ağında duruyor.
+        rows:
+          - [Şifreleme, TLS, gerçek, DocumentDB'nin sertifikası AWS'nin sertifika dosyasıyla kontrol edilir.]
+          - [Protokol, MongoDB wire protokolü (OP_MSG), gerçek, "MongoDB sürücülerinin konuştuğu ikili dil. DocumentDB bu dili anlar; bu yüzden MongoDB kütüphaneleri onunla çalışır."]
+          - [Kimlik, "Kullanıcı adı + şifre, bağlantı açılırken", gerçek, "Şifre kodda yazmaz; uygulama onu çalışırken AWS Secrets Manager'dan alır."]
+        body_label: Çerçevenin içeriği (okunur hâle getirilmiş)
+        body: |-
+          OP_MSG   veritabanı: shop
+          { find: "products",
+            filter: { category: "Elektronik" },
+            projection: { name: 1, price: 1, rating: 1, category: 1, brand: 1, tags: 1, stock: 1 },
+            sort: { rating: -1 },
+            limit: 48,
+            hint: { $natural: 1 },          ← sadece "Collection scan" seçiliyken
+            $readPreference: { mode: "secondaryPreferred" } }
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Her satırın
+        etiketi işin nerede olduğunu söyler: mor etiketli satırda bir şey bir yerden bir yere gider (tarayıcıdan uygulamaya,
+        uygulamadan DocumentDB'ye ya da geri). Gri "Uygulamanın içinde" etiketli satırda iş uygulamanın kendi içinde
+        yapılır, hiçbir yere bir şey gitmez. İki istek de aynı kodu çalıştırır; fark tek bir satırda.
+      app_code:
+        - file: engines/docdb.py
+          func: api_products
+          title: Kategori listesi (iki istekte de aynı kod)
+          sub: Adresteki index=on ya da index=off seçimi tek farkı belirler.
+          lines:
+            - {match: '@bp.get("/api/products")', say: Kategori sayfasının ürün listesi isteği buraya gelir., tag: Tarayıcı → Uygulama}
+            - {match: 'use_index = request.args.get("index", "on") == "on"', say: "Adresteki seçime bakar: index kullanılsın mı?", tag: Uygulamanın içinde}
+            - {match: 'cur = db().products.find(flt, CARD).sort(order).limit(48)', say: "Komutu kurar: kategori filtresi, kart alanları, puana göre sıra, en fazla 48. Henüz bir şey gönderilmedi.", tag: Uygulamanın içinde, hl: table}
+            - {match: 'cur = cur.hint([("$natural", 1)])', say: "\"Collection scan\" seçildiyse komuta hint eklenir: index'i kullanma.", tag: Uygulamanın içinde, hl: scan}
+            - {match: 'items = [_doc(d) for d in cur]', say: "Komut şimdi gönderilir, dokümanlar gelir. Uygulama her dokümanın _id alanının adını product_id yapar.", tag: [Uygulama → DocumentDB, DocumentDB → Uygulama], hl: result}
+            - {match: 'plan = db().command("explain", find, verbosity="executionStats")', say: "Aynı sorgu bir kez daha, explain ile gider: DocumentDB kaç doküman okuduğunu ve hangi yolu seçtiğini söyler. Ölçümler buradan.", tag: [Uygulama → DocumentDB, DocumentDB → Uygulama]}
+            - {match: 'colors = db().products.distinct(', say: "Üçüncü bir komut: bu kategorideki renkleri ister (sayfadaki renk filtresi için).", tag: [Uygulama → DocumentDB, DocumentDB → Uygulama]}
+            - {match: 'return jsonify(trace.payload({"items": items, "colors": sorted(colors)}))', say: Ürünler ve renkler tek bir cevapta tarayıcıya gider., tag: Uygulama → Tarayıcı}
       live:
         title: Gerçek katalogda ne oldu?
         intro: >-
@@ -167,9 +248,14 @@ steps:
         columns:
           - label: Index ile
             sub: Sayfa ilk açıldığında giden komut ("Use the index" seçili).
+            via: >-
+              Uygulama bu komutu pymongo kütüphanesinin find() metoduyla gönderir; sonra aynı sorguyu explain komutuyla
+              bir kez daha gönderip ölçer.
             parts: [coll, filter, proj, sort, limit]
           - label: Index olmadan (collection scan)
             sub: Senin "Collection scan" tıklamanla giden komut.
+            via: >-
+              Aynı find() çağrısı, sonuna pymongo'nun hint() metoduyla eklenen tek parçayla. Gerisi soldakinin aynısı.
             parts: [coll, filter, proj, sort, limit, hint]
             mark: [hint]
         note: >-
@@ -177,6 +263,29 @@ steps:
           (category) ve sıralamaya (rating) bakar, bunlara uyan bir index varsa onu kendisi seçer. Kategori filtresi iki
           komutta da aynı, yani filtre index kullanıldığını göstermez. Sağdaki komutun tek farkı 6. parça: .hint ile
           DocumentDB'ye "index'i bırak, baştan sona oku" diyoruz. Bu tek parça, okunan doküman sayısını 40'tan 200'e çıkardı.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          DocumentDB'nin işi dokümanları verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: DocumentDB → Uygulama
+            text: >-
+              {items} doküman geldi (Elektronik'te 40 ürün var, sınır 48). Ardından explain'in cevabı (kaç doküman okundu,
+              hangi yol seçildi) ve renk listesi geldi.
+          - who: Uygulama
+            text: >-
+              Her dokümanın _id alanının adını product_id yaptı, renkleri alfabetik sıraladı ve explain'den okunan ve dönen
+              doküman sayılarını isteğin kaydına (trace) yazdı.
+          - who: Uygulama → Tarayıcın
+            text: Ürünleri, renk listesini ve isteğin kaydını tek bir JSON cevabında gönderdi.
+          - who: Tarayıcın
+            text: >-
+              Ürün kartlarını yeniden çizdi. Liste index ile gelen listeyle aynı: sonuç değişmedi, sadece DocumentDB'nin yaptığı
+              iş değişti.
+          - who: Sonra
+            text: >-
+              "Use the index" butonuna basarsan sayfa index'li komutu yeniden gönderir. Hint'i burada sadece deney için
+              kullandık; gerçek bir sistemde DocumentDB doğru index'i kendisi seçer ve hint'e nadiren gerek kalır.
       remember: >-
         Sonuç aynı, yapılan iş farklı. Index olmadan veritabanı her dokümanı okumak zorunda kalır. Index, sık kullanılan bir
         filtre ve sıralama için doğru bölüme doğrudan gitmeyi sağlar.

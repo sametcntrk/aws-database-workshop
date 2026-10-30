@@ -60,7 +60,16 @@
       <p class="gs-say" aria-live="polite"></p></section>`;
     const indexList = `<div class="gs-index" data-hl="index"><div class="gs-index-cap">Index ${esc(spec.index_name || "")}</div><ol>${entries.map((r, k) =>
       `<li data-k="${k}"><span>${esc(r[fField])}</span><span>${esc(r[sField])}</span><span>→ ${esc(r.id)}</span></li>`).join("")}</ol></div>`;
-    const html = `<div class="gs-lanes">${lane("index", "Index ile", indexList + table(false), "index")}${lane("scan", "Index olmadan (collection scan)", table(true), "scan")}</div>
+    // Who works in each frame: the app sends the command and gets the documents back; the database reads in between.
+    const APP = "Uygulama", DB = spec.engine_label || "DocumentDB", L = spec.labels || {};
+    const wrap = (frames, send, back) => [frames[0], { ...frames[1], ...base, who: APP, say: send }, ...frames.slice(1).map((f) => ({ ...f, who: f.who || DB })),
+      { ...frames[frames.length - 1], who: APP, say: back }];
+    idx.splice(0, idx.length, ...wrap(idx, spec.send_index || "Uygulama find komutunu gönderiyor. Komutta index adı yok; DocumentDB uygun index'i kendisi seçecek.",
+      spec.back_index || `Uygulama ${ordered.length} dokümanı aldı ve tarayıcıya gönderdi.`));
+    scan.splice(0, scan.length, ...wrap(scan, spec.send_scan || "Uygulama aynı find komutunu, sonuna hint ekleyerek gönderiyor: \"index'i kullanma, baştan sona oku\".",
+      spec.back_scan || `Uygulama ${matches.length} dokümanı aldı ve tarayıcıya gönderdi. Liste soldakiyle aynı.`));
+    const actors = `<div class="gs-actors" aria-hidden="true"><span data-a="app" data-hl="app">Uygulama (sunucudaki program)</span><i>⇄</i><span data-a="db" data-hl="db">${esc(DB)} (veritabanı)</span></div>`;
+    const html = `${actors}<div class="gs-lanes">${lane("index", L.index || "Index ile", indexList + table(false), "index")}${lane("scan", L.scan || "Index olmadan (collection scan)", table(true), "scan")}</div>
       <p class="gs-sum" hidden>Index ile <b>${ordered.length}</b> doküman okundu. Index olmadan <b>${rows.length}</b> doküman okundu ve bir de sıralama yapıldı.
       Sonuç ikisinde de aynı: ${ordered.map((r) => esc(r.id)).join(", ")}.</p>`;
 
@@ -87,7 +96,10 @@
         const r = rows.find((x) => x.id === id);
         return `<li class="${f.sorted ? "" : "unsorted"}">${esc(r.name)} <small>${esc(r[sField])}</small></li>`;
       }).join("") || "<li class=\"empty\">henüz boş</li>";
-      L.querySelector(".gs-say").textContent = f.say;
+      L.querySelector(".gs-say").innerHTML = `${f.who ? `<b class="gs-who ${f.who === APP ? "app" : "db"}">${esc(f.who)}</b> ` : ""}${esc(f.say)}`;
+      L.dataset.who = f.who === APP ? "app" : f.who ? "db" : "";
+      const ws = [...root.querySelectorAll(".gs-lane")].map((x) => x.dataset.who).filter(Boolean);
+      root.querySelectorAll(".gs-actors [data-a]").forEach((x) => x.classList.toggle("on", ws.includes(x.dataset.a)));
     }
     return { html, lanes: { index: idx, scan }, paint, final: (root) => { root.querySelector(".gs-sum").hidden = false; } };
   }
