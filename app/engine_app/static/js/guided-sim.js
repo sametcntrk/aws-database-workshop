@@ -400,7 +400,7 @@
    * say_find, say_back}]. One lane. */
   function kv(spec) {
     const keys = spec.keys, DB = spec.engine_label || "ElastiCache";
-    const fr = [{ say: START, active: null, read: 0, log: [] }];
+    const fr = [{ say: START, active: null, read: 0, log: [], vals: keys.map((x) => x.value) }];
     let s = { ...fr[0] };
     spec.commands.forEach((c) => {
       const k = keys.findIndex((x) => x.key === c.key);
@@ -408,7 +408,8 @@
       fr.push(s);
       s = { ...s, active: k, who: DB, read: s.read + 1, say: c.say_find || `${c.key} anahtarının yeri hesaplandı (slot ${keys[k].slot}). Doğrudan o kayda gidildi; başka anahtara bakılmadı.` };
       fr.push(s);
-      s = { ...s, who: DB, log: [...s.log, `${c.cmd} ${c.key} → ${c.returns}`], say: c.say_back || `${DB} cevabı döndü: ${c.returns}.` };
+      const vals = c.set !== undefined ? s.vals.map((v, i) => (i === k ? c.set : v)) : s.vals;     // a write changes the value on screen
+      s = { ...s, who: DB, vals, changed: c.set !== undefined ? k : null, log: [...s.log, `${c.cmd} ${c.key} → ${c.returns}`], say: c.say_back || `${DB} cevabı döndü: ${c.returns}.` };
       fr.push(s);
     });
     fr.push({ ...s, active: null, who: APP_NAME, done: true, say: spec.back || "Uygulama iki cevabı birleştirdi ve tarayıcıya gönderdi." });
@@ -423,6 +424,8 @@
         const i = Number(tr.dataset.i);
         tr.classList.toggle("active", f.active === i);
         tr.classList.toggle("dimrow", f.active !== null && f.active !== undefined && f.active !== i);
+        tr.classList.toggle("fresh", f.changed === i);
+        tr.children[2].textContent = (f.vals || [])[i] ?? keys[i].value;
       });
       chips(L, (f.log || []).map((x) => `<li data-hl="result"><code>${esc(x)}</code></li>`));
       sayWho(L, f);

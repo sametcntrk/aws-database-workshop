@@ -4278,16 +4278,219 @@ steps:
   - page: deals
     path: /deals
     engines: [elasticache]
-    use_case: Atomic counter
-    title: Buy one piece with DECR
+    use_case: Atomik sayaç
+    title: DECR ile bir tane satın al
     why: >-
-      The stock is one integer key. DECR lowers it by one and returns the new value in one atomic command.
-    do: Click the lit button "Buy one now".
+      Fırsatlar sayfasındasın. Günün fırsat ürününden kaç tane kaldığı yazıyor. Şimdi bir tane satın alacaksın ve kalan adedin
+      nasıl tek hamlede azaldığına bakacaksın.
+    do: Aydınlık "Buy one now" (hemen bir tane al) butonuna tıkla.
     target: "#buy"
     action: click
     wait: {method: POST, path: /elasticache/api/deal/buy}
     focus: "#deal"
-    result: DECR returned the new stock. No other command can run between the read and the write, because they are one command.
+    result: DECR returned the new stock in one atomic command.
+    panel:
+      need: >-
+        Fırsat ürününün kalan adedi binlerce kişi tarafından aynı anda azaltılabilir. Her alımda adet tam bir azalmalı, iki kişi
+        aynı son parçayı alamamalı ve cevap anında gelmeli. "Kaç tane kaldı, bak; sonra bir eksiğini yaz" diye iki adımda
+        yapmak, aynı anda gelen alımlarda yanlış sonuç verir (Adım 19).
+      concept:
+        term: Atomik komut (DECR)
+        text: >-
+          DECR bir sayacı tek komutta bir azaltır ve yeni değeri söyler. Okuma ve yazma aynı komutun içindedir; ElastiCache
+          (Valkey) komutları her anahtar için tek tek sırayla çalıştırdığı için iki DECR asla aynı değeri görmez. Bir bilet
+          kuyruğunda numaratör gibi: her basan bir sonraki numarayı alır, iki kişi aynı numarayı alamaz.
+        terms:
+          - [DECR, "Sayacı 1 azaltır ve yeni değeri döndürür. Okuma ve yazma tek komut."]
+          - [INCR, "Sayacı 1 artırır. Burada \"parçayı geri ver\" için."]
+          - [Atomik, "Bölünemez: işlem ya tamamen olur ya hiç olmaz; arasına başka bir işlem giremez."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde fırsat sayacı için hazırlık
+        intro: >-
+          "Buy" butonuna hiç basılmadan, sayaç ve satın alma kuralı hazırlanır. Aşağıdaki beş adım bu hazırlığın sırasıdır.
+        text:
+          - title: Önce satın almanın sorusu yazılır
+            text: >-
+              "Bir parça kaldıysa bana ver, kalmadıysa söyle" - bu tek bir atomik işlem olmalı. Cevapta kalan adet de gelmeli ki
+              sayfa güncellensin.
+            code: |-
+              DECR lm:deal:stock   →  sonuç ≥ 0 ise satın aldın, sonuç < 0 ise parça kalmadı
+          - title: Sayaç kampanyadan önce kurulur
+            text: >-
+              Kalan adet asıl stok kaydından alınır ve bellekte tek bir tamsayı anahtar olarak yazılır; kampanya bitince
+              kendiliğinden silinsin diye bir bitiş zamanı verilir.
+            code: |-
+              SET lm:deal:stock 50
+              EXPIREAT lm:deal:stock <kampanya bitişi>
+          - title: Eksiye düşme önceden düşünülür
+            text: >-
+              DECR sıfırın altına da iner. Basit yol: sonuç eksiyse "tükendi" denir ve INCR ile sayaç geri alınır. Sayacın hiç
+              eksiye inmemesi isteniyorsa kontrol ve azaltma tek bir Lua betiğinde yapılır.
+            code: |-
+              EVAL "local v = tonumber(redis.call('GET', KEYS[1])) if v and v > 0 then return redis.call('DECR', KEYS[1]) end return -1" 1 lm:deal:stock
+          - title: Sayaçtan sonra asıl kayıt yazılır
+            text: >-
+              Sayaç sadece kapıdaki ilk elemedir. Parçayı alan kişinin siparişi ilişkisel veritabanına transaction ile yazılır;
+              ödeme başarısız olursa sayaç INCR ile geri artırılır.
+          - title: Sayaç izlenir ve karşılaştırılır
+            text: >-
+              Kampanya boyunca satılan adet (başlangıç − sayaç) siparişlerle karşılaştırılır. Fark varsa (ör. geri verilmeyen
+              parçalar) asıl kayda göre düzeltilir.
+      feed:
+        title: Veri nereden geliyor?
+        writes: >-
+          Kampanyayı başlatan iş (sayacı kurar) ve her alımda uygulama (DECR; tükendiyse INCR ile geri alır).
+        reads: Uygulama, fırsatın göründüğü her sayfa için (ana sayfa, fırsatlar sayfası).
+        kind: >-
+          Uygulama orkestrasyonu. ElastiCache başka bir veritabanından kendiliğinden veri çekmez; sayacı biri kurar ve uygulama
+          değiştirir.
+        with: >-
+          Parçayı alan kişi onu fırsat fiyatıyla sepetine ekleyebilir (DynamoDB); siparişin asıl kaydı ödemede ilişkisel
+          veritabanına (Aurora) yazılır. Ürün bilgisi katalogdan (DocumentDB), görseli nesne deposundan (S3) gelir.
+        best: >-
+          Sayaç hızlı karar içindir, asıl kayıt veritabanındadır. Satın alma akışı: DECR (bellek) → sipariş transaction'ı
+          (veritabanı) → başarısızsa INCR. Sayaç kaybolursa asıl kayıttan yeniden kurulur.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              Ana sayfadaki fırsat kutusuna ya da üst menüdeki "Deals" bağlantısına tıkladın; fırsatlar sayfası açıldı. Açılırken
+              oturumun güncellendi.
+            engines: [elasticache]
+          - text: >-
+              Sayfa fırsatı istedi: kart bilgisi (HGETALL lm:deal) ve kalan adet (GET lm:deal:stock) bellekten geldi; görsel
+              S3'ten.
+            engines: [elasticache, s3]
+          - text: >-
+              "Buy one now" butonuna bastın. Tarayıcın uygulamaya "bir tane al" dedi; uygulama ElastiCache'e tek bir komut
+              gönderdi: DECR lm:deal:stock. Simülasyon bu komutu gösteriyor.
+            engines: [elasticache]
+          - text: >-
+              Cevap gelen yeni değer oldu (ör. 44). Uygulama "0 veya üstü, satın aldın" dedi; sayfada "You got one" (bir tane
+              aldın) ve kalan adet yazdı.
+            engines: [elasticache]
+      sim:
+        kind: kv
+        title: "ElastiCache (Valkey) belleği: fırsat anahtarları"
+        caption: >-
+          Bellekteki fırsat anahtarları, canlı değerleriyle. Sayaç 45 iken bir DECR geldiğini oynatıyoruz; senin denemende
+          değer, o anki stoktan bir eksik olur.
+        keys:
+          - {key: "lm:deal", type: hash, value: "product_id P0001, name Alpen Kablosuz Kulaklık 1, price 2024.3, old_price 3373.84, …", slot: 3299}
+          - {key: "lm:deal:stock", type: string, value: "45", slot: 1725}
+        commands:
+          - cmd: DECR
+            key: lm:deal:stock
+            returns: "44"
+            set: "44"
+            say_send: >-
+              "Buy one now"a bastın. Tarayıcın "bir tane al" dedi; uygulama ElastiCache'e tek komut gönderiyor: DECR lm:deal:stock.
+            say_find: >-
+              lm:deal:stock anahtarının yeri hesaplandı (slot 1725). Bu anahtar için komutlar tek tek sırayla çalışır; şu an
+              başka hiçbir komut bu sayaca dokunamaz.
+            say_back: >-
+              Okuma ve yazma tek hamlede: 45 okundu, 44 yazıldı ve 44 cevap olarak döndü. Arada başka bir alıcı giremedi.
+        back: >-
+          Uygulama cevaba baktı: 44, yani 0 veya üstü - satın aldın. Sonucu tarayıcına gönderdi; sayfada "You got one. 44 pieces
+          left" yazacak.
+        summary: >-
+          Tek komut, tek anahtar. DECR okumayı ve yazmayı tek hamlede yaptığı için aynı anda bin kişi bassa da her biri farklı bir
+          sayı alır; sayı 0'ın altına inince parça bitmiştir.
+      wire:
+        what: >-
+          Uygulama, ElastiCache'e açık tuttuğu bağlantılar üzerinden komutu gönderir (redis-py kütüphanesi, cluster istemcisi).
+        dst: "dbws-cache-qtkvec.serverless.euc1.cache.amazonaws.com : 6379"
+        dst_note: >-
+          ElastiCache Serverless'ın adresi. Bu ad, VPC'nin içindeki uç noktaya çözülür; cache internete kapalıdır.
+        rows:
+          - [Şifreleme, TLS, gerçek, ElastiCache Serverless sadece şifreli bağlantı kabul eder.]
+          - [Protokol, RESP (Redis/Valkey protokolü), gerçek, "Her komut kısa bir metin çerçevesidir: komut adı ve parametreleri."]
+          - [Kimlik, "ACL kullanıcısı + şifre, bağlantı açılırken", gerçek, "Şifre kodda yazmaz; uygulama onu çalışırken AWS Secrets Manager'dan alır."]
+        body_label: Komut ve cevap (okunur hâle getirilmiş)
+        body: |-
+          DECR lm:deal:stock
+            → (integer) 44
+
+          Ağdaki ham hâli (RESP): *2\r\n$4\r\nDECR\r\n$13\r\nlm:deal:stock\r\n   cevap:  :44\r\n
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. "Satın aldın mı?"
+        kararını uygulama, ElastiCache'in döndürdüğü sayıya bakarak verir.
+      app_code:
+        - file: engines/elasticache.py
+          func: api_buy
+          title: '"Bir tane al" isteği'
+          sub: Senin tıklamanla gelen istek.
+          lines:
+            - {match: '@bp.post("/api/deal/buy")', say: "\"Bir tane al\" isteği buraya gelir.", tag: Tarayıcı → Uygulama}
+            - {match: 'left = cmd("DECR"', say: "Tek komut: sayacı bir azalt ve yeni değeri söyle.", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], hl: key}
+            - {match: 'won = left >= 0', say: "Karar uygulamada: yeni değer 0 veya üstüyse satın aldın.", tag: Uygulamanın içinde}
+            - {match: 'cmd("INCR"', say: "Değer eksiye düştüyse parça yoktu; sayacı INCR ile geri artırır.", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama]}
+            - {match: 'return jsonify(trace.payload({"won": won, "stock": max(left, 0)}))', say: "Sonucu ve kalan adedi (eksiyse 0) tarayıcıya gönderir.", tag: Uygulama → Tarayıcı}
+      live:
+        title: Gerçek bellekte ne oldu?
+        intro: Senin tıklamanla ElastiCache'e giden gerçek komut.
+        runs:
+          - label: DECR (senin tıklaman)
+            trigger: true
+            metrics: [[Sonuç, data.won, {set: "Satın aldın ✓", empty: "Tükendi ✗"}], [Kalan adet, data.stock], [Süre, ms]]
+        reading: >-
+          DECR tek komutta sayacı azalttı ve yeni değeri döndürdü; süre genelde 1–2 milisaniye ve her istekte biraz değişir. Kalan
+          adet, sen ve diğer ziyaretçiler aldıkça azalır. "Tükendi" görürsen sayaç sıfıra inmişti; uygulama onu INCR ile geri aldı.
+      query:
+        title: Sayfa ElastiCache'e ne dedi?
+        intro: >-
+          Tek bir komut. Bir parçanın üzerine gelince cümlede, kodda ve açıklamada aynı yer parlar.
+        cards_title: Parça parça
+        parts:
+          - id: d
+            say: Sayacı bir azalt
+            code: DECR
+            name: Ne yapılsın?
+            note: Okuma, bir çıkarma ve yazma; hepsi tek komut. Cevap yeni değerdir.
+            hl: key
+          - id: k
+            say: (lm:deal:stock) ve yeni değeri söyle.
+            code: "  lm:deal:stock"
+            name: Hangi anahtar?
+            note: Fırsatın kalan adedi. Anahtar yoksa DECR onu 0 kabul eder ve -1 yazar; bu yüzden sayaç önceden kurulur.
+            hl: key
+        columns:
+          - label: Bir tane al
+            sub: Senin "Buy one now" tıklamanla giden komut.
+            via: Uygulama bu komutu redis-py kütüphanesinin decr() metoduyla gönderir; "aldın mı?" kararını cevaba bakarak kendisi verir.
+            parts: [d, k]
+        note: >-
+          Dikkat: komutta "stok sıfırdan büyükse" diye bir koşul yok. DECR her zaman azaltır; eksiye inmeyi fark eden ve geri alan
+          uygulamadır. Koşulu da ElastiCache'in içinde yaptırmak istenirse bir Lua betiği kullanılır.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          ElastiCache'in işi yeni değeri verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: ElastiCache → Uygulama
+            text: Sayacın yeni değeri tek bir sayı olarak geldi.
+          - who: Uygulama
+            text: >-
+              Sayı 0 veya üstüyse "satın aldın" dedi. Eksi olsaydı parça kalmamıştı; INCR ile sayacı geri alıp "tükendi" derdi.
+          - who: Uygulama → Tarayıcın
+            text: Sonucu, kalan adedi ve isteğin kaydını tek bir JSON cevabında gönderdi.
+          - who: Tarayıcın
+            text: >-
+              "You got one. N pieces left" yazdı ve kalan adedi güncelledi; bir de "fırsat fiyatıyla sepete ekle" butonu çıktı.
+          - who: Sonra (DynamoDB)
+            text: >-
+              O butona basarsan ürün fırsat fiyatıyla sepetine eklenir: bu kez yazma DynamoDB'ye gider. Sipariş verilene kadar
+              asıl satış kaydı yoktur.
+      remember: >-
+        Paylaşılan bir sayacı tek bir atomik komutla (DECR, INCR) değiştir. Okuma ve yazma aynı komutta olunca aynı anda gelen
+        alımlar birbirini ezemez; kararı komutun döndürdüğü yeni değere göre ver.
+      why_db: >-
+        Neden ElastiCache? Fırsat sayacı çok sık ve aynı anda değişen küçük bir değer. ElastiCache onu bellekte tutar, atomik
+        DECR'i milisaniyenin altında çalıştırır. Bedeli: sayaç asıl kayıt değildir; satışın kendisi veritabanına yazılır.
 
   - page: deals
     path: /deals
