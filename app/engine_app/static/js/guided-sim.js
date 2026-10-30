@@ -395,6 +395,41 @@
     return { html, lanes, paint, final: showSum };
   }
 
+  /* ---------- kv: key-value reads in memory. The app sends one command per key; the database computes where the key lives
+   * (hash slot) and goes straight to it. spec.keys [{key, type, value, slot}], spec.commands [{cmd, key, returns, say_send,
+   * say_find, say_back}]. One lane. */
+  function kv(spec) {
+    const keys = spec.keys, DB = spec.engine_label || "ElastiCache";
+    const fr = [{ say: START, active: null, read: 0, log: [] }];
+    let s = { ...fr[0] };
+    spec.commands.forEach((c) => {
+      const k = keys.findIndex((x) => x.key === c.key);
+      s = { ...s, active: null, who: APP_NAME, say: c.say_send || `Uygulama ${c.cmd} ${c.key} gönderiyor.` };
+      fr.push(s);
+      s = { ...s, active: k, who: DB, read: s.read + 1, say: c.say_find || `${c.key} anahtarının yeri hesaplandı (slot ${keys[k].slot}). Doğrudan o kayda gidildi; başka anahtara bakılmadı.` };
+      fr.push(s);
+      s = { ...s, who: DB, log: [...s.log, `${c.cmd} ${c.key} → ${c.returns}`], say: c.say_back || `${DB} cevabı döndü: ${c.returns}.` };
+      fr.push(s);
+    });
+    fr.push({ ...s, active: null, who: APP_NAME, done: true, say: spec.back || "Uygulama iki cevabı birleştirdi ve tarayıcıya gönderdi." });
+    const table = `<table class="gs-table" data-hl="table"><thead><tr><th data-hl="key">Anahtar</th><th>Tür</th><th>Değer</th><th data-hl="slot">Slot</th></tr></thead><tbody>
+      ${keys.map((x, i) => `<tr data-i="${i}"><td data-hl="key"><code>${esc(x.key)}</code></td><td>${esc(x.type)}</td><td>${esc(x.value)}</td><td data-hl="slot">${esc(x.slot)}</td></tr>`).join("")}</tbody></table>`;
+    const html = `${actorBar(DB)}<div class="gs-lanes one">${shell("kv", spec.title || `${DB} (bellek)`, table, { count: "Okunan anahtar", result: spec.result_title || "Komutlar ve cevapları", col: true })}</div>${summary(spec.summary || "")}`;
+    function paint(root, id, f) {
+      const L = laneOf(root, id);
+      L.querySelector(".gs-count b").textContent = `${f.read || 0} / ${keys.length}`;
+      L.classList.toggle("done", !!f.done);
+      L.querySelectorAll("tbody tr").forEach((tr) => {
+        const i = Number(tr.dataset.i);
+        tr.classList.toggle("active", f.active === i);
+        tr.classList.toggle("dimrow", f.active !== null && f.active !== undefined && f.active !== i);
+      });
+      chips(L, (f.log || []).map((x) => `<li data-hl="result"><code>${esc(x)}</code></li>`));
+      sayWho(L, f);
+    }
+    return { html, lanes: { kv: fr }, paint, final: showSum };
+  }
+
   /* ---------- Who works in a frame (owner rule: work of the app is never credited to the database).
    * actorize(frames, send, back, db): after START the app sends, every middle frame is the database's (unless it names
    * its own `who`), the last frame is the app sending the answer on. actorBar(db) is the bar above the lanes;
@@ -414,7 +449,7 @@
     root.querySelectorAll(".gs-actors [data-a]").forEach((x) => x.classList.toggle("on", ws.includes(x.dataset.a)));
   }
 
-  const KINDS = { "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
+  const KINDS = { kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
 
   function render(box, spec) {
     const kind = KINDS[spec.kind];

@@ -25,10 +25,12 @@
   const entryOf = (c) => (c && c.entries && c.entries[0]) || null;
   // One measured run: the first trace entry and the response data of one call. A metric names its source:
   // "ms", "items", "capacity" (trace entry), "examined", "returned" (DocumentDB explain), "data.<path>" (response body).
-  const runOf = (c) => (c ? { e: entryOf(c) || {}, data: c.data || {} } : null);
+  const runOf = (c) => (c ? { e: entryOf(c) || {}, all: c.entries || [], data: c.data || {} } : null);
   function metric(run, key) {
     const e = run.e;
     if (key.startsWith("data.")) return key.slice(5).split(".").reduce((o, k) => (o == null ? undefined : o[k]), run.data);
+    const nth = /^e(\d)\.(\w+)$/.exec(key);                     // "e1.ms": a field of the call's second trace entry
+    if (nth) { const x = (run.all || [])[Number(nth[1])] || {}; return nth[2] === "ms" && x.ms !== undefined ? `${x.ms} ms` : x[nth[2]]; }
     const m = /docs examined:\s*(\d+),\s*returned:\s*(\d+)/.exec(e.explain || "");
     if (key === "examined") return m ? Number(m[1]) : undefined;
     if (key === "returned") return m ? Number(m[2]) : e.items;

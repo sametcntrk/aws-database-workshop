@@ -292,16 +292,238 @@ steps:
   - page: home
     path: /
     engines: [elasticache]
-    use_case: Hot data in memory
-    title: The flash deal comes from memory
+    use_case: Bellekteki sıcak veri
+    title: Fırsat kutusu bellekten gelir
     why: >-
-      Every Visitor reads the flash deal, and its stock changes many times each minute.
-      ElastiCache (Valkey) keeps it in memory as a hash and a counter. A read takes less than one millisecond inside the VPC.
-    do: Look at the lit flash deal box.
+      Ana sayfanın üstündeki fırsat kutusu günün indirimli ürününü ve kalan adedi gösteriyor. Her ziyaretçi bu kutuyu
+      görüyor ve adet dakikada birçok kez değişiyor. Bu adımda tıklama yok, sadece bakacaksın.
+    do: Aydınlık fırsat kutusuna bak. Sonra kartın altındaki butonla perde arkasını aç.
     target: "#hero-deal"
     action: look
     wait: {method: GET, path: /elasticache/api/deal}
-    result: HGETALL lm:deal returned the fields of the deal hash. GET lm:deal:stock returned the counter. Look at the time of each command.
+    result: HGETALL lm:deal returned the fields of the deal hash. GET lm:deal:stock returned the counter.
+    panel:
+      need: >-
+        Fırsat kutusu her sayfa açılışında okunuyor ve kalan adet satış oldukça değişiyor. Binlerce ziyaretçi aynı anda aynı
+        küçük veriyi istiyor. Bu veriyi her seferinde diskte duran bir veritabanından okumak gereksiz yük ve gecikme demek;
+        cevap milisaniyenin altında gelmeli.
+      concept:
+        term: Anahtar-değer ve bellek (in-memory)
+        text: >-
+          ElastiCache (Valkey) veriyi bellekte, anahtar-değer çiftleri olarak tutar. Bir vestiyer gibi düşünebilirsin: fişin
+          numarasını verirsin, görevli bütün askıları aramaz, doğrudan o numaralı askıya gider. Anahtar fişin numarası, değer
+          askıdaki paltodur. Değer düz bir metin ya da sayı olabileceği gibi, birden fazla alanı olan bir hash da olabilir.
+        terms:
+          - [Anahtar (key), "Değerin adı. Burada lm:deal (fırsat kartı) ve lm:deal:stock (kalan adet)."]
+          - [Hash, "Alanları olan bir değer: product_id, name, price… HGETALL hepsini bir kerede getirir."]
+          - [Hash slot, "Anahtarın adından hesaplanan 0–16383 arası bir numara. Anahtarın hangi parçada (shard) durduğunu bu belirler."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde bellekteki fırsat verisi için hazırlık
+        intro: >-
+          Ana sayfa hiç açılmadan, fırsat verisi belleğe yazılır ve nasıl okunacağı belirlenir. Aşağıdaki beş adım bu
+          hazırlığın sırasıdır.
+        text:
+          - title: Önce sayfanın sorusu yazılır
+            text: >-
+              Her sayfa aynı iki şeyi soruyor: "fırsat ne?" (ad, fiyat, ürün) ve "kaç tane kaldı?". İkisi de tek bir anahtarla
+              cevaplanır; arama ya da filtre yoktur.
+            code: |-
+              HGETALL lm:deal          → fırsat kartının alanları
+              GET     lm:deal:stock    → kalan adet
+          - title: Veriye uygun yapı seçilir
+            text: >-
+              Kartın birden fazla alanı olduğu için hash; kalan adet ise tek bir sayı olduğu için düz bir değer (string) olur.
+              Sayının ayrı bir anahtarda durmasının sebebi, satış sırasında DECR ile tek hamlede azaltılabilmesidir.
+            code: |-
+              HSET lm:deal product_id P0001 name "Alpen Kablosuz Kulaklık 1" price 2024.30 old_price 3373.84
+              SET  lm:deal:stock 50
+          - title: Bellekteki veri bir kopyadır
+            text: >-
+              Ürünün asıl kaydı katalogdadır. Kampanya başlarken kart katalogdan kopyalanır. Okumada anahtar bulunamazsa
+              uygulama asıl kayda gider ve belleği yeniden doldurur (cache-aside). Bu yüzden bellek kaybolsa da veri kaybolmaz.
+          - title: Kampanya bitince anahtar kendiliğinden silinir
+            text: >-
+              Anahtarlara bir son kullanma zamanı verilir; kampanya bitince fırsat kartı ve sayaç bellekten kendiliğinden düşer.
+              Silme işi için ayrı bir program gerekmez.
+            code: |-
+              EXPIREAT lm:deal <bitiş zamanı>
+              EXPIREAT lm:deal:stock <bitiş zamanı>
+          - title: Birlikte işlenecek anahtarlar aynı slota konur
+            text: >-
+              ElastiCache anahtarları adlarından hesaplanan slotlara, slotları da parçalara dağıtır. lm:deal ile lm:deal:stock
+              farklı slotlardadır; ayrı ayrı okumak sorun değildir ama ikisini tek bir transaction'da (MULTI) değiştirmek
+              istenirse CROSSSLOT hatası alınır. O zaman adlara aynı hash tag konur: süslü parantezin içi slotu belirler.
+            code: |-
+              lm:{deal}  ve  lm:{deal}:stock   → ikisi de aynı slotta
+      feed:
+        title: Veri nereden geliyor?
+        writes: >-
+          Kampanyayı başlatan bir iş: ürünü katalogdan kopyalar, fiyatı indirir ve sayacı stoktan kurar. Satış sırasında her
+          alım sayacı uygulama üzerinden DECR ile azaltır.
+        reads: Uygulama, fırsatın göründüğü her sayfa için (ana sayfa, fırsatlar sayfası).
+        kind: >-
+          Uygulama orkestrasyonu. ElastiCache başka bir veritabanından kendiliğinden veri çekmez; içine ne yazılırsa onu
+          tutar.
+        with: >-
+          Fırsat kartı tek başına durmaz: ürünün asıl bilgisi katalogda (DocumentDB), görseli nesne deposunda (S3, büyük
+          sistemlerde bir CDN ile), satın almanın asıl kaydı sipariş veritabanında (Aurora) durur.
+        best: >-
+          Bellekteki veri her zaman asıl kayıttan yeniden kurulabilir olmalıdır. Okumada anahtar yoksa uygulama asıl kayda
+          gider ve belleği doldurur (cache-aside); asıl kayıt değişince bellekteki kopya silinir ya da güncellenir.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, ana sayfa açılırken gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda
+          çalışan veritabanları var.
+        steps:
+          - text: >-
+              Mağazanın ana sayfasındasın; bir önceki adımda kategori kutularına baktın. Tarayıcın seni lm_visitor ve
+              lm_persona çerezleriyle tanıyor.
+          - text: >-
+              Sayfa açılırken birkaç istek aynı anda yola çıktı: oturum kaydın (bellek), ana sayfa verisi (DocumentDB), fırsat
+              kutusu (bellek) ve "Recently viewed" şeridi (Keyspaces). Biri yavaşlasa diğerleri onu beklemez.
+            engines: [elasticache, docdb, keyspaces]
+          - text: >-
+              Fırsat isteği için uygulama ElastiCache'e iki komut gönderdi: HGETALL lm:deal (kartın bütün alanları) ve
+              GET lm:deal:stock (kalan adet). Simülasyon bu iki komutu gösteriyor.
+            engines: [elasticache]
+          - text: >-
+              Kutu çizildi: ürünün adı, indirimli ve eski fiyatı, "pieces left" (kalan adet). Görsel, karttaki ürün
+              numarasından kurulan adresle ayrı bir istekte S3'ten geldi.
+            engines: [elasticache, s3]
+      sim:
+        kind: kv
+        title: "ElastiCache (Valkey) belleği: anahtarlardan bir kesit"
+        caption: >-
+          Bellekteki anahtarlardan küçük bir kesit, canlı değerleriyle (oturum anahtarındaki kimlik kısaltıldı). lm:deal ve
+          lm:deal:stock bu adımın anahtarları; diğerleri bu mağazanın bellekte tuttuğu başka anahtarlar. Slot, anahtar adından hesaplanan gerçek numaradır. Üstteki etiketler o
+          anda işi kimin yaptığını gösterir.
+        keys:
+          - {key: "lm:session:7f3a…", type: hash, value: "persona C00001, last_page /", slot: "…"}
+          - {key: "lm:deal:stock", type: string, value: "45", slot: 1725}
+          - {key: "lm:leaderboard", type: sorted set, value: "C00002 → 1168114.91, C00001 → 465187.51, …", slot: 10162}
+          - {key: "lm:deal", type: hash, value: "product_id P0001, name Alpen Kablosuz Kulaklık 1, price 2024.3, old_price 3373.84, ends_at …", slot: 3299}
+          - {key: "lm:name:C00001", type: string, value: "Ayşe Yılmaz", slot: 10945}
+        commands:
+          - cmd: HGETALL
+            key: lm:deal
+            returns: "5 alan (product_id, name, price, old_price, ends_at)"
+            say_send: >-
+              Ana sayfayı açtın. Tarayıcın fırsatı istedi; uygulama ElastiCache'e ilk komutu gönderiyor: HGETALL lm:deal.
+          - cmd: GET
+            key: lm:deal:stock
+            returns: '"45"'
+            say_send: Uygulama ikinci komutu gönderiyor - GET lm:deal:stock, yani kalan adet.
+        back: >-
+          Uygulama iki cevabı tek bir cevapta birleştirdi (adedi metinden sayıya çevirdi) ve tarayıcına gönderdi. Tarayıcın
+          kutuyu çizecek, görseli S3'ten isteyecek.
+        summary: >-
+          İki komut, iki anahtar, iki doğrudan erişim. Bellekte kaç anahtar olursa olsun ElastiCache aramaz: adından yerini
+          hesaplar ve oraya gider.
+      wire:
+        what: >-
+          Uygulama, ElastiCache'e açık tuttuğu bağlantılar üzerinden komutları gönderir (redis-py kütüphanesi, cluster
+          istemcisi). İstemci slotların hangi parçada olduğunu bilir ve her komutu doğru parçaya yollar.
+        dst: "dbws-cache-qtkvec.serverless.euc1.cache.amazonaws.com : 6379"
+        dst_note: >-
+          ElastiCache Serverless'ın adresi. Bu ad, VPC'nin içindeki uç noktaya çözülür; cache internete kapalıdır.
+        rows:
+          - [Şifreleme, TLS, gerçek, ElastiCache Serverless sadece şifreli bağlantı kabul eder.]
+          - [Protokol, RESP (Redis/Valkey protokolü), gerçek, "Her komut kısa bir metin çerçevesidir: komut adı ve parametreleri. HTTP değil."]
+          - [Kimlik, "ACL kullanıcısı + şifre, bağlantı açılırken", gerçek, "Şifre kodda yazmaz; uygulama onu çalışırken AWS Secrets Manager'dan alır."]
+        body_label: Komutlar ve cevaplar (okunur hâle getirilmiş)
+        body: |-
+          HGETALL lm:deal
+            → product_id "P0001", name "Alpen Kablosuz Kulaklık 1", price "2024.3", old_price "3373.84", ends_at "…"
+          GET lm:deal:stock
+            → "45"
+
+          Ağdaki ham hâli (RESP): *2\r\n$7\r\nHGETALL\r\n$7\r\nlm:deal\r\n
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Mor etiketli
+        satırda bir şey bir yerden bir yere gider; gri "Uygulamanın içinde" etiketli satırda iş uygulamanın kendi içinde
+        yapılır.
+      app_code:
+        - file: engines/elasticache.py
+          func: api_deal
+          title: Fırsat isteği
+          sub: Sayfa açılırken gelen istek; iki komut gönderir.
+          lines:
+            - {match: '@bp.get("/api/deal")', say: Fırsat kutusunun veri isteği buraya gelir., tag: Tarayıcı → Uygulama}
+            - {match: 'deal = cmd("HGETALL"', say: "İlk komut: lm:deal hash'inin bütün alanları istenir.", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], hl: key}
+            - {match: 'stock = cmd("GET"', say: "İkinci komut: kalan adet istenir.", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], hl: key}
+            - {match: 'return jsonify(trace.payload({**deal, "stock": int(stock or 0)}))', say: "İki cevabı tek bir cevapta birleştirir, adedi metinden sayıya çevirir ve tarayıcıya gönderir.", tag: Uygulama → Tarayıcı}
+      live:
+        title: Gerçek bellekte ne oldu?
+        intro: >-
+          Ana sayfa açılırken ElastiCache'e giden iki gerçek komutun süreleri. Süre, uygulamanın komutu göndermesinden cevabın
+          gelmesine kadar geçen zaman.
+        runs:
+          - label: Fırsat isteği (sayfa açılınca)
+            trigger: true
+            metrics: [["HGETALL lm:deal", ms], ["GET lm:deal:stock", e1.ms], [Kalan adet, data.stock]]
+        reading: >-
+          İki komut da birkaç milisaniyenin altında, çoğu zaman 1 milisaniye civarında cevaplanır; sürenin büyük kısmı ağdadır,
+          bellekteki arama ise mikrosaniyeler sürer. Süre her istekte biraz değişir. Kalan adet, satış oldukça azalır.
+      query:
+        title: Sayfa ElastiCache'e ne dedi?
+        intro: >-
+          İki sütun, simülasyondaki iki komut. Bir parçanın üzerine gelince cümlede, kodda ve açıklamada aynı yer parlar.
+        cards_title: Parça parça
+        parts:
+          - id: hg
+            say: lm:deal hash'inin bütün alanlarını getir.
+            code: HGETALL lm:deal
+            name: Ne isteniyor?
+            note: "HGETALL, \"hash'in bütün alanları\" demek. Tek bir alan isteseydik HGET lm:deal price yazardık."
+            hl: key
+          - id: gt
+            say: lm:deal:stock anahtarının değerini getir.
+            code: GET lm:deal:stock
+            name: Ne isteniyor?
+            note: GET, düz bir değeri okur. Cevap her zaman metindir ("45"); sayıya çeviren uygulamadır.
+            hl: key
+        columns:
+          - label: 1. Fırsat kartı
+            sub: Sayfa açılırken giden ilk komut.
+            via: Uygulama bu komutu redis-py kütüphanesinin hgetall() metoduyla gönderir.
+            parts: [hg]
+          - label: 2. Kalan adet
+            sub: Hemen ardından giden ikinci komut.
+            via: Uygulama bu komutu redis-py'nin get() metoduyla gönderir.
+            parts: [gt]
+        note: >-
+          Dikkat: iki komutta da "ara" ya da "filtrele" yok. Anahtarın adı biliniyor; ElastiCache yerini addan hesaplar.
+          Adını bilmediğin bir değeri bu şekilde bulamazsın.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          ElastiCache'in işi iki cevabı verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: ElastiCache → Uygulama
+            text: >-
+              Hash'in 5 alanı ve kalan adet geldi. Bellekteki bütün değerler metindir: fiyat bile "2024.3" olarak gelir.
+          - who: Uygulama
+            text: Kalan adedi sayıya çevirdi ve hash'in alanlarıyla tek bir cevapta birleştirdi.
+          - who: Uygulama → Tarayıcın
+            text: Fırsatı ve isteğin kaydını tek bir JSON cevabında gönderdi.
+          - who: Tarayıcın
+            text: Kutuyu çizdi; fiyatları Türk lirası biçimine çevirdi ve eski fiyatın üstünü çizdi.
+          - who: Tarayıcın → S3
+            text: >-
+              Kutudaki görseli ürün numarasından kurduğu adresle (/s3/api/img/P0001) istedi; görsel S3'ten geldi. Kartta
+              bilgiyi (ElastiCache) görselle (S3) birleştiren tarayıcıdır.
+          - who: Sonra
+            text: >-
+              Fırsatlar sayfasında "Buy one" (bir tane al) butonuna basınca sayaç DECR ile tek hamlede azalır (Adım 17).
+      remember: >-
+        Çok okunan küçük veriyi bellekte, adıyla bulunan bir anahtarda tut. Bellek arama yapmaz: anahtarın yerini hesaplar ve
+        doğrudan oraya gider; bu yüzden cevap milisaniyenin altındadır.
+      why_db: >-
+        Neden ElastiCache? Fırsat kartı küçük, çok sık okunuyor ve adedi sık değişiyor. ElastiCache bunu bellekte tutar, her
+        okumaya milisaniyenin altında cevap verir ve DECR gibi atomik komutları hazır sunar. Bedeli: veri bellekte durur ve
+        aranamaz; asıl kayıt başka bir veritabanında tutulur.
 
   # ---------------------------------------------------------------- Category: DocumentDB indexes
   - page: category
