@@ -234,7 +234,7 @@ def create_app():
                 abort(404)
             entry = next((x for x in e2e_index()["lessons"] if x["id"] == eid), None)
             has_tr = (HERE / "templates" / "e2e" / f"{eid}.tr.html").exists()
-            lang = "tr" if has_tr and request.args.get("lang") == "tr" else "en"
+            lang = "tr" if has_tr else "en"  # EN option removed: every page with a TR version shows TR
             name = f"e2e/{eid}.tr.html" if lang == "tr" else f"e2e/{eid}.html"
             return render_template(name, **ctx(eid=eid, entry=entry, meta=catalog.META.get(eid, {}),
                                                lang=lang, has_tr=has_tr, ui=e2e_ui()[lang],

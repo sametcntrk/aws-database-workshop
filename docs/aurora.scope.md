@@ -1,10 +1,10 @@
 # Scope: Aurora PostgreSQL (aurora)
 
-status: pilot
+status: verified domain-map row, regenerated in model 2 (weighted R1 "Engine uyumu")
 domain-map row: verified
-date: 2026-10-29
+date: 2026-10-30 (model 2); first version 2026-10-29 (model 1)
 
-Page: `app/engine_app/templates/e2e/aurora.tr.html` (Turkish only; the old English `aurora.html` stays untouched). Data: `AURORA_USECASES` in `app/engine_app/e2e_usecases.py`. Simulations: the Aurora section of `app/engine_app/e2e_sims.py` (five `usecase_scorecard` decisions from the cards plus the nine mechanism simulations).
+Page: `app/engine_app/templates/e2e/aurora.tr.html` (Turkish only; the old English `aurora.html` stays untouched and still renders the model 1 data). Data: `AURORA_W` at the end of `app/engine_app/e2e_usecases_w.py` (model 2), registered as `USECASES_W["aurora"]` and `PAGE_SVC["aurora"] = "aur"`. Simulations: `_aurora()` in `app/engine_app/e2e_sims.py` adds `weighted_scorecard` for every card with a `sim` when `lang == "tr"` (`w_checkout`, `w_catalog`, `w_ledger`, `w_tenant`, `w_reporting`); the nine mechanism simulations are unchanged. Kept for the English page: `AURORA_USECASES` (model 1), the `win_checkout`, `lose_reporting`, `race_*` and `decide_*` simulations. Check: `check_usecases.py --app app aurora`.
 
 ## Part A topic and the everyday picture (A1)
 
@@ -53,22 +53,54 @@ Page: `app/engine_app/templates/e2e/aurora.tr.html` (Turkish only; the old Engli
 
 PostgreSQL (community), MySQL, Aurora PostgreSQL
 
-## Use cases (M2) and their closest alternatives
+## R1 catalog of the domain
 
-| No | Use case | Alternative 1 | Alternative 2 | sim (win / lose / race / none) | Totals |
-|---|---|---|---|---|---|
-| 1 | Checkout: order, stock, payment (Lale Market) | DynamoDB | DocumentDB | win_checkout | Aurora 47, DynamoDB 41, DocumentDB 35 |
-| 2 | Product catalog with relations (JSONB attributes) | DocumentDB | OpenSearch | race_catalog | Aurora 44, DocumentDB 42, OpenSearch 32 |
-| 3 | Warehouse stock with reservations | DynamoDB | ElastiCache | none | Aurora 44, DynamoDB 43, ElastiCache 35 |
-| 4 | Customer accounts, addresses, consents | DynamoDB | DocumentDB | none | Aurora 45, DynamoDB 43, DocumentDB 41 |
-| 5 | Multi-tenant SaaS with row-level security | RDS for PostgreSQL | DynamoDB | none | Aurora 46, RDS 42, DynamoDB 39 |
-| 6 | Reporting: from 90 days to three years of history | Redshift | OpenSearch | lose_reporting | Redshift 45, Aurora 32, OpenSearch 31 |
-| 7 | Invoices and double-entry ledger | RDS for PostgreSQL | DynamoDB | race_ledger | Aurora 45, RDS 43, DynamoDB 39 |
-| 8 | Appointments: non-overlapping time ranges | DynamoDB | ElastiCache | race_booking | Aurora 44, DynamoDB 43, ElastiCache 34 |
-| 9 | Workflow state with audit trail | DynamoDB | DocumentDB | none | Aurora 47, DynamoDB 44, DocumentDB 41 |
-| 10 | Geospatial: delivery zones and nearest points (PostGIS) | OpenSearch | DynamoDB | none | Aurora 45, DynamoDB 38, OpenSearch 35 |
+Domain: database. Catalog: `R1_CATALOG` of `e2e_usecases_w.py` (VM, ŞE, EY, OY, TA, DA, YD, AO), accepted by the owner on 2026-10-29. The page shows it under the R1–R5 callout with an Aurora PostgreSQL example per code.
 
-Aurora loses card 6 (Redshift). "Both together" is the honest answer in card 6 (Aurora as system of record, zero-ETL to Redshift) and in card 2 (Aurora for the catalog, OpenSearch for search). New entries added to the shared parts: `CATEGORY["rds"]`, `LINK["rds"]` (additions only; `SVC` already had `rds`). The `usecase()` assert now accepts any chosen service that is in `CATEGORY` (the DynamoDB cards still pass `ddb`).
+## Use cases (M2): candidates, weights, results (model 2)
+
+| No | Use case | Candidates (best fit first) | R1 sub-items (codes) | R1 weight | Totals /100 | sim |
+|---|---|---|---|---|---|---|
+| 1 | Checkout: order, stock, payment (Lale Market) | Aurora, DocumentDB, DynamoDB | TA, ŞE, EY, OY | 50 | 96.9 / 79.2 / 75.7 | w_checkout |
+| 2 | Product catalog with relations | Aurora, DocumentDB, OpenSearch | VM, ŞE, EY, TA | 50 | 86.8 / 82.1 / 62 (race; DocumentDB wins R1 43.2 to 42.2) | w_catalog |
+| 3 | Warehouse stock with reservations | Aurora, DynamoDB, MemoryDB | TA, OY, YD, EY | 48 | 90.6 / 79.9 / 78.8 | |
+| 4 | Customer accounts, addresses, consents | Aurora, RDS for PostgreSQL, DocumentDB | ŞE, TA, EY, VM | 48 | 96.6 / 92.6 / 82.8 (R1 equal with RDS) | |
+| 5 | Multi-tenant SaaS with row-level security | **RDS for PostgreSQL**, Aurora, DynamoDB | AO, ŞE, EY | 40 (R5 20, R2 18; note says why) | 90 / 88 / 64.4 (race, R1 equal) | w_tenant |
+| 6 | Reporting: 90 days to three years | **Redshift**, Aurora, OpenSearch | DA, EY, AO, OY | 48 | 93.6 / 63.8 / 62 | w_reporting |
+| 7 | Invoices and double-entry ledger | Aurora, RDS for PostgreSQL, DynamoDB | TA, ŞE, EY, AO | 48 | 94 / 87 / 69.6 (R1 equal) | w_ledger |
+| 8 | Appointments: non-overlapping ranges | Aurora, DynamoDB, MemoryDB | TA, EY, VM, YD | 48 | 94.6 / 74 / 71 | |
+| 9 | Workflow state with audit trail | Aurora, RDS for PostgreSQL, DynamoDB | TA, ŞE, EY, YD | 56 | 96 / 96 / 78.2 (tie with RDS, close race) | |
+| 10 | Geospatial: zones and nearest points (PostGIS) | Aurora, OpenSearch, DynamoDB | EY, VM, DA, TA | 48 | 92.5 / 67 / 61.6 | |
+
+Changes after the reader simulation (2026-10-30, docs/aurora.reader-report.md): RDS for PostgreSQL replaced DynamoDB in card 4 and DocumentDB in card 9 (same engine, small or flat loads); in cards 1, 2, 3, 8, 10 the verdict or the M2 summary says why RDS is not shown (R1 equal, the race the card teaches is with another engine; card 1: Aurora already runs in Lale Market). ACU range choice is always R4, a known peak is R2. Card 9 R4 weight 18 → 10 (the rule moved to R1). Amazon Location Service: not a database; named in card 10 as the routing/geofence companion. Prices used: eu-central-1 on demand 2026-10-29, ACU-hour 0.14 USD, db.r6g.xlarge RDS 0.549 / Aurora 0.627 USD/h.
+
+Candidate changes against model 1: card 3 and card 8 replace ElastiCache with MemoryDB (stock and appointments are official records; ElastiCache Serverless has no durable log, the same rule as the DynamoDB page). Card 1 now ranks DocumentDB second (multi-document transactions, `$jsonSchema`). Services checked and left out: Aurora DSQL and Limitless (no card needs multi-Region writes or more than one writer), Athena (card 6 needs data within seconds; an S3 export is periodic), ElastiCache (no durable log), Neptune (no card has multi-hop relations), Step Functions (card 9: named in the verdict as the workflow engine next to Aurora, not a database candidate).
+
+- Aurora clearly loses: card 6 (Redshift, gap 29.8; R1 · DA row store vs columnar).
+- Aurora loses a close race: card 5 (RDS for PostgreSQL, gap 2; same engine, R5 price on flat traffic). Card 9 is a tie with RDS (96 / 96).
+- Another engine wins R1 but loses on the total: card 2 (DocumentDB R1 43.2 vs 42.2; Aurora wins on R4/R5 because the orders already run in Aurora and the team knows SQL).
+- R1 equal and service design decides: cards 4, 5, 7 and 9 (RDS for PostgreSQL), a pair that flips on the traffic shape.
+- "Both together": card 6 (Aurora as system of record + zero-ETL to Redshift), card 2 (Aurora catalog + OpenSearch for search via OpenSearch Ingestion), card 9 (verdict: Step Functions for a growing workflow, Aurora for state and audit), card 10 (OpenSearch for a text-plus-geo discovery screen).
+
+Consistency rules applied across the cards (and with the DynamoDB page): no TTL in PostgreSQL = YD 7 when the expiry is inside the condition (cards 3, 8; same as the DynamoDB seat card), 4 when a cleanup job is the only way (DynamoDB page); MVCC on hot updates = OY/DA 1–2 off; MemoryDB R4 5 (no serverless + new API for a SQL team), R5 5; DocumentDB R4 6 (new cluster + new API); DynamoDB TTL "within a few days" = YD 5 when stock must return in 15 minutes (card 3), 7 when the expiry is a condition (card 8); DynamoDB transaction conflicts on hot items = TA 2–3 off.
+
+## New facts used in model 2 (with source)
+
+| Claim | Source |
+|---|---|
+| RDS for PostgreSQL: up to 15 read replicas per source instance | https://aws.amazon.com/rds/faqs/ |
+| RDS Multi-AZ instance failover "typically complete within one to two minutes" | https://aws.amazon.com/rds/features/multi-az/ |
+| RDS Multi-AZ DB cluster failover "typically less than 35 seconds" | https://docs.aws.amazon.com/cli/latest/reference/rds/failover-db-cluster.html |
+| eu-central-1 on demand, db.r6g.large: RDS for PostgreSQL 0.274 USD/h, Aurora PostgreSQL 0.313 USD/h, Aurora I/O-Optimized 0.407 USD/h | AWS Price List API (AmazonRDS), publication 2026-10-29 |
+| Aurora storage grows to 128 TiB; I/O-Optimized saves when I/O exceeds 25% of spend; RDS storage auto scaling | https://aws.amazon.com/blogs/database/is-amazon-rds-for-postgresql-or-amazon-aurora-postgresql-a-better-choice-for-me/ |
+| DynamoDB transaction conflicts: TransactionConflictException / TransactionCanceledException on concurrent requests to the same item | https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis.html |
+| DocumentDB `$jsonSchema` validation (4.0 and later), document size 16 MiB | https://docs.aws.amazon.com/documentdb/latest/devguide/json-schema-validation.html, https://docs.aws.amazon.com/documentdb/latest/devguide/limits.html |
+| Redshift: columnar store in 1 MB blocks, per-column compression | https://aws.amazon.com/blogs/big-data/getting-the-most-out-of-your-analytics-stack-with-amazon-redshift/ |
+| Redshift Serverless: RPU-hours per second, 60-second minimum, base 4–1024 RPU, no charge when idle | https://aws.amazon.com/redshift/pricing/ |
+| OpenSearch Ingestion streams Aurora PostgreSQL changes (CDC) into OpenSearch | https://docs.aws.amazon.com/opensearch-service/latest/developerguide/configure-client-aurora.html |
+| OpenSearch geo_distance, geo_bounding_box, geo_shape | https://aws.amazon.com/blogs/database/building-search-experiences-for-json-data-with-amazon-opensearch-service/ |
+
+The model 1 facts (six copies in three AZs, failover under 60/30 seconds, 15 replicas, replica lag, Serverless v2 ACU, zero-ETL within seconds, RLS, exclusion constraints, VACUUM) keep their sources in the page and in the comment block of `AURORA_W`.
 
 ## Known traps (handled explicitly in Part A)
 

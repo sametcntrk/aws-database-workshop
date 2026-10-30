@@ -470,18 +470,38 @@
 <p>Önemli kelime {{ k.term("access pattern") }}'dir. Bir access pattern, uygulamanın sorduğu bir sorudur; o anda bildiği değerlerle birlikte.
    "Id'si 7f3a olan tarayıcının sepetini göster" bir access pattern'dir. "İçinde kitap olan bütün sepetleri değerlerine göre sıralı göster" farklı bir access pattern'dir.
    Bir key-value database birincisini tek ve ucuz bir istekle cevaplar (Ö1, Ö3). İkincisi için ya ikinci bir index'e (Ö7) ya da verinin tamamının okunmasına ihtiyaç duyar.</p>
-<p>Bu bölümdeki her karar aynı beş gereksinimle anlatılır. M2'deki kartlar ve M7'deki simülasyonlar aynı beş başlığı kullanır:</p>
+<p>Bu bölümdeki her karar aynı beş gereksinimle anlatılır. M2'deki kartlar ve M7'deki simülasyonlar aynı beş başlığı kullanır. Son sütun her gereksinimin cevabının nereden geldiğini söyler:</p>
 <table class="data">
   <caption>R1–R5: her iş yükünün beş gereksinimi</caption>
-  <thead><tr><th>No</th><th>Gereksinim</th><th>Sorusu</th></tr></thead>
+  <thead><tr><th>No</th><th>Gereksinim</th><th>Sorusu</th><th>Kaynağı</th></tr></thead>
   <tbody>
-    <tr><td><b>R1</b></td><td>Access pattern</td><td>Uygulama hangi soruları, elinde hangi değerlerle soruyor? Hangi kurallar yazma anında korunmalı?</td></tr>
-    <tr><td><b>R2</b></td><td>Ölçek ve trafik şekli</td><td>Saniyede kaç istek, ne kadar veri, trafik düz mü dalgalı mı, tepe anında ne kadar gecikme kabul edilir?</td></tr>
-    <tr><td><b>R3</b></td><td>Dayanıklılık</td><td>Bir arızada bu verinin kaybı ne demek: yeni bir login mi, çift çekilen bir kart mı?</td></tr>
-    <tr><td><b>R4</b></td><td>Operasyon ve ekip</td><td>Kim işletecek, ekip hangi API'ı biliyor, sunucu boyutlandırmak isteniyor mu?</td></tr>
-    <tr><td><b>R5</b></td><td>Maliyet modeli</td><td>İstek başına mı, saat başına mı, GB başına mı ödenir ve bu trafik şekline uyar mı?</td></tr>
+    <tr><td><b>R1</b></td><td>Engine uyumu: veri, erişim ve garanti modeli</td><td>İş yükünün verisi, soruları ve kuralları engine'in çalışma prensibine, algoritmasına ve sunduğu araçlara ne kadar uyuyor? Access pattern bu gereksinimin bir parçasıdır (R1 · EY).</td><td>engine'in doğası</td></tr>
+    <tr><td><b>R2</b></td><td>Ölçek ve trafik şekli</td><td>Saniyede kaç istek, ne kadar veri, trafik düz mü dalgalı mı, tepe anında ne kadar gecikme kabul edilir?</td><td>ikisi birlikte: engine'in ölçeklenme modeli ve servisin kapasite yönetimi</td></tr>
+    <tr><td><b>R3</b></td><td>Dayanıklılık</td><td>Bir arızada bu verinin kaybı ne demek: yeni bir login mi, çift çekilen bir kart mı?</td><td>üreticinin servis tasarımı</td></tr>
+    <tr><td><b>R4</b></td><td>Operasyon ve ekip</td><td>Kim işletecek, ekip hangi API'ı biliyor, sunucu boyutlandırmak isteniyor mu?</td><td>üreticinin servis tasarımı</td></tr>
+    <tr><td><b>R5</b></td><td>Maliyet modeli</td><td>İstek başına mı, saat başına mı, GB başına mı ödenir ve bu trafik şekline uyar mı?</td><td>üreticinin servis tasarımı</td></tr>
   </tbody>
 </table>
+{% call k.callout("why", "Neden R1 en ağır, R3–R5 neden daha hafif ama silinmez?") %}
+<p>R1'in cevabı platformdan bağımsızdır. R1 satırları yalnız engine'in kendisini puanlar; bir kırılım servisin paketlemesinden geliyorsa (kalıcı bir log, Lambda bağlantısı, serverless olmaması) R2–R5'e yazılır ve R1'de sayılmaz. Valkey'in komutları sırayla çalıştırması, PostgreSQL'in her UPDATE'te yeni bir row sürümü yazması, DynamoDB'nin veriyi partition key'in hash'iyle dağıtması, engine hangi bulutta ya da hangi makinede çalışırsa çalışsın aynıdır. Bu yüzden bir iş yüküne hangi engine'in uyduğu en çok R1'de görünür.</p>
+<p>R3–R5'in cevabı ise büyük ölçüde üreticinin tasarım kararıdır. AWS key-value için yalnız ElastiCache sunabilirdi; DynamoDB'yi hiç çıkarmayabilir ya da serverless değil instance modunda çıkarabilirdi. Aynı Valkey engine'i ElastiCache Serverless'ta kalıcı bir log olmadan, MemoryDB'de çoklu AZ'li bir log ile ve serverless seçeneği olmadan sunulur. Bu yüzden R3–R5'in ağırlığı R1 kadar yüksek olamaz. Ama silinmez: aynı engine'i sunan farklı servisler ve platformlar arasındaki seçim tam olarak bu satırlarda yapılır.</p>
+{% endcall %}
+<p>R1 tek bir puan değildir. Bir iş yükünde engine'e sorulan birkaç soru vardır ve her kart bu soruları aşağıdaki sabit katalogdan seçer: kimisinde üç alt madde, kimisinde beş. Kartta alt maddeler sırayla numaralanır ve katalog kodunu taşır, örneğin "R1.2 · TA Tutarlılık ve atomiklik". Böylece farklı kartları ve farklı sayfaları aynı dille karşılaştırabilirsin.</p>
+<table class="data">
+  <caption>R1 kataloğu: Engine uyumunun sekiz alt maddesi (database'ler için)</caption>
+  <thead><tr><th>Kod</th><th>Alt madde</th><th>Ne sorar</th><th>DynamoDB'de örnek</th></tr></thead>
+  <tbody>
+    <tr><td><b>VM</b></td><td>Veri modeli ve value tipi</td><td>Value'nun yapısı ne: structured, semi-structured, iç içe, blob, graph, zaman serisi? Bir value ne kadar büyük?</td><td>Bir value en fazla 400 KB; içinde iç içe map ve list alanları olabilir (A2)</td></tr>
+    <tr><td><b>ŞE</b></td><td>Şema elverişliliği</td><td>Şema yazarken mi okurken mi uygulanır? Alanlar kayıttan kayda değişebilir mi, şema nasıl evrilir?</td><td>Yalnız key alanları tanımlanır (Ö4)</td></tr>
+    <tr><td><b>EY</b></td><td>Erişim yolu</td><td>Soru hangi değerle sorulur: key, aralık, ikincil alan, join ve toplam, metin, coğrafya, ilişki, zaman penceresi?</td><td>Partition key ve sort key; ikinci yol için GSI; JOIN yok (Ö1, Ö3, Ö7)</td></tr>
+    <tr><td><b>OY</b></td><td>Okuma/yazma şekli</td><td>Hacim değil, işlemin biçimi: yerinde güncelleme mi, ekleme mi, oku-değiştir-yaz mı, sayaç mı, toplu yazma mı?</td><td>UpdateItem ADD ile okumadan artırma; toplu silme yok (A6)</td></tr>
+    <tr><td><b>TA</b></td><td>Tutarlılık ve atomiklik</td><td>Engine hangi garantileri verir: okuma tutarlılığı, koşullu yazma, transaction kapsamı, izolasyon?</td><td>Eventually ya da strongly consistent okuma; ConditionExpression; 100 value'luk transaction (Ö5)</td></tr>
+    <tr><td><b>DA</b></td><td>Depolama algoritması</td><td>Engine'in çalışma algoritması bu erişime uyuyor mu: bellek içi hash, B-tree, LSM, columnar, inverted index?</td><td>Hash ile partition'lar ve partition içinde sort key sırası; SSD'de tek haneli milisaniye (A4)</td></tr>
+    <tr><td><b>YD</b></td><td>Veri yaşam döngüsü</td><td>Veri nasıl sona erer, değişikliği nasıl dışarı yayılır: TTL, sürüm, değişiklik akışı?</td><td>TTL günler içinde siler; Streams 24 saat (Ö6, Ö8)</td></tr>
+    <tr><td><b>AO</b></td><td>Ayar ve optimizasyon araçları</td><td>Engine geliştiriciye hangi sıkılaştırma araçlarını verir: index tipleri, projection, sparse index, sıkıştırma, script?</td><td>Sparse GSI, projection, key tasarımı (B4)</td></tr>
+  </tbody>
+</table>
+<p>Her kartta her satırın bir <b>ağırlığı</b> vardır ve ağırlıkların toplamı 100'dür. Ağırlık puanlardan önce, iş yükünün önceliğinden belirlenir ve kartta tek cümlelik nedeniyle yazılır. Çoğu kartta R1 en ağır gereksinimdir; R2–R5'in her biri en az 5 alır. Bir aday her satırda 0–10 puan alır ve katkısı puan × ağırlık / 10'dur. Zorunlu satır ve diskalifiye yoktur: bir iş yükünün önceliği olan satırda zayıf kalan aday, toplamda kendiliğinden geride kalır. Puan ile ağırlığın işi ayrıdır: <b>puan</b> satırdaki "ne istiyoruz" cümlesinin ne kadar karşılandığını ölçer, <b>ağırlık</b> o satırın bu iş yükü için ne kadar önemli olduğunu. Bir eksik yalnız bir satırda sayılır: gecikme engine'in depolamasından geliyorsa R1 · DA'da, servisin tasarımından geliyorsa R2'de.</p>
 
 <h2 id="signals" data-short="Ö1–Ö8: sinyal ve sınır"><span class="sec">M1</span>Key-value'nun sekiz özelliği: hangi sinyal çağırır, sınırı nedir</h2>
 <p>Bu tablo M2'deki kartların referansıdır. Bir kart "Ö5 ile çözer" dediğinde buraya dönersin. Her satır A10'daki özelliği iş yükündeki sinyaliyle ve sınırıyla, yani yapamadığı şeyle birleştirir. Sınırlar, alternatiflerin neden bazen daha iyi olduğunu da açıklar.</p>
@@ -574,20 +594,42 @@
 </table>
 
 <h2 id="usecases" data-short="Use case'ler, alternatifleriyle"><span class="sec">M2</span>Use case'ler: neden key-value, en yakın alternatif neyi karşılar, yine de seçersek ne olur</h2>
-<p>Her kart bir iş yükünü anlatır ve beş parçadan oluşur. (1) <b>Gerçek projede:</b> iş yükü kim için, hangi ekranda, hangi sayılarla. (2) <b>Gereksinimler R1–R5:</b> her biri için "ne istiyoruz" (sayılı) ve "neden önemli, karşılanmazsa ne olur". (3) <b>Puan tablosu:</b> seçilen servis (DynamoDB) ve en yakın iki alternatif, her gereksinimde 10 üzerinden. (4) <b>Her adayın gerekçesi:</b> gereksinim gereksinim nasıl karşıladığı (A10'daki Ö-numarasıyla), kaç puan aldığı ve puanın neden kırıldığı; her alternatif için uzun bir <b>kafa kafaya</b> paragrafı: nerede ayrışır, bu iş yükünde neden seçilmedi, hangi koşul değişseydi o seçilirdi. (5) <b>Karar:</b> toplamın okunuşu ve "yine de key-value seçersek" artı ve eksilerimiz. Simülasyonu olan beş kart M7'de aynı puanlarla adım adım oynar. Başlığa tıklayarak kartı aç.</p>
+<p>Her kart bir iş yükünü anlatır ve altı parçadan oluşur. (1) <b>Bu iş yüküne en uygun servis:</b> kartın en üstünde, ağırlıklı toplamı en yüksek olan aday durur. Bu aday DynamoDB olmayabilir; DynamoDB her kartta tabloda kalır ve "bu sayfanın servisi" işaretini taşır. (2) <b>Gerçek projede:</b> iş yükü kim için, hangi ekranda, hangi sayılarla. (3) <b>Gereksinimler ve ağırlıklar:</b> R1'in alt maddeleri (R1.1, R1.2, …) ve R2–R5; her satırda ağırlık ve nedeni, "ne istiyoruz" ve "neden önemli, karşılanmazsa ne olur". (4) <b>Puan tablosu:</b> bu iş yüküne gerçekten uyan üç servis; her hücrede 10 üzerinden puan ve ağırlıklı katkı, R1'in toplamı ve 100 üzerinden toplam. (5) <b>Her adayın gerekçesi:</b> satır satır nasıl karşıladığı (A10'daki Ö-numarasıyla), kaç puan aldığı ve puanın neden kırıldığı; en uygun servisin dışındaki her aday için uzun bir <b>kafa kafaya</b> paragrafı: nerede ayrışır, bu iş yükünde neden geride kalır, hangi koşul değişseydi o seçilirdi. (6) <b>Karar:</b> toplamların okunuşu ve "DynamoDB seçersek" artı ve eksilerimiz. Simülasyonu olan beş kart M7'de aynı puanlarla adım adım oynar. Başlığa tıklayarak kartı aç.</p>
 <table class="data">
-  <caption>puan ölçeği: her kartta aynı</caption>
+  <caption>puan ölçeği: her satırda ve her kartta aynı</caption>
   <thead><tr><th>Puan</th><th>Anlamı</th></tr></thead>
   <tbody>
-    <tr><td class="y">10</td><td>Gereksinimi doğrudan, ek iş olmadan ve sayıları aşarak karşılar.</td></tr>
+    <tr><td class="y">10</td><td>Satırı doğrudan, ek iş olmadan ve sayıları aşarak karşılar.</td></tr>
     <tr><td class="y">8–9</td><td>Karşılar; küçük bir ek iş ya da küçük bir maliyet vardır.</td></tr>
-    <tr><td class="p">5–7</td><td>Karşılar, ama uygulama tarafında belirgin ek iş, boyutlandırma ya da bir sınırla.</td></tr>
-    <tr><td class="p">2–4</td><td>Kısmen: gereksinimin bir parçası karşılanmaz ya da ciddi bir bedelle karşılanır.</td></tr>
-    <tr><td class="n">0–1</td><td>Karşılamaz. Zorunlu bir gereksinimde 0 ya da 1 alan aday diskalifiye olur ama tabloda kalır.</td></tr>
+    <tr><td class="p">4–7</td><td>Karşılar, ama uygulama tarafında belirgin ek iş, boyutlandırma ya da bir sınırla.</td></tr>
+    <tr><td class="n">0–3</td><td>Kısmen ya da hiç: satırın bir parçası karşılanmaz ya da ciddi bir bedelle karşılanır.</td></tr>
   </tbody>
 </table>
-{% for uc in usecases %}{{ k.usecase(uc) }}
+<table class="data">
+  <caption>kartlarda geçen servis terimleri (ayrıntısı Bölüm B ve C'de)</caption>
+  <thead><tr><th>Terim</th><th>Ne demek</th></tr></thead>
+  <tbody>
+    <tr><td>Okuma ve yazma birimi</td><td>DynamoDB'nin ölçü birimi: 4 KB'a kadar strongly consistent bir okuma 1 okuma birimi, 1 KB'a kadar bir yazma 1 yazma birimidir (B2).</td></tr>
+    <tr><td>On-demand ve provisioned mod</td><td>On-demand: her istek ödenir, kapasite planı yoktur. Provisioned: saniyedeki kapasiteyi sen belirlersin; düz trafikte daha ucuzdur (M5).</td></tr>
+    <tr><td>Warm throughput (ön ısıtma)</td><td>Bir table'ın anında karşılayabildiği istek hızı; büyük bir açılıştan önce yükseltilir.</td></tr>
+    <tr><td>ECPU</td><td>ElastiCache Serverless'ın istek birimi: basit bir komut 1 KB başına yaklaşık 1 ECPU.</td></tr>
+    <tr><td>ACU</td><td>Aurora Serverless v2'nin kapasite birimi; saat başına ödenir.</td></tr>
+    <tr><td>Writer / primary ve replica</td><td>Instance tabanlı database'lerde bütün yazmaları alan tek sunucu ve onun okuma kopyaları.</td></tr>
+    <tr><td>MVCC ve VACUUM</td><td>PostgreSQL her UPDATE'te row'un yeni bir sürümünü yazar (MVCC); eski sürümleri VACUUM temizler.</td></tr>
+  </tbody>
+</table>
+<p>Toplam 100 üzerindendir: her hücrenin katkısı puan × ağırlık / 10'dur. İlk iki aday arasındaki fark 5 puan ya da daha azsa kart "yakın yarış" işaretini taşır; bu bir bilgidir, karar yine toplamdır.</p>
+{% for uc in usecases %}{{ k.wusecase(uc) }}
 {% endfor %}
+<table class="data">
+  <caption>on kartın özeti: en uygun servis, ikinciyle farkı ve DynamoDB'nin yeri</caption>
+  <thead><tr><th>Kart</th><th>En uygun servis</th><th class="num">Fark</th><th>DynamoDB</th></tr></thead>
+  <tbody>{% for uc in usecases %}
+    <tr><td><a href="#uc-{{ uc.id }}">{{ uc.no }}. {{ uc.title }}</a></td><td>{{ uc.best.name }} ({{ uc.best.total }}){% if uc.race %} · yakın yarış{% endif %}</td><td class="num">{{ uc.gap }}</td>
+      <td>{% for c in uc.cands %}{% if c.page %}{{ loop.index }}. sıra, {{ c.total }}{% endif %}{% endfor %}</td></tr>{% endfor %}
+  </tbody>
+</table>
+<p>Özetin okunuşu: DynamoDB, sorusu key ile bilinen, kuralı tek bir value üzerinde kalan ve kalıcı olması gereken iş yüklerinde öndedir. Süre sonu tam anında olmalı ya da cevap milisaniyenin altında dönmeliyse bellek içi Valkey (ElastiCache ya da MemoryDB) öne geçer. Kaybı pahalı bir veride MemoryDB, kaybı ucuz bir veride ElastiCache. DocumentDB iç içe belgede, Aurora birçok tabloya yayılan kuralda engine olarak güçlüdür; bu sayfanın kartlarında ölçek ve operasyon ağırlığı onları geride bırakır.</p>
 
 <h2 id="away" data-short="Uzaklaştıran sinyaller"><span class="sec">M3</span>Key-value database'ten uzaklaştıran sinyaller</h2>
 <table class="data">
@@ -619,7 +661,7 @@
 <table class="data">
   <thead><tr><th>Servis</th><th>Nedir</th><th>Ne zaman seç</th></tr></thead>
   <tbody>
-    <tr><td><b>Amazon DynamoDB</b></td><td>Serverless bir key-value ve document database. Kalıcı, her ölçekte tek haneli milisaniye, istek başına ödeme.</td><td>Veri resmi kayıt, trafik büyük ya da dalgalı ve ekip sunucu istemiyor.</td></tr>
+    <tr><td><b>Amazon DynamoDB</b></td><td>Serverless bir key-value ve document database. Kalıcı, her ölçekte tek haneli milisaniye, istek başına ödeme.</td><td>Veri kalıcı olmalı (resmi kayıt ya da kaybı istenmeyen bir ön hazırlık, örneğin sepet), trafik büyük ya da dalgalı ve ekip sunucu istemiyor.</td></tr>
     <tr><td><a href="/e2etutorial/elasticache?lang=tr">Amazon ElastiCache (Valkey)</a></td><td>Zengin veri yapılarına sahip bellek içi bir key-value store. Mikrosaniyeler.</td><td>En önemli şey hız ve veri bir cache ya da yeniden kurulabilir: oturumlar, sıralamalar, sayaçlar.</td></tr>
     <tr><td>Amazon MemoryDB</td><td>Kalıcı, çoklu AZ'li bir log'a sahip, Valkey uyumlu bellek içi bir database.</td><td>Belleğin hızına ve bir database'in dayanıklılığına birlikte ihtiyacın var.</td></tr>
     <tr><td><a href="/e2etutorial/keyspaces?lang=tr">Amazon Keyspaces</a></td><td>Serverless, Cassandra uyumlu bir wide-column database.</td><td>Ekip zaten Apache Cassandra ve CQL kullanıyor.</td></tr>
@@ -646,13 +688,13 @@
    Sipariş bu mağazada bir key-value database için iyi bir uyum değildir, çünkü stok, sipariş ve satırlar üzerinde birlikte kurallar ister. Bu Aurora'nın işidir.</p>
 
 <h2 id="decide" data-short="Karar simülasyonları"><span class="sec">M7</span>Karar simülasyonları: M2'nin beş kartı adım adım</h2>
-<p>Her simülasyon M2'deki bir kartın verisini kullanır: aynı iş yükü, aynı R1–R5, aynı üç aday, aynı 10'luk puanlar ve aynı gerekçeler. Fark şudur: simülasyon gereksinimleri teker teker açar ve puan tablosu adım adım dolar; sonunda kazananı, ikinciyi ve kartın karar paragrafını görürsün. Oynat'a basmadan önce kartı okuyup kazananı tahmin et.</p>
-<p>Beş simülasyonun biri net bir kazanma (IoT), biri net bir kaybetme (rate limit), üçü yakın yarıştır (sepet, profil, oturum). Gerçek mimari kararların çoğu yakın yarışlar gibi görünür: iki güçlü aday ve karar veren bir ya da iki gereksinim.</p>
-{{ k.sim("win_iot", "Kart 5: her cihazın son durumu (net bir kazanma)") }}
-{{ k.sim("lose_rate", "Kart 8: rate limit sayaçları (net bir kaybetme: ElastiCache kazanır)") }}
-{{ k.sim("race_cart", "Kart 1: alışveriş sepeti, DynamoDB mi Aurora mı? (yakın yarış)") }}
-{{ k.sim("race_profile", "Kart 2: kullanıcı profilleri, DynamoDB mi DocumentDB mi? (yakın yarış)") }}
-{{ k.sim("race_session", "Kart 3: oturumlar, DynamoDB mi ElastiCache mi? (yakın yarış)") }}
+<p>Her simülasyon M2'deki bir kartın verisini birebir kullanır: aynı iş yükü, aynı satırlar ve ağırlıklar, aynı üç aday, aynı puanlar ve aynı gerekçeler. Fark şudur: simülasyon her adımda bir satır açar. Önce satırın ağırlığını ve nedenini, sonra her adayın puanını ve ağırlıklı katkısını görürsün; puan tablosu ve toplamlar adım adım dolar. Sonunda en uygun servisi, ikinciyi, aradaki farkı ve kartın karar paragrafını görürsün. Oynat'a basmadan önce kartı okuyup sonucu tahmin et.</p>
+<p>Beş simülasyon öğrettikleri şeye göre seçildi. IoT'de DynamoDB ile Keyspaces engine uyumunda eşittir ve kararı servis tasarımı verir (yakın yarış). Sepette engine uyumu yakındır; ElastiCache'e karşı R3, Aurora'ya karşı süre sonu satırı ve R2 kararı verir. Koltuk tutmada engine uyumunda MemoryDB öndedir ama servis tasarımı kararı çevirir (yakın yarış). Oturumda iki Valkey servisi R1'de eşittir ve DynamoDB üçüncüdür. Rate limit'te DynamoDB hem engine uyumunda hem maliyette net kaybeder.</p>
+{{ k.sim("w_iot", "Kart 5: her cihazın son durumu, DynamoDB mi Keyspaces mi? (yakın yarış)") }}
+{{ k.sim("w_cart", "Kart 1: alışveriş sepeti, DynamoDB, ElastiCache ve Aurora") }}
+{{ k.sim("w_seat", "Kart 7: koltuk tutmaları, DynamoDB mi MemoryDB mi? (yakın yarış)") }}
+{{ k.sim("w_session", "Kart 3: oturumlar (ElastiCache en uygun, DynamoDB üçüncü)") }}
+{{ k.sim("w_rate", "Kart 8: rate limit sayaçları (ElastiCache en uygun, DynamoDB net kaybeder)") }}
 <p>Her kararın son cümlesine bak: "Bir koşul değişseydi". İyi bir mimar bu cümleyi karar kaydına yazar. Koşul daha sonra değişirse ekip kararın yeniden kontrol edilmesi gerektiğini bilir.</p>
 
 {{ k.quiz("ddb-a1", "Bir ödeme API'ı, bir client isteği tekrar denediğinde bir kartı asla iki kez çekmemeli. Her isteğin benzersiz bir request id'si var. En iyi ne oturur?",
@@ -662,8 +704,8 @@
    ["Evet, filtreli tam bir okuma her raporu cevaplar", "Hayır, gruplamalı açık sorular SQL'e daha iyi uyar", "Evet, her rapor yeni bir partition key alırsa", "Hayır, çünkü key-value database'ler sayı saklayamaz"],
    1, "Sorular her hafta değişir ve gruplama ister. Onları Redshift'e (örneğin DynamoDB'den zero-ETL ile) ya da ilişkisel bir database'e koy.") }}
 {{ k.quiz("ddb-a3", "Bir web mağazasının oturumları bir milisaniyenin altında okunmalı ve kaybolan bir oturum sadece yeni bir login demek. Hangi AWS servisi kazanır ve hangi koşul cevabı değiştirir?",
-   ["ElastiCache. Kaybolan bir oturum kabul edilemez olsaydı DynamoDB kazanırdı.", "DynamoDB. Trafik iki katına çıksaydı ElastiCache kazanırdı.", "Redshift. Oturumlar daha büyük olsaydı S3 kazanırdı.", "Neptune. Kullanıcıların arkadaşları olsaydı Aurora kazanırdı."],
-   0, "Hız ve tam süre sonu bellek içi depoyu öne çıkarır. Kararı DynamoDB'ye taşıyacak koşul dayanıklılıktır.") }}
+   ["ElastiCache. Kaybolan bir oturum pahalı olsaydı MemoryDB kazanırdı.", "DynamoDB. Trafik iki katına çıksaydı ElastiCache kazanırdı.", "Redshift. Oturumlar daha büyük olsaydı S3 kazanırdı.", "Neptune. Kullanıcıların arkadaşları olsaydı Aurora kazanırdı."],
+   0, "Bellekteki veri ve tam anında süre sonu R1'de bellek içi engine'i öne çıkarır (kart 3). ElastiCache ve MemoryDB aynı Valkey engine'ini çalıştırır; aralarındaki fark dayanıklılıktır, yani kararı MemoryDB'ye taşıyacak koşul oturum kaybının pahalı olmasıdır.") }}
 
 <div class="part"><b>Bölüm B</b><h2 id="partB" data-short="Bölüm B: İleri">İleri: pratikte DynamoDB</h2>
 <p>Bölüm A'daki fikirlerin DynamoDB'deki isimleri, okuma ve yazma işlemleri, key tasarımı ve ek özellikler.</p></div>
