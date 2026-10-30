@@ -491,26 +491,44 @@ steps:
           - [Keyspaces, "Amazon'un Apache Cassandra uyumlu, sunucusuz geniş sütunlu (wide column) veritabanı."]
           - [Uygulama, "Mağazanın arka uç programı. Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
       prior:
-        title: Gerçek bir sistemde bu tablo nasıl kurulur?
+        title: Gerçek bir sistemde olay tablosu için hazırlık
         intro: >-
-          Sayfa açılmadan önce hazır olması gerekenler. Gerçek bir sistemde bu kararlar tablo kurulurken, en baştan verilir.
+          Ürün sayfası hiç açılmadan, olay tablosu bu sayfanın sorusuna göre kurulur. Keyspaces'te soruyu tablo kurulurken
+          seçersin; sonradan değiştirmek yeni bir tablo demektir. Aşağıdaki beş adım bu hazırlığın sırasıdır.
         text:
-          - >-
-            Önce soru belirlenir, tablo sonra. Keyspaces'te (ve Cassandra'da) en iyi uygulama sorgu odaklı tasarımdır:
-            "bu kişinin son hareketleri, en yeni önce" sorusu için partition key user_id seçilir (bir kişinin bütün satırları
-            bir arada), clustering key de event_time, yeniden eskiye. Başka bir soru için ("bu ürüne kimler baktı?") aynı
-            olaylarla ikinci bir tablo kurulur. Aynı verinin iki tabloda durması burada hata değil, normaldir.
-          - >-
-            Partition key yükü dağıtmalı. Keyspaces tek bir partition'a saniyede en fazla 1.000 yazma birimi (WCU) ve 3.000
-            okuma birimi (RCU) verir. user_id iyi bir seçimdir, çünkü yük binlerce kişiye dağılır. "Bugünün tarihi" gibi
-            herkesin aynı değeri yazdığı bir partition key ise bütün yükü tek partition'a yığar.
-          - >-
-            Partition'lar sınırsız büyümemeli. Olaylar yıllarca birikirse bir kişinin defteri çok büyür ve okuması yavaşlar.
-            Bunu önlemek için satırlara son kullanma süresi (TTL) verilir; geçmişin tamamı gerekiyorsa partition key'e bir
-            zaman parçası eklenir (ör. user_id + ay) ve her ay yeni bir defter açılır.
-          - >-
-            Satırlar hiç güncellenmez, sadece yeni satır eklenir (append-only). Her yazma tek bir partition'a gider. Bu,
-            Keyspaces'in en hızlı ve en ucuz çalıştığı yazma biçimidir.
+          - title: Önce sayfanın sorusu yazılır
+            text: >-
+              Keyspaces'te (ve Cassandra'da) tasarım sorudan başlar. Şeridin sorusu her ziyarette aynıdır: "bu kişinin son
+              hareketleri, en yeni önce, en fazla 40". Başka bir soru ("bu ürüne kimler baktı?") ayrı bir tablo ister.
+            code: |-
+              SELECT product_id, detail, event_type FROM dbws.activity_by_user WHERE user_id = ? LIMIT 40
+          - title: Tablo bu soruya göre kurulur
+            text: >-
+              Partition key user_id: bir kişinin bütün satırları bir arada durur. Clustering key event_time, yeniden eskiye:
+              en yeni satır en üstte. TTL de tabloda tanımlanır: her satır 7 gün sonra kendiliğinden silinir. Okurken ORDER BY
+              ya da silme işi gerekmez.
+            code: |-
+              CREATE TABLE dbws.activity_by_user (
+                user_id text, event_time timestamp, event_id uuid,
+                event_type text, product_id text, detail text,
+                PRIMARY KEY ((user_id), event_time, event_id)
+              ) WITH CLUSTERING ORDER BY (event_time DESC) AND default_time_to_live = 604800;
+          - title: Partition key yükü dağıtmalı
+            text: >-
+              Tek bir partition saniyede en fazla 3.000 okuma (RCU) ve 1.000 yazma (WCU) birimi alır. user_id iyi bir
+              seçimdir, çünkü yük binlerce kişiye dağılır. "Bugünün tarihi" gibi herkesin aynı değeri yazdığı bir partition
+              key bütün yükü tek partition'a yığar. CloudWatch'ta StoragePartitionThroughputCapacityExceeded bunu gösterir.
+          - title: Partition sınırsız büyümemeli
+            text: >-
+              Olaylar yıllarca birikirse bir kişinin defteri çok büyür. TTL eski satırları siler; geçmişin tamamı lazımsa
+              partition key'e bir zaman parçası eklenir ve her ay yeni bir defter açılır.
+            code: |-
+              PRIMARY KEY ((user_id, month), event_time, event_id)   -- ör. month = '2026-10'
+          - title: Satır, okunurken lazım olanı kendisi taşır
+            text: >-
+              Keyspaces'te JOIN yoktur. Bu yüzden olay satırı yazılırken ürünün adı ve kategorisi de detail alanına kopyalanır;
+              şerit çizilirken katalog yeniden sorulmaz. Bedeli: ürünün adı sonradan değişirse eski satırlar eski adı gösterir.
+              Satırlar hiç güncellenmez, sadece eklenir (append-only).
       feed:
         title: Veri nereden geliyor?
         writes: >-
@@ -519,10 +537,45 @@ steps:
         kind: >-
           Uygulama orkestrasyonu. Keyspaces başka bir veritabanından kendiliğinden veri çekmez, başka bir veritabanına da
           kendiliğinden veri göndermez; yazan da okuyan da uygulamadır.
+        with: >-
+          Ürün sayfası Keyspaces'in yanında dört veritabanı daha kullanır: ürünün kendisi bir doküman veritabanından
+          (DocumentDB), görseller nesne deposundan (S3, büyük sistemlerde bir CDN ile), öneriler bir graf veritabanından
+          (Neptune), oturum bellekte duran bir veritabanından (ElastiCache). Olay satırı bunların hiçbirine bağlanmaz;
+          ihtiyaç duyduğu ürün adını yazılırken kopya olarak alır.
         best: >-
           Trafik büyüyünce uygulama olayı tabloya doğrudan değil, önce bir olay akışına bırakır (Amazon Kinesis Data Streams
           ya da Amazon MSK). Küçük bir tüketici program akıştan okuyup tabloya yazar. Böylece sayfa yazmanın bitmesini
           beklemez, ani yükler akışta tamponlanır ve aynı olaylar analiz gibi başka hedeflere de dağıtılabilir.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu sayfa açılırken gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda
+          çalışan veritabanları var.
+        steps:
+          - text: >-
+              Mağazada bir müşteri olarak geziyorsun (ör. Ayşe Yılmaz). Şifreyle giriş yok: tarayıcın iki çerez taşıyor.
+              lm_visitor bu tarayıcının kimliği; Keyspaces'teki partition'ın da bu kimlik.
+          - text: >-
+              Bir ürün kartına (Kablosuz Kulaklık) tıkladın ve /p/P0001 açıldı. Sayfa açılır açılmaz arka planda oturum
+              kaydın güncellendi (30 dakikalık, bellekte).
+            engines: [elasticache]
+          - text: >-
+              Sayfa önce ürünün kendisini istedi: adı, fiyatı, açıklaması ve özellikleri DocumentDB'den bir doküman olarak
+              geldi. Büyük ürün görseli ayrı bir istekle S3'ten geldi.
+            engines: [docdb, s3]
+          - text: >-
+              Ürün bilgisi gelince tarayıcın uygulamaya "bu ürüne baktım" dedi. Uygulama Keyspaces'e bir INSERT gönderdi;
+              satırın detail alanına ürünün adı ve kategorisi yazıldı (DocumentDB'den gelen bilginin kopyası).
+              Simülasyonun ilk yarısı bu.
+            engines: [keyspaces]
+          - text: >-
+              Hemen ardından iki istek aynı anda gitti: "Son baktıkların" şeridi için Keyspaces'e bir SELECT (simülasyonun
+              ikinci yarısı) ve "bunu alanlar şunları da aldı" önerileri için Neptune'a bir sorgu.
+            engines: [keyspaces, neptune]
+          - text: >-
+              Şerit çizildi. Kartlardaki ürün adı Keyspaces satırındaki detail'den geldi, DocumentDB'ye yeniden sorulmadı.
+              Kartların görselleri yine S3'ten, her biri ayrı bir istekle.
+            engines: [keyspaces, s3]
       now_intro: >-
         Sayfanın açıldığı an. Önce resmin tamamı (simülasyon), sonra aynı anın ayrıntıları: isteğin yolu, uygulamanın
         kodu, Keyspaces'e giden komutlar ve gerçek ölçümler.
@@ -552,6 +605,15 @@ steps:
               - {time: "26 Eki 02:00", type: purchase, product: P0147 Kahve Makinesi}
               - {time: "25 Eki 20:13", type: search, product: P0173 Dambıl Seti}
         insert: {time: "şimdi", type: view, product: P0001 Kablosuz Kulaklık}
+        send_insert: >-
+          Kablosuz Kulaklık'ın sayfasını açtın ve ürün bilgisi DocumentDB'den geldi. Tarayıcın "bu ürüne baktım" dedi;
+          uygulama da Keyspaces'e INSERT gönderiyor. Satırın user_id'si bu tarayıcının kimliği, detail'i ürünün adı.
+        send_select: >-
+          Şimdi sayfa "Son baktıkların" şeridini istiyor. Uygulama Keyspaces'e SELECT ... WHERE user_id = 7f3a… LIMIT 40
+          gönderiyor. Aynı anda öneriler için Neptune'a da ayrı bir istek gidiyor.
+        back: >-
+          Uygulama listenin en fazla 8 ürününü tarayıcına gönderdi. Tarayıcın şeridi çizecek: adlar satırların detail
+          alanından, görseller ayrı isteklerle S3'ten gelecek.
         summary: >-
           Yazma da okuma da tek bir partition'a gitti. Tablo ne kadar büyürse büyüsün, senin geçmişini okumak için sadece
           senin defterin açılır. Keyspaces satırları olduğu gibi verdi; "sadece view, tekrar yok, en fazla 8" kuralları
@@ -700,7 +762,14 @@ steps:
           - who: Uygulama → Tarayıcın
             text: "{items} ürünlük listeyi JSON olarak, isteğin kaydıyla (trace) birlikte geri gönderdi."
           - who: Tarayıcın
-            text: Listeyi "Recently viewed" şeridine çizdi. Mağaza sekmesinde gördüğün şerit bu cevap.
+            text: >-
+              Listeyi "Recently viewed" şeridine çizdi. Kartlardaki adlar Keyspaces satırının detail alanından geldi;
+              DocumentDB'ye yeniden sorulmadı.
+          - who: Tarayıcın → S3
+            text: >-
+              Her kartın görselini ürün numarasından kurduğu adresle (/s3/api/img/P0001) ayrı ayrı istedi. Bu istekler S3'ün
+              uygulama sunucusuna gider; o da S3'ten products/P0001.jpg nesnesini okuyup gönderir. Kartta adı (Keyspaces)
+              ve görseli (S3) birleştiren tarayıcıdır.
           - who: Sonra
             text: >-
               Bu satırlar 7 gün sonra TTL ile kendiliğinden silinir. Başka bir ürüne bakarsan yeni bir view satırı partition'ın

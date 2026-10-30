@@ -190,11 +190,11 @@
     const frames = [{ say: START, phase: 0 }];
     const mine = rowsOf(parts[me], true), total = parts.reduce((n, p) => n + rowsOf(p, true).length, 0);
     // 1) the write: the app sends, the engine stores
-    frames.push({ phase: 0, who: APP, say: `Sayfa açıldı. Uygulama "bu ürüne baktın" bilgisini bir INSERT komutuyla Keyspaces'e gönderiyor. Satırın user_id'si bu tarayıcının kimliği.` });
+    frames.push({ phase: 0, who: APP, say: spec.send_insert || `Sayfa açıldı. Uygulama "bu ürüne baktın" bilgisini bir INSERT komutuyla Keyspaces'e gönderiyor. Satırın user_id'si bu tarayıcının kimliği.` });
     frames.push({ phase: 1, who: DB, lit: me, say: `INSERT geldi: user_id = ${parts[me].label}. Keyspaces bu değere bakar ve satırın hangi partition'a gideceğini bulur. Diğer partition'lara dokunmaz.` });
     frames.push({ phase: 2, who: DB, lit: me, inserted: true, say: "Yeni satır partition'ın en üstüne girdi. Tablo satırları event_time'a göre yeniden eskiye sıralı tutuyor; sıralama yazarken yapılıyor, okurken değil." });
     // 2) the read: the app asks, the engine returns rows as they are
-    frames.push({ phase: 3, who: APP, lit: me, inserted: true, select: true, touched: 1, say: `Şimdi uygulama "Son baktıkların" şeridi için SELECT ... WHERE user_id = ${parts[me].label} LIMIT ${lim} gönderiyor.` });
+    frames.push({ phase: 3, who: APP, lit: me, inserted: true, select: true, touched: 1, say: spec.send_select || `Şimdi uygulama "Son baktıkların" şeridi için SELECT ... WHERE user_id = ${parts[me].label} LIMIT ${lim} gönderiyor.` });
     frames.push({ phase: 4, who: DB, lit: me, inserted: true, select: true, touched: 1, read: mine.length, stage: "db",
       say: `Keyspaces sadece bu partition'ı açtı ve satırları baştan okudu: ${mine.length} satır (en fazla ${lim} olabilirdi). Satırları olduğu gibi uygulamaya geri gönderdi. Hangisinin şeride gireceğine Keyspaces karar vermez.` });
     // 3) the app's own work: keep only views, drop repeats, at most `cap`
@@ -208,7 +208,7 @@
         keep: [...keep], skip: [...skip], result: [...result], say: `Uygulama ${k + 1}. satıra bakıyor (${r.time}). ${why}` });
     });
     frames.push({ ...frames[frames.length - 1], check: 0, done: true, stage: "out",
-      say: `Uygulama listenin en fazla ${cap} ürününü tarayıcıya gönderdi (burada ${result.length} ürün var). Tabloda ${total} satır var; Keyspaces sadece ${mine.length} tanesini okudu, süzmeyi uygulama yaptı.` });
+      say: spec.back ? `${spec.back} (Burada ${result.length} ürün var.)` : `Uygulama listenin en fazla ${cap} ürününü tarayıcıya gönderdi (burada ${result.length} ürün var). Tabloda ${total} satır var; Keyspaces sadece ${mine.length} tanesini okudu, süzmeyi uygulama yaptı.` });
     const block = (p, i) => `<div class="gs-part" data-p="${i}" data-hl="pk${p.me ? " where" : ""}">
       <div class="gs-part-key" data-hl="pk">user_id = <b>${esc(p.label)}</b>${p.me ? " <em>(sen)</em>" : ""}</div>
       <table class="gs-table"><thead><tr><th data-hl="ck">event_time ↓</th><th data-hl="type">event_type</th><th>product</th></tr></thead><tbody>
