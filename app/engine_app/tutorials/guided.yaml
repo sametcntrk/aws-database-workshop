@@ -638,16 +638,21 @@ steps:
   - page: product
     path: /p/P0001
     engines: [dynamodb]
-    use_case: Shopping cart
-    title: Add the product to your cart
+    use_case: Alışveriş sepeti
+    title: Ürünü sepete ekle
     why: >-
-      The cart is in DynamoDB. Your cart is one partition (pk = CART#<your browser id>), and each product is one item in it (sk = ITEM#<product>).
-    do: Click the lit button "Add to cart".
+      Sepet DynamoDB adlı veritabanında duruyor. Senin sepetin, içinde ürün kartları olan bir çekmece gibi: çekmecenin
+      etiketi senin tarayıcının kimliği (pk = CART#…), her kart da sepetteki bir ürün (sk = ITEM#P0001). DynamoDB bir
+      ürünü bulmak için bu iki etikete bakar, başka hiçbir şeyi taramaz.
+    do: Aydınlık "Add to cart" (sepete ekle) butonuna tıkla. Adet 1 kalsın.
     target: "#add"
     action: click
     wait: {method: POST, path: /dynamodb/api/cart/items}
     focus: "#add-msg"
-    result: UpdateItem with ADD qty changed the item in one atomic step. The note shows the write request units (WRU).
+    result: >-
+      DynamoDB sepetine 1 adet yazdı. Yazma tek komutla yapıldı (UpdateItem, ADD qty): ürün sepette yoksa oluşturuldu,
+      varsa adedi 1 arttı. Aşağıdaki satır bu yazmanın süresini ve harcadığı yazma birimini (WRU) gösteriyor. Bu 1 adet,
+      sonraki iki adımda kuralı denemek için gerekli.
 
   - page: product
     path: /p/P0001
@@ -879,17 +884,15 @@ steps:
       live:
         title: Gerçek izdihamda ne oldu?
         intro: >-
-          Soldaki sütun senin başlattığın gerçek deneme. Sağdaki sütun için panel aynı denemeyi atomik DECR ile bir kez de
-          kendisi çalıştırdı. İkisi de ElastiCache'te geçici bir sayaçla çalışır, gerçek stoğa dokunmaz.
+          Senin başlattığın gerçek deneme iki tur çalıştı: önce "önce oku, sonra yaz" yoluyla, hemen ardından aynı alıcı
+          ve stok sayısıyla atomik DECR ile. İki tur da ElastiCache'te geçici bir sayaçla çalışır, gerçek stoğa dokunmaz.
         runs:
           - label: '"Önce oku, sonra yaz" (senin denemen)'
             trigger: true
-          - label: Atomik DECR
-            fetch: /elasticache/api/deal/simulate
-            body_from_trigger: {mode: atomic}
-        metrics: [[Alıcı, data.buyers], [Stok, data.stock], [Satılan, data.winners], [Fazla satış, data.oversold], ["Süre (p50, ms)", data.p50_ms]]
-        error_text: >-
-          Bu ölçüm şu an alınamadı. Simülasyon her ziyaretçi için saatte 3 kez çalışabilir; sınır dolmuş olabilir.
+            metrics: [[Alıcı, data.buyers], [Stok, data.stock], [Satılan, data.winners], [Fazla satış, data.oversold], ["Süre (p50, ms)", data.p50_ms]]
+          - label: Atomik DECR (aynı denemede)
+            trigger: true
+            metrics: [[Alıcı, data.buyers], [Stok, data.stock], [Satılan, data.atomic.winners], [Fazla satış, data.atomic.oversold], ["Süre (p50, ms)", data.atomic.p50_ms]]
         reading: >-
           Atomik DECR tam stok kadar sattı ve fazla satış 0. "Önce oku, sonra yaz" yolunda alıcılar okuma ile yazma
           arasında birbirinin değerini ezdi ve stoktan fazla satıldı; fazla satış sayısı her denemede değişir, çünkü kimin

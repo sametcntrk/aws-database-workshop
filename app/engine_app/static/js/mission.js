@@ -106,7 +106,7 @@
   function shortResult() {
     const after = calls.slice(from).filter((c) => !c.background).slice(0, 1);   // only the call of the lit part
     const lines = after.flatMap((c) => (c.entries || []).slice(0, 3).map((e) =>
-      `<li><b>${esc(e.op)}</b> <span>${esc(e.engine || "")} · ${e.ms} ms${e.items !== undefined ? ` · ${e.items} kayıt` : ""}</span></li>`)).join("");
+      `<li><b>${esc(e.op)}</b> <span>${esc(e.engine || "")} · ${e.ms} ms${e.items !== undefined ? ` · ${e.items} kayıt` : ""}${e.capacity ? ` · ${esc(String(e.capacity).replace(/\s*\(.*\)$/, ""))}` : ""}</span></li>`)).join("");
     return `<div class="coach-bts"><b>Perde arkası</b><p>${esc(step.result || "")}</p>${lines ? `<ol>${lines}</ol>` : ""}</div>`;
   }
   function renderCard() {
@@ -129,7 +129,7 @@
   const runOf = (c) => (c ? { e: entryOf(c) || {}, data: c.data || {} } : null);
   function metric(run, key) {
     const e = run.e;
-    if (key.startsWith("data.")) return run.data[key.slice(5)];
+    if (key.startsWith("data.")) return key.slice(5).split(".").reduce((o, k) => (o == null ? undefined : o[k]), run.data);   // "data.atomic.winners"
     const m = /docs examined:\s*(\d+),\s*returned:\s*(\d+)/.exec(e.explain || "");
     if (key === "examined") return m ? Number(m[1]) : undefined;
     if (key === "returned") return m ? Number(m[2]) : e.items;
@@ -144,7 +144,7 @@
     return `<div class="gp-runs">${L.runs.map((r, k) => {
       const run = runs[k];
       if (!run) return `<div class="gp-run"><h4>${esc(r.label)}</h4><p class="gp-wait">Ölçüm alınıyor…</p></div>`;
-      if (run.error) return `<div class="gp-run"><h4>${esc(r.label)}</h4><p class="gp-wait">${esc(L.error_text || "Bu ölçüm şu an alınamadı.")}</p></div>`;
+      if (run.error) return "";                                    // a failed measurement is left out
       const stages = [...String(run.e.plan || "").matchAll(STAGE_RE)].map((x) => x[1]).reverse().filter((x) => L.stages && L.stages[x]);   // the plan is outer → inner
       return `<div class="gp-run"><h4>${esc(r.label)}</h4>
         <dl>${(r.metrics || metrics).map(([label, key, map]) => {             // map {set, empty}: a text for a filled or an empty value
@@ -230,7 +230,8 @@
   async function fillLive(L, trig) {
     const box = sheet.querySelector(".gp-live");
     const same = (c, pc) => c.path === pc.path && Object.entries(pc.query || {}).every(([k, v]) => String(c.query[k]) === String(v));
-    const runs = L.runs.map((r) => (r.trigger ? runOf(trig) : r.page_call ? runOf([...lm.calls].reverse().find((c) => same(c, r.page_call))) : null));
+    const runs = L.runs.map((r) => (r.trigger ? (trig && trig.ok === false ? { error: true } : runOf(trig))      // a refused call: no box
+      : r.page_call ? runOf([...lm.calls].reverse().find((c) => same(c, r.page_call))) : null));
     box.innerHTML = liveHtml(L, runs);
     await Promise.all(L.runs.map(async (r, k) => {
       if (!r.fetch) return;

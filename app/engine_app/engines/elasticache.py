@@ -87,11 +87,24 @@ def register(bp):
                 oversold = max(0, winners - stock)
                 t.result(items=buyers, note=("Atomic DECR: exactly the stock was sold." if oversold == 0 else
                                              f"Read-then-write: {oversold} pieces were sold that do not exist (a race condition)."))
+            seconds = round(time.perf_counter() - started, 2)
+            # A read-then-write run also runs the same rush with atomic DECR, inside the same reservation, so the
+            # Guided panel can compare both without a second Load Simulation run.
+            atomic_run = None
+            if mode != "atomic":
+                r().set(key, stock, ex=600)
+                with ThreadPoolExecutor(max_workers=48) as pool:
+                    res = list(pool.map(atomic, range(buyers)))
+                lat = sorted(ms for _, ms in res)
+                won = sum(1 for w, _ in res if w)
+                atomic_run = {"winners": won, "oversold": max(0, won - stock),
+                              "p50_ms": round(lat[len(lat) // 2], 2), "p95_ms": round(lat[int(len(lat) * 0.95)], 2)}
             r().delete(key)
         return jsonify(trace.payload({"mode": mode, "buyers": buyers, "stock": stock, "winners": winners, "oversold": oversold,
-                                      "seconds": round(time.perf_counter() - started, 2),
+                                      "seconds": seconds,
                                       "p50_ms": round(latencies[len(latencies) // 2], 2),
-                                      "p95_ms": round(latencies[int(len(latencies) * 0.95)], 2)}))
+                                      "p95_ms": round(latencies[int(len(latencies) * 0.95)], 2),
+                                      "atomic": atomic_run}))
 
     @bp.post("/api/session")
     def api_session():
