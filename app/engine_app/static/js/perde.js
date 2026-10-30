@@ -141,9 +141,10 @@
 
   /* ---------- t-1: what was there before the action, and where the data comes from (panel.prior, panel.feed) */
   function priorHtml(R, F) {
-    const paras = [].concat((R && R.text) || []).map((x) => `<p>${esc(x)}</p>`).join("");
+    const paras = [].concat((R && R.text) || []).map((x, k) => (typeof x === "string" ? `<p>${esc(x)}</p>`
+      : `<div class="pa-prep"><h4><span>${k + 1}</span>${esc(x.title || "")}</h4><p>${esc(x.text || "")}</p>${x.code ? `<pre class="pa-prep-code">${esc(x.code)}</pre>` : ""}</div>`)).join("");
     const feed = F ? `<div class="pa-feed"><h4>${esc(F.title || "Veri nereden geliyor?")}</h4><dl>
-        ${[["Kim yazıyor?", F.writes], ["Kim okuyor?", F.reads], ["Nasıl besleniyor?", F.kind], ["En iyi uygulama", F.best]]
+        ${[["Kim yazıyor?", F.writes], ["Kim okuyor?", F.reads], ["Nasıl besleniyor?", F.kind], ["Yanındaki veritabanları", F.with], ["En iyi uygulama", F.best]]
           .filter(([, v]) => v).map(([t, v]) => `<div><dt>${esc(t)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl></div>` : "";
     return paras + feed;
   }
@@ -223,6 +224,9 @@
         ${P.prior || P.feed ? phase("pa-t1", "t-1", "Önceden ne vardı?", (P.prior || {}).intro) : ""}
         ${P.prior || P.feed ? `<section class="gp-sec">${h((P.prior || {}).title || "Bu adımdan önce")}${priorHtml(P.prior, P.feed)}</section>` : ""}
         ${phase("pa-t0", "t0", P.now_title || (step.action === "look" ? "Sayfa açılınca ne oldu?" : "Senin tıklamanla ne oldu?"), P.now_intro)}
+        ${P.scenario ? `<section class="gp-sec pa-scn">${h(P.scenario.title || "Ne oldu? Senin gözünden")}<p>${esc(P.scenario.intro || "")}</p>
+          <ol>${(P.scenario.steps || []).map((x) => `<li><p>${esc(x.text)}</p>${(x.engines || []).length ? `<span class="pa-scn-db">${x.engines.map((e) =>
+            `<span class="chip eng-${e}">${esc(ENGINE_LABEL[e] || e)}</span>`).join("")}</span>` : ""}</li>`).join("")}</ol></section>` : ""}
         ${P.sim ? `<section class="gp-sec">${h("Simülasyon")}<div class="gp-sim"></div></section>` : ""}
         <section class="gp-sec pa-route">${h("İstek nereden geçti?")}<p>${step.action === "look" ? "Sayfa açılırken giden" : "Senin tıklamanla giden"}
           istek, veritabanına ulaşana kadar bu duraklardan geçti. Bilgiler isteğin kendi kaydından geliyor.</p><div class="pa-path-box"></div>

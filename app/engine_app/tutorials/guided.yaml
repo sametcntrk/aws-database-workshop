@@ -72,25 +72,43 @@ steps:
           - [Collection scan, "Index kullanmadan koleksiyondaki dokümanları baştan sona tek tek okumak."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
       prior:
-        title: Gerçek bir sistemde index'ler nasıl kurulur?
+        title: Gerçek bir sistemde kategori sorgusu için hazırlık
         intro: >-
-          Sayfa açılmadan önce hazır olması gerekenler. Index'ler ürünler gelmeden, sorgular belli olunca kurulur.
+          Kategori sayfası hiç açılmadan, veritabanı bu sayfanın sorusuna göre hazırlanır. Aşağıdaki beş adım bu hazırlığın
+          sırasıdır.
         text:
-          - >-
-            Index sorguya göre kurulur. Önce "sayfalar veritabanına hangi soruları soracak?" diye bakılır. Kategori sayfası
-            "bu kategorideki ürünler, puanı yüksek olan önce" diye soruyor; bunun için iki alanı birlikte tutan bir bileşik
-            index kurulur: { category: 1, rating: -1 }.
-          - >-
-            Alanların sırası önemlidir. Kural: önce eşitlikle aranan alan (category = "Elektronik"), sonra sıralama alanı
-            (rating), en sonda aralıkla aranan alan (ör. fiyat 100 ile 500 arası). Bu sırayla index hem filtreyi hem
-            sıralamayı karşılar; veritabanı sonucu bellekte ayrıca sıralamak zorunda kalmaz.
-          - >-
-            Her index'in bir bedeli vardır. Her yeni ürün ya da fiyat değişikliğinde index'ler de güncellenir; index'ler
-            disk ve bellek kaplar. Bu yüzden sadece sık sorulan sorular için index kurulur ve hiç kullanılmayan index'ler
-            düzenli aralıklarla bulunup silinir.
-          - >-
-            Katalog çok okunur, az yazılır. Okumalar kopyalara (replica) dağıtılır, ana kopya (primary) yazmalara kalır.
-            Böylece kampanya günü binlerce kişi aynı anda kategori sayfasını açsa da yazmalar yavaşlamaz.
+          - title: Önce sayfanın sorusu yazılır
+            text: >-
+              Index'ler veriye göre değil, sorulara göre kurulur. Kategori sayfasının sorusu her ziyarette aynıdır:
+              "category = X olan ürünler, puanı yüksek olan önce, en fazla 48, sadece kart alanları". Bu soru listesi sayfa
+              tasarlanırken çıkarılır ve her yeni ekranla güncellenir.
+            code: |-
+              db.products.find({ category: "Elektronik" }, { name: 1, price: 1, rating: 1, … })
+                         .sort({ rating: -1 }).limit(48)
+          - title: Soruya uyan bileşik index kurulur
+            text: >-
+              Alan sırası kuralı (ESR): önce eşitlik alanı (category), sonra sıralama alanı (rating), en sonda aralık alanı
+              (ör. fiyat). Bu sırayla index'in "Elektronik" bölümü zaten puan sırasındadır: veritabanı oraya gider, 48. kayıtta
+              durur, ayrıca sıralamaz. Ters sırada bütün index'i dolaşırdı.
+            code: |-
+              db.products.createIndex({ category: 1, rating: -1 })
+          - title: Yayından önce plan kontrol edilir
+            text: >-
+              explain, veritabanına "bunu nasıl çalıştıracaksın?" diye sorar. Doğru hazırlıkta plan IXSCAN der ve okunan
+              doküman sayısı dönen sayıya eşittir. COLLSCAN ya da ayrı bir SORT görülürse index eksik ya da sırası yanlıştır.
+            code: |-
+              ….explain("executionStats")  →  IXSCAN { category: 1, rating: -1 },  totalDocsExamined = nReturned
+          - title: Index bellekte durmalı ve bedeli izlenmeli
+            text: >-
+              Hız, index'in sunucu belleğinde olmasına bağlıdır (CloudWatch: IndexBufferCacheHitRatio). Her yazma bütün
+              index'leri günceller; kullanılmayan index $indexStats ile bulunur ve silinir.
+            code: |-
+              db.products.aggregate([{ $indexStats: {} }])   →  index başına kullanım sayısı ve boyut
+          - title: Okumalar kopyalara dağıtılır
+            text: >-
+              Katalog çok okunur, az yazılır. Okuma tercihi secondaryPreferred olur: kategori sorguları replica'lara gider,
+              ana kopya (primary) yazmalara kalır. Replica'lar genelde 100 ms'den kısa gecikmeyle günceldir; "az önce
+              kaydettiğimi hemen göster" gereken ekranlar ise primary'den okur.
       feed:
         title: Veri nereden geliyor?
         writes: >-
@@ -100,11 +118,47 @@ steps:
         kind: >-
           Uygulama orkestrasyonu. DocumentDB başka bir veritabanından kendiliğinden veri çekmez. Ama kendi değişikliklerini
           dışarı verebilir: change streams açıksa her ekleme ve güncelleme sırayla okunabilen bir kayıt olarak çıkar.
+        with: >-
+          Kategori sayfası tek bir veritabanıyla çalışmaz. Ürün görselleri bir nesne deposunda (Amazon S3) durur: ürün
+          dokümanı görselin S3'teki adını (anahtarını) tutar, görselin kendisini tarayıcı ayrı bir istekle alır ve büyük
+          sistemlerde bu istek bir CDN'den (Amazon CloudFront) karşılanır; uygulama görselin byte'larını taşımaz. Oturum
+          bilgisi (kim, hangi sayfada) bellekte duran bir veritabanında (ElastiCache) kısa ömürlü bir kayıt olarak tutulur.
+          Metinle arama ise ayrı bir arama motoruna (OpenSearch) gider.
         best: >-
           Katalog tek yerde (burada DocumentDB) tutulur, diğer sistemler oradan beslenir. Metin araması için ürünler
           OpenSearch'e aktarılır: DocumentDB'nin OpenSearch ile zero-ETL entegrasyonu ya da change streams'i okuyan küçük
           bir program bu işi yapar. Uygulama aynı ürünü iki yere ayrı ayrı yazmaz, çünkü biri unutulunca iki kopya birbirini
           tutmaz.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              Mağazaya bir müşteri olarak girdin (ör. Ayşe Yılmaz). Şifreyle giriş yok: tarayıcın iki çerez taşıyor.
+              lm_visitor bu tarayıcının kimliği, lm_persona seçtiğin müşteri. Mağaza seni her istekte bu çerezlerden tanıyor.
+          - text: >-
+              Ana sayfada kategori kutularından "Elektronik"e tıkladın ve /c/Elektronik sayfası açıldı. Sayfa açılır açılmaz
+              arka planda oturum kaydın güncellendi: hangi müşteri olduğun ve son baktığın sayfa, 30 dakikalık bir süreyle
+              bellekte tutuluyor.
+            engines: [elasticache]
+          - text: >-
+              Aynı anda tarayıcın uygulamaya "Elektronik ürünlerini, puanı yüksek olan önce getir" isteğini gönderdi.
+              Uygulama bu isteği DocumentDB'ye bir find komutu olarak iletti. "Use the index" seçiliydi, yani DocumentDB
+              index'i kullandı. Simülasyonun sol şeridi bu istek.
+            engines: [docdb]
+          - text: >-
+              Liste geldi ve tarayıcın 40 ürün kartını çizdi. Kartların adı, fiyatı ve puanı DocumentDB'den geldi; ama
+              görseller DocumentDB'de değil. Tarayıcın, ekranda görünen her kart için ürün numarasından bir görsel adresi
+              kurdu (/s3/api/img/P0021) ve görseli ayrı bir istekle aldı. Bu istekler S3'e gider. Ürün bilgisini ve
+              görseli kartta birleştiren tarayıcıdır.
+            engines: [docdb, s3]
+          - text: >-
+              Sonra sayfanın üstündeki "Collection scan" butonuna bastın. Tarayıcın aynı listeyi bu kez index=off ile istedi;
+              uygulama aynı find komutunu, sonuna "index'i kullanma" (hint) ekleyerek gönderdi. Simülasyonun sağ şeridi bu
+              istek. Görseller değişmediği için büyük olasılıkla tarayıcının önbelleğinden geldi.
+            engines: [docdb]
       sim:
         kind: index-vs-scan
         caption: >-
@@ -115,6 +169,18 @@ steps:
         labels:
           index: "t-1 · İstek 1 · Sayfa açılınca · Index ile"
           scan: "t0 · İstek 2 · Senin tıklaman · Index olmadan (collection scan)"
+        send_index: >-
+          Elektronik kategorisine tıkladın. Tarayıcın "Elektronik ürünlerini, puanı yüksek olan önce" istedi; uygulama da
+          DocumentDB'ye find komutunu gönderiyor. Komutta index adı yok: DocumentDB uygun index'i kendisi seçecek.
+        back_index: >-
+          Uygulama dokümanları aldı ve tarayıcına gönderdi. Tarayıcın kartları çizecek, her kartın görselini de ayrıca
+          S3'ten isteyecek.
+        send_scan: >-
+          "Collection scan" butonuna bastın. Tarayıcın aynı listeyi index=off ile istedi; uygulama aynı find komutunu, sonuna
+          hint ekleyerek gönderiyor: "index'i kullanma, baştan sona oku".
+        back_scan: >-
+          Uygulama aynı dokümanları aldı ve tarayıcına gönderdi. Liste soldakiyle aynı; görseller büyük olasılıkla
+          tarayıcının önbelleğinden gelecek.
         columns: [[id, Ürün no], [name, Ürün], [category, Kategori], [rating, Puan]]
         filter: [category, Elektronik]
         sort: [rating, desc]
@@ -282,6 +348,12 @@ steps:
             text: >-
               Ürün kartlarını yeniden çizdi. Liste index ile gelen listeyle aynı: sonuç değişmedi, sadece DocumentDB'nin yaptığı
               iş değişti.
+          - who: Tarayıcın → S3
+            text: >-
+              Kartların görselleri DocumentDB'den gelmez. Tarayıcın her kart için ürün numarasından görsel adresini kurar
+              (/s3/api/img/P0021) ve ayrı bir istek gönderir. Bu istek ALB'den S3'ün uygulama sunucusuna gider; o da S3'ten
+              products/P0021.jpg nesnesini okuyup gönderir. Görsel 5 dakika tarayıcının önbelleğinde kalır; bu yüzden aynı
+              kartlar yeniden çizilince görseller çoğu zaman tekrar istenmez. Ürün bilgisi ile görseli kartta tarayıcı birleştirir.
           - who: Sonra
             text: >-
               "Use the index" butonuna basarsan sayfa index'li komutu yeniden gönderir. Hint'i burada sadece deney için
