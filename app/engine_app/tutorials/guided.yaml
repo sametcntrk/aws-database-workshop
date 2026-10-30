@@ -4771,10 +4771,12 @@ steps:
   - page: deals
     path: /deals
     engines: [elasticache]
-    use_case: Session with TTL
-    title: Make the session short-lived
-    why: Your session is a hash with a time to live (TTL). Valkey deletes the key when the TTL gets to zero.
-    do: Select a TTL in the lit list.
+    use_case: Süreli oturum (TTL)
+    title: Oturumu kısa ömürlü yap
+    why: >-
+      Fırsatlar sayfasının altında "Your session" (oturumun) bölümü var. Oturumun bellekte belli bir süre yaşıyor. Önce bu
+      süreyi seçeceksin.
+    do: Aydınlık "TTL" listesinden "30 seconds" (30 saniye) seç.
     target: "#ttl"
     action: change
     wait: {change: true}
@@ -4782,15 +4784,253 @@ steps:
   - page: deals
     path: /deals
     engines: [elasticache]
-    use_case: Session with TTL
-    title: Write the session with its TTL
-    why: The button writes the session hash and sets its expiry.
-    do: Click the lit button that refreshes the session.
+    use_case: Süreli oturum (TTL)
+    title: Oturumu süresiyle birlikte yaz
+    why: >-
+      Süreyi seçtin. Şimdi oturumunu bu süreyle yeniden yazdıracaksın ve sürenin her okumada nasıl azaldığına bakacaksın.
+    do: Aydınlık "Refresh the session" (oturumu yenile) butonuna tıkla.
     target: "#ttl-set"
     action: click
     wait: {method: POST, path: /elasticache/api/session, body: {ttl: "*"}}
     focus: "#session"
-    result: HSET wrote the fields, and EXPIRE set the TTL. Each read shows a smaller TTL. The app needs no cleanup job.
+    result: HSET wrote the fields, and EXPIRE set the TTL.
+    panel:
+      need: >-
+        Mağaza her ziyaretçinin kim olduğunu ve en son nerede olduğunu kısa süreliğine hatırlamalı. Ziyaretçi gidince bu bilgi
+        kendiliğinden silinmeli; binlerce eski oturumu temizlemek için ayrı bir program çalıştırmak hem iş hem risk olur. Bir de
+        "şu an kaç kişi aktif?" sorusu anında cevaplanmalı.
+      concept:
+        term: TTL (yaşam süresi) ve bellekteki oturum
+        text: >-
+          Bir anahtara TTL verirsen ElastiCache onu o kadar saniye sonra kendisi siler. Kütüphaneden ödünç alınan bir kitabın
+          iade tarihi gibi: tarih gelince kitap rafa döner, kimse hatırlatmak zorunda kalmaz. Oturum bir hash olarak yazılır
+          (persona, son sayfa, zaman); her sayfa açılışında yeniden yazılıp süresi baştan başlatılır. Ziyaretçi gelmeyi
+          bırakınca süre biter ve oturum kaybolur.
+        terms:
+          - [TTL, "Bir anahtarın kalan ömrü (saniye). Sıfır olunca anahtar silinir."]
+          - [HSET, "Bir hash'in alanlarını yazar: persona, last_page, seen_at."]
+          - [EXPIRE, "Bir anahtara saniye cinsinden yaşam süresi verir."]
+          - [Sorted set (ZADD), "Her üyesinin bir puanı olan, puana göre sıralı küme. Burada üye ziyaretçi, puan son görülme zamanı."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde oturum deposu için hazırlık
+        intro: >-
+          Oturum ilk kez yazılmadan, nerede ve ne kadar süre tutulacağı belirlenir. Aşağıdaki beş adım bu hazırlığın sırasıdır.
+        text:
+          - title: Önce oturumun soruları yazılır
+            text: >-
+              Her istekte "bu ziyaretçi kim, hangi persona, en son nerede?" sorulur; ayrıca "son 5 dakikada kaç kişi aktif?".
+              Birincisi tek bir anahtarla, ikincisi zamana göre sıralı bir kümeyle cevaplanır.
+            code: |-
+              HGETALL lm:session:<ziyaretçi>                         → oturum
+              ZCOUNT  lm:active <şimdi − 300> +inf                     → son 5 dakikada aktif olanlar
+          - title: Oturum uygulama sunucusunda değil, ortak bir yerde tutulur
+            text: >-
+              Ziyaretçinin istekleri farklı uygulama sunucularına düşebilir. Oturum sunucunun belleğinde tutulursa diğer sunucu
+              onu bilmez; bu yüzden hepsinin eriştiği ortak bir bellek deposuna (ElastiCache) yazılır.
+          - title: Süre yazmayla birlikte verilir
+            text: >-
+              Her yazmada süre yeniden başlatılır; böylece aktif ziyaretçinin oturumu yaşar, gidenin oturumu kendiliğinden düşer.
+              Yazma ve süre tek bir transaction'da (MULTI) ya da tek komutta gönderilirse arada süresiz bir anahtar kalmaz.
+            code: |-
+              MULTI
+                HSET   lm:session:<ziyaretçi> persona C00001 last_page /deals seen_at 1793395000
+                EXPIRE lm:session:<ziyaretçi> 1800
+              EXEC
+          - title: Bellek dolarsa ne olacağı bilinir
+            text: >-
+              Süresi dolan anahtarlar silinir; ama bellek dolarsa ElastiCache tahliye (eviction) kuralına göre başka anahtarları
+              da silebilir. Oturum kaybı kabul edilebilir bir veri olduğu için bu sorun değildir; kalıcı olması gereken veri burada
+              tutulmaz.
+          - title: Aktiflik kümesi de temizlenir
+            text: >-
+              Sorted set'in üyelerinin ayrı ayrı süresi yoktur. "Aktif ziyaretçiler" kümesinden eski üyeler düzenli olarak puana
+              göre silinir; aksi hâlde küme sonsuz büyür.
+            code: |-
+              ZREMRANGEBYSCORE lm:active -inf <şimdi − 3600>
+      feed:
+        title: Veri nereden geliyor?
+        writes: Uygulama, her sayfa açılışında arka planda (ve bu adımda senin butonunla).
+        reads: Uygulama, oturum bilgisi gereken her istekte; ayrıca canlı ekranlardaki "aktif ziyaretçi" sayısı için.
+        kind: >-
+          Uygulama orkestrasyonu. ElastiCache başka bir veritabanından kendiliğinden veri çekmez; oturumu uygulama yazar ve okur.
+        with: >-
+          Oturum, ziyaretçinin kimliğini (lm_visitor çerezi) diğer veritabanlarıyla paylaşır: aynı kimlik DynamoDB'de sepetin
+          anahtarı, Keyspaces'te olay geçmişinin partition'ıdır. Oturum kısa ömürlü bir kopya; kalıcı kayıtlar o veritabanlarında.
+        best: >-
+          Oturum ve önbellek gibi kaybı kabul edilebilir, sık okunan ve süreli veri bellekte, TTL ile tutulur. Kaybı kabul
+          edilemeyen veri (sipariş, ödeme) kalıcı bir veritabanına yazılır.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              Fırsatlar sayfasını açtığında, her sayfada olduğu gibi oturumun arka planda 30 dakikalık süreyle yeniden yazıldı.
+            engines: [elasticache]
+          - text: >-
+              Bir önceki adımda TTL listesinden "30 seconds"u seçtin. Bu sadece sayfadaki bir seçimdi; istek gitmedi.
+          - text: >-
+              "Refresh the session" butonuna bastın. Tarayıcın uygulamaya "oturumumu 30 saniyelik süreyle yaz" dedi; uygulama
+              ElastiCache'e üç komut gönderdi: HSET (alanlar), EXPIRE (süre), ZADD (aktif ziyaretçiler kümesi). Simülasyon bu
+              komutları gösteriyor.
+            engines: [elasticache]
+          - text: >-
+              Hemen ardından sayfa oturumu okudu (HGETALL ve TTL); kutuda oturumun alanları ve kalan süre (30 civarı) göründü.
+              "Read the session" butonuna her basışında süre azalır; 30 saniye sonra oturum silinmiş olur.
+            engines: [elasticache]
+      sim:
+        kind: kv
+        title: "ElastiCache (Valkey) belleği: oturum anahtarları"
+        caption: >-
+          Oturumla ilgili iki anahtar (kimlik kısaltıldı). Önce yazma isteğinin üç komutu, sonra okuma isteğinin iki komutu
+          oynuyor. Değerler senin denemenle aynı biçimde.
+        keys:
+          - {key: "lm:session:7f3a…", type: hash, value: "persona C00001, last_page /deals, seen_at … (TTL 1800 sn)", slot: "…"}
+          - {key: "lm:active", type: sorted set, value: "7f3a… → 1793394900, c41e… → 1793394600, …", slot: 542}
+        commands:
+          - cmd: HSET
+            key: "lm:session:7f3a…"
+            returns: "0 (alanlar güncellendi)"
+            set: "persona C00001, last_page /deals, seen_at 1793395000 (TTL 1800 sn)"
+            say_send: '"Refresh the session"a bastın. Uygulama ilk komutu gönderiyor: HSET, oturumun alanlarını yaz.'
+          - cmd: EXPIRE
+            key: "lm:session:7f3a…"
+            returns: "1 (süre verildi)"
+            set: "persona C00001, last_page /deals, seen_at 1793395000 (TTL 30 sn)"
+            say_send: "Uygulama ikinci komutu gönderiyor: EXPIRE … 30, yani bu anahtar 30 saniye sonra silinsin."
+            say_back: Anahtarın süresi 30 saniyeye ayarlandı; ElastiCache onu zamanı gelince kendisi silecek.
+          - cmd: ZADD
+            key: lm:active
+            returns: "0 (üyenin puanı güncellendi)"
+            set: "7f3a… → 1793395000, c41e… → 1793394600, …"
+            say_send: "Üçüncü komut: ZADD lm:active <şimdi> <ziyaretçi>; aktif ziyaretçiler kümesinde senin zamanın güncellenir."
+          - cmd: TTL
+            key: "lm:session:7f3a…"
+            returns: "30"
+            say_send: "Sayfa hemen ardından oturumu okuyor; uygulama HGETALL ve TTL gönderiyor (simülasyonda TTL'yi gösteriyoruz)."
+            say_back: "Kalan süre: 30 saniye. Her okumada azalır; sıfıra inince anahtar yok olur."
+        back: >-
+          Uygulama sonuçları tarayıcına gönderdi; kutuda oturumun alanları ve kalan süre görünecek.
+        summary: >-
+          Yazma, süre ve aktiflik üç ayrı komutla gitti; silme için hiçbir komut gönderilmeyecek. 30 saniye sonra ElastiCache
+          oturumu kendisi silecek.
+      wire:
+        what: >-
+          Uygulama, ElastiCache'e açık tuttuğu bağlantılar üzerinden komutları gönderir (redis-py kütüphanesi, cluster istemcisi).
+        dst: "dbws-cache-qtkvec.serverless.euc1.cache.amazonaws.com : 6379"
+        dst_note: >-
+          ElastiCache Serverless'ın adresi. Bu ad, VPC'nin içindeki uç noktaya çözülür; cache internete kapalıdır.
+        rows:
+          - [Şifreleme, TLS, gerçek, ElastiCache Serverless sadece şifreli bağlantı kabul eder.]
+          - [Protokol, RESP (Redis/Valkey protokolü), gerçek, "Her komut kısa bir metin çerçevesidir; üç komut art arda gider."]
+          - [Kimlik, "ACL kullanıcısı + şifre, bağlantı açılırken", gerçek, "Şifre kodda yazmaz; uygulama onu çalışırken AWS Secrets Manager'dan alır."]
+        body_label: Komutlar ve cevaplar (okunur hâle getirilmiş)
+        body: |-
+          HSET   lm:session:7f3a… persona C00001 last_page /deals seen_at 1793395000   → (integer) 0
+          EXPIRE lm:session:7f3a… 30                                                   → (integer) 1
+          ZADD   lm:active 1793395000 7f3a…                                            → (integer) 0
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Süreyi seçmek ve
+        sınırlamak uygulamanın işi; silmek ElastiCache'in.
+      app_code:
+        - file: engines/elasticache.py
+          func: api_session
+          title: '"Oturumu yenile" isteği'
+          sub: Senin tıklamanla gelen istek; her sayfa açılışında da arka planda aynı istek gider.
+          lines:
+            - {match: '@bp.post("/api/session")', say: "Oturum yazma isteği buraya gelir; adres süreyi (ttl) taşır.", tag: Tarayıcı → Uygulama}
+            - {match: 'ttl = max(10, min(int(body.get("ttl", 1800)), 86400))', say: "Süreyi 10 saniye ile 1 gün arasında tutar; verilmezse 30 dakika.", tag: Uygulamanın içinde}
+            - {match: 'key = f"lm:session:{visitor_id()}"', say: "Anahtar adını kurar: lm:session: + bu tarayıcının kimliği.", tag: Uygulamanın içinde, hl: key}
+            - {match: 'cmd("HSET"', say: "Birinci komut: oturumun alanlarını yazar (persona, son sayfa, zaman).", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], hl: key}
+            - {match: 'cmd("EXPIRE"', say: "İkinci komut: anahtara yaşam süresi verir.", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], hl: key}
+            - {match: 'cmd("ZADD"', say: "Üçüncü komut: aktif ziyaretçiler kümesinde senin zamanını günceller.", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], hl: key}
+            - {match: 'return jsonify(trace.payload({"ttl": ttl}))', say: Verilen süreyi tarayıcıya söyler., tag: Uygulama → Tarayıcı}
+      live:
+        title: Gerçek bellekte ne oldu?
+        intro: >-
+          Senin tıklamanla giden yazma isteği: üç komut ve her birinin süresi.
+        runs:
+          - label: Yazma (senin tıklaman)
+            trigger: true
+            metrics: [[HSET, ms], [EXPIRE, e1.ms], [ZADD, e2.ms], [Verilen süre (sn), data.ttl]]
+        reading: >-
+          Her komut yaklaşık bir milisaniye sürdü; süreler her istekte biraz değişir. Mağaza sekmesindeki kutuda kalan süre
+          verdiğin süreye çok yakındır; "Read the session"a sonra basarsan azaldığını görürsün. Süre bitince HGETALL boş döner ve TTL -2 olur
+          (anahtar yok).
+      query:
+        title: Sayfa ElastiCache'e ne dedi?
+        intro: >-
+          İki sütun: senin tıklamanla giden yazma komutları ve hemen ardından giden okuma komutları.
+        cards_title: Parça parça
+        parts:
+          - id: hs
+            say: Bu tarayıcının oturumuna persona, son sayfa ve zamanı yaz,
+            code: "HSET lm:session:7f3a… persona C00001 last_page /deals seen_at 1793395000"
+            name: Ne yazılsın?
+            note: Hash'in alanları. Anahtar yoksa oluşur; varsa alanlar güncellenir.
+            hl: key
+          - id: ex
+            say: bu oturum 30 saniye sonra silinsin,
+            code: "EXPIRE lm:session:7f3a… 30"
+            name: Ne kadar yaşasın?
+            note: Saniye cinsinden süre. Her yeni EXPIRE süreyi baştan başlatır.
+            hl: key
+          - id: za
+            say: ve aktif ziyaretçiler kümesinde zamanımı güncelle.
+            code: "ZADD lm:active 1793395000 7f3a…"
+            name: Kim aktif?
+            note: Puan son görülme zamanı (saniye). "Son 5 dakikada kaç kişi?" sorusu bu kümeden puan aralığıyla cevaplanır.
+            hl: key
+          - id: hg
+            say: Oturumun bütün alanlarını
+            code: "HGETALL lm:session:7f3a…"
+            name: Ne okunsun?
+            note: Hash'in bütün alanları. Süre bittiyse boş döner.
+            hl: key
+          - id: tt
+            say: ve kalan süresini getir.
+            code: "TTL lm:session:7f3a…"
+            name: Ne kadar kaldı?
+            note: Kalan saniye. -1 "süresiz", -2 "böyle bir anahtar yok" demek.
+            hl: key
+        columns:
+          - label: Yaz (senin tıklaman)
+            sub: '"Refresh the session" ile giden komutlar.'
+            via: Uygulama bu komutları redis-py kütüphanesinin hset(), expire() ve zadd() metotlarıyla, art arda gönderir.
+            parts: [hs, ex, za]
+          - label: Oku (hemen ardından)
+            sub: Sayfanın kendiliğinden gönderdiği okuma.
+            via: Uygulama bu komutları redis-py'nin hgetall() ve ttl() metotlarıyla gönderir.
+            parts: [hg, tt]
+        note: >-
+          Dikkat: hiçbir yerde "sil" komutu yok. Silme işini EXPIRE'ın verdiği süre yapar; ElastiCache zamanı gelince anahtarı
+          kendisi kaldırır.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          ElastiCache'in işi cevapları verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: ElastiCache → Uygulama
+            text: Üç komutun her birine kısa bir sayı cevabı geldi (kaç alan eklendi, süre verildi mi, üye eklendi mi).
+          - who: Uygulama → Tarayıcın
+            text: Verilen süreyi gönderdi.
+          - who: Tarayıcın → Uygulama → ElastiCache
+            text: Sayfa hemen oturumu okumak için ikinci bir istek gönderdi; uygulama HGETALL ve TTL ile okudu.
+          - who: Tarayıcın
+            text: Oturumun alanlarını ve kalan süreyi kutuya yazdı.
+          - who: Sonra
+            text: >-
+              30 saniye sonra oturum anahtarı ElastiCache tarafından silinir. Ama başka bir sayfa açarsan oturum yeniden 30
+              dakikalık süreyle yazılır.
+      remember: >-
+        Kısa ömürlü veriyi bellekte bir süreyle (TTL) yaz; silme işini veritabanı kendisi yapar. Her yazmada süre baştan başlar,
+        böylece aktif olan yaşar, giden kendiliğinden düşer.
+      why_db: >-
+        Neden ElastiCache? Oturum her istekte okunan, küçük, süreli ve kaybı kabul edilebilir bir veri. ElastiCache onu bellekte,
+        bütün uygulama sunucularının ortak eriştiği bir yerde tutar ve süresi bitince kendisi siler. Bedeli: bellek kalıcı
+        değildir; kalıcı olması gereken veri burada tutulmaz.
 
   # ---------------------------------------------------------------- Checkout: Aurora and the fan-out
   - page: checkout
