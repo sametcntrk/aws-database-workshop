@@ -5833,29 +5833,475 @@ steps:
   - page: activity
     path: /account/activity
     engines: [keyspaces]
-    use_case: Event history
-    title: Read the history of your persona
-    why: Your persona has seeded history. Its events are in one partition, sorted by time.
-    do: Click the lit button "My persona".
+    use_case: Olay geçmişi
+    title: Persona'nın geçmişini oku
+    why: >-
+      "My activity" (hareketlerim) sayfasındasın. Bu tarayıcıyla yaptıkların listelendi: baktığın ürünler, verdiğin sipariş.
+      Şimdi seçtiğin müşterinin (persona) daha uzun geçmişine bakacaksın.
+    do: Aydınlık "My persona (seeded)" (benim persona'm) butonuna tıkla.
     target: "#exp-who [data-value=persona]"
     action: click
     wait: {method: GET, path: /keyspaces/api/activity, query: {who: persona}}
     focus: "#feed"
     result: Keyspaces read one partition, newest first, and stopped after the limit.
+    panel:
+      need: >-
+        Hareketler sayfası bir kişinin son yaptıklarını, en yenisi üstte gösteriyor. Tabloda binlerce kişinin milyonlarca satırı
+        var; sayfa sadece bir kişinin satırlarını, sıralı ve hızlı istiyor. Kişi kim olursa olsun (bu tarayıcı ya da seçilen
+        müşteri) soru aynı.
+      concept:
+        term: Partition ve sıralı okuma
+        text: >-
+          Keyspaces her kişinin satırlarını kendi partition'ında, yani kendi defterinde tutar; defterin içinde satırlar zamana
+          göre yeniden eskiye sıralıdır. Okurken sadece o defter açılır ve baştan istenen kadar sayfa okunur. Hangi defterin
+          açılacağını partition key (user_id) söyler: bu tarayıcının kimliği ya da seçilen müşterinin numarası.
+        terms:
+          - [Partition key, "Hangi deftere bakılacağını söyleyen alan. Bu tabloda user_id."]
+          - [Clustering key, "Defterin içindeki sıra. Burada event_time, yeniden eskiye."]
+          - [LIMIT, "Baştan kaç satır okunacağı. Sıra hazır olduğu için ilk 20 satır en yeni 20 olaydır."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde hareket geçmişi için hazırlık
+        intro: >-
+          Hareketler sayfası hiç açılmadan, tablo bu sayfanın sorusuna göre kurulur. Aşağıdaki beş adım bu hazırlığın sırasıdır.
+        text:
+          - title: Önce sayfanın sorusu yazılır
+            text: >-
+              "Bu kişinin son 20 hareketi, en yeni önce". Kişi bazen ziyaretçinin kendisi, bazen seçilen müşteridir; ikisi de
+              aynı soru, sadece partition key değişir.
+            code: |-
+              SELECT event_time, event_type, product_id, detail FROM dbws.activity_by_user WHERE user_id = ? LIMIT 20
+          - title: Sıra tabloda tanımlanır
+            text: >-
+              Clustering key event_time DESC; satırlar yazılırken yerine konur. Okurken ORDER BY yazılmaz ve sıralama işi yapılmaz.
+            code: |-
+              PRIMARY KEY ((user_id), event_time, event_id)) WITH CLUSTERING ORDER BY (event_time DESC)
+          - title: Sayfalama token ile yapılır
+            text: >-
+              Daha eski hareketler için OFFSET kullanılmaz; sürücü bir sonraki sayfanın yerini (paging state) verir ve okuma
+              kaldığı yerden devam eder. Böylece 1000. sayfa da ilk sayfa kadar hızlıdır.
+          - title: Eski olaylar kendiliğinden silinir
+            text: >-
+              Tablonun varsayılan TTL'si olaylara bir ömür verir; süresi dolan satırlar silinir ve partition sınırsız büyümez.
+              Daha uzun saklanması gereken geçmiş, analiz deposuna (ör. S3) aktarılır.
+          - title: Tutarlılık okumaya göre seçilir
+            text: >-
+              Kendi yaptığını hemen görmesi gereken ekranlar LOCAL_QUORUM okur; gecikmeyi kaldırabilen ekranlar LOCAL_ONE ile
+              yarı maliyetine okur (Adım 28).
+      feed:
+        title: Veri nereden geliyor?
+        writes: Uygulama. Ürün sayfası açılınca "view", sipariş verilince "purchase" ve benzeri olaylar.
+        reads: Uygulama, "My activity" (hareketlerim) sayfası ve "son baktıkların" şeridi için.
+        kind: >-
+          Uygulama orkestrasyonu: Keyspaces'e yazan da ondan okuyan da uygulamadır. Kopyalama Keyspaces'in kendi içindedir: her
+          satırı üç kopya olarak kendisi tutar.
+        with: >-
+          Hareketler sayfasındaki ürün adları satırların detail alanında, yazıldıkları anki kopyalarıyla durur (katalogdan,
+          DocumentDB). Satın alma olayının asıl siparişi ilişkisel veritabanındadır (Aurora).
+        best: >-
+          Yoğun yazılan ve kişiye göre okunan olaylar geniş sütunlu bir tabloda, kişi başına partition'larla tutulur. Trafik çok
+          büyüyünce olaylar önce bir akışa (Kinesis, MSK) yazılır ve oradan tabloya aktarılır.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              "My activity" sayfasını açtın. Açılırken oturumun güncellendi.
+            engines: [elasticache]
+          - text: >-
+              Sayfa "This browser" (bu tarayıcı) seçiliyken geçmişi istedi; uygulama Keyspaces'e bu tarayıcının partition'ı için
+              SELECT gönderdi. Baktığın ürünler ve verdiğin sipariş listelendi. Simülasyonun ilk okuması bu.
+            engines: [keyspaces]
+          - text: >-
+              Sonra "My persona (seeded)" butonuna bastın. Tarayıcın aynı isteği who=persona ile gönderdi; uygulama bu kez seçtiğin
+              müşterinin numarasıyla (ör. C00001) okudu. Simülasyonun ikinci okuması bu.
+            engines: [keyspaces]
+          - text: >-
+              Liste müşterinin geçmişiyle doldu: aramalar, istek listesine eklemeler, sepetten çıkarmalar, satın almalar; en yenisi
+              üstte.
+            engines: [keyspaces]
+      sim:
+        kind: partition
+        title: "Keyspaces tablosu: dbws.activity_by_user"
+        caption: >-
+          Tablodan küçük bir kesit: üç partition. C00001'in satırları canlı tablodan; bu tarayıcının satırları senin önceki
+          adımlarına benzeyen örnekler. İki okuma iki ayrı gerçek istek: önce sayfa açılırken, sonra senin tıklamanla.
+        result_title: Sayfaya giden hareketler
+        partitions:
+          - label: "7f3a… (bu tarayıcı)"
+            me: true
+            rows:
+              - {time: "10 dk önce", type: purchase, product: P0001 Alpen Kablosuz Kulaklık 1}
+              - {time: "25 dk önce", type: view, product: P0001 Alpen Kablosuz Kulaklık 1}
+          - label: C00001 · Ayşe
+            rows:
+              - {time: "26 Eki 10:39", type: search, product: P0084 Anadolu Algoritmalar 84}
+              - {time: "26 Eki 02:00", type: purchase, product: P0147 Nordwind Kahve Makinesi 147}
+              - {time: "25 Eki 20:13", type: search, product: P0173 Anadolu Dambıl Seti 173}
+              - {time: "25 Eki 17:50", type: wishlist, product: P0112 Kapadokya Robot Süpürge 112}
+              - {time: "25 Eki 14:13", type: remove_from_cart, product: P0076 Nordwind Oyuncu Mouse 76}
+              - {time: "25 Eki 13:43", type: search, product: P0053 Nordwind Dambıl Seti 53}
+          - label: C00002 · Mert
+            rows:
+              - {time: "26 Eki 09:12", type: view, product: P0090 Kapadokya Sırt Çantası 90}
+              - {time: "25 Eki 18:40", type: purchase, product: P0044 Bulut Mimarisi 44}
+        reads:
+          - partition: "7f3a… (bu tarayıcı)"
+            limit: 20
+            say_send: >-
+              "My activity" sayfasını açtın. Uygulama SELECT … WHERE user_id = '7f3a…' LIMIT 20 gönderiyor (t-1, İstek 1).
+            say_read: Keyspaces sadece bu tarayıcının partition'ını açtı ve 2 satırı baştan okudu.
+          - partition: C00001 · Ayşe
+            limit: 20
+            say_send: >-
+              "My persona" butonuna bastın. Uygulama aynı SELECT'i user_id = 'C00001' ile gönderiyor (t0, İstek 2).
+            say_read: >-
+              Keyspaces sadece C00001'in partition'ını açtı ve satırları baştan okudu; en yeni olay en üstte. Gerçek tabloda 20.
+              satırda durur (LIMIT 20).
+        back: >-
+          Uygulama satırları tarayıcına gönderdi; liste persona'nın geçmişiyle dolacak.
+        summary: >-
+          İki istek, iki farklı partition, aynı soru. Keyspaces her seferinde sadece bir defteri açtı ve hazır sırayla baştan okudu;
+          tablonun geri kalanına hiç dokunmadı.
+      wire:
+        what: >-
+          Uygulama, Keyspaces'e açık tuttuğu bağlantı üzerinden komutu gönderir (cassandra-driver). Bağlantı her istekte yeniden
+          kurulmaz.
+        dst: "cassandra.eu-central-1.amazonaws.com : 9142"
+        dst_note: >-
+          Keyspaces'in bölge adresi. Bu ad, VPC'nin içindeki interface endpoint'in özel IP'sine çözülür; trafik internete çıkmaz.
+        rows:
+          - [Şifreleme, TLS, gerçek, Keyspaces sadece şifreli bağlantı kabul eder.]
+          - [Protokol, "CQL ikili protokolü, sürüm 4", gerçek, "Cassandra'nın kendi dili; tutarlılık seviyesi her komutun yanında gider."]
+          - [Kimlik, "SigV4, bağlantı açılırken", gerçek, "Uygulama IAM rolünün geçici kimliğiyle imzalı bir doğrulama gönderdi. Şifre yok."]
+        body_label: Çerçevenin içeriği (okunur hâle getirilmiş)
+        body: |-
+          QUERY
+            SELECT event_time, event_type, product_id, detail FROM dbws.activity_by_user WHERE user_id = ? LIMIT 20
+            değer      : 'C00001'
+            tutarlılık : LOCAL_QUORUM
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Hangi deftere
+        bakılacağını uygulama seçer: bu tarayıcı mı, persona mı.
+      app_code:
+        - file: engines/keyspaces.py
+          func: api_activity
+          title: Hareketler isteği (iki istekte de aynı kod)
+          sub: Adresteki who=visitor ya da who=persona hangi partition'ın okunacağını seçer.
+          lines:
+            - {match: '@bp.get("/api/activity")', say: "Hareketler isteği buraya gelir.", tag: Tarayıcı → Uygulama}
+            - {match: 'who = request.args.get("who", "visitor")', say: "Kimin geçmişi isteniyor: bu tarayıcı mı, persona mı?", tag: Uygulamanın içinde}
+            - {match: 'level = request.args.get("consistency", "LOCAL_QUORUM")', say: "Hangi tutarlılıkla okunacak (Adım 28).", tag: Uygulamanın içinde}
+            - {match: 'uid = persona_id() if who == "persona" else visitor_id()', say: "Partition key'i seçer: persona'nın numarası ya da tarayıcının kimliği (çerezlerden).", tag: Uygulamanın içinde, hl: pk}
+            - {match: 'rows = list(s().execute(SimpleStatement(cql, consistency_level=', say: "SELECT Keyspaces'e gider; satırlar sırayla döner.", tag: [Uygulama → Keyspaces, Keyspaces → Uygulama], hl: where}
+            - {match: 'return jsonify(trace.payload([{"event_time": r.event_time.isoformat()', say: Satırları sayfanın beklediği şekle çevirip tarayıcıya gönderir., tag: Uygulama → Tarayıcı}
+      live:
+        title: Gerçek tabloda ne oldu?
+        intro: Sayfa açılırken bu tarayıcı için giden okuma ve senin tıklamanla persona için giden okuma.
+        runs:
+          - label: Bu tarayıcı (sayfa açılınca)
+            page_call: {path: /keyspaces/api/activity, query: {who: visitor}}
+            metrics: [[Okunan satır, items], [Süre, ms]]
+          - label: Persona (senin tıklaman)
+            trigger: true
+            metrics: [[Okunan satır, items], [Süre, ms]]
+        reading: >-
+          Bu tarayıcının partition'ında sadece senin bu oturumdaki hareketlerin var; persona'nın partition'ında kurulumdan gelen
+          uzun bir geçmiş var ve okuma 20 satırda durdu. Persona'nın örnek geçmişi 7 gün sonra TTL ile silinir; o zaman liste
+          kısalır. Süre her istekte biraz değişir.
+      query:
+        title: Uygulama Keyspaces'e ne dedi?
+        intro: >-
+          İki sütun, iki isteğin komutu. Tek fark partition key'in değeri. Bir parçanın üzerine gelince cümlede, kodda ve
+          açıklamada aynı yer parlar.
+        cards_title: Parça parça
+        parts:
+          - id: sel
+            say: Olayların zamanını, türünü, ürününü ve açıklamasını
+            code: "SELECT event_time, event_type, product_id, detail FROM dbws.activity_by_user"
+            name: Ne okunsun?
+            note: Sayfanın gösterdiği dört alan.
+            hl: type
+          - id: wv
+            say: bu tarayıcının partition'ından
+            code: "  WHERE user_id = '7f3a…'"
+            name: Hangi defter?
+            note: Partition key; bu tarayıcının kimliği.
+            hl: where
+          - id: wp
+            say: seçtiğin müşterinin partition'ından
+            code: "  WHERE user_id = 'C00001'"
+            name: Hangi defter?
+            note: Aynı tablo, başka bir defter. Partition key olmadan bu tabloda arama yapılamaz.
+            hl: where
+            tag: sadece sağdaki komutta var
+          - id: lim
+            say: en yeni 20 tanesini oku.
+            code: "  LIMIT 20"
+            name: Kaç tane?
+            note: Satırlar zaten yeniden eskiye sıralı; ilk 20 satır en yeni 20 olaydır.
+            hl: ck
+        columns:
+          - label: Bu tarayıcı
+            sub: Sayfa açılırken giden komut.
+            via: Uygulama bu komutu cassandra-driver'ın execute() metoduyla, seçilen tutarlılık seviyesiyle gönderir.
+            parts: [sel, wv, lim]
+          - label: Persona
+            sub: Senin "My persona" tıklamanla giden komut.
+            via: Aynı execute() çağrısı; uygulama partition key olarak persona'nın numarasını koydu.
+            parts: [sel, wp, lim]
+            mark: [wp]
+        note: >-
+          Dikkat: iki komutta da ORDER BY yok. Sıra tablo kurulurken bir kez belirlendi; okuma sadece baştan okur.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          Keyspaces'in işi satırları verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: Keyspaces → Uygulama
+            text: "{items} satır geldi, en yenisi üstte."
+          - who: Uygulama
+            text: Zamanı ISO biçimine çevirdi; satırları tür, ürün ve açıklamayla listeledi.
+          - who: Uygulama → Tarayıcın
+            text: Hareketleri ve isteğin kaydını tek bir JSON cevabında gönderdi.
+          - who: Tarayıcın
+            text: Listeyi persona'nın hareketleriyle yeniden çizdi.
+          - who: Sonra
+            text: Bir sonraki adımda aynı okumayı daha ucuz bir tutarlılıkla (LOCAL_ONE) yapacaksın.
+      remember: >-
+        Keyspaces'te kişi başına bir partition ve zamana göre sıralı satırlar, "bu kişinin son hareketleri" sorusunu her ölçekte
+        tek bir defter okumasıyla cevaplar. Partition key'i değiştirmek başka bir defteri açmaktır.
+      why_db: >-
+        Neden Keyspaces? Olaylar çok sık yazılır, hiç güncellenmez ve hep kişiye göre okunur. Keyspaces bunu sunucusuz, partition
+        başına sıralı ve TTL'li olarak sunar. Bedeli: JOIN ve esnek sorgu yoktur; her yeni soru yeni bir tablo tasarımı ister.
 
   - page: activity
     path: /account/activity
     engines: [keyspaces]
-    use_case: Tunable consistency
-    title: Read one replica for half the cost
+    use_case: Ayarlanabilir tutarlılık
+    title: Tek kopyayı yarı maliyetle oku
     why: >-
-      Keyspaces stores three replicas of each row. LOCAL_QUORUM reads two of them. LOCAL_ONE reads one replica, at half the read cost, and it can miss a very new write.
-    do: Click the lit button "LOCAL_ONE".
+      Persona'nın geçmişi listelendi. Şimdi aynı listeyi daha ucuz bir okuma türüyle isteyeceksin ve neyin değiştiğine
+      bakacaksın.
+    do: Aydınlık "LOCAL_ONE" butonuna tıkla.
     target: "#exp-cl [data-value=LOCAL_ONE]"
     action: click
     wait: {method: GET, path: /keyspaces/api/activity, query: {consistency: LOCAL_ONE}}
     focus: "#feed"
-    result: The result is the same here, because nobody wrote to this partition in the last moment. The read cost is half.
+    result: The result is the same here; the read cost is half.
+    panel:
+      need: >-
+        Hareketler listesi sık okunur. Her okuma para harcar. Ama kullanıcı bir şey yaptıktan hemen sonra listeye bakıyorsa,
+        yaptığı şeyi görmeli. İki ihtiyaç farklı: biri ucuz olsun, diğeri en yeni yazmayı kesin göstersin.
+      concept:
+        term: Tutarlılık seviyesi (LOCAL_QUORUM ve LOCAL_ONE)
+        text: >-
+          Keyspaces her satırı bir bölgenin üç farklı veri merkezinde (Availability Zone) üç kopya olarak tutar. Yazma her zaman
+          en az iki kopyaya ulaşınca onaylanır (LOCAL_QUORUM). Okurken seçersin: LOCAL_QUORUM iki kopyaya sorar ve en yenisini
+          alır, bu yüzden onaylanmış her yazmayı görür; LOCAL_ONE tek bir kopyaya sorar, yarı fiyatına okur ama çok yeni bir
+          yazmayı kaçırabilir. Üç arkadaştan ikisine sorup en güncel cevabı almak ya da birine sorup geçmek gibi.
+        terms:
+          - [LOCAL_QUORUM, "Üç kopyanın ikisine sorar. Onaylanmış her yazmayı görür."]
+          - [LOCAL_ONE, "Tek kopyaya sorar. Yarı maliyet; çok yeni bir yazmayı kaçırabilir."]
+          - [Replica (kopya), "Aynı satırın farklı Availability Zone'lardaki kopyaları."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde tutarlılık seviyesi için hazırlık
+        intro: >-
+          Liste hiç okunmadan, her ekranın hangi tutarlılıkla okuyacağı belirlenir. Aşağıdaki beş adım bu hazırlığın sırasıdır.
+        text:
+          - title: Önce her okumanın ihtiyacı yazılır
+            text: >-
+              "Bir an önceki bir yazmayı kaçırmak sorun olur mu?" Kullanıcının kendi işleminden hemen sonra gösterilen liste için
+              olur; arka plandaki raporlar ve öneriler için olmaz.
+          - title: Yazma tutarlılığı sabittir
+            text: >-
+              Keyspaces'te yazmalar her zaman LOCAL_QUORUM'dur: üç kopyadan ikisi onaylamadan yazma tamamlanmaz. Bu yüzden
+              LOCAL_QUORUM okuma, onaylanmış her yazmayı görür (2 + 2 > 3).
+          - title: Okuma seviyesi her komutta seçilir
+            text: >-
+              Tutarlılık tablo ayarı değil, komutun parametresidir. Sürücüde varsayılan bir seviye tanımlanır, gereken komutlarda
+              değiştirilir.
+            code: |-
+              SimpleStatement(cql, consistency_level=ConsistencyLevel.LOCAL_ONE)
+          - title: Maliyet ve hız hesaplanır
+            text: >-
+              LOCAL_ONE okuma, LOCAL_QUORUM okumanın yarı birimini harcar. Çok okunan, gecikmeye dayanıklı ekranlarda okuma
+              faturası yarıya iner. Süre farkı küçüktür ve ağ koşullarına göre değişir.
+          - title: Kendi yazdığını görme kuralı korunur
+            text: >-
+              Kullanıcının az önce yaptığı işlemi göstermesi gereken ekran LOCAL_QUORUM'da kalır. LOCAL_ONE sadece gecikmenin fark
+              edilmeyeceği yerlerde kullanılır.
+      feed:
+        title: Veri nereden geliyor?
+        writes: Uygulama. Ürün sayfası açılınca "view", sipariş verilince "purchase" ve benzeri olaylar.
+        reads: Uygulama, "My activity" (hareketlerim) sayfası ve "son baktıkların" şeridi için.
+        kind: >-
+          Uygulama orkestrasyonu: Keyspaces'e yazan da ondan okuyan da uygulamadır. Kopyalama Keyspaces'in kendi içindedir: her
+          satırı üç kopya olarak kendisi tutar.
+        with: >-
+          Hareketler sayfasındaki ürün adları satırların detail alanında, yazıldıkları anki kopyalarıyla durur (katalogdan,
+          DocumentDB). Satın alma olayının asıl siparişi ilişkisel veritabanındadır (Aurora).
+        best: >-
+          Yoğun yazılan ve kişiye göre okunan olaylar geniş sütunlu bir tabloda, kişi başına partition'larla tutulur. Trafik çok
+          büyüyünce olaylar önce bir akışa (Kinesis, MSK) yazılır ve oradan tabloya aktarılır.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              Bir önceki adımda persona'nın geçmişini LOCAL_QUORUM ile okudun (sayfadaki varsayılan). Bu, simülasyonun sol şeridi.
+            engines: [keyspaces]
+          - text: >-
+              "LOCAL_ONE" butonuna bastın. Tarayıcın aynı isteği consistency=LOCAL_ONE ile gönderdi; uygulama aynı SELECT'i tek
+              kopyaya soracak şekilde gönderdi. Simülasyonun sağ şeridi bu istek.
+            engines: [keyspaces]
+          - text: >-
+              Liste aynı kaldı: bu partition'a son anda kimse yazmadığı için tek kopya da güncel. Okuma yarı birim harcadı.
+            engines: [keyspaces]
+      sim:
+        kind: replicas
+        engine_label: Keyspaces
+        caption: >-
+          Persona'nın en yeni satırının üç kopyası. Fark görülebilsin diye bir an önce yeni bir olay yazıldığını ve bir kopyanın
+          onu henüz almadığını varsayıyoruz. Solda LOCAL_QUORUM, sağda LOCAL_ONE; ikisi de gerçek istek.
+        key: C00001 en yeni olay
+        old: search P0084
+        new: view P0021
+        lag: [c]
+        nodes:
+          - {id: a, label: "Kopya 1 (AZ-a)"}
+          - {id: b, label: "Kopya 2 (AZ-b)"}
+          - {id: c, label: "Kopya 3 (AZ-c)"}
+        state_say: >-
+          Yeni olay (view P0021) iki kopyaya yazıldı ve onaylandı; üçüncü kopya onu birazdan alacak.
+        lanes:
+          - id: quorum
+            title: "t-1 · İstek 1 · Önceki okuma · LOCAL_QUORUM"
+            reads: [b, c]
+            pick: newest
+            cost: "1 okuma birimi"
+            send: Persona'nın geçmişi istendi; uygulama SELECT'i LOCAL_QUORUM ile gönderiyor.
+            read_say: LOCAL_QUORUM iki kopyaya sordu; biri eski, biri yeni değeri verdi. Keyspaces en yenisini seçti.
+            got_say: "Cevap: view P0021, en yeni olay. İki kopyadan biri güncel olduğu için kaçırılmadı."
+            back: Uygulama listeyi tarayıcına gönderdi.
+          - id: one
+            title: "t0 · İstek 2 · Senin tıklaman · LOCAL_ONE"
+            reads: [c]
+            cost: "0,5 okuma birimi"
+            send: '"LOCAL_ONE"a bastın. Uygulama aynı SELECT''i LOCAL_ONE ile gönderiyor.'
+            read_say: LOCAL_ONE tek bir kopyaya sordu; bu kez yeni olayı henüz almamış olana denk geldi.
+            got_say: "Cevap: search P0084, bir an önceki en yeni olay. Yarı fiyatına; birazdan bütün kopyalar güncel olur."
+            back: Uygulama listeyi tarayıcına gönderdi; bu senaryoda yeni olay listede yok.
+        summary: >-
+          LOCAL_QUORUM iki kopyaya sorduğu için onaylanmış yeni yazmayı kesin gördü. LOCAL_ONE yarı fiyatına okudu ama tek kopyaya
+          sorduğu için çok yeni bir yazmayı kaçırabildi. Gerçek denemende kimse yazmadığı için iki okuma da aynıydı.
+      wire:
+        what: >-
+          Uygulama, Keyspaces'e açık tuttuğu bağlantı üzerinden komutu gönderir (cassandra-driver). Bağlantı her istekte yeniden
+          kurulmaz.
+        dst: "cassandra.eu-central-1.amazonaws.com : 9142"
+        dst_note: >-
+          Keyspaces'in bölge adresi. Bu ad, VPC'nin içindeki interface endpoint'in özel IP'sine çözülür; trafik internete çıkmaz.
+        rows:
+          - [Şifreleme, TLS, gerçek, Keyspaces sadece şifreli bağlantı kabul eder.]
+          - [Protokol, "CQL ikili protokolü, sürüm 4", gerçek, "Cassandra'nın kendi dili; tutarlılık seviyesi her komutun yanında gider."]
+          - [Kimlik, "SigV4, bağlantı açılırken", gerçek, "Uygulama IAM rolünün geçici kimliğiyle imzalı bir doğrulama gönderdi. Şifre yok."]
+        body_label: Çerçevenin içeriği (okunur hâle getirilmiş)
+        body: |-
+          QUERY
+            SELECT event_time, event_type, product_id, detail FROM dbws.activity_by_user WHERE user_id = ? LIMIT 20
+            değer      : 'C00001'
+            tutarlılık : LOCAL_ONE      ← çerçevenin içinde, komutla birlikte gider
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Tutarlılık seviyesi
+        komutla birlikte gider; tablo aynı kalır.
+      app_code:
+        - file: engines/keyspaces.py
+          func: api_activity
+          title: Hareketler isteği
+          sub: Adresteki consistency=LOCAL_ONE okumanın seviyesini seçer.
+          lines:
+            - {match: '@bp.get("/api/activity")', say: "Hareketler isteği buraya gelir.", tag: Tarayıcı → Uygulama}
+            - {match: 'level = request.args.get("consistency", "LOCAL_QUORUM")', say: "Adresteki tutarlılık seviyesini okur; varsayılan LOCAL_QUORUM.", tag: Uygulamanın içinde, hl: node}
+            - {match: 'rows = list(s().execute(SimpleStatement(cql, consistency_level=LEVELS.get(level', say: "SELECT'i bu seviyeyle Keyspaces'e gönderir.", tag: [Uygulama → Keyspaces, Keyspaces → Uygulama], hl: node}
+            - {match: 'return jsonify(trace.payload([{"event_time": r.event_time.isoformat()', say: Satırları tarayıcıya gönderir., tag: Uygulama → Tarayıcı}
+      live:
+        title: Gerçek tabloda ne oldu?
+        intro: Önceki adımdaki LOCAL_QUORUM okuması ve senin tıklamanla giden LOCAL_ONE okuması.
+        runs:
+          - label: LOCAL_QUORUM (önceki okuma)
+            page_call: {path: /keyspaces/api/activity, query: {consistency: LOCAL_QUORUM, who: persona}}
+            metrics: [[Okunan satır, items], [Süre, ms]]
+          - label: LOCAL_ONE (senin tıklaman)
+            trigger: true
+            metrics: [[Okunan satır, items], [Süre, ms]]
+        reading: >-
+          İki okuma da aynı satırları döndürdü. LOCAL_ONE, LOCAL_QUORUM'un yarı okuma birimini harcar (bu ekran birimi göstermiyor).
+          Süre farkı küçüktür ve her istekte değişir; LOCAL_ONE bazen daha yavaş bile görünebilir. Asıl fark bedel ve garantidir.
+      query:
+        title: Uygulama Keyspaces'e ne dedi?
+        intro: >-
+          İki sütun, iki isteğin komutu. CQL metni aynı; fark, komutun yanında giden tutarlılık seviyesi.
+        cards_title: Parça parça
+        parts:
+          - id: sel
+            say: C00001'in en yeni 20 olayını
+            code: "SELECT event_time, event_type, product_id, detail FROM dbws.activity_by_user WHERE user_id = 'C00001' LIMIT 20"
+            name: Ne okunsun?
+            note: Bir önceki adımdaki komutun aynısı.
+            hl: node
+          - id: q
+            say: üç kopyadan ikisine sorarak oku.
+            code: "-- consistency_level = LOCAL_QUORUM"
+            name: Kaç kopyaya sorulsun?
+            note: Onaylanmış her yazmayı görür. Varsayılan seviye.
+            hl: node
+          - id: o
+            say: tek bir kopyaya sorarak, yarı maliyetle oku.
+            code: "-- consistency_level = LOCAL_ONE"
+            name: Kaç kopyaya sorulsun?
+            note: Yarı maliyet; çok yeni bir yazmayı kaçırabilir.
+            hl: node
+            tag: sadece sağdaki komutta var
+        columns:
+          - label: LOCAL_QUORUM
+            sub: Önceki adımdaki okuma.
+            via: Uygulama bu komutu cassandra-driver'ın execute() metoduyla, SimpleStatement'a seviyeyi koyarak gönderir.
+            parts: [sel, q]
+          - label: LOCAL_ONE
+            sub: Senin "LOCAL_ONE" tıklamanla giden komut.
+            via: Aynı execute() çağrısı; sadece consistency_level değişti.
+            parts: [sel, o]
+            mark: [o]
+        note: >-
+          Dikkat: tutarlılık seviyesi CQL metninin içinde değil; sürücü onu komutun yanında ayrı bir alan olarak gönderir. Aynı
+          sorgu metni farklı seviyelerle çalıştırılabilir.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          Keyspaces'in işi satırları verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: Keyspaces → Uygulama
+            text: "{items} satır geldi; tek bir kopyadan."
+          - who: Uygulama → Tarayıcın
+            text: Hareketleri tarayıcıya gönderdi.
+          - who: Tarayıcın
+            text: Listeyi yeniden çizdi; görünen bir değişiklik yok.
+          - who: Sonra
+            text: >-
+              Raporlar sayfasında bambaşka bir soru soracaksın: bütün siparişleri şehre göre topla. O soru bir analiz deposuna
+              gider (Redshift, Adım 29).
+      remember: >-
+        Okuma tutarlılığını ekran ekran seç: kendi yazdığını görmesi gereken yerde LOCAL_QUORUM, gecikmeye dayanıklı yerde
+        yarı maliyetli LOCAL_ONE.
+      why_db: >-
+        Neden Keyspaces? Olay geçmişi çok okunur ve çoğu ekran bir anlık gecikmeyi kaldırır. Keyspaces her okumada tutarlılığı ve
+        bedeli seçtirir ve kopyaları kendisi yönetir. Bedeli: tutarlılık seçimini uygulama doğru yapmalıdır.
 
   # ---------------------------------------------------------------- Reports: Redshift
   - page: reports

@@ -185,10 +185,19 @@
   /* ---------- partition: Keyspaces / Cassandra wide rows. One INSERT into the user's partition, then one SELECT of it. */
   function partition(spec) {
     const parts = spec.partitions, me = parts.findIndex((p) => p.me), ins = spec.insert, cap = spec.app_limit || 8, lim = spec.read_limit || 40;
-    const rowsOf = (p, withNew) => (withNew && p.me ? [{ ...ins, fresh: true }, ...p.rows] : p.rows);
+    const rowsOf = (p, withNew) => (withNew && p.me && ins ? [{ ...ins, fresh: true }, ...p.rows] : p.rows);
     const APP = "Uygulama", DB = "Keyspaces";
     const frames = [{ say: START, phase: 0 }];
     const mine = rowsOf(parts[me], true), total = parts.reduce((n, p) => n + rowsOf(p, true).length, 0);
+    if (spec.reads) {                                                  // read-only mode: one SELECT per request, no INSERT, no app filter
+      spec.reads.forEach((rd) => {
+        const pi = parts.findIndex((p) => p.label === rd.partition), n = Math.min(parts[pi].rows.length, rd.limit || 20);
+        frames.push({ phase: 0, who: APP, lit: pi, select: true, say: rd.say_send || `Uygulama SELECT gönderiyor: ${rd.partition}.` });
+        frames.push({ phase: 4, who: DB, lit: pi, select: true, touched: 1, readP: pi, read: n, stage: "db", inserted: false,
+          result: parts[pi].rows.slice(0, n).map((r) => `${r.type} · ${r.product}`), say: rd.say_read || `Keyspaces bu partition'ı baştan okudu: ${n} satır.` });
+      });
+      frames.push({ ...frames[frames.length - 1], who: APP, done: true, say: spec.back || "Uygulama satırları tarayıcıya gönderdi." });
+    } else {
     // 1) the write: the app sends, the engine stores
     frames.push({ phase: 0, who: APP, say: spec.send_insert || `Sayfa açıldı. Uygulama "bu ürüne baktın" bilgisini bir INSERT komutuyla Keyspaces'e gönderiyor. Satırın user_id'si bu tarayıcının kimliği.` });
     frames.push({ phase: 1, who: DB, lit: me, say: `INSERT geldi: user_id = ${parts[me].label}. Keyspaces bu değere bakar ve satırın hangi partition'a gideceğini bulur. Diğer partition'lara dokunmaz.` });
@@ -209,6 +218,7 @@
     });
     frames.push({ ...frames[frames.length - 1], check: 0, done: true, stage: "out",
       say: spec.back ? `${spec.back} (Burada ${result.length} ürün var.)` : `Uygulama listenin en fazla ${cap} ürününü tarayıcıya gönderdi (burada ${result.length} ürün var). Tabloda ${total} satır var; Keyspaces sadece ${mine.length} tanesini okudu, süzmeyi uygulama yaptı.` });
+    }
     const block = (p, i) => `<div class="gs-part" data-p="${i}" data-hl="pk${p.me ? " where" : ""}">
       <div class="gs-part-key" data-hl="pk">user_id = <b>${esc(p.label)}</b>${p.me ? " <em>(sen)</em>" : ""}</div>
       <table class="gs-table"><thead><tr><th data-hl="ck">event_time ↓</th><th data-hl="type">event_type</th><th>product</th></tr></thead><tbody>
@@ -226,8 +236,9 @@
         el.querySelectorAll("tbody tr").forEach((tr) => {
           const k = Number(tr.dataset.k);
           if (tr.classList.contains("fresh")) tr.hidden = !f.inserted;
-          tr.classList.toggle("active", i === me && (f.check ? f.check === k + 1 : f.stage === "db"));
-          tr.classList.toggle("read", i === me && (f.read || 0) > k);
+          const rp = f.readP ?? me;                                     // the partition this frame reads
+          tr.classList.toggle("active", i === rp && (f.check ? f.check === k + 1 : f.stage === "db"));
+          tr.classList.toggle("read", i === rp && (f.read || 0) > k);
           tr.classList.toggle("gs-keep", i === me && (f.keep || []).includes(k));
           tr.classList.toggle("gs-skip", i === me && (f.skip || []).includes(k));
         });
