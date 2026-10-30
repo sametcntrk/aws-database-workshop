@@ -4,8 +4,10 @@
  * what to do. A step with a `panel` has its "Perde arkası" in its own browser tab (perde.js): the click on the lit control
  * opens /guided-e-commerce-app/perde-arkasi/<n> in the one tab named "perde-arkasi" (the click is the user gesture a tab needs), and when the page makes
  * the expected Engine call this tab writes the call to localStorage "lm_perde_<n>" for that tab. A "look" step has no click:
- * its card offers a button. A step with no `panel` shows its `result` text in the small card.
- * Step fields: page, path, engines, use_case, title, why, do, target (CSS selector of the control),
+ * its card offers a button, and the step is done when the reader opens the tab with it. A step with no `panel` shows its
+ * `result` text in the small card.
+ * Step fields: page, path, engines, use_case, title, why, do, done (what happened, shown after the action),
+ *   after (shown when the reader comes back from the tab), target (CSS selector of the control),
  *   action: click | look | type | change,  wait: {method, path, query, body, count, any} | {click} | {change} | {value},
  *   focus (selector to light after the action), result (short text, steps with no panel), panel (perde.js).
  * State: localStorage lm_mission_v2 = {"i": step index, "done": {index: true}}. ?adim=N opens step N.
@@ -29,12 +31,12 @@
 
   const ENGINE_LABEL = { docdb: "DocumentDB", opensearch: "OpenSearch", neptune: "Neptune", dynamodb: "DynamoDB", aurora: "Aurora PostgreSQL",
     elasticache: "ElastiCache (Valkey)", keyspaces: "Keyspaces", s3: "S3", redshift: "Redshift", influxdb: "Timestream for InfluxDB" };
-  let last, actionDone, phase, calls, w, seen, from = 0, tabOpen = false, back = false;
+  let last, actionDone, phase, calls, w, seen, from = 0, tabOpen = false, back = false, ready = false;
 
   /* ---------- Top bar: progress only */
   const bar = () => { $("#mission").innerHTML = `<div class="mission-head"><span class="tutor-badge">Görev</span><span class="mission-step">Adım ${st.i + 1} / ${steps.length}</span>
     <ol class="mission-dots" aria-hidden="true">${steps.map((_, k) => `<li class="${k < st.i ? "done" : k === st.i ? "now" : ""}"></li>`).join("")}</ol>
-    <span class="mission-hint">Aydınlık kontrolü ve yanındaki kartı takip et.</span></div>`; };
+    <span class="mission-hint">Sarı çerçeveli yeri ve yanındaki kartı takip et.</span></div>`; };
 
   /* ---------- Dark layer with a hole, and the small coach card */
   const layer = document.createElement("div");
@@ -44,6 +46,7 @@
   const card = document.createElement("section");
   card.className = "coach-card";
   card.setAttribute("role", "dialog");
+  card.lang = "tr";                                             // Turkish capitals in the uppercase labels (İ, not I)
   card.setAttribute("aria-live", "polite");
   document.body.append(layer, card);
   const ring = $(".coach-ring", layer), cover = $(".coach-cover", layer);
@@ -112,24 +115,31 @@
     return `<div class="coach-bts"><b>Perde arkası</b><p>${esc(step.result || "")}</p>${lines ? `<ol>${lines}</ol>` : ""}</div>`;
   }
   function tabBox() {
-    if (back && step.after) return `<div class="coach-bts coach-tab coach-after"><b>Okuduklarınla şimdi bak</b><p>${esc(step.after)}</p>
+    if (back && step.after) return `<div class="coach-bts coach-tab coach-after"><b>Perde arkasından dönünce</b><p>${esc(step.after)}</p>
       <button type="button" class="coach-tab-btn" data-c="tab">Perde arkası sekmesine git ↗</button></div>`;
-    return `<div class="coach-bts coach-tab"><b>Perde arkası</b><p>${tabOpen
-      ? "Bu adımın perde arkası \"Perde arkası\" sekmesinde açıldı: simülasyon, gerçek ölçümler, komutun açıklaması ve isteğin yolu orada. Okuduktan sonra bu sekmeye dön ve İleri'ye bas."
-      : "Bu adımın perde arkası ayrı bir \"Perde arkası\" sekmesinde açılır (bütün adımlar aynı sekmeyi kullanır): simülasyon, gerçek ölçümler, komutun açıklaması ve isteğin yolu. Okuduktan sonra bu sekmeye dön ve İleri'ye bas."}</p>
-      <button type="button" class="coach-tab-btn" data-c="tab">${tabOpen ? "Perde arkası sekmesine git" : "Perde arkasını aç"} ↗</button></div>`;
+    const text = st.i === 0   // the first step says once how the tab works; the other steps keep it to one line
+      ? "Perde arkası ayrı bir sekmede açılır ve bütün adımlar aynı sekmeyi kullanır. Orada veritabanının bu adımda ne yaptığını görürsün: simülasyon, gerçek ölçümler, komutun açıklaması ve isteğin yolu. Okuyunca bu sekmeye dön ve İleri'ye bas."
+      : tabOpen ? "Perde arkası sekmesinde açıldı. Okuyunca bu sekmeye dön ve İleri'ye bas." : "Veritabanının bu adımda ne yaptığını Perde arkası sekmesinde gör.";
+    const wait = !actionDone && !ready;                          // a look step: the call of the lit part has not come yet
+    return `<div class="coach-bts coach-tab"><b>Perde arkası</b><p>${text}</p>
+      <button type="button" class="coach-tab-btn" data-c="tab" ${wait ? "disabled" : ""}>${wait ? "Sayfa yükleniyor…" : tabOpen ? "Perde arkası sekmesine git" : "Perde arkasını aç"} ↗</button></div>`;
   }
   function renderCard() {
     card.innerHTML = `<header><span>${chips()}${step.use_case ? `<em>${esc(step.use_case)}</em>` : ""}</span><small>${st.i + 1} / ${steps.length}</small></header>
       <h2>${esc(step.title)}</h2>
-      ${actionDone ? "" : `<p>${esc(step.why || "")}</p>`}
-      <p class="coach-do ${actionDone ? "done" : ""}">${esc(step.do || "Aydınlık bölüme bak, sonra İleri'ye bas.")}</p>
-      ${actionDone ? (step.panel ? tabBox() : shortResult()) : ""}
+      ${step.why ? `<p class="coach-why ${actionDone ? "past" : ""}">${esc(step.why)}</p>` : ""}
+      ${actionDone ? (step.done ? `<p class="coach-done">${esc(step.done)}</p>` : "")
+        : `<p class="coach-do">${esc(step.do || "Sarı çerçeveli bölüme bak, sonra İleri'ye bas.")}</p>`}
+      ${actionDone ? (step.panel ? tabBox() : step.result ? shortResult() : "") : lookTab() ? tabBox() : ""}
       <footer>${nav()}</footer>`;
     wire(card);
     const tb = card.querySelector("[data-c=tab]");
-    if (tb) tb.addEventListener("click", () => { openTab(false); renderCard(); schedule(); });
+    if (tb) tb.addEventListener("click", () => {
+      if (!actionDone) complete();                               // a look step is done when the reader opens its tab
+      openTab(false); renderCard(); schedule();
+    });
   }
+  const lookTab = () => step.action === "look" && step.panel;   // a look step finishes with the tab button, not with the page's call
   function render() {
     renderCard();
     cover.hidden = !(step.action === "look" || actionDone);       // after the action, the lit part is for reading only
@@ -164,7 +174,10 @@
   }
   function onCall(c) {
     calls.push(c);
-    if (!actionDone && matches(c) && ++seen >= (w.count || 1)) { from = calls.length - 1; complete(); }
+    if (!actionDone && !ready && matches(c) && ++seen >= (w.count || 1)) {
+      from = calls.length - 1;
+      if (lookTab()) { ready = true; renderCard(); schedule(); } else complete();
+    }
     else if (actionDone && !step.panel) renderCard();
   }
   document.addEventListener("lm:call", (e) => onCall(e.detail));
@@ -198,7 +211,7 @@
     step = steps[st.i];
     last = st.i === steps.length - 1;
     w = step.wait || {};
-    actionDone = !step.wait; phase = "do"; calls = []; seen = 0; from = 0; tabOpen = false; back = false;
+    actionDone = !step.wait; phase = "do"; calls = []; seen = 0; from = 0; tabOpen = false; back = false; ready = false;
     bar();
     if (step.action === "look" && !w.fresh) lm.calls.forEach(onCall);   // a "look" step waits for a call that the page made at load; other steps wait for the user's own action
     if (actionDone && step.focus) phase = "look-result";

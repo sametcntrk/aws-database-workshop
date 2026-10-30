@@ -15,9 +15,17 @@ steps:
     use_case: Ürün kataloğu
     title: Kategori kutuları tek bir gruplama sorgusundan gelir
     why: >-
-      Mağazanın ana sayfasındasın. Ortadaki kutular her kategoride kaç ürün olduğunu ve en ucuz fiyatı gösteriyor. Bu
-      sayılar elle yazılmadı: sayfa açılırken veritabanı 200 ürünü saydı. Bu adımda tıklama yok, sadece bakacaksın.
-    do: Aydınlık "Categories" (kategoriler) kutularına bak. Sonra kartın altındaki butonla perde arkasını aç.
+      Lale Market'in ana sayfasındasın; görev boyunca bu mağazada gezecek ve her ekranın arkasındaki veritabanına
+      bakacaksın. Ortadaki kutular her kategoride kaç ürün olduğunu ve en ucuz fiyatı gösteriyor. Bu sayılar bir yere
+      elle yazılmadı: sayfa açılırken veritabanı 200 ürünü saydı. Peki bu sayım nerede ve nasıl yapıldı?
+    do: >-
+      "Categories" (kategoriler) kutularına bak. Sonra aşağıdaki "Perde arkasını aç" butonuna bas.
+    done: >-
+      Her kutudaki iki sayı, veritabanının sayfa açılırken yaptığı tek bir sayımdan geliyor.
+    after: >-
+      Kutulardaki sayıları DocumentDB kendi içinde hesapladı; uygulamaya 200 ürün değil, her kategori için tek bir
+      satır geldi. Sayfa bu satırları kutulara çevirdi. Sıradaki adımda aynı sayfadaki fırsat kutusuna bakacaksın; o
+      bilgi bambaşka bir yerden, bellekten geliyor.
     target: "#cats"
     action: look
     wait: {method: GET, path: /docdb/api/home}
@@ -295,9 +303,16 @@ steps:
     use_case: Bellekteki sıcak veri
     title: Fırsat kutusu bellekten gelir
     why: >-
-      Ana sayfanın üstündeki fırsat kutusu günün indirimli ürününü ve kalan adedi gösteriyor. Her ziyaretçi bu kutuyu
-      görüyor ve adet dakikada birçok kez değişiyor. Bu adımda tıklama yok, sadece bakacaksın.
-    do: Aydınlık fırsat kutusuna bak. Sonra kartın altındaki butonla perde arkasını aç.
+      Aynı sayfanın üstünde günün fırsat ürünü ve kalan adedi duruyor. Bu kutuyu her ziyaretçi görüyor ve kalan adet
+      dakikada birçok kez değişiyor. Bu kadar sık okunan küçük bir bilgi nerede tutuluyor?
+    do: >-
+      Sayfanın üstündeki fırsat kutusuna bak. Sonra aşağıdaki "Perde arkasını aç" butonuna bas.
+    done: >-
+      Fırsat kutusundaki fiyat ve kalan adet, sayfa açılırken bellekten okundu.
+    after: >-
+      Fırsat bilgisi ElastiCache'in belleğinde, adıyla bulunan iki anahtarda duruyor; cevap milisaniyenin altında
+      geldi. Bellek arama yapmadı, anahtarın yerine doğrudan gitti. Şimdi Elektronik kategorisine geçeceğiz ve bir
+      ürün listesinin nasıl bulunduğuna bakacağız.
     target: "#hero-deal"
     action: look
     wait: {method: GET, path: /elasticache/api/deal}
@@ -532,11 +547,18 @@ steps:
     use_case: Index ile filtreleme
     title: Index'i kapat
     why: >-
-      Bu sayfadaki ürünler DocumentDB adlı veritabanından geliyor. Sayfa sadece Elektronik ürünlerini istiyor ve puanı en
-      yüksek olanı en üste koyuyor. Bunu hızlı yapmak için veritabanı bir index kullanıyor. Index, kitabın sonundaki dizin
-      gibidir: aradığın kelimenin hangi sayfalarda olduğunu söyler, kitabı baştan sona okuman gerekmez. Şimdi aynı listeyi
-      index olmadan isteyeceğiz ve veritabanının ne kadar fazla iş yaptığını göreceğiz.
-    do: Aydınlık "Collection scan" butonuna tıkla. "Collection scan", index'i kullanmadan bütün ürünleri tek tek okumak demek.
+      Elektronik kategorisine geçtik; ürünler puanı en yüksek olan üstte olacak şekilde listelendi. Veritabanı bu
+      listeyi bir index ile buldu. Index, kitabın sonundaki dizin gibidir: aradığın kelimenin hangi sayfada olduğunu
+      söyler, kitabı baştan sona okuman gerekmez. Şimdi aynı listeyi index olmadan isteyeceksin; bakalım veritabanı ne
+      kadar fazla iş yapacak.
+    do: >-
+      "Collection scan" (bütün ürünleri tek tek oku) butonuna tıkla.
+    done: >-
+      Liste değişmedi, ama veritabanı bu kez 40 ürünü bulmak için 200 ürünün hepsini okudu.
+    after: >-
+      Index açıkken DocumentDB sadece Elektronik ürünlerini okudu; index kapalıyken 200 ürünün hepsini okuyup 160'ını
+      attı. Ekrandaki liste iki seferde de aynı, fark veritabanının yaptığı işte. Sıradaki adımda listeyi bir renge
+      göre daraltacaksın.
     target: "#exp-index [data-value=off]"
     action: click
     wait: {method: GET, path: /docdb/api/products, query: {index: "off"}}
@@ -861,9 +883,17 @@ steps:
     use_case: İç içe alanla filtreleme
     title: Dokümanın içindeki bir alanla filtrele
     why: >-
-      Elektronik kategorisindesin. Ürünlerin rengi, her ürünün kendi özellikleri arasında saklanıyor. Şimdi listeyi bir
-      renge göre daraltacaksın ve veritabanının bu iç içe bilgiye nasıl ulaştığını göreceksin.
-    do: Aydınlık "Colour" (renk) listesinden bir renk seç, örneğin siyah.
+      Index yeniden açık; az önce veritabanının işini nasıl kısalttığını gördün. Ürünün adı ve fiyatı her üründe aynı
+      yerde durur; renk ise her ürünün kendine özgü bilgileri arasında, iç içe bir bölümde saklanıyor. Şimdi listeyi
+      bir renge göre daraltacaksın; veritabanı bu iç içe bilgiye nasıl ulaşıyor?
+    do: >-
+      "Colour" (renk) listesinden bir renk seç, örneğin siyah.
+    done: >-
+      Liste sadece seçtiğin renkteki Elektronik ürünlerine indi.
+    after: >-
+      Filtre, ürünün içindeki bölüme adresiyle baktı: "attributes.renk". Sekmede okunan ve dönen ürün sayılarını
+      gördün; ikisi birbirine ne kadar yakınsa veritabanı o kadar az boşa iş yapmış demektir. Şimdi arama sayfasına
+      geçeceğiz; orada ürünü kategoriyle değil, yazdığın kelimelerle bulacağız.
     target: "#color"
     action: change
     wait: {method: GET, path: /docdb/api/products, query: {color: "*"}}
@@ -1146,9 +1176,19 @@ steps:
     use_case: Metin araması
     title: Analyzer hangi kelimelerin eşleşeceğine karar verir
     why: >-
-      Arama sayfasındasın; arama kutusunda Türkçe harfler olmadan "kablosuz kulaklik" yazılı ve ürünler listelendi. Şimdi
-      arama motorunun kelimeleri nasıl işlediğini değiştirip sonucun ve puanların nasıl değiştiğine bakacaksın.
-    do: Aydınlık "standard" butonuna tıkla. Bu, aramayı Türkçe harfleri olduğu gibi tutan ayarla tekrarlar.
+      Arama sayfasına geçtik. Kutuda Türkçe harfler olmadan "kablosuz kulaklik" yazıyor, ama adında "Kulaklık" geçen
+      ürünler yine bulundu. Arama motoru hem yazılanı hem ürün adlarını önce kelimelere ayırıp sadeleştiriyor; bu işi
+      yapan ayara analyzer denir. Şimdi bu ayarı Türkçe harfleri sadeleştirmeyen bir ayarla değiştireceksin; sonuçlara
+      ve aramanın her ürüne verdiği uygunluk puanına dikkat et.
+    do: >-
+      "standard" butonuna tıkla.
+    done: >-
+      Ürünler yine geldi ama uygunluk puanları düştü: bu ayarda "kulaklik" ile "Kulaklık" artık aynı kelime
+      sayılmıyor.
+    after: >-
+      Türkçe analyzer "Kulaklık" kelimesini "kulaklik" olarak saklıyor, bu yüzden arama birebir eşleşiyordu. standard
+      ayarında birebir eşleşme kalmadı; ürünler sadece küçük yazım farklarına izin verildiği için bulundu ve uygunluk
+      puanları düştü. Sıradaki adımda bu yazım toleransını kapatacaksın.
     target: "#exp-analyzer [data-value=standard]"
     action: click
     wait: {method: GET, path: /opensearch/api/search, query: {analyzer: standard}}
@@ -1455,9 +1495,16 @@ steps:
     use_case: Yazım hatası toleransı
     title: Fuzziness bir yazım hatasını kabul eder
     why: >-
-      Arama kutusunda "kulaklk" yazıyor: bir harf eksik, hızlı yazan birinin yapacağı türden. Yine de kulaklıklar listelendi.
-      Şimdi bu toleransı kapatıp ne değiştiğine bakacaksın.
-    do: Aydınlık "Exact words" (sadece birebir kelimeler) butonuna tıkla.
+      Analyzer yeniden Türkçe. Az önce arama, "kulaklik" ile "Kulaklık" arasındaki farkı küçük bir yazım farkı sayıp
+      ürünleri yine buldu. Şimdi kutuda "kulaklk" yazıyor: hızlı yazan birinin yapacağı gibi bir harf eksik, yine de
+      kulaklıklar listelendi. Bu toleransı kapatacaksın; bakalım sonuçlara ne olacak.
+    do: >-
+      "Exact words" (sadece birebir kelimeler) butonuna tıkla.
+    done: >-
+      Sonuç listesi boşaldı: bir harfi eksik "kulaklk" hiçbir ürünle eşleşmedi.
+    after: >-
+      Bu toleransın adı fuzziness. Açıkken OpenSearch bir iki harf farklı kelimeleri de eşleşme sayıyor, kapalıyken
+      sadece birebir aynı kelimeleri. Sıradaki adımda başka bir aramanın yanındaki sayılara bakacaksın.
     target: "#exp-fuzzy [data-value=off]"
     action: click
     wait: {method: GET, path: /opensearch/api/search, query: {fuzzy: "off", q: kulaklk}}
@@ -1726,9 +1773,17 @@ steps:
     use_case: Facet'ler
     title: Facet sayıları aynı istekten gelir
     why: >-
-      Arama sayfasında "siyah" aradın; 40 ürün beş farklı kategoriden geldi. Soldaki listede her kategorinin yanında kaç ürün
-      olduğu yazıyor. Şimdi bir kategoriye tıklayıp listeyi daraltacaksın.
-    do: Soldaki listede aydınlık "Elektronik" satırına tıkla.
+      Bu kez "siyah" aradık; 40 ürün beş farklı kategoriden geldi. Soldaki listede her kategorinin yanında o
+      kategoriden kaç ürün bulunduğu yazıyor. Şimdi bir kategoriye tıklayıp listeyi daraltacaksın; bu sayılar nereden
+      geliyor ve sıralama bozuluyor mu?
+    do: >-
+      Soldaki listede "Elektronik" satırına tıkla.
+    done: >-
+      Liste Elektronik'teki 9 ürüne indi; soldaki sayılar da yeni listeye göre değişti.
+    after: >-
+      Ürünler ve soldaki sayılar aynı istekte, aynı anda hesaplandı; her kategori için ayrı bir sayım yapılmadı.
+      Seçtiğin kategori bir filtre olarak eklendi: ürünleri eledi ama kalanların puanına dokunmadı. Şimdi mağazalar
+      sayfasına geçeceğiz; orada arama kelimeyle değil, konumla yapılıyor.
     target: "#facet-cat [data-cat='Elektronik']"
     action: click
     wait: {method: GET, path: /opensearch/api/search, query: {category: "*"}}
@@ -1992,9 +2047,17 @@ steps:
     use_case: Konum araması
     title: Bir noktanın yakınındaki mağazaları bul
     why: >-
-      Mağazalar sayfasındasın. Harita İstanbul'un ortasına odaklı ve çevresinde 25 km'lik bir daire var; dairenin içindeki
-      mağazalar listelendi. Şimdi daireyi büyütüp aramanın nasıl değiştiğine bakacaksın.
-    do: Aydınlık "100 km" butonuna tıkla.
+      Mağazalar sayfasına geçtik. Harita İstanbul'un ortasına odaklı; çevresindeki 25 km'lik dairenin içindeki
+      mağazalar en yakından uzağa listelendi. Şimdi daireyi büyüteceksin; arama bütün mağazaların uzaklığını tek tek
+      mi hesaplıyor, yoksa daha kısa bir yolu mu var?
+    do: >-
+      "100 km" butonuna tıkla.
+    done: >-
+      Daire 100 km'ye büyüdü; daha çok mağaza listelendi, en yakını yine en üstte.
+    after: >-
+      Her mağazanın konumu OpenSearch'te bir harita noktası (geo_point) olarak duruyor. Arama, dairenin dışındaki
+      bölgelere hiç bakmadan içerideki mağazaları buldu ve uzaklığa göre sıraladı. Şimdi bir ürünün sayfasına
+      geçeceğiz ve tek bir ürünün bilgisinin nasıl okunduğuna bakacağız.
     target: "#exp-km [data-value='100']"
     action: click
     wait: {method: GET, path: /opensearch/api/stores, query: {km: "100"}}
@@ -2252,9 +2315,17 @@ steps:
     use_case: Bir ürün için tek okuma
     title: Daha az alan oku
     why: >-
-      Bir ürünün sayfasındasın: adı, fiyatı, açıklaması ve özellikleri tek seferde geldi. Şimdi aynı ürünü sadece kartta
-      görünen bilgilerle isteyeceksin ve veritabanından ne kadar az veri geldiğine bakacaksın.
-    do: Aydınlık "Card fields only" (sadece kart alanları) butonuna tıkla.
+      Bir ürünün sayfasına geçtik: adı, fiyatı, açıklaması ve bütün özellikleri tek seferde geldi. Ama mağazanın liste
+      ve kart gibi yerlerinde bu bilgilerin sadece birkaçı gerekiyor. Şimdi aynı ürünü sadece kartta görünen
+      bilgilerle isteyeceksin; bakalım veritabanından ne kadar veri gelecek.
+    do: >-
+      "Card fields only" (sadece kart alanları) butonuna tıkla.
+    done: >-
+      Adı, fiyatı ve puanı kaldı; açıklama gelmedi, özellik listesi kısaldı.
+    after: >-
+      DocumentDB ürünü yine tek seferde okudu, ama uygulamaya sadece yedi alan gönderdi; ağdan geçen veri küçüldü. Her
+      ekranın sadece ihtiyacı olan alanları istemesine projection denir. Sıradaki adımda bu sayfanın sen fark etmeden
+      yaptığı başka bir işe bakacaksın.
     target: "#exp-proj [data-value=card]"
     action: click
     wait: {method: GET, path: /docdb/api/product/*, query: {projection: card}}
@@ -2500,14 +2571,18 @@ steps:
     use_case: Kullanıcı başına olay geçmişi
     title: Sayfa, baktığın ürünü Keyspaces'e yazdı
     why: >-
-      Bir önceki adımda bu ürünün sayfasını açtın. Sayfa açılırken mağaza arka planda iki iş yaptı: "bu ürüne baktın"
-      bilgisini bir veritabanına (Keyspaces) kaydetti, hemen ardından baktığın ürünlerin listesini aynı yerden geri okudu.
-      Sayfadaki "Recently viewed" (son baktıkların) şeridi bu listedir. Bu adımda tıklama yok, sadece bakacaksın.
+      Bu ürünün sayfası açılırken mağaza arka planda iki iş daha yaptı. "Bu ürüne baktın" bilgisini Keyspaces adlı bir
+      veritabanına yazdı, hemen ardından baktığın ürünlerin listesini aynı yerden geri okudu. Sayfadaki "Recently
+      viewed" (son baktıkların) şeridi bu listedir; milyonlarca kayıt arasından sadece seninkiler nasıl bulunuyor?
+    do: >-
+      "Recently viewed" şeridine bak. Sonra aşağıdaki "Perde arkasını aç" butonuna bas.
+    done: >-
+      Şeritteki ürünler bu tarayıcıyla baktığın ürünler; en son baktığın en başta.
     after: >-
-      Şeritteki her ürün, Keyspaces'te sana ait partition'a (kişiye ait deftere) yazılmış bir "view" satırından geliyor.
-      Keyspaces sadece senin defterini açtı ve en yeni satırları verdi. "view" olmayan satırları ve aynı ürünün tekrarlarını
-      Uygulama ayıkladı, en fazla 8 ürünü şeride koydu. Başka bir ürüne bakıp geri dönersen o ürün şeridin en başına geçer.
-    do: Aydınlık "Recently viewed" (son baktıkların) şeridine bak. Sonra kartın altındaki butonla perde arkasını aç.
+      Şeritteki her ürün, Keyspaces'te sana ait partition'a (kişiye ait deftere) yazılmış bir "view" satırından
+      geliyor. Keyspaces sadece senin defterini açıp en yeni satırları verdi. Tekrarları ve "view" olmayan satırları
+      uygulama ayıkladı; şeride en fazla 8 ürün koydu. Sıradaki adımda aynı sayfadaki önerilere bakacaksın; onlar da
+      başka bir veritabanından geliyor.
     target: "#recent-wrap"
     action: look
     wait: {method: GET, path: /keyspaces/api/recent}
@@ -2827,10 +2902,19 @@ steps:
     use_case: Öneriler
     title: Öneriler bir graf üzerinde yürüyüştür
     why: >-
-      "Bunu alanlar şunları da aldı" önerileri Neptune adlı bir graf veritabanından geliyor. Graf, bir arkadaşlık ağı
-      haritası gibidir: kişiler ve ürünler noktalar, "satın aldı" bilgisi de aralarındaki çizgilerdir. Şimdi önerileri
-      bu ürüne göre değil, senin seçtiğin müşteriye göre isteyeceğiz.
-    do: Aydınlık "For my persona" (benim için) butonuna tıkla.
+      Sayfadaki "Customers who bought this also bought" (bunu alanlar şunları da aldı) önerileri Neptune adlı bir graf
+      veritabanından geliyor. Graf bir arkadaşlık ağı gibidir: müşteriler ve ürünler noktalar, "satın aldı" bilgisi de
+      aralarındaki çizgiler. Şimdi önerileri bu ürüne göre değil, persona'na, yani görevin başında seçtiğin müşteriye
+      göre isteyeceksin. Persona'dan başlayınca graf üzerinde bir adım daha yürümek gerekiyor; bunun cevabı nasıl
+      değiştirdiğine bak.
+    do: >-
+      "For my persona" (persona'ma göre) butonuna tıkla.
+    done: >-
+      Öneriler değişti: başlıkta persona'nın adı var ve her kartta kaç ortak müşteri olduğu yazıyor.
+    after: >-
+      Ürüne göre önerilerde Neptune iki adım yürüdü: üründen alıcılarına, oradan onların aldıklarına. Persona'ya göre
+      önerilerde başa bir adım daha ekledi: persona'dan aldığı ürünlere. Kartlarda fiyat yok, çünkü Neptune sadece
+      ilişkileri tutuyor. Şimdi bu ürünü sepete ekleyeceksin; sepet de başka bir veritabanında duruyor.
     target: "#exp-recs [data-value=persona]"
     action: click
     wait: {method: GET, path: /neptune/api/recs, query: {mode: persona}}
@@ -3213,9 +3297,17 @@ steps:
     use_case: Alışveriş sepeti
     title: Ürünü sepete ekle
     why: >-
-      Bir ürünün sayfasındasın. Şimdi bu ürünü sepete ekleyeceksin. Sepet, bu tarayıcıya ait bir kayıt olarak saklanıyor;
-      hiç sepetin yoksa ilk eklemede kendiliğinden oluşacak.
-    do: Aydınlık "Add to cart" (sepete ekle) butonuna tıkla. Adet 1 kalsın.
+      Önerilerden sonra alışverişe geçiyoruz. Sepet DynamoDB adlı bir veritabanında, bu tarayıcıya ait bir kayıt
+      olarak duruyor; hiç sepetin yoksa ilk eklemede kendiliğinden oluşuyor. Ürünü ekleyince sepetin önce okunup sonra
+      mı yazıldığını, yoksa tek hamlede mi güncellendiğine dikkat et.
+    do: >-
+      "Add to cart" (sepete ekle) butonuna tıkla. Adet 1 kalsın.
+    done: >-
+      Butonun altında "Added" (eklendi) yazdı ve üstteki sepet sayacı arttı.
+    after: >-
+      DynamoDB sepeti adresiyle buldu ve tek komutla "yoksa oluştur, varsa adedi artır" dedi; önce okumaya gerek
+      kalmadı. Sonra sepetin güncel hâli okunup sayfaya geldi. Sıradaki iki adımda bu sepete kuralı bozan bir ekleme
+      deneyeceksin: bir üründen en fazla 5 adet.
     target: "#add"
     action: click
     wait: {method: POST, path: /dynamodb/api/cart/items}
@@ -3485,9 +3577,12 @@ steps:
     use_case: Koşullu yazma
     title: Kuralı bozacak bir yazma hazırla
     why: >-
-      Sepet kuralı: bir üründen en fazla 5 adet. Az önceki adımda sepete 1 adet ekledin. Şimdi 5 adet daha eklemeyi
-      deneyeceğiz; bu, toplamı 6 yapar ve kuralı bozar.
-    do: Aydınlık adet (quantity) kutusuna 5 yaz.
+      Sepetin bir kuralı var: bir üründen en fazla 5 adet. Az önce bu üründen 1 adet ekledin; şimdi 5 adet daha
+      eklersen toplam 6 olur ve kural bozulur. Önce adedi yazacaksın, eklemeyi bir sonraki adımda yapacaksın.
+    do: >-
+      "Quantity" (adet) kutusuna 5 yaz.
+    done: >-
+      Adet kutusunda 5 yazıyor; henüz hiçbir şey gönderilmedi.
     target: "#qty"
     action: type
     wait: {value: "5"}
@@ -3498,10 +3593,18 @@ steps:
     use_case: Koşullu yazma
     title: Bir koşul kötü bir yazmayı durdurur
     why: >-
-      Sepet DynamoDB adlı veritabanında duruyor. Sayfa "5 adet ekle" derken yanına bir koşul da koyuyor: "sadece toplam 5'i
-      geçmeyecekse yaz". Bu, bir kapı görevlisine benzer: kontrol eder ve uygun değilse içeri almaz. Kontrol ve yazma tek
-      hamlede yapılır.
-    do: Aydınlık "Add to cart" (sepete ekle) butonuna tıkla. Üstteki "Limit 5 per product" kutusu işaretli kalsın.
+      Adet kutusunda 5 yazıyor. Sayfa bu kez yazma isteğinin yanına bir koşul da koyacak: "sadece toplam 5'i
+      geçmeyecekse yaz". Koşul bir kapı görevlisi gibidir: kontrol eder, uygun değilse içeri almaz. Kontrolü kim, ne
+      zaman yapıyor?
+    do: >-
+      Üstteki "Limit 5 per product" (ürün başına en fazla 5) kutusunun işaretli olduğuna bak, sonra "Add to cart"
+      butonuna tıkla.
+    done: >-
+      Butonun altında kırmızı bir uyarı çıktı ve sepetteki adet değişmedi: veritabanı bu yazmayı reddetti.
+    after: >-
+      Kontrolü uygulama değil DynamoDB yaptı, hem de yazmayla aynı anda: koşul tutmadığı için hiçbir şey yazılmadı.
+      Böylece iki tarayıcı sekmesi aynı anda ekleme yapsa bile kural aşılamaz. Şimdi sepet sayfasına geçeceğiz ve aynı
+      sepeti iki farklı yolla okuyacağız.
     target: "#add"
     action: click
     wait: {method: POST, path: /dynamodb/api/cart/items, body: {qty: "5"}}
@@ -3788,9 +3891,18 @@ steps:
     use_case: Okuma tutarlılığı
     title: Sepeti yarı maliyetle oku
     why: >-
-      Sepet sayfasındasın. Sepetin, az önce eklediğin ürünlerle listelendi. Şimdi aynı sepeti daha ucuz bir okuma türüyle
-      isteyeceksin ve neyin değiştiğine bakacaksın.
-    do: Aydınlık "Eventually consistent" (sonunda tutarlı) butonuna tıkla.
+      Sepet sayfasına geçtik; eklediğin ürün listede. Sayfa sepeti her seferinde en son hâliyle, kesin olarak okuyor
+      ve bu kesinliğin bir bedeli var. Şimdi aynı sepeti daha ucuz bir okuma türüyle isteyeceksin; ucuz okuma neyi
+      göze alıyor?
+    do: >-
+      "Eventually consistent" (eninde sonunda tutarlı) butonuna tıkla.
+    done: >-
+      Sepet aynı göründü; değişen, okumanın maliyeti: yarıya indi.
+    after: >-
+      DynamoDB her veriyi birden fazla kopyada tutuyor. Kesin okuma en son yazmayı görmeyi garanti eder ve iki kat
+      birim harcar; eninde sonunda tutarlı okuma yarı fiyatına çalışır ama bir saniye önceki yazmayı kaçırabilir. Bu
+      yüzden ödeme sayfası sepeti hep kesin okur. Sıradaki adımda yüzlerce kişinin aynı saniyede sepetine yazdığı bir
+      kampanya anını deneyeceksin.
     target: "#exp-consistent [data-value=false]"
     action: click
     wait: {method: GET, path: /dynamodb/api/cart, query: {consistent: "false"}}
@@ -4040,9 +4152,18 @@ steps:
     use_case: Ani yük
     title: Bir anda gelen alıcı dalgası
     why: >-
-      Sepet sayfasının altında bir deneme düğmesi var: 200 sanal alıcı aynı anda sepetlerine ürün ekleyecek. Bir kampanya
-      başladığında gerçekte olan budur. Veritabanının bu ani dalgayı nasıl karşıladığına bakacaksın.
-    do: Aydınlık "Start the simulation" (denemeyi başlat) butonuna tıkla. Birkaç saniye sürer.
+      Az önce tek bir sepeti okudun. Bir kampanya başladığında ise yüzlerce kişi aynı saniyede sepetine ürün ekler.
+      Sayfanın altındaki deneme 200 sanal alıcıyla aynı anda toplam 1000 yazma gönderiyor. Veritabanı bu ani dalgayı
+      önceden hazırlık yapmadan karşılayabilecek mi?
+    do: >-
+      Sayfanın altındaki "Start the simulation" (denemeyi başlat) butonuna tıkla. Birkaç saniye sürer.
+    done: >-
+      Deneme bitti; sonuç kutularında kaç yazma yapıldığı, saniyede kaç yazma yapıldığı ve yazmaların ne kadar sürdüğü
+      yazıyor.
+    after: >-
+      1000 yazmanın her biri birkaç milisaniyede bitti ve tablo bunun için önceden kapasite ayarlamadı. Her alıcı
+      kendi sepetine yazdığı için yük partition'lara dağıldı; herkes aynı kayda yazsaydı tek bir partition tıkanırdı.
+      Şimdi fırsatlar sayfasına geçeceğiz; orada herkes gerçekten aynı sayaca yazıyor.
     target: "#sim-run"
     action: click
     wait: {method: POST, path: /dynamodb/api/simulate, any: true}
@@ -4281,9 +4402,17 @@ steps:
     use_case: Atomik sayaç
     title: DECR ile bir tane satın al
     why: >-
-      Fırsatlar sayfasındasın. Günün fırsat ürününden kaç tane kaldığı yazıyor. Şimdi bir tane satın alacaksın ve kalan adedin
-      nasıl tek hamlede azaldığına bakacaksın.
-    do: Aydınlık "Buy one now" (hemen bir tane al) butonuna tıkla.
+      Fırsatlar sayfasına geçtik. Günün fırsat ürününden kaç tane kaldığı yazıyor; ana sayfada bu bilginin bellekten
+      geldiğini görmüştün. Şimdi bir tane satın alacaksın; binlerce kişinin aynı anda azalttığı bir sayaç nasıl
+      şaşmadan sayıyor?
+    do: >-
+      "Buy one now" (hemen bir tane al) butonuna tıkla.
+    done: >-
+      "You got one" (bir tane aldın) yazdı ve kalan adet bir azaldı.
+    after: >-
+      Uygulama ElastiCache'e tek bir komut gönderdi: DECR, yani "bir azalt ve yeni değeri söyle". Okuma ve yazma aynı
+      komutta olduğu için arada başka bir alıcı giremez; uygulama kararı dönen sayıya göre verdi. Sıradaki iki adımda
+      bunun tersini, önce okuyup sonra yazan güvensiz yolu deneyeceksin.
     target: "#buy"
     action: click
     wait: {method: POST, path: /elasticache/api/deal/buy}
@@ -4498,9 +4627,12 @@ steps:
     use_case: Yarış durumu
     title: Güvensiz yolu seç
     why: >-
-      Fırsat ürününün stoğu ElastiCache'te bellekte duran bir sayaç. "Önce oku, sonra yaz" yolunda her alıcı önce stoğu
-      okur, sonra bir eksiğini yazar. Aynı anda iki alıcı aynı değeri okuyabilir.
-    do: Aydınlık "Read, then write" (önce oku, sonra yaz) butonuna tıkla.
+      Az önce sayaç tek bir komutla azaldı. Diğer yolda her alıcı önce stoğu okur, sonra bir eksiğini yazar; aynı anda
+      iki alıcı aynı değeri okuyabilir. Önce denemenin bu güvensiz yolu kullanmasını seçeceksin.
+    do: >-
+      "Read, then write" (önce oku, sonra yaz) butonuna tıkla.
+    done: >-
+      Deneme güvensiz yola ayarlandı; henüz hiçbir alıcı gelmedi.
     target: "#exp-mode [data-value=naive]"
     action: click
     wait: {click: true}
@@ -4511,9 +4643,17 @@ steps:
     use_case: Yarış durumu
     title: İzdihamı başlat
     why: >-
-      Şimdi 300 alıcı aynı anda 10 parçalık stoğu almaya çalışacak. Bu bir yarış: herkes aynı sayaca aynı anda
-      koşuyor. Kazananı belirleyen şey, sayacın nasıl azaltıldığı.
-    do: Aydınlık "Start the rush" (izdihamı başlat) butonuna tıkla.
+      Deneme güvensiz yola ayarlı. Şimdi 300 alıcı aynı anda 10 parçalık bir stoğu almaya çalışacak; herkes aynı
+      sayaca aynı anda koşuyor. Deneme karşılaştırma için aynı kapışmayı DECR ile de çalıştıracak. Stoktan fazla
+      satılıyor mu?
+    do: >-
+      "Start the rush" (kapışmayı başlat) butonuna tıkla.
+    done: >-
+      Deneme bitti. Sonuç kutusunda kaç kişinin aldığına ve stoktan fazla satış olup olmadığına bak.
+    after: >-
+      Önce oku sonra yaz yolunda alıcılar aynı değeri okuyabildiği için stoktan fazlası satılabildi; sonuç kutusundaki
+      fazla satış sayısı bunu gösteriyor. Karşılaştırma için aynı kapışma DECR ile de çalıştı; orada tam 10 kişi aldı.
+      Gerçek fırsat stoğu bu denemeden etkilenmedi. Sıradaki adımda bu sayfadaki oturum bölümüne geçeceksin.
     target: "#sim-run"
     action: click
     wait: {method: POST, path: /elasticache/api/deal/simulate, body: {mode: naive}, any: true}
@@ -4774,9 +4914,13 @@ steps:
     use_case: Süreli oturum (TTL)
     title: Oturumu kısa ömürlü yap
     why: >-
-      Fırsatlar sayfasının altında "Your session" (oturumun) bölümü var. Oturumun bellekte belli bir süre yaşıyor. Önce bu
-      süreyi seçeceksin.
-    do: Aydınlık "TTL" listesinden "30 seconds" (30 saniye) seç.
+      Fırsatlar sayfasının altında "Your session" (oturumun) bölümü var. Mağaza, kim olduğunu ve en son hangi sayfada
+      olduğunu kısa bir süre hatırlamak için bu oturumu bellekte tutuyor; süre dolunca oturum kendiliğinden siliniyor.
+      Bu süreye TTL denir: bir kaydın ne kadar yaşayacağı. Önce bu süreyi seçeceksin.
+    do: >-
+      "TTL" listesinden "30 seconds" (30 saniye) seç.
+    done: >-
+      Süre 30 saniye olarak seçildi; henüz hiçbir şey yazılmadı.
     target: "#ttl"
     action: change
     wait: {change: true}
@@ -4787,8 +4931,16 @@ steps:
     use_case: Süreli oturum (TTL)
     title: Oturumu süresiyle birlikte yaz
     why: >-
-      Süreyi seçtin. Şimdi oturumunu bu süreyle yeniden yazdıracaksın ve sürenin her okumada nasıl azaldığına bakacaksın.
-    do: Aydınlık "Refresh the session" (oturumu yenile) butonuna tıkla.
+      Süre 30 saniye olarak seçili. Şimdi oturumunu bu süreyle yeniden yazdıracaksın. Süreyi kim sayıyor, süre dolunca
+      oturumu kim siliyor?
+    do: >-
+      "Refresh the session" (oturumu yenile) butonuna tıkla.
+    done: >-
+      Oturum kutusunda oturumun bilgileri ve kalan süresi göründü; süre 30 saniyeden başladı.
+    after: >-
+      Uygulama oturumu yazdı ve ElastiCache'e süresini söyledi; saymayı ve süre dolunca silmeyi ElastiCache kendisi
+      yapıyor, ayrı bir temizlik programı yok. Başka bir sayfa açarsan oturum yeniden yazılır ve süre baştan başlar.
+      Şimdi ödeme sayfasına geçeceğiz.
     target: "#ttl-set"
     action: click
     wait: {method: POST, path: /elasticache/api/session, body: {ttl: "*"}}
@@ -5039,9 +5191,14 @@ steps:
     use_case: Transaction ve geri alma
     title: Ödemeyi başarısız yap
     why: >-
-      Ödeme sayfasındasın; sepetindeki ürünler ve toplam tutar listelendi. Önce, ödemenin yarıda başarısız olacağı bir deneme
-      hazırlayacaksın.
-    do: Aydınlık "Make the payment fail" (ödemeyi başarısız yap) kutusunu işaretle.
+      Ödeme sayfasına geçtik; sepetindeki ürünler ve toplam tutar listelendi. Bir sipariş birkaç yazmadan oluşur: stok
+      düşülür, sipariş kaydı ve içindeki ürünler yazılır. Siparişin asıl kaydı Aurora adlı bir veritabanında
+      tutuluyor; sipariş verilince sayfadaki liste her veritabanının durumunu gösterecek. Önce ödemenin bu yazmaların
+      ortasında başarısız olacağı bir deneme hazırlayacaksın.
+    do: >-
+      "Make the payment fail" (ödemeyi başarısız yap) kutusunu işaretle.
+    done: >-
+      Kutu işaretli; sipariş henüz verilmedi.
     target: "#exp-fail"
     action: click
     wait: {click: true}
@@ -5052,9 +5209,16 @@ steps:
     use_case: Transaction ve geri alma
     title: Siparişi ver ve geri alınışını izle
     why: >-
-      Kutu işaretli: ödeme, stok düşüldükten hemen sonra başarısız olacak. Şimdi siparişi verip veritabanının yarım kalan işi
-      nasıl topladığına bakacaksın.
-    do: Aydınlık "Place the order" (siparişi ver) butonuna tıkla.
+      Kutu işaretli: ödeme, stok düşüldükten hemen sonra başarısız olacak. Stok eksildiği hâlde sipariş yazılmazsa
+      mağaza, olmayan bir satışı stoktan düşmüş olur. Bakalım veritabanı yarım kalan işi nasıl geri alacak.
+    do: >-
+      "Place the order" (siparişi ver) butonuna tıkla.
+    done: >-
+      Sipariş verilmedi: listedeki Aurora satırı kırmızı oldu ve sepetin olduğu gibi kaldı.
+    after: >-
+      Aurora stoğu düşürdü, ödeme başarısız olunca da bütün işi tek hamlede geri aldı (ROLLBACK): ne sipariş kaydı
+      kaldı ne eksik stok. Birlikte olması gereken yazmalar bir transaction içinde olduğu için ya hepsi olur ya
+      hiçbiri. Sıradaki iki adımda kutunun işaretini kaldırıp gerçek bir sipariş vereceksin.
     target: "#place"
     action: click
     wait: {method: POST, path: /aurora/api/orders, body: {fail_after_stock: "true"}}
@@ -5302,9 +5466,12 @@ steps:
     use_case: Bir sipariş, altı veritabanı
     title: Ödemenin başarılı olmasına izin ver
     why: >-
-      Şimdi gerçek bir sipariş vereceksin. Önce, bir önceki adımda işaretlediğin "ödemeyi başarısız yap" kutusunu
-      kaldıracaksın.
-    do: Aydınlık "Make the payment fail" kutusunun işaretini kaldır.
+      Az önce sipariş yarıda kaldı ve hiçbir iz bırakmadı. Şimdi gerçek bir sipariş vereceksin. Önce ödemeyi başarısız
+      yapan kutunun işaretini kaldıracaksın.
+    do: >-
+      "Make the payment fail" kutusunun işaretini kaldır.
+    done: >-
+      Kutu boş; bu kez ödeme başarılı olacak.
     target: "#exp-fail"
     action: click
     wait: {click: true}
@@ -5315,9 +5482,17 @@ steps:
     use_case: Bir sipariş, altı veritabanı
     title: Siparişi ver
     why: >-
-      Kutu boş: bu kez ödeme başarılı olacak. Siparişi verince altı veritabanının sırayla güncellendiğini sayfadaki listede
-      göreceksin.
-    do: Aydınlık "Place the order" (siparişi ver) butonuna tıkla.
+      Kutu boş, sepetin hazır. Siparişi verdiğinde mağazanın birçok parçası bunu öğrenmeli: siparişin asıl kaydı,
+      sepet, canlı sıralama, alışveriş geçmişi, operasyon grafiği ve öneriler. Hepsi farklı veritabanlarında;
+      sayfadaki listede hangisinin ne zaman güncellendiğine dikkat et.
+    do: >-
+      "Place the order" butonuna tıkla.
+    done: >-
+      Listedeki altı satır sırayla yeşil oldu, "Order … is placed" (sipariş verildi) yazdı ve sepet sayacı sıfırlandı.
+    after: >-
+      Önce Aurora siparişin asıl kaydını kesinleştirdi; diğer beş veritabanı ancak ondan sonra kendi payına düşeni
+      yazdı. Onlardan biri başarısız olsaydı bile sipariş bozulmazdı. Görevin geri kalanında bu siparişi diğer
+      ekranlarda göreceksin; ilk durak sipariş geçmişin.
     target: "#place"
     action: click
     wait: {method: POST, path: /neptune/api/purchase}
@@ -5605,9 +5780,16 @@ steps:
     use_case: İlişkili tabloları birleştirme (JOIN)
     title: Siparişlerin üç tablodan gelir
     why: >-
-      Siparişlerim sayfasındasın. Her satırda bir sipariş, tarihi, durumu, içindeki ürünler ve toplamı görünüyor. Bu adımda
-      tıklama yok, sadece bakacaksın.
-    do: Aydınlık sipariş listesine bak. Sonra kartın altındaki butonla perde arkasını aç.
+      Sipariş geçmişi sayfasına geçtik. Her satırda bir sipariş, tarihi, durumu, içindeki ürünler ve toplamı var; az
+      önce verdiğin sipariş de burada. Bu bilgiler tek bir yerde durmuyor; sayfa onları nasıl tek satırda topluyor?
+    do: >-
+      Sipariş listesine bak. Sonra aşağıdaki "Perde arkasını aç" butonuna bas.
+    done: >-
+      Her satırdaki ürün adları, siparişin kaydıyla birlikte tek bir sorguda geldi.
+    after: >-
+      Siparişin kendisi, içindeki kalemler ve ürün adları Aurora'da üç ayrı tabloda duruyor. Sorgu onları sipariş ve
+      ürün numaralarıyla birleştirdi (JOIN); her bilgi bir kez tutuluyor, kopyalanmıyor. Şimdi hareketler sayfasına
+      geçeceğiz; orada bir kişinin bütün geçmişini okuyacağız.
     target: "#orders"
     action: look
     wait: {method: GET, path: /aurora/api/orders}
@@ -5836,9 +6018,17 @@ steps:
     use_case: Olay geçmişi
     title: Persona'nın geçmişini oku
     why: >-
-      "My activity" (hareketlerim) sayfasındasın. Bu tarayıcıyla yaptıkların listelendi: baktığın ürünler, verdiğin sipariş.
-      Şimdi seçtiğin müşterinin (persona) daha uzun geçmişine bakacaksın.
-    do: Aydınlık "My persona (seeded)" (benim persona'm) butonuna tıkla.
+      "My activity" (hareketlerim) sayfasına geçtik. Bu tarayıcıyla yaptıkların listelendi: baktığın ürünler ve az
+      önce verdiğin sipariş. Bu liste de ürün sayfasındaki şerit gibi Keyspaces'ten geliyor. Şimdi persona'nın daha
+      uzun geçmişini isteyeceksin; aynı soru başka bir kişi için nasıl cevaplanıyor?
+    do: >-
+      "My persona (seeded)" (persona'm, hazır yüklü) butonuna tıkla.
+    done: >-
+      Liste değişti: artık persona'nın hareketleri görünüyor, en yenisi üstte.
+    after: >-
+      Keyspaces bu kez persona'nın defterini (partition'ını) açtı ve satırları en yeniden eskiye okudu; istenen 20
+      satıra gelince durdu. Kişiyi değiştirmek başka bir defteri açmak demek, soru aynı kaldı. Sıradaki adımda aynı
+      listeyi daha ucuz bir okuma ayarıyla isteyeceksin.
     target: "#exp-who [data-value=persona]"
     action: click
     wait: {method: GET, path: /keyspaces/api/activity, query: {who: persona}}
@@ -6083,9 +6273,17 @@ steps:
     use_case: Ayarlanabilir tutarlılık
     title: Tek kopyayı yarı maliyetle oku
     why: >-
-      Persona'nın geçmişi listelendi. Şimdi aynı listeyi daha ucuz bir okuma türüyle isteyeceksin ve neyin değiştiğine
-      bakacaksın.
-    do: Aydınlık "LOCAL_ONE" butonuna tıkla.
+      Persona'nın geçmişi listelendi. Keyspaces her satırı birden fazla kopyada tutuyor ve şu an okurken kopyaların
+      çoğunluğuna soruyor. Şimdi tek bir kopyaya sorarak aynı listeyi yarı maliyetle isteyeceksin; bunun bedeli ne?
+    do: >-
+      "LOCAL_ONE" (tek kopyadan oku) butonuna tıkla.
+    done: >-
+      Liste aynı kaldı; bu okuma yarı maliyetle yapıldı.
+    after: >-
+      LOCAL_ONE tek bir kopyadan okudu; çok yeni bir yazma o kopyaya henüz ulaşmadıysa listede görünmeyebilirdi.
+      Sepette yaptığın seçimin aynısı: kendi yaptığını hemen görmesi gereken ekranda çoğunluk okuması (LOCAL_QUORUM),
+      gecikmeye dayanıklı ekranda tek kopya yeter. Şimdi raporlar sayfasına geçeceğiz; orada tek bir kişinin değil,
+      bütün satışların hesabını yapacağız.
     target: "#exp-cl [data-value=LOCAL_ONE]"
     action: click
     wait: {method: GET, path: /keyspaces/api/activity, query: {consistency: LOCAL_ONE}}
@@ -6310,9 +6508,17 @@ steps:
     use_case: Geçmiş üzerinde analiz
     title: Satış geçmişini şehre göre topla
     why: >-
-      Raporlar sayfasındasın. Bir yıllık satışlar aya göre toplanmış bir grafikte görünüyor. Şimdi aynı satışları şehre göre
-      toplatacaksın.
-    do: Aydınlık "City" (şehir) butonuna tıkla.
+      Raporlar sayfasına geçtik. Bir yılın satışları aya göre toplanmış bir grafikte görünüyor; bu rapor binlerce
+      satış satırını okuyor ama her satırın sadece birkaç bilgisini kullanıyor. Şimdi aynı satışları şehre göre
+      toplatacaksın; bu kadar çok satır nasıl hızlı toplanıyor?
+    do: >-
+      "City" (şehir) butonuna tıkla.
+    done: >-
+      Grafik ve tablo değişti: satışlar artık ay ay değil, şehir şehir toplanıyor.
+    after: >-
+      Redshift veriyi satır satır değil, sütun sütun saklıyor; bu sorgu sadece kullandığı şehir, adet ve tutar
+      sütunlarını okudu. Bu rapor görevden önce yüklenmiş örnek satış geçmişini okuyor. Sıradaki adımda aynı raporu,
+      siparişlerin gerçekten yazıldığı veritabanının canlı kopyasından isteyeceksin.
     target: "#exp-dim [data-value=city]"
     action: click
     wait: {method: GET, path: /redshift/api/report, query: {dim: city}}
@@ -6552,9 +6758,17 @@ steps:
     use_case: Zero-ETL
     title: Aurora'nın canlı kopyasını oku
     why: >-
-      Raporlar sayfasındasın; şimdiye kadar kurulumda yüklenen geçmişe baktın. Şimdi aynı raporu, siparişlerin gerçekten yazıldığı
-      veritabanının canlı kopyasından isteyeceksin. Adım 25'te verdiğin sipariş de orada.
-    do: Aydınlık "Live from Aurora" (Aurora'dan canlı) butonuna tıkla.
+      Rapor şehir şehir toplandı, ama görevden önce yüklenmiş örnek satış geçmişinden. Siparişler ise Aurora'ya
+      yazılıyor ve ağır raporları orada çalıştırmak ödeme sayfasını yavaşlatırdı. Bu yüzden Aurora'nın bir kopyası
+      sürekli Redshift'e akıyor; şimdi raporu o canlı kopyadan isteyeceksin.
+    do: >-
+      "Live from Aurora" (Aurora'dan canlı) butonuna tıkla.
+    done: >-
+      Rapor, siparişlerin yazıldığı veritabanının kopyasıyla yeniden çizildi.
+    after: >-
+      Bu sorgu Redshift'te, zero-ETL'in Aurora'dan kopyaladığı tablolarda çalıştı; Aurora'ya hiç gitmedi. Kopyalama
+      için kod yazılmadı, AWS bunu kendisi yapıyor. Siparişinin bu kopyaya ulaşıp ulaşmadığını sıradaki adımda kontrol
+      edeceksin.
     target: "#exp-src [data-value=live]"
     action: click
     wait: {method: GET, path: /redshift/api/report, query: {source: live}}
@@ -6773,9 +6987,17 @@ steps:
     use_case: Zero-ETL
     title: Kopya ne kadar güncel?
     why: >-
-      Canlı rapor çizildi. Sayfanın altındaki "Zero-ETL replication" kutusu kopyalamanın durumunu ve en yeni siparişin Redshift'e
-      ne zaman ulaştığını gösteriyor. Bu adımda tıklama yok, sadece bakacaksın.
-    do: Aydınlık "Zero-ETL replication" kutusuna bak. Sonra kartın altındaki butonla perde arkasını aç.
+      Canlı rapor çizildi, ama bir kopyaya güvenmeden önce ne kadar güncel olduğunu bilmek gerekir. Sayfanın altındaki
+      "Zero-ETL replication" (zero-ETL kopyalama) kutusu kopyalamanın durumunu ve en yeni siparişin Redshift'e ne
+      zaman ulaştığını gösteriyor. Adım 25'teki siparişin oraya vardı mı?
+    do: >-
+      Sayfanın altındaki "Zero-ETL replication" kutusuna bak. Sonra aşağıdaki "Perde arkasını aç" butonuna bas.
+    done: >-
+      Kutudaki zaman, en yeni siparişin Redshift'e ne zaman ulaştığını gösteriyor.
+    after: >-
+      Kopyalamanın sağlıklı olup olmadığını, kaç tablonun kopyalandığını ve hata olup olmadığını Redshift'in kendisi
+      söyledi. Kutudaki zamanı siparişini verdiğin zamanla karşılaştır: aradaki fark, raporun ne kadar geride olduğunu
+      gösterir. Şimdi sipariş raporuna geçeceğiz ve Aurora'nın bir raporu nasıl hesapladığını okuyacağız.
     target: "#repl"
     action: look
     wait: {method: GET, path: /redshift/api/replication}
@@ -6975,9 +7197,18 @@ steps:
     use_case: Sorgu planı
     title: Sorgu planını oku
     why: >-
-      Sipariş raporu sayfasındasın: müşteri segmentlerine göre sipariş sayısı ve ciro. Şimdi veritabanından bu raporu nasıl
+      Sipariş raporu sayfasına geçtik: müşteri gruplarına göre sipariş sayısı ve ciro. Bu rapor Aurora'da çalışıyor;
+      yavaşlarsa nedenini tahmin etmek yerine veritabanına sormak gerekir. Şimdi Aurora'dan bu raporu nasıl
       hesapladığını adım adım anlatmasını isteyeceksin.
-    do: Aydınlık "Show the query plan (EXPLAIN ANALYZE)" (sorgu planını göster) kutusunu işaretle.
+    do: >-
+      "Show the query plan (EXPLAIN ANALYZE)" (sorgu planını göster) kutusunu işaretle.
+    done: >-
+      Raporun altında bir plan çıktı: veritabanının raporu hesaplarken attığı adımlar, her birinin satır sayısı ve
+      süresiyle.
+    after: >-
+      SQL sadece ne istendiğini söyledi; tabloları nasıl okuyacağına ve satırları nasıl birleştireceğine Aurora'nın
+      planlayıcısı karar verdi. Plan aşağıdan yukarı okunur: önce tablolar okunur, sonra birleştirilir ve toplanır.
+      Şimdi canlı ekrana geçeceğiz; orada sıralama her an hazır tutuluyor.
     target: "#exp-explain"
     action: click
     wait: {method: GET, path: /aurora/api/report, query: {explain: "on"}}
@@ -7203,9 +7434,18 @@ steps:
     use_case: Liderlik tablosu
     title: Sıralı küme her yazmada sırayı korur
     why: >-
-      Canlı ekrandasın: en çok alışveriş yapan 10 müşteri, bugünkü sipariş sayısı ve şu an aktif ziyaretçiler. Sayfa her 5
-      saniyede kendini yeniliyor. Bu adımda tıklama yok, sadece bakacaksın.
-    do: Aydınlık liderlik tablosuna bak. Sonra kartın altındaki butonla perde arkasını aç.
+      Canlı ekrana geçtik: en çok alışveriş yapan 10 müşteri, bugünkü sipariş sayısı ve şu an aktif ziyaretçiler.
+      Sayfa her 5 saniyede kendini yeniliyor. Her yenilemede binlerce müşterinin cirosunu yeniden toplayıp sıralamak
+      yerine sıra nasıl hep hazır tutuluyor?
+    do: >-
+      En çok alışveriş yapanlar tablosuna bak. Sonra aşağıdaki "Perde arkasını aç" butonuna bas.
+    done: >-
+      Tablodaki sıra, sayfa her yenilendiğinde bellekten hazır geliyor.
+    after: >-
+      Sıralama ElastiCache'te bir sıralı kümede (sorted set) duruyor: her siparişte müşterinin skoru (toplam
+      harcaması) artıyor ve küme sırayı yazarken koruyor. Okumak sadece en üstteki 10'u almak; bu yüzden her yenileme
+      birkaç milisaniye sürüyor. Adım 25'teki siparişin de bu skorlardan birini artırdı. Şimdi operasyon ekranına
+      geçeceğiz; orada veri zamana göre akıyor.
     target: "#board"
     action: look
     wait: {method: GET, path: /elasticache/api/leaderboard}
@@ -7432,9 +7672,18 @@ steps:
     use_case: Zaman serisi ölçümleri
     title: Her zaman penceresi için tek değer
     why: >-
-      Operasyon ekranındasın: depoların sıcaklığı ve dakikadaki sipariş sayısı grafiklerde. Grafik şu an 15 dakikalık
-      ortalamaları gösteriyor. Şimdi pencereyi büyütüp grafiğin nasıl sadeleştiğine bakacaksın.
-    do: Aydınlık "1 hour" (1 saat) butonuna tıkla.
+      Operasyon ekranına geçtik: depoların sıcaklığı ve dakikadaki sipariş sayısı grafiklerde. Sensörler her 5
+      dakikada bir ölçüm gönderiyor ve günde yüzlerce nokta birikiyor; grafik zamanı 15 dakikalık dilimlere
+      (pencerelere) bölüp her dilim için tek bir ortalama gösteriyor. Şimdi dilimi 1 saate büyüteceksin; bu ortalamayı
+      kim hesaplıyor?
+    do: >-
+      "1 hour" (1 saat) butonuna tıkla.
+    done: >-
+      Grafik daha az noktayla, daha düz çizildi: her nokta artık bir saatin ortalaması.
+    after: >-
+      InfluxDB ham noktaları göndermedi; aralığı saatlik pencerelere böldü ve her pencerenin ortalamasını kendisi
+      hesapladı. Pencere büyüdükçe uygulamaya gelen nokta sayısı azalıyor. Şimdi müşteri grafı ekranına geçeceğiz;
+      orada ilişkiler üzerinde yürüyeceğiz.
     target: "#exp-win [data-value='1h']"
     action: click
     wait: {method: GET, path: /influxdb/api/series, query: {window: 1h}}
@@ -7682,9 +7931,17 @@ steps:
     use_case: İlişki analizi
     title: Bir müşterinin çevresi
     why: >-
-      Müşteri grafı ekranındasın; seçili müşterinin aldığı ürünler ve aynı ürünleri alan başka müşteriler bir ağ olarak çiziliyor.
-      Şimdi başka bir müşteriyi seçip onun çevresine bakacaksın.
-    do: Aydınlık listeden "Lukas Weber"i seç.
+      Müşteri grafı ekranına geçtik. Ekran önce persona'nı gösteriyor: aldığı ürünler ve aynı ürünleri alan başka
+      müşteriler bir ağ olarak çiziliyor; bu ağ, öneriler adımında gördüğün Neptune'dan geliyor. Şimdi başka bir
+      müşteri seçeceksin; sorgunun ağda ne kadar uzağa yürüdüğüne bak.
+    do: >-
+      Müşteri listesinden "Lukas Weber"i seç.
+    done: >-
+      Ağ Lukas Weber'in çevresiyle yeniden çizildi: aldığı ürünler ve aynı ürünleri alan başka müşteriler.
+    after: >-
+      Neptune Lukas'tan başladı, aldığı ürünlere, oradan her ürünün en fazla üç alıcısına yürüdü ve durdu. Yürüyüşün
+      kısa ve sınırlı tutulması, graf büyüdükçe sorgunun da hızlı kalmasını sağlıyor. Şimdi satıcı paneline geçeceğiz;
+      orada dosyaların nerede durduğuna bakacağız.
     target: "#who"
     action: change
     wait: {method: GET, path: /neptune/api/graph, query: {persona: C00004}}
@@ -7922,9 +8179,18 @@ steps:
     use_case: Özel dosya, doğrudan indirme
     title: Önceden imzalı adres
     why: >-
-      Satıcı panelindesin. "Download: two ways" (iki yoldan indirme) bölümünde aynı ürün görseli iki farklı yoldan indirilebiliyor.
-      Şimdi ikinci yolu deneyip görselin nereden geldiğine bakacaksın.
-    do: Aydınlık "Presigned URL, straight from S3" (imzalı adresle, doğrudan S3'ten) butonuna tıkla.
+      Satıcı paneline geçtik. Ürün görselleri S3 adlı bir dosya deposunda, herkese kapalı bir alanda duruyor.
+      "Download: two ways" (iki yoldan indirme) bölümünde aynı görsel iki yoldan indirilebiliyor: birinci yolda görsel
+      uygulamanın üzerinden geçer, ikinci yolda tarayıcı onu doğrudan S3'ten alır. Şimdi ikinci yolu deneyeceksin;
+      uygulama bu işte nerede duruyor?
+    do: >-
+      "Presigned URL, straight from S3" (imzalı adresle, doğrudan S3'ten) butonuna tıkla.
+    done: >-
+      Görsel bu kez doğrudan S3'ten indi; altında indirme süresi ve adres yazıyor.
+    after: >-
+      Uygulama dosyayı taşımadı; sadece kısa süre geçerli, imzalı bir adres üretti. Tarayıcın görseli bu adresle
+      doğrudan S3'ten indirdi; S3 de imzayı ve süreyi kontrol etti. Sıradaki adımda bu depoya kendi görselini
+      yükleyeceksin.
     target: "#via-presign"
     action: click
     wait: {method: GET, path: /s3/api/presign/*}
@@ -8153,9 +8419,16 @@ steps:
     use_case: Nesne depolama
     title: Bir görseli nesne olarak yükle
     why: >-
-      Satıcı panelindesin. Üstteki formla bucket'a bir ürün görseli yükleyebilirsin. Şimdi küçük bir resim seçip yükleyecek ve
-      S3'ün onu nasıl sakladığına bakacaksın.
-    do: Aydınlık formda küçük bir JPEG ya da PNG seç, sonra "Upload" (yükle) butonuna tıkla.
+      Az önce bir görseli S3'ten indirdin. Şimdi üstteki formla depoya kendi görselini yükleyeceksin. S3'ün dosyayı
+      hangi adla ve hangi bilgilerle sakladığını, aynı adla yeniden yüklersen eskisine ne olduğuna dikkat et.
+    do: >-
+      Formda küçük bir JPEG ya da PNG seç, sonra "Upload" (yükle) butonuna tıkla.
+    done: >-
+      Dosyan yüklendi ve galeride göründü; adı, boyutu ve yanındaki bilgiler yazıyor.
+    after: >-
+      S3 dosyanı bir nesne olarak sakladı: bir anahtar (adı), byte'ları ve yanındaki küçük bilgiler (metadata).
+      Sürümleme açık olduğu için aynı adla yeniden yüklesen bile eski hâli kaybolmaz. Görev burada bitiyor; "Görevi
+      bitir" butonuna basınca her veritabanını uçtan uca anlatan sayfalara geçeceksin.
     target: "#upload"
     action: click
     wait: {method: POST, path: /s3/api/upload}
