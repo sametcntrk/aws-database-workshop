@@ -491,6 +491,49 @@
     return { html, lanes, paint, final: showSum };
   }
 
+  /* ---------- inverted-index: a search engine looks words up in its inverted index (term → documents). Each lane is one
+   * request: spec.docs [{id, name}], spec.lanes [{id, title, field, terms [[term, [ids]]], analyze_say, tokens [..],
+   * lookups [{token, term, say, fuzzy}], scores [[id, score]], score_say, send, back}]. */
+  function invertedIndex(spec) {
+    const DB = spec.engine_label || "OpenSearch", docs = spec.docs;
+    const nameOf = (id) => (docs.find((d) => d.id === id) || { name: id }).name;
+    const lanes = {};
+    spec.lanes.forEach((ln) => {
+      const fr = [{ say: START, tokens: [], term: null, found: [], scores: [] }];
+      let s = { ...fr[0] };
+      s = { ...s, tokens: ln.tokens, say: ln.analyze_say || `Sorgu analyzer'dan geçti: ${ln.tokens.join(", ")}.` };
+      fr.push(s);
+      ln.lookups.forEach((lk) => {
+        const row = ln.terms.find(([t]) => t === lk.term);
+        s = { ...s, term: lk.term, tok: lk.token, fuzzy: !!lk.fuzzy, found: [...new Set([...s.found, ...((row && row[1]) || [])])], say: lk.say };
+        fr.push(s);
+      });
+      s = { ...s, term: null, tok: null, scores: ln.scores, done: true, say: ln.score_say || "Her ürüne bir skor verildi; en yüksek skor en üstte." };
+      fr.push(s);
+      lanes[ln.id] = actorize(fr, ln.send || "Uygulama arama isteğini OpenSearch'e gönderiyor.", ln.back || "Uygulama sonuçları tarayıcıya gönderdi.", DB, { term: null });
+    });
+    const laneHtml = (ln) => shell(ln.id, ln.title, `<div class="gs-tokens" data-hl="analyze"><span>Sorgunun kelimeleri (token)</span><ol></ol></div>
+      <table class="gs-table" data-hl="index"><thead><tr><th>Terim (${esc(ln.field)})</th><th>Geçtiği ürünler</th></tr></thead><tbody>
+      ${ln.terms.map(([t, ids]) => `<tr data-t="${esc(t)}"><td><code>${esc(t)}</code></td><td>${ids.map((x) => `<span class="gs-pid" data-id="${esc(x)}">${esc(x)}</span>`).join(" ")}</td></tr>`).join("")}</tbody></table>`,
+      { hl: ln.id, count: "Bulunan ürün", result: spec.result_title || "Sonuç (skor sırasında)", col: true });
+    const html = `${actorBar(DB)}<div class="gs-lanes${spec.lanes.length === 1 ? " one" : ""}">${spec.lanes.map(laneHtml).join("")}</div>${summary(spec.summary || "")}`;
+    function paint(root, id, f) {
+      const L = laneOf(root, id);
+      L.querySelector(".gs-count b").textContent = (f.found || []).length;
+      L.classList.toggle("done", !!f.done);
+      L.querySelector(".gs-tokens ol").innerHTML = (f.tokens || []).map((t) => `<li class="${f.tok === t ? "on" : ""}"><code>${esc(t)}</code></li>`).join("") || '<li class="empty">henüz yok</li>';
+      L.querySelectorAll("tbody tr").forEach((tr) => {
+        tr.classList.toggle("active", f.term === tr.dataset.t);
+        tr.classList.toggle("fuzzy", f.term === tr.dataset.t && !!f.fuzzy);
+        tr.classList.toggle("dimrow", !!f.term && f.term !== tr.dataset.t);
+      });
+      L.querySelectorAll(".gs-pid").forEach((x) => x.classList.toggle("hit", (f.found || []).includes(x.dataset.id)));
+      chips(L, (f.scores || []).map(([x, sc]) => `<li>${esc(nameOf(x))} <small>${esc(sc)}</small></li>`));
+      sayWho(L, f);
+    }
+    return { html, lanes, paint, final: showSum };
+  }
+
   /* ---------- Who works in a frame (owner rule: work of the app is never credited to the database).
    * actorize(frames, send, back, db): after START the app sends, every middle frame is the database's (unless it names
    * its own `who`), the last frame is the app sending the answer on. actorBar(db) is the bar above the lanes;
@@ -510,7 +553,7 @@
     root.querySelectorAll(".gs-actors [data-a]").forEach((x) => x.classList.toggle("on", ws.includes(x.dataset.a)));
   }
 
-  const KINDS = { "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
+  const KINDS = { "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
 
   function render(box, spec) {
     const kind = KINDS[spec.kind];

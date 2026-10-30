@@ -1143,17 +1143,311 @@ steps:
   - page: search
     path: /search?q=kablosuz%20kulaklik
     engines: [opensearch]
-    use_case: Full-text search
-    title: The analyzer decides which words match
+    use_case: Metin araması
+    title: Analyzer hangi kelimelerin eşleşeceğine karar verir
     why: >-
-      OpenSearch keeps an inverted index: for each word, the list of products that contain it. The tr_folded analyzer changes "ı" to "i"
-      at index time and at query time. So the query word "kulaklik" matches the name "Kulaklık".
-    do: Click the lit button "standard".
+      Arama sayfasındasın; arama kutusunda Türkçe harfler olmadan "kablosuz kulaklik" yazılı ve ürünler listelendi. Şimdi
+      arama motorunun kelimeleri nasıl işlediğini değiştirip sonucun ve puanların nasıl değiştiğine bakacaksın.
+    do: Aydınlık "standard" butonuna tıkla. Bu, aramayı Türkçe harfleri olduğu gibi tutan ayarla tekrarlar.
     target: "#exp-analyzer [data-value=standard]"
     action: click
     wait: {method: GET, path: /opensearch/api/search, query: {analyzer: standard}}
     focus: "#hits"
-    result: The same products came back, but the score of each one is about half. With the standard analyzer, only "kablosuz" matches the name now.
+    result: The same products came back with a lower score. With the standard analyzer, "kulaklik" matches the name only through fuzziness.
+    panel:
+      need: >-
+        Ziyaretçiler aramayı çoğu zaman Türkçe harfler olmadan yazar: "kulaklik", "hoparlor". Ürün adlarında ise "Kulaklık",
+        "Hoparlör" yazıyor. Aramanın bu iki yazımı aynı kelime sayması, ayrıca 200 ürünün içinden en ilgili olanları en
+        üste koyması gerekiyor. Bunu bir veritabanında "LIKE '%kulak%'" gibi satır satır tarayarak yapmak hem yavaş hem kaba
+        olurdu.
+      concept:
+        term: Ters index (inverted index) ve analyzer
+        text: >-
+          Arama motoru her ürünün adını kelimelere böler ve bir "kelime → geçtiği ürünler" listesi tutar. Buna ters index
+          denir; bir kitabın sonundaki dizine benzer, ama her kelime için. Kelimeye bölme ve onları sadeleştirme işini
+          analyzer yapar: harfleri küçültür, isterse ı'yı i'ye, ö'yü o'ya çevirir. Aynı analyzer hem ürün yazılırken hem
+          arama yapılırken çalışır; iki taraf aynı kelimeyi üretirse eşleşme olur. Eşleşen her ürüne bir skor (relevance)
+          verilir; en yüksek skor en üstte.
+        terms:
+          - [Token, "Analyzer'ın ürettiği tek bir kelime. \"Kablosuz Kulaklık\" → kablosuz, kulaklik."]
+          - [tr_folded, "Bu mağazanın analyzer'ı: Türkçe küçük harf + Türkçe harfleri sadeleştirme (ı→i, ö→o, ş→s)."]
+          - [standard, "Varsayılan analyzer: küçültür ama Türkçe harfleri olduğu gibi tutar (kulaklık)."]
+          - [Fuzziness, "Bir iki harf farkla yazılmış kelimeleri de eşleştirme. AUTO, kelime uzunluğuna göre 1–2 harf fark kabul eder."]
+          - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+      prior:
+        title: Gerçek bir sistemde arama index'i için hazırlık
+        intro: >-
+          Arama kutusu hiç kullanılmadan, ürünler arama motoruna kendi analyzer'larıyla yazılır. Aşağıdaki beş adım bu
+          hazırlığın sırasıdır.
+        text:
+          - title: Önce aramanın soruları yazılır
+            text: >-
+              Ziyaretçi nasıl yazacak? Türkçe harfsiz ("kulaklik"), yazım hatalı ("kulaklk"), birden fazla kelimeyle. Hangi
+              alan daha önemli? Adda geçen kelime, açıklamada geçenden değerlidir. Bu kararlar index kurulmadan verilir.
+            code: |-
+              multi_match: { query: "kablosuz kulaklik", fields: ["name^3", "description"], fuzziness: "AUTO" }
+          - title: Dil için bir analyzer tanımlanır
+            text: >-
+              Türkçe için harf küçültme Türkçe kurallarla yapılır (I → ı, İ → i) ve ardından harfler sadeleştirilir
+              (asciifolding). Böylece "Kulaklık" index'e "kulaklik" olarak yazılır ve ASCII aramalar onu bulur.
+            code: |-
+              "analysis": { "filter": { "tr_lower": { "type": "lowercase", "language": "turkish" } },
+                            "analyzer": { "tr_folded": { "tokenizer": "standard", "filter": ["tr_lower", "asciifolding"] } } }
+          - title: Aynı alan iki şekilde index'lenebilir
+            text: >-
+              Bir alan hem sadeleştirilmiş hem orijinal hâliyle tutulabilir (multi-field). Böylece aynı veriyle hem esnek arama
+              hem birebir eşleşme yapılır; kategori gibi alanlar ise analyzer'sız keyword olarak tutulur (filtre ve sayım için).
+            code: |-
+              "name": { "type": "text", "analyzer": "tr_folded", "fields": { "std": { "type": "text", "analyzer": "standard" } } },
+              "category": { "type": "keyword" }
+          - title: Analyzer önceden denenir
+            text: >-
+              _analyze ile bir metnin hangi token'lara bölündüğü görülür. Analyzer sonradan değiştirilirse bütün ürünlerin
+              yeniden index'lenmesi gerekir; bu yüzden yayından önce denenir.
+            code: |-
+              POST products/_analyze { "analyzer": "tr_folded", "text": "Kablosuz Kulaklık" }  →  ["kablosuz", "kulaklik"]
+          - title: Kapasite parçalara bölünür
+            text: >-
+              Index parçalara (shard) bölünür ve her parçanın bir kopyası (replica) başka bir sunucuda durur; bir sunucu düşse
+              de arama çalışır. Bu katalogda products index'i 5 parçalı ve her parçanın 1 kopyası var, domain 3 sunucudan oluşuyor.
+      feed:
+        title: Veri nereden geliyor?
+        writes: >-
+          Arama index'ine kullanıcı yazmaz. Ürünlerin asıl kaydı katalog veritabanındadır; arama motoru ondan beslenir.
+        reads: Uygulama, arama sayfası ve arama kutusunun öneri listesi için.
+        kind: >-
+          OpenSearch başka bir veritabanından kendiliğinden veri çekmez; birinin onu beslemesi gerekir. Besleme ya bir ara
+          servisle (Amazon OpenSearch Ingestion) ya da kataloğun değişikliklerini okuyan bir programla yapılır.
+        with: >-
+          Arama sonucundaki ürünlerin asıl kaydı katalogdadır (DocumentDB); kartlardaki görseller nesne deposundan (S3) gelir.
+          Kartta arama motorunun döndürdüğü alanlar (ad, fiyat, kategori) gösterilir; daha fazla bilgi gerekirse ürün sayfası
+          kataloğa sorar.
+        best: >-
+          Katalog tek yerde tutulur; arama index'i ondan otomatik beslenir. DocumentDB'nin OpenSearch ile zero-ETL
+          entegrasyonu önce bütün ürünleri yükler, sonra her değişikliği change streams ile birkaç saniye içinde taşır.
+          Uygulama aynı ürünü iki yere ayrı ayrı yazmaz.
+      scenario:
+        title: Ne oldu? Senin gözünden
+        intro: >-
+          Simülasyondan önce, bu adımda gerçekte ne yaşadığını sırayla anlatalım. Her satırın sağında o anda çalışan
+          veritabanları var.
+        steps:
+          - text: >-
+              Arama sayfası "kablosuz kulaklik" aramasıyla açıldı; Türkçe harfler olmadan, birçok kişinin yazdığı gibi. Açılırken
+              oturumun güncellendi.
+            engines: [elasticache]
+          - text: >-
+              Sayfa açılırken tarayıcın uygulamaya aramayı gönderdi; uygulama OpenSearch'e "ad ve açıklamada ara, adı 3 kat
+              önemli say, yazım hatasına izin ver" dedi. tr_folded seçiliydi. Simülasyonun sol şeridi bu istek.
+            engines: [opensearch]
+          - text: >-
+              5 ürün listelendi, her birinin yanında bir skor. Soldaki kategori ve fiyat sayıları aynı cevaptan geldi. Kartların
+              görselleri S3'ten.
+            engines: [opensearch, s3]
+          - text: >-
+              Sonra "standard" butonuna bastın. Tarayıcın aynı aramayı analyzer=standard ile istedi; uygulama bu kez adın
+              Türkçe harfleri koruyan kopyasında (name.std) aradı. Simülasyonun sağ şeridi bu istek.
+            engines: [opensearch]
+          - text: >-
+              Aynı 5 ürün geldi ama skorları biraz düştü. "kulaklik" bu alanda birebir yok; fuzziness açık olduğu için bir harf
+              farkla "kulaklık" eşleşti.
+            engines: [opensearch]
+      sim:
+        kind: inverted-index
+        caption: >-
+          Ürün adlarının ters index'inden küçük bir kesit: 7 gerçek ürün. Solda tr_folded ile index'lenmiş ad alanı, sağda
+          standard ile index'lenmiş kopyası (name.std). İki şerit iki ayrı gerçek istek: soldaki sayfa açılırken, sağdaki senin
+          tıklamanla gitti. Skorlar gerçek sonuçlardan.
+        docs:
+          - {id: P0136, name: Bosphorus Kablosuz Kulaklık 136}
+          - {id: P0081, name: Kapadokya Kablosuz Kulaklık 81}
+          - {id: P0031, name: Alpen Kablosuz Kulaklık 31}
+          - {id: P0001, name: Alpen Kablosuz Kulaklık 1}
+          - {id: P0196, name: Nordwind Kablosuz Kulaklık 196}
+          - {id: P0121, name: Toros Bluetooth Hoparlör 121}
+          - {id: P0141, name: Anadolu Mekanik Klavye 141}
+        lanes:
+          - id: folded
+            title: "t-1 · İstek 1 · Sayfa açılınca · tr_folded"
+            field: name
+            terms:
+              - [kablosuz, [P0136, P0081, P0031, P0001, P0196]]
+              - [kulaklik, [P0136, P0081, P0031, P0001, P0196]]
+              - [bluetooth, [P0121]]
+              - [hoparlor, [P0121]]
+              - [klavye, [P0141]]
+              - [alpen, [P0031, P0001]]
+            tokens: [kablosuz, kulaklik]
+            send: >-
+              Arama sayfası açıldı. Tarayıcın "kablosuz kulaklik" aramasını istedi; uygulama OpenSearch'e multi_match sorgusunu
+              gönderiyor (ad alanı tr_folded ile).
+            analyze_say: >-
+              Sorgu metni tr_folded analyzer'ından geçti: küçültüldü, Türkçe harfler sadeleşti. Sonuç iki token: kablosuz,
+              kulaklik.
+            lookups:
+              - {token: kablosuz, term: kablosuz, say: '"kablosuz" terimi index''te bulundu: 5 üründe geçiyor. Tarama yok, doğrudan listeye gidildi.'}
+              - {token: kulaklik, term: kulaklik, say: '"kulaklik" terimi birebir bulundu, çünkü ürün adları da yazılırken "kulaklik" olarak index''lendi.'}
+            scores: [[P0136, 9.3], [P0081, 8.59], [P0031, 8.26], [P0001, 7.78], [P0196, 7.78]]
+            score_say: >-
+              İki kelimeyi de adında taşıyan 5 ürün skorlandı. Ad 3 kat önemli sayıldı; açıklamadaki eşleşmeler de skora eklendi.
+            back: Uygulama 5 ürünü skorlarıyla tarayıcına gönderdi.
+          - id: standard
+            title: "t0 · İstek 2 · Senin tıklaman · standard"
+            field: name.std
+            terms:
+              - [kablosuz, [P0136, P0081, P0031, P0001, P0196]]
+              - [kulaklık, [P0136, P0081, P0031, P0001, P0196]]
+              - [bluetooth, [P0121]]
+              - [hoparlör, [P0121]]
+              - [klavye, [P0141]]
+              - [alpen, [P0031, P0001]]
+            tokens: [kablosuz, kulaklik]
+            send: >-
+              "standard" butonuna bastın. Tarayıcın aynı aramayı analyzer=standard ile istedi; uygulama sorguyu adın standard
+              kopyasında (name.std) çalıştırıyor.
+            analyze_say: >-
+              Sorgu metni standard analyzer'dan geçti. Kullanıcı Türkçe harf yazmadığı için token'lar yine kablosuz, kulaklik.
+            lookups:
+              - {token: kablosuz, term: kablosuz, say: '"kablosuz" birebir bulundu: 5 ürün.'}
+              - {token: kulaklik, term: kulaklık, fuzzy: true, say: '"kulaklik" bu index''te birebir yok; burada "kulaklık" yazıyor. Fuzziness AUTO açık: bir harf farkla "kulaklık" eşleşti, ama birebir eşleşmeden daha düşük puanla.'}
+            scores: [[P0136, 8.72], [P0081, 8.05], [P0031, 7.75], [P0001, 7.3], [P0196, 7.3]]
+            score_say: >-
+              Aynı 5 ürün, ama skorlar biraz düşük: "kulaklık" bulanık (fuzzy) eşleşmeden geldi.
+            back: Uygulama aynı 5 ürünü daha düşük skorlarla tarayıcına gönderdi.
+        summary: >-
+          Kelimeyi bulan şey index'teki terimdir. tr_folded'da ad "kulaklik" olarak durduğu için ASCII arama birebir eşleşir;
+          standard'da "kulaklık" durduğu için eşleşme sadece fuzziness sayesinde ve daha düşük puanla olur. Fuzziness kapalı
+          olsaydı (Adım 6) "kulaklik" adla hiç eşleşmezdi ve skor yaklaşık yarıya inerdi (9,3 → 4,65).
+      wire:
+        what: >-
+          Uygulama arama isteğini HTTPS ile OpenSearch'e gönderir (opensearch-py kütüphanesi). Her istek, uygulamanın IAM
+          kimliğiyle imzalanır.
+        dst: "vpc-dbws-search-shmosucy37orsjafn7t226ewjm.eu-central-1.es.amazonaws.com : 443"
+        dst_note: >-
+          OpenSearch domain'inin VPC içindeki adresi. Domain 3 sunucudan oluşuyor ve internete kapalı; sadece bu uygulama
+          sunucusundan gelen bağlantıyı kabul ediyor.
+        rows:
+          - [Şifreleme, TLS (HTTPS), gerçek, OpenSearch domain'i sadece şifreli bağlantı kabul eder.]
+          - [Protokol, "HTTP, POST /products/_search (JSON)", gerçek, "Arama bir web isteğidir; sorgu JSON gövdede gider."]
+          - [Kimlik, "IAM, SigV4 imzası (servis: es)", gerçek, "Şifre yok. İsteğe, geçici AWS kimliğiyle hesaplanmış bir imza eklenir."]
+        body_label: İsteğin içeriği (okunur hâle getirilmiş)
+        body: |-
+          POST /products/_search HTTP/1.1
+          Host: vpc-dbws-search-….eu-central-1.es.amazonaws.com
+          Authorization: AWS4-HMAC-SHA256 Credential=…/eu-central-1/es/aws4_request, SignedHeaders=…, Signature=…
+
+          { "query": { "bool": { "must": [ { "multi_match": { "query": "kablosuz kulaklik",
+                                                              "fields": ["name.std^3", "description"],
+                                                              "fuzziness": "AUTO" } } ] } },
+            "size": 24,
+            "aggs": { "categories": { "terms": { "field": "category" } }, "price": { "range": { … } } } }
+      code_intro: >-
+        Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Mor etiketli
+        satırda bir şey bir yerden bir yere gider; gri "Uygulamanın içinde" etiketli satırda iş uygulamanın kendi içinde
+        yapılır. İki istek de aynı kodu çalıştırır; hangi alanda aranacağını adresteki analyzer belirler.
+      app_code:
+        - file: engines/opensearch.py
+          func: api_search
+          title: Arama isteği (iki istekte de aynı kod)
+          sub: Adresteki analyzer=folded ya da analyzer=standard hangi alanda aranacağını seçer.
+          lines:
+            - {match: '@bp.get("/api/search")', say: "Arama isteği buraya gelir; adres aranan metni ve seçimleri taşır.", tag: Tarayıcı → Uygulama}
+            - {match: 'analyzer = request.args.get("analyzer", "folded")', say: Hangi analyzer seçildi, ona bakar., tag: Uygulamanın içinde}
+            - {match: 'field = "name" if analyzer == "folded" else "name.std"', say: "tr_folded ise ad alanında, standard ise adın standard kopyasında arayacak.", tag: Uygulamanın içinde, hl: index}
+            - {match: 'match = {"multi_match":', say: "Sorguyu kurar: aranan metin, adı 3 kat önemli say, açıklamada da ara.", tag: Uygulamanın içinde, hl: analyze}
+            - {match: 'match["multi_match"]["fuzziness"] = "AUTO"', say: "Yazım hatası toleransı açıksa sorguya fuzziness ekler.", tag: Uygulamanın içinde}
+            - {match: 'r = client().search(index="products", body=body)', say: "Sorgu OpenSearch'e gider; ürünler, skorları ve kategori/fiyat sayıları tek cevapta döner.", tag: [Uygulama → OpenSearch, OpenSearch → Uygulama]}
+            - {match: 'hits = [{"product_id": h["_id"], "score":', say: "Her sonucu sayfanın beklediği şekle çevirir; skoru iki basamağa yuvarlar.", tag: Uygulamanın içinde}
+            - {match: 'return jsonify(trace.payload({"hits": hits, "aggs": aggs, "total":', say: "Ürünler, sayılar ve toplam tarayıcıya gider.", tag: Uygulama → Tarayıcı}
+      live:
+        title: Gerçek index'te ne oldu?
+        intro: >-
+          Senin tıklamanla OpenSearch'e giden gerçek arama. Gerçek index'te 200 ürün var.
+        runs:
+          - label: standard ile (senin tıklaman)
+            trigger: true
+            metrics: [[Bulunan ürün, data.total], [İlk ürünün skoru, data.hits.0.score], [Süre, ms]]
+        reading: >-
+          Aynı 5 ürün bulundu. tr_folded ile ilk ürünün skoru 9,3 idi; standard ile biraz daha düşük, çünkü "kulaklık" bu kez
+          bulanık eşleşmeden geldi. Skor tek başına bir anlam taşımaz; sadece aynı aramadaki ürünleri sıralamak için kullanılır.
+          Süre her istekte biraz değişir.
+      query:
+        title: Sayfa OpenSearch'e ne dedi?
+        intro: >-
+          İki sütun, simülasyondaki iki isteğin sorgusu. Tek fark aranan alan. Bir parçanın üzerine gelince cümlede, kodda ve
+          açıklamada aynı yer parlar.
+        cards_title: Parça parça
+        parts:
+          - id: mm
+            say: '"kablosuz kulaklik" metnini'
+            code: '{ "multi_match": { "query": "kablosuz kulaklik",'
+            name: Ne aranıyor?
+            note: multi_match, aynı metni birden fazla alanda arar. Metin önce o alanın analyzer'ından geçer.
+            hl: analyze
+          - id: ff
+            say: ürün adında (3 kat önemli) ve açıklamada,
+            code: '    "fields": ["name^3", "description"],'
+            name: Nerede?
+            note: ^3, o alandaki eşleşmenin skora 3 kat katkı yapması demek. name alanı tr_folded ile index'lenmiş.
+            hl: index
+            indent: 2
+          - id: fs
+            say: ürün adının standard kopyasında (3 kat önemli) ve açıklamada,
+            code: '    "fields": ["name.std^3", "description"],'
+            name: Nerede?
+            note: name.std, aynı adın standard analyzer'la index'lenmiş kopyası; Türkçe harfler korunur. Açıklama yine tr_folded.
+            hl: index
+            indent: 2
+            tag: sadece sağdaki sorguda var
+          - id: fz
+            say: bir iki harf farkı kabul ederek ara.
+            code: '    "fuzziness": "AUTO" } }'
+            name: Ne kadar esnek?
+            note: AUTO, 3–5 harfli kelimelerde 1, daha uzunlarda 2 harf farkı kabul eder. Sağdaki sorguda "kulaklık"ı bulan bu parça.
+            hl: analyze
+            indent: 2
+        columns:
+          - label: tr_folded
+            sub: Sayfa açılırken giden sorgu.
+            via: Uygulama bu sorguyu opensearch-py kütüphanesinin search() metoduyla, SigV4 imzalı HTTPS isteği olarak gönderir.
+            parts: [mm, ff, fz]
+          - label: standard
+            sub: Senin "standard" tıklamanla giden sorgu.
+            via: Aynı search() çağrısı; uygulama sadece aranan alanın adını değiştirdi.
+            parts: [mm, fs, fz]
+            mark: [fs]
+        note: >-
+          Dikkat: sorguda "analyzer" kelimesi yok. Analyzer, alan tanımlanırken seçildi; sorgu bir alanın adını verince o
+          alanın analyzer'ı kendiliğinden çalışır. Bu yüzden analyzer'ı değiştirmek için sorgu değil, aranan alan değişti.
+      back:
+        title: Cevap dönünce ne oldu?
+        intro: >-
+          OpenSearch'ün işi sonuçları verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
+        steps:
+          - who: OpenSearch → Uygulama
+            text: >-
+              Tek cevapta üç şey geldi: skor sırasında ürünler, kategori sayıları ve fiyat aralığı sayıları. OpenSearch kendi
+              içinde 5 parçaya (shard) sordu ve sonuçları birleştirdi.
+          - who: Uygulama
+            text: Her ürünü sayfanın beklediği şekle çevirdi, skorları iki basamağa yuvarladı ve sayıları topladı.
+          - who: Uygulama → Tarayıcın
+            text: Ürünleri, sayıları ve isteğin kaydını tek bir JSON cevabında gönderdi.
+          - who: Tarayıcın
+            text: Sonuç kartlarını skor sırasında çizdi; soldaki kategori ve fiyat sayılarını güncelledi.
+          - who: Tarayıcın → S3
+            text: >-
+              Kartların görsellerini ürün numarasından kurduğu adreslerle istedi; görseller S3'ten geldi. Kartta adı ve fiyatı
+              (OpenSearch) görselle (S3) birleştiren tarayıcıdır.
+          - who: Sonra
+            text: >-
+              Bir sonraki adımda yazım hatalı bir aramayı ("kulaklk") fuzziness açıkken ve kapalıyken deneyeceksin.
+      remember: >-
+        Arama motoru kelimeleri index'teki terimlerle eşleştirir; terimleri analyzer üretir. Aynı analyzer yazarken ve ararken
+        çalıştığı için, Türkçe harfleri sadeleştiren bir analyzer ASCII aramaları da doğru bulur.
+      why_db: >-
+        Neden OpenSearch? Arama; kelimeye bölme, dil kuralları, yazım hatası toleransı ve skorla sıralama ister. OpenSearch
+        bunları ters index üzerinde, 200 ya da 20 milyon ürün için aynı şekilde yapar. Bedeli: asıl kayıt değildir, katalogdan
+        beslenmesi gerekir; ve analyzer değişince her şey yeniden index'lenir.
 
   - page: search
     path: /search?q=kulaklk
