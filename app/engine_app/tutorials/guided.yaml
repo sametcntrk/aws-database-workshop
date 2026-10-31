@@ -48,59 +48,630 @@ steps:
           - [Koleksiyon, "Aynı türden dokümanların durduğu yer. Burada adı products; 200 doküman var."]
           - [$group, "Dokümanları bir alana göre gruplayan ve her grupta hesap (sayma, en küçük, toplam) yapan aşama."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde katalog ve özet sorguları için hazırlık
+      t1:
+        title: Önceden ne vardı? Ana sayfanın verisi depolara nasıl geldi?
         intro: >-
-          Ana sayfa hiç açılmadan, katalog koleksiyonu ve sayfanın özet sorusu hazırlanır. Aşağıdaki beş adım bu hazırlığın
-          sırasıdır.
-        text:
-          - title: Önce sayfanın soruları yazılır
-            text: >-
-              Ana sayfanın iki sorusu var: "her kategoride kaç ürün var ve en ucuzu kaç?" (özet) ve "puanı en yüksek 8
-              ürün" (vitrin). Özet sorusu bir aggregation, vitrin sorusu sıralı bir find olur.
-            code: |-
-              db.products.aggregate([ { $group: { _id: "$category", products: { $sum: 1 }, from_price: { $min: "$price" } } },
-                                      { $sort: { _id: 1 } } ])
-          - title: Her ürün tek bir doküman olur
-            text: >-
-              Ürünler farklı yapıda bilgi taşır: kulaklığın pil süresi, ceketin bedeni. Ortak alanlar (ad, kategori, fiyat,
-              puan) her dokümanda aynı adla durur; farklı olanlar attributes altında toplanır. Gruplama ve filtreleme ortak
-              alanlar üzerinden yapılır.
-            code: |-
-              { _id: "P0021", name: "Akıllı Saat", category: "Elektronik", price: 1299.90, rating: 4.8,
-                attributes: { renk: "siyah", garanti_ay: 24 }, tags: ["yeni"] }
-          - title: Gruplama sunucuda yapılır
-            text: >-
-              Sayma, en küçük ve toplam gibi hesaplar veritabanında, aggregation ile yapılır; uygulamaya sadece sonuç gider.
-              Aggregation'ın başına bir $match konursa (ör. sadece stokta olanlar) önce bir index'le eleme yapılır, sonra
-              gruplanır.
-          - title: Çok okunan özet önbelleğe alınabilir
-            text: >-
-              Kategori sayıları dakikalar içinde pek değişmez ama her ziyarette sorulur. Katalog çok büyüdüğünde bu sonuç
-              birkaç dakikalığına bellekte (ör. ElastiCache) tutulur ya da ürün eklenip silindikçe güncellenen küçük bir özet
-              dokümanına yazılır.
-          - title: Plan ve süre izlenir
-            text: >-
-              Aggregation'ın planı explain ile görülür. Katalog büyüdükçe süre izlenir; özet sorgusu yavaşlarsa önbellek ya
-              da özet dokümanı devreye alınır.
-            code: |-
-              db.products.explain("executionStats").aggregate([ … ])
-      feed:
-        title: Veri nereden geliyor?
-        writes: >-
-          Katalog yönetimi: ürün ekleyen, fiyat ve stok güncelleyen arka ofis ekranları ya da tedarikçi dosyalarını aktaran bir
-          iş. Hepsi uygulama üzerinden yazar.
-        reads: Uygulama, mağaza sayfaları için (ana sayfa, kategori, ürün sayfası).
-        kind: >-
-          Uygulama orkestrasyonu. DocumentDB başka bir veritabanından kendiliğinden veri çekmez. Kendi değişikliklerini ise
-          change streams ile dışarı verebilir.
-        with: >-
-          Ana sayfa tek bir veritabanıyla çalışmaz: fırsat kutusu bellekte duran bir veritabanından (ElastiCache), ürün
-          görselleri nesne deposundan (S3, büyük sistemlerde bir CDN ile), "son baktıkların" şeridi bir olay tablosundan
-          (Keyspaces) gelir. Hepsini aynı sayfada tarayıcı birleştirir; her bölüm kendi isteğiyle gelir.
-        best: >-
-          Katalog tek yerde tutulur, diğer sistemler oradan beslenir. Ana sayfa gibi çok okunan bir sayfada her bölüm ayrı
-          istekle ve birbirini beklemeden yüklenir; biri yavaşlarsa diğerleri gecikmez.
+          Ana sayfa açılmadan önce dört depo zaten dolu: ürünler DocumentDB'de, fotoğraflar S3'te, fırsat ve oturum bellekte
+          (ElastiCache), "baktın" satırları Keyspaces'te. Burada onları dolduran gerçek zinciri görüyorsun: önce zincirin
+          bileşenleri, sonra bir simülasyon, sonra dört aşama (tasarım, ilk yükleme, sürekli besleme, tutarlılık ve onarım).
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1", "t0'daki tıklamadan (ya da sayfanın açılmasından) önceki zaman. Bu bölüm, verinin o ana kadar hedefe nasıl geldiğini anlatır."]
+          - ["Ekip", "Mağazanın sistemini kuran ve işleten mühendisler. Bir kez çalışan kurulum komutlarını onlar gönderir, alarmlara onlar bakar."]
+          - ["Katalog ekibi ve kampanya ekibi", "Ürünleri ekleyen, fiyatları değiştiren ve fırsatları planlayan çalışanlar. Kod yazmazlar; arka ofis ekranlarını kullanırlar."]
+          - ["Koleksiyon ve doküman", "DocumentDB'de bir koleksiyon (ör. products) ürünlerin dosyası, her ürün bir doküman (alanları olan bir kayıt)."]
+          - ["Doğrulama kuralı (validator)", "Koleksiyona konan giriş kontrolü: zorunlu alanlar ve türleri. Kurala uymayan doküman yazılmaz; kapıdaki bilet kontrolü gibi."]
+          - ["Index", "Bir alana göre tutulan sıralı liste; kitabın sonundaki dizin gibi. Sorgu bütün dokümanları taramadan aradığına gider."]
+          - ["Upsert", "\"Bu numarayla doküman varsa güncelle, yoksa yarat.\" Aynı satır kaç kez gelirse gelsin tek doküman olur."]
+          - ["S3, bucket (kova) ve anahtar", "S3, AWS'in dosya deposu. Dosyalar bir kovada durur; her dosyanın tam adı onun anahtarıdır (ör. products/P0009.jpg)."]
+          - ["S3 olayı", "Kovaya yeni dosya gelince S3'ün gönderdiği haber. Bir programı (burada içe aktarma işini) kendiliğinden başlatabilir."]
+          - ["Önceden imzalı adres (presigned URL)", "Kısa süre geçerli, tek bir dosya için izin taşıyan bir S3 adresi. Sahibi o dosyayı şifre bilmeden yükleyebilir; süre dolunca adres işe yaramaz."]
+          - ["AWS Lambda", "Bir olay gelince kısa bir kodu çalıştıran AWS servisi; sunucuyu AWS yönetir."]
+          - ["EventBridge Scheduler", "Bir işi belli bir saatte (bir kez ya da düzenli) başlatan AWS servisi; çalar saat gibi."]
+          - ["Hash ve TTL (süre)", "Hash: bellekte tek anahtar altında birkaç alan (ürün, fiyat, bitiş). TTL: kaydın ömrü; süre dolunca kayıt kendiliğinden silinir."]
+          - ["Partition (bölüm)", "Keyspaces'te aynı anahtarı taşıyan satırların birlikte durduğu yer. Burada her ziyaretçinin kendi bölümü var; satırlar en yenisi başta durur."]
+          - ["CloudWatch", "AWS'in ölçüm ve alarm servisi."]
+          - ["Çerez, ziyaretçi ve persona", "Çerez: tarayıcının sakladığı küçük not. lm_visitor bu tarayıcının ziyaretçi numarası (ör. 7f3a…), lm_persona görevin başında seçilen müşteri (ör. C00001, Ayşe Yılmaz)."]
+          - ["Valkey", "ElastiCache'in kullandığı, Redis ile aynı komutları anlayan bellek veritabanı motoru."]
+          - ["Küme (cluster) ve Availability Zone", "Küme: bir veritabanının birlikte çalışan sunucuları. Availability Zone: aynı bölgedeki ayrı veri merkezlerinden biri; biri çökse diğerleri çalışır."]
+          - ["Sürekli yedek (PITR)", "Point-in-time recovery: veritabanını geçmişteki herhangi bir saniyeye geri açabilme. Yanlış bir toplu değişikliğin ilacı."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra"
+          sütunu veriyi kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim kodumuz" etiketli
+          parçaları mağazanın ekibi yazar. Ana sayfa dört depodan okur, bu yüzden zincir dört kola ayrılır: katalog (DocumentDB),
+          fotoğraflar (S3), fırsat ve oturum (ElastiCache), "baktın" satırları (Keyspaces). Aynı parçalar aşağıdaki simülasyonda
+          birer kutu: üst sırada veriyi getiren ve yazan parçalar, ortada sayfanın okuduğu depolar, altta yandaki işler.
+        inventory:
+          - id: staging
+            name: S3 (içe aktarma klasörü)
+            kind: aws
+            what: Amazon S3 bucket'ı
+            does: >-
+              Eski katalog sisteminin dışa aktardığı ürün dosyaları (ilk yükleme) ve tedarikçilerin her gece gönderdiği ürün
+              dosyaları buraya gelir. Yeni dosya gelince S3 olayı içe aktarma işini başlatır.
+            box: Ürün dosyalarının geldiği klasör; yeni dosya işi başlatır.
+            phases: [2, 3, 4]
+            before: Eski katalog sistemi, tedarikçiler
+            after: importer
+          - id: importer
+            name: İçe aktarma işi (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod
+            does: >-
+              Dosyayı satır satır okur, alanları hedef şekle çevirir (ör. fiyatı metinden sayıya), ürünü ürün numarasıyla
+              DocumentDB'ye yazar (upsert). İlk yüklemede fotoğrafları da kopyalar. Kabul edilmeyen satırı hata klasörüne, sayılarını
+              CloudWatch'a yazar.
+            box: "Dosyayı okur, alanları çevirir, ürünü ürün no'suyla yazar (upsert)."
+            phases: [2, 3, 4]
+            before: staging
+            after: [docdb, images, rejects, monitor]
+          - id: admin
+            name: Katalog yönetim servisi
+            kind: code
+            what: arka ofis programı (ürün ve kampanya ekranlarının arka ucu)
+            does: >-
+              Katalog ekibinin eklediği ya da değiştirdiği ürünü kontrol eder ve DocumentDB'ye yazar. Fotoğraf için S3'ten kısa
+              süreli bir yükleme adresi alır. Kampanyayı kaydeder ve başlama saatine bir zamanlayıcı kurar.
+            box: Ekranlardan gelen ürünü ve kampanyayı yazar; fotoğrafa yükleme adresi verir.
+            phases: [3]
+            before: Katalog ve kampanya ekibi (arka ofis ekranları)
+            after: [docdb, images, scheduler]
+          - id: scheduler
+            name: EventBridge Scheduler
+            kind: aws
+            what: AWS'in zamanlayıcı servisi
+            does: Kampanyanın başlama saatinde kampanya işini bir kez çalıştırır.
+            box: Başlama saatinde kampanya işini bir kez çalıştırır.
+            phases: [3]
+            before: admin
+            after: dealjob
+          - id: dealjob
+            name: Kampanya işi (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod
+            does: >-
+              Kampanyayı DocumentDB'den okur ve fırsatı belleğe yazar (lm:deal, lm:deal:stock); iki anahtara bitiş saatini koyar.
+              Bellek kaybolursa aynı iş fırsatı yeniden kurar.
+            box: "Kampanyayı DocumentDB'den okur, fırsatı belleğe yazar; bitişte kendiliğinden silinir."
+            phases: [3, 4]
+            before: [scheduler, docdb]
+            after: cache
+          - id: web
+            name: Uygulama (mağaza sayfaları)
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucusunda)
+            does: >-
+              Her sayfa açılışında ziyaretçinin oturumunu belleğe yazar (30 dakika süreli). Ürün sayfası açılınca Keyspaces'e bir
+              "baktı" satırı yazar. Kataloğa yazmaz; ana sayfada okur (t0).
+            box: Oturumu belleğe, "baktı" satırını Keyspaces'e yazar.
+            phases: [3]
+            before: Tarayıcı (sayfa açılışları)
+            after: [cache, keyspaces]
+          - id: docdb
+            name: DocumentDB (shop.products, shop.campaigns)
+            kind: aws
+            what: katalog veritabanı
+            does: >-
+              Ürünlerin ve kampanyaların asıl kaydı (tek doğru kaynak). Doğrulama kuralı bozuk dokümanı kapıda durdurur; index'ler
+              sayfaların sorularını hızlandırır.
+            box: Ürünlerin ve kampanyaların asıl kaydı.
+            phases: [1, 2, 3, 4]
+            before: [importer, admin]
+            after: [dealjob, backup, "Ana sayfa sorgusu (t0)"]
+          - id: images
+            name: S3 (ürün görselleri)
+            kind: aws
+            what: Amazon S3 bucket'ı
+            does: Her ürünün fotoğrafı products/<ürün no>.jpg anahtarında. Adres ürün numarasından kurulur; dokümanda yazmaz.
+            box: "Fotoğraflar products/<ürün no>.jpg anahtarında."
+            phases: [1, 2, 3]
+            before: [importer, admin]
+            after: Görsel isteği (t0)
+          - id: cache
+            name: ElastiCache (Valkey)
+            kind: aws
+            what: bellekte çalışan veritabanı
+            does: >-
+              Fırsat (lm:deal, lm:deal:stock) ve oturumlar (lm:session:<ziyaretçi>). Her anahtarın bir süresi var; süre dolunca
+              kendiliğinden silinir. Veriyi birden fazla Availability Zone'da (ayrı veri merkezleri) tutar.
+            box: Fırsat ve oturumlar, süreleriyle.
+            phases: [1, 3, 4]
+            before: [dealjob, web]
+            after: Fırsat kutusu ve oturum (t0)
+          - id: keyspaces
+            name: Keyspaces (dbws.activity_by_user)
+            kind: aws
+            what: geniş sütunlu veritabanı (Cassandra uyumlu)
+            does: >-
+              Ziyaretçi başına olaylar, en yenisi başta. Tablonun varsayılan ömrü 7 gün: satırlar sonra okumalardan kendiliğinden
+              düşer. Tablonun kendi sürekli yedeği (PITR) onu son 35 gün içindeki bir saniyeye geri açabilir.
+            box: Ziyaretçi başına "baktı" satırları, en yenisi başta; 7 gün yaşar.
+            phases: [1, 3, 4]
+            before: web
+            after: Son baktıkların şeridi (t0)
+          - id: rejects
+            name: Hata klasörü (S3)
+            kind: aws
+            what: Amazon S3 bucket'ı
+            does: Kabul edilmeyen satırları sebebiyle saklar; diğer satırlar beklemeden yazılır. Ekip satırı düzeltip yeniden gönderir.
+            box: Reddedilen satırlar, sebebiyle.
+            phases: [4]
+            before: importer
+            after: Ekip (düzeltir, yeniden gönderir)
+          - id: monitor
+            name: CloudWatch alarmları
+            kind: aws
+            what: AWS'in izleme servisi
+            does: >-
+              İçe aktarma işinin sayılarını (okunan, yazılan, reddedilen) ve DocumentDB'nin yazma ölçülerini izler. Reddedilen satır
+              olursa ya da beklenen gece dosyası gelmezse ekibe alarm gönderir.
+            box: "Okunan / yazılan / reddedilen sayılarını izler, alarm verir."
+            phases: [2, 4]
+            before: [importer, docdb]
+            after: Ekip (alarm)
+          - id: backup
+            name: DocumentDB sürekli yedeği (PITR)
+            kind: aws
+            what: DocumentDB'nin yedekleme özelliği
+            does: >-
+              Kataloğu saklama süresi içindeki (1–35 gün) herhangi bir saniyeye, yeni bir kümede geri açar. Yanlış bir toplu
+              değişiklikten sonra doğru dokümanlar oradan geri yazılır.
+            box: Kataloğu geçmişteki bir saniyeye yeni bir kümede açar.
+            phases: [4]
+            before: docdb
+            after: Ekip (geri yükleme)
+        sim_title: "Simülasyon: ana sayfanın verisi depolara nasıl geldi?"
+        sim:
+          kind: pipeline
+          title: Dosyalar ve ekranlar → yazan programlar → DocumentDB, S3, ElastiCache, Keyspaces
+          caption: >-
+            DocumentDB'deki 9 ürün, t0'daki simülasyonun 9 ürünü. Önce depolar boşken ilk yükleme, sonra yeni bir ürünün, gece
+            gelen bir tedarikçi dosyasının, bir fırsat kampanyasının ve bir ziyaretçinin satırlarının kutulardan geçişi, en sonda
+            aynı dosyanın ikinci kez gelmesi, reddedilen satır, izleme, yedek ve bellek kaybı oynuyor. P0130'un dosyadaki eski
+            fiyatı, ziyaretçi numarası ve saatler örnek; diğer değerler canlı sistemden. Son karede depolar, ana sayfanın açıldığı
+            andaki (t0) hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım}
+          rows:
+            - {id: writers, title: "Veriyi getirenler ve yazanlar", side: true}
+            - {id: stores, title: "Ana sayfanın okuduğu depolar"}
+            - {id: helpers, title: "Yandaki işler: hata klasörü, izleme, yedek", side: true}
+          summary: >-
+            Kataloğu ilk yükleme bir kez kurdu; yeni ürünü ürün ekranı, yeni fiyatı gece dosyası, fırsatı kampanya işi, oturumu ve
+            "baktı" satırlarını uygulama yazdı. İkinci kez gelen dosya upsert sayesinde kopya yaratmadı, bozuk satır kapıda kaldı.
+            Son durum: kesitte 9 doküman, t0'daki simülasyonun başladığı durum.
+          boxes:
+            - id: staging
+              row: writers
+            - id: importer
+              row: writers
+            - id: admin
+              row: writers
+            - id: scheduler
+              row: writers
+            - id: dealjob
+              row: writers
+            - id: web
+              row: writers
+            - id: docdb
+              row: stores
+              tables:
+                - name: "shop.products (kesit: t0'daki 9 ürün; katalogda 200)"
+                  cols: [_id, name, category, price]
+                  money: [price]
+                  rows:
+                    - {_id: P0009, name: Nordwind Python ile Veri 9, category: Kitap, price: 101.43, hidden: true}
+                    - {_id: P0068, name: Anadolu Spor Çantası 68, category: Spor, price: 495.48, hidden: true}
+                    - {_id: P0084, name: Anadolu Algoritmalar 84, category: Kitap, price: 397.42, hidden: true}
+                    - {_id: P0090, name: Kapadokya Sırt Çantası 90, category: Moda, price: 81.52, hidden: true}
+                    - {_id: P0113, name: Kapadokya Dambıl Seti 113, category: Spor, price: 194.94, hidden: true}
+                    - {_id: P0119, name: Anadolu Algoritmalar 119, category: Kitap, price: 590.12, hidden: true}
+                    - {_id: P0130, name: Nordwind Yün Kazak 130, category: Moda, price: 291.71, hidden: true}
+                    - {_id: P0143, name: Alpen Koşu Ayakkabısı 143, category: Spor, price: 478.65, hidden: true}
+                    - {_id: P0175, name: Anadolu Yün Kazak 175, category: Moda, price: 601.17, hidden: true}
+                - name: shop.campaigns
+                  cols: [_id, product_id, price, stock, ends_at]
+                  money: [price]
+                  rows:
+                    - {_id: flash-1031, product_id: P0001, price: 2024.30, stock: 50, ends_at: "başlangıç + 6 saat", hidden: true}
+            - id: images
+              row: stores
+              tables:
+                - name: "kova: ürün görselleri (kesit; fırsat ürünü P0001 dahil)"
+                  cols: [anahtar, boyut]
+                  rows:
+                    - {key: P0009, anahtar: products/P0009.jpg, boyut: 64 KB, hidden: true}
+                    - {key: P0068, anahtar: products/P0068.jpg, boyut: 36 KB, hidden: true}
+                    - {key: P0084, anahtar: products/P0084.jpg, boyut: 50 KB, hidden: true}
+                    - {key: P0090, anahtar: products/P0090.jpg, boyut: 28 KB, hidden: true}
+                    - {key: P0113, anahtar: products/P0113.jpg, boyut: 47 KB, hidden: true}
+                    - {key: P0119, anahtar: products/P0119.jpg, boyut: 50 KB, hidden: true}
+                    - {key: P0130, anahtar: products/P0130.jpg, boyut: 60 KB, hidden: true}
+                    - {key: P0143, anahtar: products/P0143.jpg, boyut: 39 KB, hidden: true}
+                    - {key: P0175, anahtar: products/P0175.jpg, boyut: 60 KB, hidden: true}
+                    - {key: P0001, anahtar: products/P0001.jpg, boyut: 48 KB, hidden: true}
+            - id: cache
+              row: stores
+              tables:
+                - name: anahtarlar
+                  cols: [anahtar, değer, ömür]
+                  rows:
+                    - {key: deal, anahtar: "lm:deal (hash)", değer: "P0001 · Alpen Kablosuz Kulaklık 1 · 2.024,30 ₺ (eski 3.373,84 ₺)", ömür: bitişe kadar, hidden: true}
+                    - {key: stock, anahtar: "lm:deal:stock", değer: "50", ömür: bitişe kadar, hidden: true}
+                    - {key: sess, anahtar: "lm:session:7f3a… (hash)", değer: "persona C00001 · last_page /p/P0084", ömür: 30 dk, hidden: true}
+            - id: keyspaces
+              row: stores
+              tables:
+                - name: "activity_by_user · bölüm: 7f3a…"
+                  cols: [event_time, event_type, product_id]
+                  rows:
+                    - {key: k2, event_time: "22:41", event_type: view, product_id: P0084, hidden: true}
+                    - {key: k1, event_time: "22:38", event_type: view, product_id: P0001, hidden: true}
+            - id: rejects
+              row: helpers
+            - id: monitor
+              row: helpers
+            - id: backup
+              row: helpers
+          frames:
+            - phase: 2
+              who: docdb
+              lit: [docdb]
+              packet: {at: docdb, text: "createCollection(\"products\", { validator }) · createIndex({ category: 1, rating: -1 })"}
+              note: {docdb: "kural ve index'ler hazır"}
+              say: >-
+                Bütün depolar boş. Ekip önce products koleksiyonunu bir doğrulama kuralıyla kurdu: adı, bilinen bir kategorisi ve
+                sayı olarak fiyatı olmayan doküman giremez. Index'ler de veriden önce kuruldu; AWS büyük bir yüklemeden önce
+                index'leri kurmayı önerir.
+            - phase: 2
+              who: staging
+              lit: [staging]
+              packet: {at: staging, text: "eski-katalog/products-0001.json (fiyatlar metin: \"309,90 TL\")"}
+              say: >-
+                Eski katalog sistemi ürünlerini dosyalara döktü; dosyalar S3'teki içe aktarma klasörüne kondu. Dosyada fiyatlar
+                metin olarak yazıyor. Kesitte bu dosyanın 8 ürününü görüyorsun; gerçek katalogdaki öteki ürünler aynı yoldan gelir.
+            - phase: 2
+              who: importer
+              lit: [staging, importer, docdb]
+              packet: {at: importer, text: "her satır için updateOne({ _id }, { $set: … }, upsert) · ordered: false"}
+              show: {docdb: [P0009, P0068, P0084, P0090, P0113, P0119, P0130, P0143]}
+              fresh: {docdb: [P0009, P0068, P0084, P0090, P0113, P0119, P0130, P0143]}
+              set: {docdb: {P0130: {price: 309.90}}}
+              note: {docdb: ""}
+              say: >-
+                İçe aktarma işi dosyayı okudu, her fiyatı metinden sayıya çevirdi ("101,43 TL" → 101.43), ürün numarasını _id
+                yaptı ve dokümanları toplu yazdı (kesitte 8'i görünüyor; fırsatın ürünü Alpen Kablosuz Kulaklık 1 de, P0001, bu
+                yüklemeyle geldi). Doğrulama kuralı her dokümanı kapıda kontrol etti.
+            - phase: 2
+              who: importer
+              lit: [importer, images]
+              packet: {at: images, text: "eski-gorseller/9.jpg → products/P0009.jpg …"}
+              show: {images: [P0009, P0068, P0084, P0090, P0113, P0119, P0130, P0143, P0001]}
+              fresh: {images: [P0009, P0068, P0084, P0090, P0113, P0119, P0130, P0143, P0001]}
+              note: {images: ""}
+              say: >-
+                Aynı iş eski sistemin fotoğraflarını görsel kovasına kopyaladı. Her fotoğrafın anahtarı ürün numarasından
+                kuruldu: products/P0009.jpg (P0001'inki de). Dokümana adres yazılmadı; tarayıcı adresi ürün numarasından kendisi
+                kurar.
+            - phase: 2
+              who: monitor
+              lit: [importer, docdb, monitor]
+              packet: {at: docdb, text: "aggregate $group category → Kitap 3 · 101,43 · Moda 2 · 81,52 · Spor 3 · 194,94 (kesitte)"}
+              note: {monitor: "okunan = yazılan · reddedilen 0"}
+              say: >-
+                İş sayılarını CloudWatch'a yazdı: okunan = yazılan + reddedilen. Ekip yüklemeyi ana sayfanın sorusunun aynısıyla
+                kontrol etti: kategori sayıları kaynak dosyadakiyle aynı.
+            - phase: 3
+              who: admin
+              lit: [admin, docdb]
+              packet: {at: admin, text: "updateOne({ _id: \"P0175\" }, { $set: { … } }, upsert: true)"}
+              show: {docdb: [P0175]}
+              fresh: {docdb: [P0175]}
+              say: >-
+                Katalog ekibi ürün ekranından yeni bir ürün ekledi: Anadolu Yün Kazak 175 (Moda, 601,17 ₺). Katalog yönetim
+                servisi alanları kontrol etti ve dokümanı ürün numarasıyla DocumentDB'ye yazdı. Moda artık 3 ürün.
+            - phase: 3
+              who: admin
+              lit: [admin, images]
+              packet: {at: images, text: "PUT products/P0175.jpg (önceden imzalı adres, 15 dk geçerli)"}
+              show: {images: [P0175]}
+              fresh: {images: [P0175]}
+              say: >-
+                Fotoğraf için servis S3'ten 15 dakika geçerli, sadece products/P0175.jpg anahtarına yükleme izni veren bir adres
+                aldı. Ekibin tarayıcısı fotoğrafı bu adresle doğrudan S3'e yükledi; dosya servisin üzerinden geçmedi.
+            - phase: 3
+              who: staging
+              lit: [staging, importer]
+              packet: {at: staging, text: "tedarikci/2026-10-30.json geldi → S3 olayı → içe aktarma işi"}
+              say: >-
+                Gece bir tedarikçinin ürün dosyası klasöre geldi. S3 yeni dosya için bir olay gönderdi; olay içe aktarma işini
+                başlattı. Kimse elle bir şey çalıştırmadı.
+            - phase: 3
+              who: importer
+              lit: [importer, docdb]
+              packet: {at: importer, text: "updateOne({ _id: \"P0130\" }, { $set: { price: 291.71 } }, upsert)"}
+              set: {docdb: {P0130: {price: 291.71}}}
+              fresh: {docdb: [P0130]}
+              note: {monitor: "gece dosyası: okunan 1 · yazılan 1 · reddedilen 0"}
+              say: >-
+                Dosyada tek satır vardı: Nordwind Yün Kazak 130'un yeni fiyatı. İş aynı numaralı dokümanı buldu ve sadece fiyatını
+                değiştirdi: 309,90 → 291,71 ₺. Yeni bir doküman oluşmadı.
+            - phase: 3
+              who: admin
+              lit: [admin, docdb, scheduler]
+              packet: {at: admin, text: "insert shop.campaigns · CreateSchedule at(başlangıç)"}
+              show: {docdb: [flash-1031]}
+              fresh: {docdb: [flash-1031]}
+              say: >-
+                Kampanya ekibi bir fırsat planladı: Alpen Kablosuz Kulaklık 1, 3.373,84 yerine 2.024,30 ₺, 50 adet, 6 saat. Servis
+                kampanyayı DocumentDB'deki campaigns koleksiyonuna yazdı (asıl kayıt) ve başlama saati için zamanlayıcıya bir
+                kerelik bir görev kurdu.
+            - phase: 3
+              who: scheduler
+              lit: [scheduler, dealjob]
+              packet: {at: scheduler, text: "at(başlangıç) → kampanya işini çalıştır"}
+              say: Başlama saati geldi. EventBridge Scheduler kampanya işini bir kez çalıştırdı.
+            - phase: 3
+              who: dealjob
+              lit: [docdb, dealjob, cache]
+              packet: {at: dealjob, text: "HSET lm:deal … · SET lm:deal:stock 50 · EXPIREAT <bitiş>"}
+              show: {cache: [deal, stock]}
+              fresh: {cache: [deal, stock]}
+              note: {cache: ""}
+              say: >-
+                Kampanya işi kampanyayı DocumentDB'den okudu ve fırsatı belleğe yazdı: lm:deal (ürün, fiyatlar, bitiş) ve
+                lm:deal:stock (50). İki anahtara da bitiş saatini koydu; süre dolunca bellek onları kendisi siler.
+            - phase: 3
+              who: web
+              lit: [web, keyspaces]
+              packet: {at: web, text: "INSERT INTO dbws.activity_by_user (user_id, event_time, event_type, product_id, …)"}
+              show: {keyspaces: [k1, k2]}
+              fresh: {keyspaces: [k1, k2]}
+              note: {keyspaces: ""}
+              say: >-
+                Bir ziyaretçi (7f3a…) ürün sayfalarına baktı: önce Alpen Kablosuz Kulaklık 1, sonra Anadolu Algoritmalar 84. Her
+                ürün sayfası açılınca uygulama Keyspaces'e bir "baktı" satırı yazdı. Satırlar ziyaretçinin bölümüne en yenisi
+                başta girer.
+            - phase: 3
+              who: web
+              lit: [web, cache]
+              packet: {at: web, text: "HSET lm:session:7f3a… persona C00001 last_page /p/P0084 · EXPIRE 1800"}
+              show: {cache: [sess]}
+              fresh: {cache: [sess]}
+              say: >-
+                Her sayfa açılışında uygulama oturum kaydını belleğe yazdı ve ömrünü 30 dakika yaptı. Ana sayfa açılınca (t0)
+                aynı kayıt yenilenecek ve ömrü yine 30 dakika olacak.
+            - phase: 4
+              who: importer
+              lit: [staging, importer, docdb]
+              packet: {at: importer, text: "aynı dosya yine geldi → updateOne(P0130, upsert) → değişen yok"}
+              mark: {docdb: {P0130: fix}}
+              say: >-
+                S3 olayı aynı dosya için ikinci kez geldi (S3 olayları en az bir kez teslim edilir; nadiren iki kez) ya da ekip
+                dosyayı yeniden çalıştırdı. İş her satırı ürün numarasıyla yazdığı için aynı dokümanın üstüne yazdı; ikinci bir
+                Nordwind Yün Kazak 130 oluşmadı, kategori sayıları bozulmadı.
+            - phase: 4
+              who: importer
+              lit: [importer, docdb, rejects]
+              packet: {at: docdb, text: "Document failed validation (category: \"Elektronk\")"}
+              mark: {docdb: {P0130: ""}}
+              note: {rejects: "1 satır · P0201 · category: \"Elektronk\"", monitor: "ertesi gece: okunan 3 · yazılan 2 · reddedilen 1"}
+              say: >-
+                Ertesi gecenin tedarikçi dosyasında yeni bir ürünün (P0201) satırı vardı ve kategorisi yanlış yazılmıştı: "Elektronk". Doğrulama kuralı sadece bilinen kategorileri kabul
+                ettiği için dokümanı reddetti. İş satırı ve sebebini hata klasörüne yazdı; diğer satırlar beklemeden yazıldı.
+                Böyle bir doküman girseydi ana sayfada altıncı, hatalı bir kategori kutusu çıkardı.
+            - phase: 4
+              who: monitor
+              lit: [importer, rejects, monitor]
+              note: {monitor: "reddedilen 1 → alarm"}
+              say: >-
+                CloudWatch reddedilen satırı gördü ve ekibe alarm gönderdi. Ekip kategoriyi "Elektronik" olarak düzeltip satırı
+                yeniden gönderecek; ürün o zaman Elektronik kutusunda sayılacak.
+                Beklenen gece dosyası sabaha kadar gelmezse de alarm çalar.
+            - phase: 4
+              who: backup
+              lit: [docdb, backup]
+              note: {backup: "geri dönüş: ör. son 7 gün, saniye saniye"}
+              say: >-
+                Biri yanlışlıkla bütün fiyatları bozan bir dosya yükleseydi: DocumentDB'nin sürekli yedeği kataloğu yüklemeden bir
+                saniye önceki hâliyle yeni bir kümede açar; doğru dokümanlar oradan aynı içe aktarma işiyle geri yazılır.
+            - phase: 4
+              who: dealjob
+              lit: [docdb, dealjob, cache]
+              note: {cache: "bellek kaybolursa: fırsat yeniden kurulur"}
+              say: >-
+                ElastiCache veriyi birden fazla Availability Zone'da tutar. Fırsat anahtarları yine de kaybolsaydı kampanya işi
+                yeniden çalışırdı: kampanyayı DocumentDB'den okur, kalan adedi siparişlerin kaydından (sipariş veritabanı Aurora;
+                ödeme adımlarında göreceksin) hesaplar (50 − satılan) ve anahtarları yeniden yazar. Oturum kaybolsa ziyaretçi bir
+                sonraki sayfada yeni oturum alır; seçtiği müşteri (persona) tarayıcının çerezinde durur.
+            - phase: 4
+              who: keyspaces
+              lit: [keyspaces]
+              note: {cache: "", keyspaces: "satır ömrü 7 gün (TTL)"}
+              say: >-
+                Keyspaces'teki "baktı" satırları 7 gün sonra okumalardan kendiliğinden düşer (TTL); temizlik işi yazılmaz. Yanlış
+                bir silmeye karşı tablonun sürekli yedeği son 35 güne kadar geri dönebilir.
+            - phase: 4
+              who: docdb
+              lit: [docdb, images, cache, keyspaces]
+              note: {keyspaces: "", backup: ""}
+              say: >-
+                Hazır: kesitte 9 doküman (Kitap 3, Moda 3, Spor 3; gerçek katalogda 5 kategoride 200); t0'daki simülasyon bu 9
+                dokümanla başlıyor. Fotoğraflar
+                S3'te, fırsat ve oturum bellekte, "baktı" satırları Keyspaces'te. Ana sayfa açılınca her bölüm kendi deposundan
+                okunacak.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Önce ana sayfanın soruları yazılır, sonra her sorunun cevabının hangi depoda, hangi şekilde duracağına karar verilir.
+              Ürünlerin ve kampanyaların asıl kaydı DocumentDB'dir; bellekteki fırsat onun kısa ömürlü bir kopyasıdır.
+            cards:
+              - title: Ana sayfanın soruları
+                text: >-
+                  Ana sayfa açılınca beş soru sorulur ve her biri tek bir komutla, kendi deposundan cevaplanmalıdır. Hiçbiri
+                  sayfa açılırken başka bir depodan veri taşımayı gerektirmez.
+                code:
+                  - {code: "db.products.aggregate([ { $group: { _id: \"$category\", … } } ])", tag: [Uygulama → DocumentDB], say: "Her kategoride kaç ürün, en ucuzu kaç? (kategori kutuları)"}
+                  - {code: "db.products.find({ rating: { $gte: 4.5 } }).sort({ rating: -1 }).limit(8)", tag: [Uygulama → DocumentDB], say: Puanı en yüksek 8 ürün (vitrin).}
+                  - {code: "HGETALL lm:deal · GET lm:deal:stock", tag: [Uygulama → ElastiCache], say: Fırsat ve kalan adedi.}
+                  - {code: "SELECT product_id … FROM dbws.activity_by_user WHERE user_id = ? LIMIT 40", tag: [Uygulama → Keyspaces], say: Bu ziyaretçinin son baktıkları.}
+                  - {code: "GET products/P0009.jpg", tag: [Tarayıcı → Uygulama, Uygulama → S3], say: "Her kartın fotoğrafı: tarayıcı adresi ürün no'dan kurar, uygulama dosyayı S3'ten okuyup verir."}
+              - title: Kaynaktan hedefe alan alan
+                text: >-
+                  Her bilginin nereden geldiği ve nerede, hangi şekilde duracağı. Ürün dosyalarında fiyat metin olarak gelir; sayıya
+                  çevrilmezse "en ucuz" hesabı yanlış olur, çünkü metinler harf harf karşılaştırılır ("81,52" metni "101,43"ten büyük
+                  sayılır).
+                map:
+                  cols: [Kaynak, Hedef, Kural]
+                  rows:
+                    - ["ürün no (dosya, ürün ekranı)", "products._id", "Doküman kimliği ürün no. Aynı ürün hep aynı dokümanın üstüne yazılır."]
+                    - ["ad, marka, tür, açıklama", "name, brand, type, description (metin)", Olduğu gibi.]
+                    - [kategori, "category (5 değerden biri)", "Gruplamanın anahtarı. Doğrulama kuralı bilinmeyen kategoriyi reddeder."]
+                    - ["fiyat (\"101,43 TL\")", "price (sayı: 101.43)", "İçe aktarma işi sayıya çevirir; en ucuz fiyat ($min) doğru çıksın diye."]
+                    - ["puan, stok", "rating (sayı), stock (tam sayı)", Vitrin puana göre sıralanır.]
+                    - ["renk, garanti, ağırlık (ürüne göre değişir)", "attributes { renk, garanti_ay, agirlik_kg }", "Ürüne özel alanlar tek bir alt dokümanda toplanır."]
+                    - [ürün fotoğrafı, "S3: products/<_id>.jpg", "Dokümanda adres yok; adres ürün numarasından kurulur."]
+                    - ["kampanya (ürün, fiyat, adet, başlangıç, bitiş)", "shop.campaigns → ElastiCache lm:deal + lm:deal:stock", "Asıl kayıt DocumentDB'de; bellekteki kopya bitişte silinir."]
+                    - [ürün sayfası ziyareti, "activity_by_user (user_id, event_time, event_type, product_id, detail)", "Ziyaretçi başına bir bölüm, en yenisi başta; 7 gün yaşar."]
+                    - ["oturum (seçilen müşteri, son sayfa)", "ElastiCache lm:session:<ziyaretçi> (hash)", "30 dakika işlem olmazsa kendiliğinden silinir."]
+              - title: "Hedefin şekli: kapıda kontrol ve index'ler"
+                text: >-
+                  products koleksiyonu bir doğrulama kuralıyla kurulur: adı, bilinen bir kategorisi ve sayı olarak fiyatı olmayan
+                  doküman yazılmaz. Vitrin ve kategori sayfası için index'ler kurulur. Kategori kutularının sorusu (gruplama) bütün
+                  dokümanları okur; katalog çok büyürse sonucu kısa süre önbellekte tutmak düşünülür.
+                code:
+                  - {code: "db.createCollection(\"products\", { validator: { $jsonSchema: {", tag: Ekip → DocumentDB, say: Koleksiyon bir giriş kuralıyla kurulur.}
+                  - {code: "  required: [\"name\", \"category\", \"price\"],", tag: DocumentDB'nin içinde, say: Bu üç alan zorunlu.}
+                  - {code: "  properties: { category: { enum: [\"Elektronik\", \"Ev & Yaşam\", \"Kitap\", \"Moda\", \"Spor\"] },", tag: DocumentDB'nin içinde, say: Sadece bilinen kategoriler.}
+                  - {code: "                price: { bsonType: \"double\", minimum: 0 } } } } })", tag: DocumentDB'nin içinde, say: "Fiyat sayı olmalı, eksi olamaz."}
+                  - {code: "db.products.createIndex({ category: 1, rating: -1 }); db.products.createIndex({ rating: -1 })", tag: Ekip → DocumentDB, say: Kategori sayfası ve vitrin için index'ler.}
+              - title: Diğer depoların şekli
+                text: >-
+                  Fırsat bellekte bir hash olarak durur ve bitiş saatinde kendiliğinden silinir. "Baktı" satırları Keyspaces'te
+                  ziyaretçi numarasına göre bölümlenir ve zamana göre en yenisi başta sıralanır; bu yüzden "son baktıkların" tek bir
+                  okumadır. Tablonun varsayılan ömrü 7 gündür.
+                code:
+                  - {code: "CREATE TABLE dbws.activity_by_user (user_id text, event_time timestamp, event_id uuid, …", tag: Ekip → Keyspaces, say: "Ziyaretçi başına olay tablosu."}
+                  - {code: "  PRIMARY KEY (user_id, event_time, event_id)) WITH CLUSTERING ORDER BY (event_time DESC, event_id ASC)", tag: Keyspaces'in içinde, say: "Bölüm: ziyaretçi; sıra: en yenisi başta."}
+                  - {code: "  AND default_time_to_live = 604800;", tag: Keyspaces'in içinde, say: Her satır 7 gün (604.800 saniye) yaşar.}
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              Mağaza açılmadan önce eski katalog sisteminin ürünleri ve fotoğrafları bir kez taşınır. Bunu ayrı bir program değil,
+              her gece tedarikçi dosyalarını da işleyen aynı içe aktarma işi yapar.
+            cards:
+              - title: Önce kurallar ve index'ler, sonra veri
+                text: >-
+                  Koleksiyon, doğrulama kuralı ve index'ler veri gelmeden kurulur (1. aşamadaki komutlar). AWS, büyük bir veri
+                  kümesini içe aktarmadan önce index'leri kurmayı önerir. Kural baştan durduğu için bozuk bir satır ilk günden içeri
+                  giremez.
+              - title: Dosyalar S3'e, oradan DocumentDB'ye
+                text: >-
+                  Eski sistem ürünleri JSON dosyalarına döker ve dosyalar S3'teki içe aktarma klasörüne konur. İçe aktarma işi her
+                  satırı hedef şekle çevirir ve dokümanları yüzlerce satırlık paketler hâlinde yazar. Paket sırasız yazılır
+                  (ordered: false): bir satır reddedilirse diğerleri yine yazılır. Dosya büyükse iş onu parçalara bölerek işler.
+                code:
+                  - {code: "doc = { \"_id\": row[\"urun_no\"], \"name\": row[\"ad\"], \"category\": row[\"kategori\"],", tag: İçe aktarma işinin içinde, say: Ürün no doküman kimliği olur.}
+                  - {code: "        \"price\": float(row[\"fiyat\"].replace(\" TL\", \"\").replace(\",\", \".\")), … }", tag: İçe aktarma işinin içinde, say: "\"101,43 TL\" → 101.43."}
+                  - {code: "ops.append(UpdateOne({ \"_id\": doc[\"_id\"] }, { \"$set\": doc }, upsert=True))", tag: İçe aktarma işinin içinde, say: "Varsa güncelle, yoksa yarat."}
+                  - {code: "db.products.bulk_write(ops, ordered=False)", tag: [İçe aktarma işi → DocumentDB, DocumentDB → İçe aktarma işi], say: Paket tek seferde gider; reddedilenler cevapta tek tek döner.}
+              - title: Fotoğraflar ürün numarasıyla
+                text: >-
+                  Aynı iş her ürünün fotoğrafını görsel kovasına products/<ürün no>.jpg anahtarıyla kopyalar. Adres ürün numarasından
+                  kurulabildiği için dokümana ayrıca yazılmaz. Yükleme sonunda kovadaki fotoğraf sayısı ürün sayısıyla karşılaştırılır.
+              - title: Yükleme kontrol edilir
+                text: >-
+                  İş okuduğu, yazdığı ve reddettiği satır sayılarını CloudWatch'a yazar; okunan = yazılan + reddedilen olmalıdır.
+                  Ekip ayrıca ana sayfanın sorusunun aynısını çalıştırır: kategori başına ürün sayısı ve en düşük fiyat kaynak
+                  dosyadakiyle aynı mı?
+                code:
+                  - {code: "db.products.aggregate([ { $group: { _id: \"$category\", n: { $sum: 1 }, min: { $min: \"$price\" } } } ])", tag: [Ekip → DocumentDB, DocumentDB → Ekip], say: Kategori başına sayı ve en ucuz fiyat; dosyadakiyle karşılaştırılır.}
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              Mağaza açıldıktan sonra katalog üç yoldan değişir: ürün ekranı, gece gelen tedarikçi dosyaları ve kampanyalar. Oturum
+              ve "baktı" satırlarını ise ziyaretçilerin sayfa açılışları üretir.
+            cards:
+              - title: Ürün ekranından DocumentDB'ye
+                text: >-
+                  Katalog ekibi ürünü ekrandan ekler ya da değiştirir. Katalog yönetim servisi alanları kontrol eder ve dokümanı ürün
+                  numarasıyla yazar. Kategori sayıları ayrıca bir yerde tutulmaz: ana sayfa açıldığında gruplama onları güncel
+                  dokümanlardan hesaplar.
+                code:
+                  - {code: "db.products.update_one({ \"_id\": \"P0175\" }, { \"$set\": { \"name\": \"Anadolu Yün Kazak 175\", \"category\": \"Moda\", \"price\": 601.17, … } }, upsert=True)", tag: Katalog yönetim servisi → DocumentDB, say: Yeni ürün kataloğa yazılır.}
+              - title: Fotoğraf doğrudan S3'e
+                text: >-
+                  Servis S3'ten kısa süre geçerli, sadece o ürünün anahtarına yükleme izni veren bir adres alır (en fazla 7 gün geçerli
+                  olabilir; bu zincirde 15 dakika). Ekibin tarayıcısı fotoğrafı bu adresle doğrudan S3'e yükler; büyük dosya servisin
+                  üzerinden geçmez.
+                code:
+                  - {code: "url = s3.generate_presigned_url(\"put_object\", Params={ \"Bucket\": …, \"Key\": \"products/P0175.jpg\" }, ExpiresIn=900)", tag: Katalog yönetim servisi → S3, say: "15 dakika geçerli, tek dosyalık yükleme adresi."}
+                  - {code: "PUT <url>   (fotoğraf)", tag: Ekibin tarayıcısı → S3, say: Fotoğraf doğrudan kovaya yüklenir.}
+              - title: Gece gelen tedarikçi dosyası
+                text: >-
+                  Tedarikçi dosyası klasörün tedarikci/ bölümüne gelince S3 bir olay gönderir; olay içe aktarma işini başlatır. İş
+                  ilk yüklemedeki aynı kodla çalışır: her satırı ürün numarasıyla yazar, değişen alanlar güncellenir.
+                code:
+                  - {code: "Events: [\"s3:ObjectCreated:*\"], Filter: { Prefix: \"tedarikci/\" } → içe aktarma işi", tag: S3 → İçe aktarma işi, say: Yeni dosya işi kendiliğinden başlatır.}
+              - title: Fırsat kampanyası belleğe
+                text: >-
+                  Kampanya önce DocumentDB'deki campaigns koleksiyonuna yazılır; asıl kayıt odur. Servis EventBridge Scheduler'da
+                  başlama saati için bir kerelik bir görev kurar. Saat gelince kampanya işi fırsatı belleğe yazar ve iki anahtara
+                  bitiş saatini koyar. Satış sırasında kalan adet bellekte azaltılır (görevin 2. adımında göreceksin).
+                code:
+                  - {code: "HSET lm:deal product_id P0001 name \"Alpen Kablosuz Kulaklık 1\" price 2024.30 old_price 3373.84 ends_at <bitiş>", tag: Kampanya işi → ElastiCache, say: Fırsatın bilgileri tek anahtarda.}
+                  - {code: "SET lm:deal:stock 50", tag: Kampanya işi → ElastiCache, say: Kalan adet sayacı.}
+                  - {code: "EXPIREAT lm:deal <bitiş> · EXPIREAT lm:deal:stock <bitiş>", tag: Kampanya işi → ElastiCache, say: Bitişte ikisi de kendiliğinden silinir.}
+              - title: Oturum ve "baktı" satırları
+                text: >-
+                  Ziyaretçinin her sayfa açılışında uygulama oturumu belleğe yazar ve ömrünü 30 dakikaya ayarlar. Ürün sayfası
+                  açılınca Keyspaces'e bir "baktı" satırı yazar; satır ziyaretçinin bölümüne girer ve tablonun varsayılan ömrünü
+                  (7 gün) alır.
+                code:
+                  - {code: "HSET lm:session:<ziyaretçi> persona C00001 last_page /p/P0084 seen_at <şimdi>", tag: Uygulama → ElastiCache, say: Oturum kaydı.}
+                  - {code: "EXPIRE lm:session:<ziyaretçi> 1800", tag: Uygulama → ElastiCache, say: 30 dakika işlem olmazsa silinir.}
+                  - {code: "INSERT INTO dbws.activity_by_user (user_id, event_time, event_id, event_type, product_id, detail) VALUES (…, 'view', 'P0084', …)", tag: Uygulama → Keyspaces, say: "\"Baktı\" satırı, ziyaretçinin bölümüne."}
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              Aynı dosya iki kez gelirse, bir satır bozuksa, yanlış bir toplu değişiklik yapılırsa ya da bellek kaybolursa ne olur?
+              Her biri için bir parça vardır.
+            cards:
+              - title: Aynı dosya iki kez gelirse
+                text: >-
+                  S3 olayları en az bir kez teslim edilir; nadiren aynı olay iki kez gelir. Ekip de bir dosyayı bilerek yeniden
+                  çalıştırabilir. İş her satırı ürün numarasıyla upsert ettiği için ikinci geliş aynı dokümanların üstüne yazar;
+                  kopya ürün oluşmaz, kategori sayıları bozulmaz.
+              - title: Bozuk satır kapıda kalır
+                text: >-
+                  Doğrulama kuralına uymayan doküman (bilinmeyen kategori, metin fiyat) yazılmaz; DocumentDB "Document failed
+                  validation" hatası verir. Paket sırasız gittiği için diğer satırlar yazılır. İş reddedilen satırı ve sebebini hata
+                  klasörüne yazar; ekip düzeltip yeniden gönderir.
+                code:
+                  - {code: "except BulkWriteError as e:", tag: DocumentDB → İçe aktarma işi, say: Reddedilen satırlar cevapta tek tek döner.}
+                  - {code: "    s3.put_object(Bucket=\"lm-import-rejects\", Key=f\"{dosya}.rejects.json\", Body=json.dumps(e.details[\"writeErrors\"]))", tag: İçe aktarma işi → S3, say: Satırlar ve sebepleri hata klasörüne.}
+              - title: İzleme ve alarm
+                text: >-
+                  İş her dosya için okunan, yazılan ve reddedilen sayılarını CloudWatch'a yazar. Reddedilen satır olursa ya da
+                  beklenen gece dosyası gelmezse alarm çalar. DocumentDB'nin DocumentsInserted ve DocumentsUpdated ölçüleri de
+                  yazmaların gerçekten olduğunu gösterir.
+              - title: Yanlış toplu değişiklik
+                text: >-
+                  DocumentDB sürekli yedek alır; saklama süresi 1 ile 35 gün arasında seçilir (varsayılan 1 gün; katalog için ör. 7 gün). Yanlış
+                  bir dosya bütün fiyatları bozarsa küme, yüklemeden bir saniye önceki hâliyle yeni bir küme olarak açılır. Doğru
+                  dokümanlar oradan dışa aktarılır ve aynı içe aktarma işiyle geri yazılır.
+                code:
+                  - {code: "aws docdb restore-db-cluster-to-point-in-time --source-db-cluster-identifier <katalog> \\", tag: Ekip → AWS, say: Kataloğun eski hâli…}
+                  - {code: "  --db-cluster-identifier katalog-geri --restore-to-time <yüklemeden önceki saniye>", tag: Ekip → AWS, say: "…yeni bir kümede açılır."}
+              - title: Bellek ve olay tablosu
+                text: >-
+                  ElastiCache veriyi birden fazla Availability Zone'da tutar. Fırsat anahtarları yine de kaybolursa kampanya işi
+                  yeniden çalıştırılır: kampanyayı DocumentDB'den okur, kalan adedi sipariş veritabanından (Aurora) hesaplar ve anahtarları yeniden
+                  yazar. Kaybolan oturum bir sonraki sayfada yeniden yaratılır. Keyspaces'teki satırlar 7 gün sonra okumalardan
+                  kendiliğinden düşer (diskten genellikle 10 gün içinde silinir); yanlış bir silmeye karşı tablo son 35 güne kadar
+                  geri açılabilir.
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
