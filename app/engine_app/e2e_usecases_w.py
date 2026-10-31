@@ -2974,3 +2974,778 @@ KEYSPACES_W.append(wusecase("migration", 10, sim="w_migration",
 
 USECASES_W["keyspaces"] = KEYSPACES_W
 PAGE_SVC["keyspaces"] = "ks"
+
+
+# ====================================================================== ElastiCache (Valkey) (page id "elasticache"), Turkish, model 2
+# The ten workloads of the model 1 ElastiCache page (e2e_usecases.EC_USECASES), rebuilt: R1 in sub-items from R1_CATALOG,
+# weights from the story, the best fit first. The model 1 data stays for the untouched English elasticache.html.
+# Twins: ElastiCache and MemoryDB run the same Valkey engine, so they get the same R1 points on every card; only R2-R5
+# separate them. The cards "session", "rate" and "reco" are the same workloads as the DynamoDB cards "session", "rate" and
+# "ads": same rows, weights and points (the reasons name this page's features). The same mechanism gets the same reduction:
+# ElastiCache R3 4 when a loss is accepted (no durable log in Serverless), 1 when the row wants "never lost";
+# MemoryDB R4 6 (no serverless option, node type and shard count), R5 4-6 (node-hours for a small or peaky load);
+# MemoryDB R2: the log commit of a write (single-digit ms) only where writes meet a latency limit.
+# Sources of the limits and numbers in the reasons below (the hedges are the hedges of the source):
+#  - Valkey: single-threaded command execution https://valkey.io/topics/latency/ ; transactions without rollback
+#    https://valkey.io/topics/transactions/ ; expire error 0-1 ms https://valkey.io/commands/expire/ ; sorted sets O(log N)
+#    https://valkey.io/topics/sorted-sets/ ; HyperLogLog 12 KB, 0.81% https://valkey.io/topics/hyperloglogs/ ; Pub/Sub
+#    at-most-once https://valkey.io/topics/pubsub/ ; asynchronous replication and the lost-write window, lock release by a
+#    script https://valkey.io/topics/cluster-spec/ , https://valkey.io/topics/distlock/ ; GEOSEARCH https://valkey.io/commands/geosearch/
+#  - ElastiCache Serverless: 30,000 ECPU/s on an empty cache, doubling every 2-3 minutes, minimum ECPU ready within 60 minutes
+#    https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Scaling-serverless.html ; ECPU per KB, 100 MB minimum for Valkey
+#    https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.corecomponents.html ; 99.99% SLA, Multi-AZ
+#    https://aws.amazon.com/elasticache/faqs/ ; supported commands (EVAL, SPUBLISH, GEOSEARCH yes; KEYS not on Serverless)
+#    https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/SupportedCommands.html ; node-based Valkey 9.0 durability
+#    https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/durability.html
+#  - MemoryDB: Multi-AZ transaction log, microsecond reads, single-digit millisecond writes, node-based clusters
+#    https://docs.aws.amazon.com/memorydb/latest/devguide/what-is-memorydb.html
+#  - SQS: at-least-once delivery, messages stored in multiple AZs before the acknowledgement
+#    https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues.html ; long polling up to
+#    20 seconds https://aws.amazon.com/sqs/faqs/ ; dead-letter queue after maxReceiveCount
+#    https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html
+#  - DynamoDB TTL "within a few days", partition 3,000 read / 1,000 write units per second, conditional writes: see the
+#    DynamoDB block above. Aurora MVCC, readers, PostGIS: see the Aurora block above.
+from .e2e_usecases import EC_USECASES as _EM1  # noqa: E402
+
+_EOLD = {uc["id"]: uc for uc in _EM1}
+CATEGORY.setdefault("sqs", ("message queue", "mesaj kuyruğu"))
+LINK.setdefault("sqs", "elasticache")      # SQS has no page yet; the ElastiCache page (card 8, M3) compares them
+CATEGORY.setdefault("sns", ("publish-subscribe", "yayın-abone servisi"))
+LINK.setdefault("sns", "elasticache")      # SNS has no page yet; the ElastiCache page (card 6) compares them
+
+
+def estory(uid):
+    return _EOLD[uid]["story"][1]
+
+
+ELASTICACHE_W = []
+
+# ------------------------------------------------------------------ 1. sessions (the DynamoDB card "session": same rows, weights, points)
+ELASTICACHE_W.append(wusecase("session", 1, sim="w_session",
+    title="Oturumlar ve login token'ları",
+    key="Key: session id. Value: kullanıcı id'si, rol, son sayfa; bir hash ve bir TTL.",
+    story=estory("session"),
+    wnote="R1 toplam 55 ve en büyük: oturumun doğası (her istekte oku ve süresini yenile, 30 dakikada tam anında düş, milisaniyenin altında cevap ver) engine'in algoritmasıyla doğrudan ilgilidir. "
+          "R2 20 ile ikinci: saniyede 40.000 okuma ve yenileme gün içinde dalgalanır. R3 5'te, en düşük sınırdadır: kaybolan oturum yalnız yeni bir login'dir.",
+    rows=[
+        row("EY", 10, "Soru her istekte sorulur ama basittir: id ile tek bir oturum. İş yükünü süre sonu ve hız ayırır.",
+            "Tek soru: \"bu session id'nin oturumu\". Uygulama session id'yi cookie'den bilir. Oturum küçük bir nesnedir (1 KB'tan az).",
+            "Bu okuma her HTTP isteğinin önündedir; key ile doğrudan gidilemezse her sayfa yavaşlar."),
+        row("YD", 20, "Oturumun güvenliği süre sonuna bağlıdır: süresi dolan oturum asla okunmamalı.",
+            "Oturum 30 dakika hareketsizlikten sonra düşmeli; 30 dakika 1 saniye sonra gelen istek yeni login'e gitmeli. Süre her sayfa görüntülemede yenilenmeli.",
+            "Süresi dolmuş bir oturum hâlâ okunabiliyorsa, ortak bir bilgisayarda bırakılan oturum başkası tarafından kullanılabilir. Bu bir güvenlik açığıdır."),
+        row("OY", 10, "Her istekte bir okuma ve bir yenileme olur; ikisinin tek işlem olması isteği yarıya indirir.",
+            "Her istekte oturumu oku ve süresini yenile; bu, uygulama kodunda tek satır ve mümkünse tek istek olmalı.",
+            "Okuma ve yenileme iki ayrı istekse saniyede 40.000 sayfa için 80.000 istek gerekir ve her sayfa iki gidiş-dönüş bekler."),
+        row("DA", 15, "1 ms sınırı bir trafik sayısı değil, engine'in veriyi nerede ve nasıl tuttuğunun sonucudur.",
+            "Okuma 1 milisaniyenin altında dönmeli, çünkü her sayfa isteğine eklenir.",
+            "Disk tabanlı bir engine'in tek haneli milisaniyesi bile günde milyonlarca sayfada hissedilir: 5 ms her sayfaya 5 ms ekler."),
+        row("R2", 20, "Saniyede 40.000 okuma ve 40.000 yenileme, gün içinde dalgalı.",
+            "Saniyede 40.000 okuma ve 40.000 süre yenilemesi; öğle ve akşam tepeleri gece trafiğinin birkaç katı. Tepe anında da cevap aynı hızda kalmalı.",
+            "Tepe anında yavaşlayan bir oturum store'u bütün sayfaları birlikte yavaşlatır; kampanya akşamı en çok ziyaretçi en yavaş sayfayı görür."),
+        row("R3", 5, "Kaybolan oturum yalnız yeni bir login'dir; sepet ve sipariş başka yerde kalıcıdır.",
+            "Düşük: kaybolan oturum yeni bir login'dir. Bir arızada bütün kullanıcıların yeniden login olması kabul edilir ama istenmez.",
+            "Oturum türetilmiş bir veridir; kaynağı kullanıcı hesabıdır. Kaybı can sıkıcıdır, zararlı değildir."),
+        row("R4", 10, "Ekip sunucu istemiyor; ama oturum basit bir iş yüküdür ve operasyon farkı küçüktür.",
+            "Ekip sunucu, node ve yama istemiyor; serverless tercih. Süre yenileme uygulama kodunda tek satır olmalı.",
+            "Oturum altyapısı ürün değildir; ekibin zamanını almamalıdır. Yenileme karmaşıksa geliştiriciler onu atlar ve oturumlar erken düşer."),
+        row("R5", 10, "Veri küçük ve kısa ömürlüdür; fark istek başına fiyatta ve sürekli çalışan kapasitededir.",
+            "Trafik dalgalı; istek ya da kullanım başına ödeme. Toplam oturum verisi birkaç GB'ı geçmez.",
+            "Kısa ömürlü küçük veri için GB fiyatı az etkilidir, istek fiyatı belirleyicidir; saniyede 80.000 istek aylık faturada görünür."),
+    ],
+    cands=["ec", "mdb", "ddb"],
+    scores={
+        "ec": [sc(10, "GET ya da HGETALL lm:session:{id} key ile doğrudan, bellekten okumadır (Ö1). Puan kırılmadı."),
+               sc(10, "EXPIRE süreyi milisaniye hassasiyetle uygular; süresi dolmuş bir key hiçbir okumada dönmez (Ö4). Puan kırılmadı."),
+               sc(10, "GETEX lm:session:{id} EX 1800 oturumu okur ve süresini aynı komutta yeniler; tek istek, tek satır (Ö3). Puan kırılmadı."),
+               sc(10, "Valkey bütün veriyi bellekteki bir hash table'da tutar; komut mikrosaniyelerdedir ve AWS'e göre Serverless'ta okumaların yarısı (p50) 1 ms'nin altında döner (Ö1). Puan kırılmadı: Lale Market'in 1,3–1,8 ms ölçümü (B1–B5) Python istemcisi ve TLS dahil uçtan uca süredir; bu satır engine'in kendi süresini puanlar."),
+               sc(10, "Serverless belleği ve trafiği izleyip kendisi büyür; okumalar tepe anında da milisaniyenin altındadır (Ö6). Puan kırılmadı."),
+               sc(4, "Serverless veriyi birkaç AZ'de replica olarak tutar ve failover yapar (Ö7), ama her yazmayı kalıcı bir log'a yazmaz. 6 puan kırıldı: bir arızada son oturumlar kaybolabilir ve kullanıcılar yeniden login olur; bu kartta kabul edilen bir sonuçtur."),
+               sc(10, "Serverless: node, yama ve kapasite planı yoktur. Puan kırılmadı."),
+               sc(8, "Saklanan veri (GB-saat) ve istek (ECPU) başına ödenir. 2 puan kırıldı: bellekteki GB pahalıdır; ama oturum verisi birkaç GB'ı geçmediği için fark küçüktür.")],
+        "mdb": [sc(10, "Aynı Valkey engine'i: key ile doğrudan, bellekten okuma. Puan kırılmadı."),
+                sc(10, "EXPIRE aynı biçimde milisaniye hassasiyetle çalışır. Puan kırılmadı."),
+                sc(10, "GETEX okuma ve yenilemeyi tek komutta yapar; engine aynıdır. Puan kırılmadı: MemoryDB'de bu komutun bir yazma olarak log'u beklemesi servisin tasarımıdır ve R2'de sayılır."),
+                sc(10, "Veri bellekteki hash table'dadır; okumalar mikrosaniyelerdedir. Puan kırılmadı."),
+                sc(7, "Okumalar mikrosaniyede kalır. 3 puan kırıldı: süre yenilemesi bir yazmadır ve MemoryDB yazmayı çoklu AZ'li log'a işledikten sonra onaylar (tek haneli milisaniye). 1 ms sınırı için okuma GET ile yapılır ve süre her istekte değil, kalan süre yarıya indiğinde ayrı bir komutla yenilenir (B5); o isteklerde gecikme milisaniyelere çıkar. Kart 3'te her istek bir INCR yazmasıdır ve kırılım bu yüzden daha büyüktür (5)."),
+                sc(10, "Her yazma çoklu AZ'li bir transaction log'unda kalıcıdır; bir arıza oturum kaybetmez. Puan kırılmadı."),
+                sc(6, "Yama ve failover yönetilir. 4 puan kırıldı: MemoryDB'de serverless seçenek yoktur; node tipi, shard ve replica sayısı ekibin işidir."),
+                sc(5, "Node saat başına ödenir. 5 puan kırıldı: dalgalı trafiğe rağmen node'lar tepe için boyutlanır ve gece de ödenir; bu kartın istemediği dayanıklılığa para verilir.")],
+        "ddb": [sc(10, "GetItem session id ile doğrudan okumadır. Puan kırılmadı."),
+                sc(6, "TTL alanı süresi dolan oturumu siler ve okuma bir koşulla süresi dolmuş oturumu reddedebilir. 4 puan kırıldı: silme \"genellikle birkaç gün içinde\" olur; \"süresi dolan asla okunmamalı\" isteği ancak uygulamanın her okumada expires_at'i karşılaştırmasıyla karşılanır."),
+                sc(6, "UpdateItem SET expires_at ve ReturnValues = ALL_NEW okuma ve yenilemeyi tek istekte yapar. 4 puan kırıldı: böylece her sayfa görüntüleme bir yazma olur ve yazma okumadan yavaştır (fiyatı R5'te sayıldı)."),
+                sc(5, "Veri SSD'deki partition'lardadır; key ile okuma tek haneli milisaniyedir. 5 puan kırıldı: 1 ms sınırı tek başına karşılanmaz; mikrosaniye için önüne DAX (DynamoDB'nin bellek içi cache'i) konmalıdır."),
+                sc(10, "Partition'lara dağılım 40.000 okumayı ve yazmayı kolayca taşır. Puan kırılmadı: gecikme engine'in depolamasından gelir ve R1.4'te (DA) bir kez sayıldı."),
+                sc(10, "Her yazma birkaç AZ'de saklanır. Puan kırılmadı: bu satırda en güçlü aday, ama bu kartta dayanıklılık en düşük ağırlıktadır."),
+                sc(10, "Serverless. Puan kırılmadı: süre kontrolünün kodu R1.2'de sayıldı."),
+                sc(6, "İstek başına ödenir. 4 puan kırıldı: her sayfada bir yenileme yazması, saniyede 40.000 yazma birimi demektir; bellek içi store'un istek fiyatından çok yüksektir.")],
+    },
+    h2h={
+        "mdb": "Kalıcı bellek içi key-value (MemoryDB) ile kafa kafaya. Bu karşılaştırma R1 ile R3–R5'in farkını en net gösteren karşılaştırmadır: iki aday aynı Valkey engine'ini çalıştırır ve R1'in dört alt maddesinde ikisi de tam puan alır. "
+               "Fark yalnız üreticinin servis tasarımındadır. MemoryDB her yazmayı çoklu AZ'li bir log'a işler; bu, oturumu bir arızadan korur ama her süre yenilemesini tek haneli milisaniyelik bir yazmaya çevirir (R2). "
+               "Serverless seçeneği olmadığı için node'lar tepe için boyutlanır ve gece de ödenir (R4, R5). Bu kartta dayanıklılığın ağırlığı en düşük sınırdadır (5), çünkü kaybolan oturum yalnız yeni bir login'dir. "
+               "Hangi koşul değişseydi MemoryDB seçilirdi: oturum kaybı pahalı olsaydı (örneğin bir bankacılık işleminin ortasındaki oturum) ya da oturumda yeniden kurulamayan bir durum (çok adımlı bir başvuru formu) tutulsaydı.",
+        "ddb": "Key-value (DynamoDB) ile kafa kafaya. DynamoDB bu kartta üçüncüdür ve nedeni R1'dedir, yani engine'in doğasındadır. "
+               "Oturumun iki temel ihtiyacı DynamoDB'nin algoritmasıyla çelişir: süre sonu tam anında olmalıdır, ama DynamoDB TTL'i arka planda ve günler içinde siler; okuma milisaniyenin altında olmalıdır, ama DynamoDB veriyi SSD'deki partition'larda tutar. "
+               "Okuma ve yenileme tek bir UpdateItem olabilir, ama bu her sayfayı bir yazmaya çevirir ve R5'te faturayı büyütür. DynamoDB'nin güçlü olduğu dayanıklılık ise bu kartta en düşük ağırlıktadır. "
+               "Hangi koşul değişseydi DynamoDB seçilirdi: oturum kaybı kabul edilemez olsaydı ve 5–10 ms yeterli olsaydı, ya da oturum okuması her istekte değil yalnız login'de yapılsaydı (imzalı token kullanan bir mimaride yalnız iptal listesi tutulsaydı).",
+    },
+    verdict="Karar: ElastiCache {ec}, MemoryDB {mdb}, DynamoDB {ddb}. Bu iş yüküne en uygun servis ElastiCache'tir. Engine uyumunda iki Valkey servisi eşittir (55'te 55); ElastiCache'i öne geçiren serverless işletimi ve bu kartın istemediği dayanıklılığa para ödetmemesidir. "
+            "ElastiCache seçtiğimizde artımız: tek komutla oku ve yenile, saniyesinde düşen oturum, mikrosaniye okuma ve sunucusuz işletim. "
+            "Eksimiz: bir arızada son oturumlar kaybolabilir; uygulama \"oturum yok\" durumunu login'e yönlendirerek sakin karşılamalı ve sepet gibi değerli durumu oturumda değil kalıcı store'da tutmalıdır. Bir koşul değişseydi: oturum kaybı pahalı olsaydı MemoryDB kazanırdı."))
+
+# ------------------------------------------------------------------ 2. live leaderboard (Lale Market)
+ELASTICACHE_W.append(wusecase("board", 2, sim="w_board",
+    title="Canlı liderlik tabloları (Lale Market)",
+    key="Key: lm:leaderboard. Value: bir sorted set; member müşteri id'si, score gelir.",
+    story=estory("board"),
+    wnote="R1 toplam 45: tablonun üç engine sorusu (ilk 10 ve \"kaçıncı sıradayım\" nasıl sorulur, bir sipariş skora nasıl eklenir, sıra nerede tutulur) her okumada ve her checkout'ta çalışır. "
+          "R2 20 ile ikinci: kampanya akşamı en çok sipariş ve en çok okuma aynı anda gelir. R3 15'tir: tablo yeniden kurulabilir, ama 4 dakikalık boş bir vitrin görünür bir kesintidir.",
+    rows=[
+        row("EY", 20, "Ana sayfayı açan her müşteri kendi sırasını sorar; saniyede 3.000 sıra sorgusu bu iş yükünün en sık sorusudur.",
+            "İki soru: \"ilk 10, skorlarıyla\" ve \"bu müşteri 2 milyon müşteri arasında kaçıncı sırada\". İkisi de her okumada güncel olmalı.",
+            "Sıra sorusunun ucuz bir yolu yoksa her sorgu, müşterinin üstündeki herkesi saymak demektir; 2 milyon müşteride bu her okumada binlerce satır okumaktır."),
+        row("OY", 15, "Her checkout bir ekleme yapar ve aynı müşterinin iki siparişi aynı anda gelebilir.",
+            "\"Bu müşterinin skoruna şu tutarı ekle\" okumadan ve atomik olmalı; aynı anda gelen iki siparişin ikisi de sayılmalı ve müşteri hemen yeni sırasına geçmeli.",
+            "Önce okuyup sonra yazan bir ekleme bir siparişi kaybeder; ay sonu hediyesi yanlış kişiye gider."),
+        row("DA", 10, "Sıranın yazma anında korunması engine'in veri yapısına bağlıdır; okumanın 10 ms sınırı da buradan gelir.",
+            "Sıra yazma anında korunmalı, okuma anında sıralama yapılmamalı. Okuma 10 ms'nin altında dönmeli.",
+            "Okuma anında 2 milyon müşteriyi sıralamak saniyede 3.000 okumada imkânsızdır; ana sayfa tablonun gelmesini bekler."),
+        row("R2", 20, "Kampanya akşamı saniyede 400 sipariş ve 3.000 okuma aynı anda gelir.",
+            "Normal günde saniyede 20, kampanyada 400 ekleme; her zaman saniyede yaklaşık 3.000 okuma. Tepe anında da okuma 10 ms'nin altında kalmalı.",
+            "Ana sayfa tabloyu bekler; tepe anında yavaşlayan tablo kampanya akşamının bütün ana sayfalarını yavaşlatır."),
+        row("R3", 15, "Tablo siparişlerden yeniden kurulur, ama 4 dakikalık boş bir vitrin müşteriye görünür.",
+            "Orta: tablo Aurora'daki siparişlerden 4 dakikada yeniden hesaplanır. Bir arızada bu 4 dakika kabul edilir; ay sonu hediyesi tablodan değil siparişlerden verilir.",
+            "Kayıp bir vitrin kesintisidir, para kaybı değildir; ama kampanya akşamı boş bir tablo \"bir şey bozuk\" izlenimi verir."),
+        row("R4", 10, "İki geliştirici sunucu istemiyor; yeniden kurma işi (Seed) zaten var.",
+            "İki geliştirici, sunucu istemiyor. Yeniden hesap işi zaten var (Admin Console'daki Seed); başka bir iş yazılmamalı.",
+            "Küçük ekipte her yeni bileşen bir nöbet listesi demektir."),
+        row("R5", 10, "Veri küçüktür; belirleyici olan okuma fiyatı ve boş saatlerde ödenen minimumdur.",
+            "2 milyon member birkaç yüz MB tutar. Okuma hacmi yüksek, yazma hacmi düşük; trafik kampanya akşamlarında sıçrar.",
+            "Küçük veride GB fiyatı az etkilidir; boş saatlerde sürekli çalışan kapasite ve okuma başına fiyat faturayı belirler."),
+    ],
+    cands=["mdb", "ec", "ddb"],
+    scores={
+        "ec": [sc(10, "ZREVRANGE lm:leaderboard 0 9 WITHSCORES ilk 10'u, ZREVRANK bir müşterinin sırasını tek komutla verir (Ö2). Puan kırılmadı."),
+               sc(10, "ZINCRBY skoru okumadan ve atomik artırır, member'ı hemen yeni yerine taşır; komutlar sırayla çalıştığı için iki sipariş de sayılır (Ö3). Puan kırılmadı."),
+               sc(10, "Sorted set sırayı her yazmada O(log N) ile korur ve bellektedir; okuma anında sıralama yoktur, cevap mikrosaniyelerdedir (Ö1, Ö2). Puan kırılmadı."),
+               sc(10, "Serverless saniyede 3.000 okumayı ve 400 eklemeyi kendisi taşır (Ö6). Puan kırılmadı."),
+               sc(4, "Replica'lar bir node arızasında tabloyu ayakta tutar (Ö7), ama kalıcı log yoktur. 6 puan kırıldı: bir arıza son eklemeleri ya da bütün tabloyu götürebilir; Seed onu 4 dakikada yeniden kurar ve bu sürede tablo eksik görünür. Bu kartta kabul edilen bir sonuçtur."),
+               sc(10, "Serverless; ZINCRBY checkout kodunda tek satırdır ve yeniden kurma işi zaten vardır. Puan kırılmadı."),
+               sc(9, "GB-saat ve ECPU başına ödenir: birkaç yüz MB yaklaşık 22 dolar, saniyede 3.000 okuma ve eklemenin yaklaşık 6.000 ECPU'su ayda yaklaşık 43 dolar; toplam yaklaşık 65 dolar. 1 puan kırıldı: sorted set komutları basit bir GET'ten daha fazla ECPU harcar ve kampanya akşamı fatura büyür.")],
+        "mdb": [sc(10, "Aynı Valkey engine'i: ZREVRANGE ve ZREVRANK. Puan kırılmadı."),
+                sc(10, "Aynı Valkey engine'i: ZINCRBY okumadan ve atomik. Puan kırılmadı."),
+                sc(10, "Aynı sorted set, bellekte. Puan kırılmadı."),
+                sc(9, "Okumalar mikrosaniyededir. 1 puan kırıldı: her ZINCRBY çoklu AZ'li log'a işlendikten sonra onaylanır (tek haneli milisaniye); 10 ms sınırının içindedir ama checkout biraz daha bekler."),
+                sc(10, "Her ekleme transaction log'unda kalıcıdır; bir arıza tabloyu boşaltmaz ve 4 dakikalık boş vitrin olmaz. Puan kırılmadı."),
+                sc(6, "Yama ve failover yönetilir. 4 puan kırıldı: serverless seçenek yoktur; node tipi, shard ve replica sayısı ekibin işidir."),
+                sc(7, "Node saat başına ödenir; Valkey'de ayda 10 TB'a kadar yazılan veri ücretsizdir. 3 puan kırıldı: birkaç yüz MB için iki küçük node (db.t4g.small, primary ve replica) ayda yaklaşık 55 dolardır ve ElastiCache'in yaklaşık 65 dolarına yakındır; ama t4g bir burstable node'dur ve kampanya akşamı için güvenli boy (iki db.r7g.large) ayda yaklaşık 380 dolardır.")],
+        "ddb": [sc(4, "\"İlk 10\", skoru sort key olan bir ikinci index'te (GSI) ters sırayla ve Limit 10 ile tek bir okumadır. 6 puan kırıldı: \"kaçıncı sıradayım\" sorusunun yolu yoktur; müşterinin üstündeki bütün value'lar sayılır ve 2 milyon müşteride bu binlerce okumadır."),
+                sc(7, "UpdateItem ADD skoru okumadan ve atomik artırır. 3 puan kırıldı: sırayı tutan ikinci index asenkron güncellenir; müşteri yeni sırasını bir an geç görebilir ve aynı anda okunan ilk 10 eski olabilir."),
+                sc(8, "Index sırayı yazma anında korur; okuma SSD'den tek haneli milisaniyedir. 2 puan kırıldı: 10 ms sınırının içindedir ama payı küçüktür."),
+                sc(7, "On-demand mod sıçramayı izler. 3 puan kırıldı: bütün müşteriler index'te tek bir partition key altında durur ve bir partition saniyede yaklaşık 3.000 okuma ve 1.000 yazma birimi için tasarlanmıştır; kampanya akşamı key'i bölmek ve ilk 10'ları birleştirmek gerekir."),
+                sc(10, "Her yazma birkaç AZ'de saklanır. Puan kırılmadı."),
+                sc(10, "Serverless. Puan kırılmadı: key'in bölünmesi R2'de sayıldı."),
+                sc(8, "İstek başına ödenir. 2 puan kırıldı: her ekleme table'a ve index'e iki yazma birimidir (sıra sorgusunun okumaları R1.1'de sayıldı).")],
+    },
+    h2h={
+        "ec": "Bellek içi key-value (ElastiCache) ile kafa kafaya. İkiz servisler: aynı Valkey engine'i, aynı sorted set ve aynı komutlar; R1'de ikisi de 45'te 45 alır. "
+              "Fark servis tasarımındadır ve bu kartta iki yöne çeker. MemoryDB'nin log'u R3'te açık bir artıdır: bir arıza tabloyu boşaltmaz ve kampanya akşamı 4 dakikalık boş bir vitrin görünmez. "
+              "ElastiCache Serverless'ın sunucusuz işletimi R4'te bu farkın bir kısmını geri alır. R5'te ise iki servis bu küçük veride birbirine yakındır: ayda yaklaşık 65 dolara karşı iki küçük node ile yaklaşık 55 dolar; MemoryDB'nin bedeli kampanya için daha büyük node seçildiğinde büyür. Fark tek puandır: bu sayfanın en yakın yarışı ve ElastiCache'in ikizine kaybettiği tek kart. "
+              "Hangi koşul değişseydi ElastiCache seçilirdi: tablo saniyeler içinde yeniden kurulabilseydi (R3'ün ağırlığı düşerdi), ekip hiçbir node işletmek istemeseydi ya da kampanya akşamları node'ları büyük boyda tutmayı gerektirseydi.",
+        "ddb": "Key-value (DynamoDB) ile kafa kafaya. Bu kart Valkey engine'inin özelliklerinin iş yükünün kendisi olduğu karttır: R1'de iki Valkey servisi DynamoDB'nin 18,5 puan önündedir. "
+               "DynamoDB ilk 10'u bir ikinci index ile verebilir, ama \"kaçıncı sıradayım\" sorusunu soramaz: sıra bir sayımdır ve 2 milyon müşteride her sorgu binlerce okumadır. Sorted set ise sırayı yazma anında tutar ve ZREVRANK onu tek adımda verir. "
+               "DynamoDB'nin dayanıklılığı bu kartta gerçek bir artıdır (R3), ama bütün müşterilerin tek bir index partition key'inde durması kampanya akşamı key'i bölmeyi ve ilk 10'ları birleştirmeyi ister. "
+               "Hangi koşul değişseydi DynamoDB seçilirdi: kimse kendi sırasını sormasaydı (yalnız ilk 10 gösterilseydi), sıra saatte bir hesaplansaydı ve skorlar başka hiçbir yerde olmayan kalıcı bir kayıt olsaydı.",
+    },
+    verdict="Karar: MemoryDB {mdb}, ElastiCache {ec}, DynamoDB {ddb}. Bu iş yüküne en uygun servis MemoryDB'dir, ama fark tek puandır: yakın bir yarış. Engine uyumunda iki Valkey servisi eşittir ve DynamoDB'nin çok önündedir; MemoryDB'yi öne geçiren tabloyu arızada da koruyan log ve bu küçük veride ElastiCache'e yakın faturasıdır, ElastiCache'i yaklaştıran sunucusuz işletimdir. "
+            "Yine de ElastiCache seçersek artımız: ilk 10 ve kişisel sıra tek komut, eklemede yarış yok, node yok; Lale Market bugün bunu yapar. "
+            "Eksimiz: bir arızada tablo eksik ya da boş görünebilir; uygulama Seed'i bir arıza adımı olarak yazmalı, ay sonu hediyesini tablodan değil Aurora'daki siparişlerden hesaplamalı ve her ay için yeni bir key (lm:leaderboard:2026-10) açıp eski aya süre vermelidir. Bir koşul değişseydi: tablo saniyeler içinde yeniden kurulabilseydi ElastiCache kazanırdı."))
+
+# ------------------------------------------------------------------ 3. rate limits (the DynamoDB card "rate": same rows, weights, points)
+ELASTICACHE_W.append(wusecase("rate", 3,
+    title="Rate limit'ler ve sayaçlar",
+    key="Key: kullanıcı id'si ve dakika. Value: bir sayı (string), TTL 60 saniye.",
+    story=estory("rate"),
+    wnote="R1 toplam 55 ve en büyük: sayacın biçimi (okumadan artır), engine'in veriyi nerede tuttuğu (2 ms sınırı) ve dakika bitince silinmesi bu iş yükünün kendisidir. "
+          "R2 20 ile ikinci: saniyede 20.000 artırma günün her saatinde gelir. R3 5'te, en düşük sınırdadır: kaybolan sayaç bir dakikalığına fazladan 100 istektir. R5 10'dur, çünkü ayda 52 milyar yazmanın fiyatı belirleyicidir.",
+    rows=[
+        row("OY", 20, "Her API isteği bir artırmadır; engine bunu okumadan ve atomik yapmalı.",
+            "\"Bu kullanıcının bu dakikadaki sayacını 1 artır ve yeni değeri döndür\" tek adımda ve atomik olmalı; aynı anda gelen iki istek ikisi de sayılmalı.",
+            "Oku-artır-yaz üç adımsa iki istek aynı değeri okur ve biri kaybolur; sınır aşılır."),
+        row("DA", 15, "2 ms sınırı engine'in veriyi bellekte mi diskte mi tuttuğuyla belirlenir.",
+            "Her artırma 2 ms'nin altında dönmeli, çünkü her API isteğinin önündedir.",
+            "Gecikme her API isteğine eklenir; disk tabanlı bir yazmanın tek haneli milisaniyesi bütün API'ı yavaşlatır."),
+        row("YD", 15, "Sayaç dakika bitince değersizdir ve dakikada bir milyonlarca yeni sayaç doğar.",
+            "Eski dakikaların sayaçları kendiliğinden silinmeli.",
+            "Silinmeyen sayaçlar her dakika birikir; bir temizlik işi bu kadar kaydı silemez."),
+        row("EY", 5, "Soru basittir: kullanıcı ve dakika ile tek bir sayaç; bu kartın riski artırma biçiminde ve gecikmededir.",
+            "Tek soru: \"bu kullanıcının bu dakikadaki sayacı\".",
+            "Key ile doğrudan gidilemezse her API isteği yavaşlar."),
+        row("R2", 20, "Saniyede 20.000 artırma, düz; gecikme sınırı katıdır.",
+            "Saniyede 20.000 artırma, günün her saati; 12 gateway sunucusu aynı sayacı paylaşır. Artırma tepe anında da 2 ms'nin altında kalmalı.",
+            "Sayaç her isteğe eklenen sabit bir gecikmedir; 2 ms ile 8 ms arasındaki fark günde 1,7 milyar istekte toplam saatler eder."),
+        row("R3", 5, "Kaybolan sayaç bir dakikalığına fazladan 100 istektir; zararsızdır.",
+            "Düşük: kaybolan sayaç bir dakikalığına fazladan 100 istek demektir.",
+            "Rate limit bir koruma kalkanıdır, muhasebe kaydı değildir; bir dakikalık boşluk kabul edilir."),
+        row("R4", 10, "Platform ekibi serverless tercih eder.",
+            "Platform ekibi sunucu istemiyor. Sayaç mantığı gateway kodunda birkaç satır olmalı.",
+            "Gateway en çok değişen koddur; sayaç karmaşıksa her değişiklik risk taşır."),
+        row("R5", 10, "Her artırma bir yazmadır; ayda 52 milyar yazmanın fiyatı bu iş yükünün maliyetidir.",
+            "Saniyede 20.000 yazma, ayda 52 milyar. Yazma başına fiyat bu iş yükünün bütün maliyetidir.",
+            "Yazma birimi fiyatındaki küçük bir fark ayda on binlerce dolardır."),
+    ],
+    cands=["ec", "mdb", "ddb"],
+    scores={
+        "ec": [sc(10, "INCR sayacı okumadan, atomik artırır ve yeni değeri döndürür; Valkey komutları sırayla çalıştırır (Ö3). Puan kırılmadı."),
+               sc(10, "Sayaç bellekteki hash table'dadır; INCR mikrosaniyelerde döner (Ö1). Puan kırılmadı."),
+               sc(10, "INCR ve EXPIRE 60 tek bir MULTI/EXEC'te gönderilir, böylece arada bir çökme sayacı süresiz bırakmaz; sayaç dakika sonunda tam anında gider (Ö4). Puan kırılmadı."),
+               sc(10, "Key ile doğrudan erişim (Ö1). Puan kırılmadı."),
+               sc(10, "Serverless kendi kendine ölçeklenir; saniyede 20.000 artırma küçük bir yüktür (Ö6). Puan kırılmadı."),
+               sc(4, "Kalıcı bir yazma log'u yoktur. 6 puan kırıldı: bir arızada sayaçlar sıfırlanabilir; bu kartta zararsızdır."),
+               sc(10, "Serverless; INCR ve EXPIRE gateway kodunda iki satırdır. Puan kırılmadı."),
+               sc(9, "ECPU başına ödenir ve basit bir INCR yaklaşık 1 ECPU'dur. 1 puan kırıldı: sayaçlar az yer tutsa da Serverless'ta en az 100 MB saklama ödenir.")],
+        "mdb": [sc(10, "Aynı Valkey engine'i: INCR okumadan ve atomik. Puan kırılmadı."),
+                sc(10, "Aynı Valkey engine'i: sayaç bellekteki hash table'dadır. Puan kırılmadı: yazmanın log'a işlenmesi engine'in değil servisin tasarımıdır ve R2'de sayılır."),
+                sc(10, "EXPIRE aynı biçimde tam anındadır. Puan kırılmadı."),
+                sc(10, "Key ile doğrudan erişim. Puan kırılmadı."),
+                sc(5, "Shard ekleyerek yazma ölçeklenir. 5 puan kırıldı: MemoryDB her yazmayı çoklu AZ'li log'a işledikten sonra onaylar; INCR bir yazma olduğu için tek haneli milisaniye 2 ms sınırını birçok istekte aşar."),
+                sc(10, "Her yazma kalıcıdır. Puan kırılmadı: ama bu kartta dayanıklılık önemsizdir."),
+                sc(6, "Yönetilen node'lar. 4 puan kırıldı: serverless seçenek yoktur; node tipi ve shard sayısı ekibin işidir."),
+                sc(6, "Node saat başına ödenir; Valkey'de ayda 10 TB'a kadar yazılan veri ücretsizdir. 4 puan kırıldı: node'lar saniyede 20.000 yazmanın log gecikmesini taşıyacak shard sayısıyla sürekli çalışır ve bu kartın istemediği dayanıklılığa para verilir.")],
+        "ddb": [sc(9, "UpdateItem ADD count :1 ve ReturnValues = UPDATED_NEW sayacı okumadan artırır ve yeni değeri döndürür. 1 puan kırıldı: ADD sınırı bilmez; \"en fazla 100\" kuralı bir koşulla (count < 100) eklenirse koşul yanlış çıktığında yeni değer dönmez ve uygulama ayrı bir hata yolunu işler."),
+                sc(4, "Veri SSD'deki partition'lardadır; yazma tek haneli milisaniyedir. 6 puan kırıldı: 2 ms sınırı yazma yolunda karşılanmaz ve DAX yazmaları hızlandırmaz."),
+                sc(6, "Key dakikayı içerdiği için eski sayaçlar okunmaz ve TTL onları siler. 4 puan kırıldı: silme günler içinde olur ve o arada her dakikanın milyonlarca sayacı storage'da birikir."),
+                sc(10, "Key ile doğrudan erişim. Puan kırılmadı."),
+                sc(10, "Yazmalar kullanıcı ve dakikaya göre partition'lara dağılır. Puan kırılmadı: gecikme engine'in depolamasından gelir ve R1.2'de (DA) bir kez sayıldı."),
+                sc(10, "Her yazma birkaç AZ'de saklanır. Puan kırılmadı: ama bu kartta dayanıklılık önemsizdir."),
+                sc(10, "Serverless. Puan kırılmadı."),
+                sc(4, "Trafik düz olduğu için provisioned kapasite on-demand'den ucuzdur. 6 puan kırıldı: saniyede 20.000 yazma birimi us-east-1 liste fiyatıyla yine de ayda yaklaşık 9.500 dolardır; aynı artırmalar ElastiCache'te ECPU olarak ayda birkaç yüz doları geçmez.")],
+    },
+    h2h={
+        "mdb": "Kalıcı bellek içi key-value (MemoryDB) ile kafa kafaya. İki aday aynı Valkey engine'ini çalıştırır: INCR ve EXPIRE ikisinde de aynıdır ve R1'de ikisi de 55'te 55 alır. Fark yalnız servis tasarımındadır: "
+               "MemoryDB her yazmayı çoklu AZ'li bir log'a işledikten sonra onaylar; INCR bir yazma olduğu için cevap tek haneli milisaniyeye çıkar ve 2 ms sınırı riske girer (R2). "
+               "Bu kartta dayanıklılığın ağırlığı en düşük sınırdadır, çünkü kaybolan sayaç zararsızdır; yani MemoryDB'nin bedelini ödediği şey bu iş yükünün istemediği bir güvencedir. "
+               "Serverless seçeneğinin olmaması R4'te de puan kaybettirir. "
+               "Hangi koşul değişseydi MemoryDB seçilirdi: sayaç bir kota ya da faturalama sayacı olsaydı (örneğin \"ayda 1 milyon ücretsiz istek\") ve kaybı para demek olsaydı.",
+        "ddb": "Key-value (DynamoDB) ile kafa kafaya. DynamoDB bu kartta üçüncüdür. Atomik sayaç DynamoDB'nin de çekirdek özelliğidir: ADD ve UPDATED_NEW aynı işi tek istekte yapar. "
+               "Ama R1'in iki satırı DynamoDB'nin doğasına ters düşer: veri SSD'dedir ve yazma tek haneli milisaniyedir, oysa sınır 2 ms'dir; TTL günler içinde siler, oysa dakikada milyonlarca yeni sayaç doğar. "
+               "R5'te fark en büyüktür: her artırma bir yazma birimidir ve ayda 52 milyar yazma, aynı artırmaların ElastiCache'teki fiyatının çok katıdır. "
+               "Hangi koşul değişseydi DynamoDB seçilirdi: sınır dakika değil gün başına olsaydı (günde 10.000 istek), istek hızı yüz kat düşük olsaydı ve sayaç kaybı kabul edilemeseydi.",
+    },
+    verdict="Karar: ElastiCache {ec}, MemoryDB {mdb}, DynamoDB {ddb}. Bu iş yüküne en uygun servis ElastiCache'tir ve bu kart sayfanın en net kazanmasıdır: engine uyumunda MemoryDB ile eşittir, DynamoDB'nin önündedir; MemoryDB'yi geride bırakan log'un yazma gecikmesi ve node işletimidir. "
+            "ElastiCache seçtiğimizde artımız: tek komutta atomik artırma, mikrosaniye cevap, dakika sonunda kendiliğinden giden sayaçlar ve düşük fatura. "
+            "Eksimiz: bir arızada sayaçlar sıfırlanabilir; uygulama bunu \"bir dakikalık fazladan izin\" olarak kabul etmeli, sayacı faturalamada kullanmamalı ve cache'e hiç ulaşılamazsa ne yapılacağına önceden karar vermelidir: istekleri geçirmek (fail-open) ya da gateway sunucusunda kaba bir yerel sınır uygulamak. Bir koşul değişseydi: sayaç günlük ve kaybı pahalı olsaydı DynamoDB ya da MemoryDB öne çıkardı."))
+
+# ------------------------------------------------------------------ 4. cache-aside for the product page (both together: ElastiCache in front of Aurora)
+ELASTICACHE_W.append(wusecase("cache", 4,
+    title="Ürün sayfası için cache-aside (Lale Market)",
+    key="Key: product:P0001. Value: ürün sayfasının JSON'u, TTL 300 saniye.",
+    story=estory("cache"),
+    wnote="R1 toplam 50: sayfa verisinin nasıl sorulduğu (hazır cevap mı, her seferinde bir JOIN mi), cevabın kaynağa göre ne kadar eski olabileceği, nerede tutulduğu ve kopyanın nasıl bittiği. "
+          "R2 20 ile ikinci: kampanya akşamı okuma on kat artar ve Aurora writer'ı checkout için serbest kalmalıdır. Diğer üç satır 10'dur: cache bir kopyadır, ekip küçüktür, sıcak veri küçüktür.",
+    rows=[
+        row("EY", 15, "Her ürün sayfası açılışı bu soruyu sorar; aynı 50 ürün saniyede binlerce kez istenir.",
+            "Tek soru: \"bu ürünün sayfa verisi\" (ürün, stok durumu, ortalama puan). Uygulama ürün id'sini URL'den bilir. Aynı cevap her açılışta yeniden hesaplanmamalı.",
+            "Sayfa her açılışta üç table'lı aynı JOIN'i çalıştırırsa aynı 50 ürün için saniyede binlerce kez aynı cevap hesaplanır."),
+        row("TA", 10, "Fiyat değişikliği müşteriye en geç 5 dakikada görünmelidir; daha eski bir fiyat bir şikâyettir.",
+            "Cevap kaynağa göre en fazla 5 dakika eski olabilir. Fiyat değişince eski kopya hemen silinebilmeli. Checkout fiyatı ve stoğu yine Aurora'dan kontrol eder.",
+            "5 dakikadan eski bir fiyat bir müşteri şikâyetidir; kopyanın ne zaman yenileneceği bilinmiyorsa eski veri hataları bulunması zor hatalara dönüşür."),
+        row("DA", 15, "10 ms sınırı ve writer'ın yükü, cevabın hazır mı yoksa hesaplanarak mı geldiğiyle belirlenir.",
+            "Sayfa verisi 10 ms içinde gelmeli. Okuma hazır bir cevabın okunması olmalı, bir sorgunun çalıştırılması değil.",
+            "Her açılışta çalışan bir sorgu 8 ms sürer ve CPU harcar; kampanya akşamı saniyede 6.000 kez çalışırsa checkout ile aynı kaynakları paylaşır."),
+        row("YD", 10, "Kopyalar kendiliğinden bitmezse soğuyan ürünlerin kopyaları birikir ve eski veri kalır.",
+            "Her kopya 5 dakika sonra kendiliğinden gitmeli; bir temizlik işi olmamalı.",
+            "Biten kopyalar silinmezse soğuk ürünlerin eski sayfaları yer tutar ve bir gün eski fiyatla geri döner."),
+        row("R2", 20, "Kampanya akşamı on kat okuma; writer checkout'u yapar ve yavaşlamamalıdır.",
+            "Kampanya akşamı saniyede 6.000 görüntüleme, yüzde 80'i 50 ürüne. Aurora writer'ının yükü kampanya akşamı normal günden fazla olmamalı.",
+            "Okuma yükü writer'a binerse checkout yavaşlar; kampanyanın en değerli işlemi en çok zarar gören işlem olur."),
+        row("R3", 10, "Kopya veri kaybı değildir, ama boşalan bir cache bütün yükü Aurora'ya taşır.",
+            "Düşük: cache bir kopyadır, kaynak Aurora'dadır. Ama cache bir anda boşalırsa bütün okumalar aynı anda Aurora'ya gider; bu \"soğuk cache\" anı Aurora'yı yormamalı.",
+            "Kaybolan kopya veri kaybı değildir, ama boş bir cache kampanya akşamında Aurora'ya saniyede 6.000 JOIN demektir."),
+        row("R4", 10, "Üç geliştirici; cache kodu birkaç satır olmalı.",
+            "Üç geliştirici. Cache kodu birkaç satır olmalı; fiyat değişikliğinde silme tek bir yerde yazılmalı. Lale Market'te ElastiCache ve Aurora zaten çalışır.",
+            "Cache kodu her okuma yoluna dağılırsa eski veri hataları bulunması zor hatalara dönüşür."),
+        row("R5", 10, "Sıcak veri 50 MB'tan azdır; kampanya için ek bir okuma instance'ı istenmiyor.",
+            "Sayfa verisi küçük (2 KB) ve sıcak ürün sayısı az; toplam sıcak veri 50 MB'tan az. Kampanya akşamı için Aurora'ya ayrıca reader eklemek istenmiyor.",
+            "Her ek reader saat başına ödenir; cache ise sadece sıcak ürünleri bellekte tutar."),
+    ],
+    cands=["ec", "ddb", "aur"],
+    scores={
+        "ec": [sc(10, "GET product:P0001 hazır sayfa verisini key ile, bellekten okur (Ö1); cevap bir kez hesaplanır, binlerce kez okunur (Ö8). Puan kırılmadı."),
+               sc(8, "TTL eski verinin üst sınırını 300 saniyede tutar; fiyat değişince DEL kopyayı hemen siler (Ö8). 2 puan kırıldı: cevap 5 dakikaya kadar eskiyebilir ve silme kodu \"önce Aurora, sonra DEL\" sırasıyla, fiyatı yazan her yolda yazılmalıdır."),
+               sc(10, "Hazır cevap bellekteki hash table'dadır; okuma mikrosaniyelerdedir ve sorgu çalışmaz (Ö1). Puan kırılmadı."),
+               sc(10, "SET … EX 300 kopyaya yazarken süreyi verir; kopya tam süresinde gider (Ö4). Puan kırılmadı."),
+               sc(10, "Saniyede 6.000 GET Serverless için küçük bir yüktür; görüntülemelerin çoğu hit olduğu için Aurora writer'ı neredeyse hiç okuma görmez (Ö6, Ö8). Puan kırılmadı."),
+               sc(7, "Bir node arızasında replica'lar kopyayı sıcak tutar (Ö7). 3 puan kırıldı: bir shard'ın kaybı ya da yeniden kurulan bir cache soğuk başlar ve okumalar birkaç dakika Aurora'ya gider; aynı key'in eşzamanlı miss'leri kısa bir SET NX kilidiyle tek okumaya indirilmelidir. Bu kartta bellekteki veri yalnız bir kopyadır ve her değeri o anda Aurora'da tam olarak vardır; kaybolan bir şey yoktur, bu yüzden \"verinin tek yeri bellek\" olan kartlardaki 4 puan burada verilmez."),
+               sc(10, "Cache zaten çalışır; cache-aside birkaç satırdır. Puan kırılmadı: silme kodu R1.2'de sayıldı."),
+               sc(9, "Sıcak veri 50 MB'tır ve ECPU başına ödenir. 1 puan kırıldı: Serverless'ta en az 100 MB saklama ödenir, kullanılan yerin iki katı.")],
+        "ddb": [sc(10, "Hazır sayfa verisi product id key'iyle bir item'dır; GetItem tek okumadır, JOIN çalışmaz. Puan kırılmadı."),
+                sc(8, "Kopya aynı biçimde 5 dakikada yenilenir ya da fiyat değişince silinir. 2 puan kırıldı: ElastiCache'teki gibi silme kodu her fiyat yazan yolda yazılmalıdır."),
+                sc(8, "Okuma SSD'deki partition'dan tek haneli milisaniyedir. 2 puan kırıldı: 10 ms sınırının içindedir ama payı küçüktür."),
+                sc(6, "TTL alanı eski kopyaları siler. 4 puan kırıldı: silme günler içinde olur; \"5 dakikadan eski kopyayı kullanma\" kuralını okuma her seferinde expires_at ile kendisi kontrol eder."),
+                sc(9, "On-demand mod on kat okumayı taşır ve Aurora writer'ı okuma görmez. 1 puan kırıldı: önceki tepenin iki katından hızlı bir sıçrama için table önceden ısıtılmalıdır."),
+                sc(10, "Her yazma birkaç AZ'de saklanır; kopya bir arızada kaybolmaz ve soğuk başlangıç yoktur. Puan kırılmadı."),
+                sc(8, "Lale Market DynamoDB'yi sepet için zaten kullanır. 2 puan kırıldı: yeni bir table ve onu dolduran kod ürün sayfasının okuma yoluna eklenir."),
+                sc(6, "İstek başına ödenir. 4 puan kırıldı: kampanya akşamı saniyede 6.000 okuma, saniyede 6.000 okuma isteğidir; aynı okumalar bellekte ECPU olarak çok daha ucuzdur.")],
+        "aur": [sc(7, "Sayfa verisi üç table'ın JOIN'idir ve index'lerle yaklaşık 8 ms sürer. 3 puan kırıldı: aynı cevap her açılışta yeniden hesaplanır; hazır bir cevap yoktur."),
+                sc(10, "Cevap her zaman kaynaktır: fiyat değiştiği anda sayfada görünür. Puan kırılmadı: bu satırda en güçlü aday Aurora'dır."),
+                sc(8, "Sık okunan page'ler buffer cache'tedir. 2 puan kırıldı: cevap bellekteki hazır bir değerden değil, index ve page zincirinden okunur; 8 ms 10 ms sınırının içindedir ama payı küçüktür (JOIN'in her seferinde yeniden çalışması R1.1'de sayıldı)."),
+                sc(10, "Kopya yoktur, bu yüzden biten ya da eskiyen kopya da yoktur. Puan kırılmadı."),
+                sc(5, "Okumalar reader instance'lara gönderilirse writer korunur. 5 puan kırıldı: on katlık sıçrama her görüntülemede yeniden çalışan bir JOIN olarak cluster'a biner; \"writer'ın yükü normal günden fazla olmasın\" isteği ancak bütün okumalar reader'lara giderse karşılanır ve reader'lar storage'ı writer ile paylaşır. Reader eklemek ve yönlendirmek R4'te sayıldı."),
+                sc(10, "Kaynak zaten Aurora'dır; üç AZ'de altı kopya. Puan kırılmadı."),
+                sc(7, "Var olan cluster'a bir reader eklenir. 3 puan kırıldı: reader'ın boyutu ve kampanya öncesi eklenmesi, okuma yolunun reader endpoint'ine yönlendirilmesi ekibin işidir."),
+                sc(5, "Reader instance saat başına ödenir. 5 puan kırıldı: kampanya akşamı için eklenen reader, hikâyenin istemediği bir maliyettir.")],
+    },
+    h2h={
+        "ddb": "Key-value (DynamoDB) ile kafa kafaya. DynamoDB hazır sayfa verisini aynı biçimde key ile tutabilir ve dayanıklılıkta öndedir: bir arızada kopya kaybolmaz, soğuk başlangıç olmaz (R3). "
+               "Ama bu kart bir kopya iş yüküdür ve bir kopyanın değeri hızında ve ucuzluğundadır. R1'de iki fark vardır: DynamoDB'nin TTL'i günler içinde siler ve 5 dakika kuralını okuma kendisi kontrol eder; okuma SSD'den tek haneli milisaniyedir, bellekten mikrosaniye değil. "
+               "R5'te her görüntüleme bir okuma isteğidir. Dayanıklılık burada bir kopyayı korur, bir kaydı değil. "
+               "Hangi koşul değişseydi DynamoDB seçilirdi: sayfa verisi başka bir yerden yeniden hesaplanamasaydı (örneğin satıcının elle yazdığı bir vitrin metni) ya da soğuk cache anını Aurora hiç taşıyamasaydı.",
+        "aur": "İlişkisel (Aurora) ile kafa kafaya: cache'siz seçenek. Aurora'nın gücü tazeliktir: cevap her zaman kaynaktır ve fiyat değiştiği anda görünür (R1.2'de tek tam puan). "
+               "Ama aynı cevabı her açılışta yeniden hesaplar: saniyede 6.000 JOIN, kampanya akşamı bir reader ve okuma yönlendirmesi demektir (R2, R4, R5). "
+               "Bu kartın doğru cevabı ikisinin birlikte çalışmasıdır: Aurora kaynak ve checkout'un database'i olarak kalır, ElastiCache onun önünde hazır cevapları tutar. Cache Aurora'nın yerine geçmez; Aurora olmadan cache'in dolduracağı bir kaynak yoktur. "
+               "Sayfa herkese aynı olsaydı önünde bir CDN (CloudFront) ilk katman olurdu; bu kart uygulamanın kendi okuduğu sayfa verisini önbellekler: kişiye göre birleşen sayfa ve CDN'in miss'leri yine bu katmana gelir. Hangi koşul değişseydi yalnız Aurora seçilirdi: eski fiyat hiç kabul edilmeseydi (örneğin anlık değişen bir borsa fiyatı), görüntülemeler ürünlere eşit dağılsaydı (sıcak küme olmasaydı) ya da trafik bir reader'ın rahat erişiminde kalsaydı.",
+    },
+    verdict="Karar: ElastiCache {ec}, DynamoDB {ddb}, Aurora {aur}. Bu iş yüküne en uygun servis ElastiCache'tir, ama tek başına değil: doğru mimari Aurora'nın önünde ElastiCache'tir. Kararı R1'in erişim ve depolama satırları ve R2 verir: hazır cevap bellekten gelir ve writer kampanya akşamı okuma görmez. "
+            "ElastiCache seçtiğimizde artımız: görüntülemelerin çoğu bellekten, Aurora'ya ek reader yok, kopya 5 dakikada kendiliğinden gider. "
+            "Eksimiz: cevap 5 dakikaya kadar eskiyebilir; uygulama fiyatı yazan her yolda kopyayı silmeli, checkout'ta fiyatı ve stoğu Aurora'dan yeniden kontrol etmeli ve soğuk cache anı için SET NX ile stampede'i önlemelidir. Bir koşul değişseydi: eski fiyat hiç kabul edilmeseydi Aurora tek başına kalırdı."))
+
+# ------------------------------------------------------------------ 5. real-time counters: views and unique visitors
+ELASTICACHE_W.append(wusecase("counters", 5,
+    title="Gerçek zamanlı sayaçlar: görüntüleme ve tekil ziyaretçi",
+    key="Key: views:2026-10-28T14:<n> (saat ve 0–15 arası bir parça numarası; her olay rastgele bir parçaya yazılır, ekran 16 hash'i toplar). Value: bir hash; field ürün id'si, değer sayı. Tekil ziyaretçi için ürün başına bir HyperLogLog.",
+    story=estory("counters"),
+    wnote="R1 toplam 50: sayacın biçimi (okumadan artır, sıcak ürünlerde yarış), tekil sayımın veri yapısı, ekranın sorusu ve saatin bitişi bu iş yükünün kendisidir. "
+          "R2 20 ile ikinci: kampanya akşamı 50.000 olay ve yarısı aynı 10 ürüne. R4 15'tir, çünkü iki geliştirici ve bir analist yeni bir sistem öğrenmek istemiyor. R3 5'tir: kalıcı rapor Redshift'tedir.",
+    rows=[
+        row("OY", 20, "Her görüntüleme bir artırmadır ve olayların yarısı aynı 10 ürüne gider.",
+            "\"Bu ürünün bu saatteki sayacını 1 artır\" okumadan ve atomik olmalı; aynı ürüne aynı anda gelen yüzlerce olayın hepsi sayılmalı.",
+            "Atomik olmayan artırma kampanya akşamı en çok bakılan ürünlerin sayılarını kaybeder; ekran yanlış \"en çok bakılan\" gösterir."),
+        row("VM", 10, "Tekil ziyaretçi sayısı bir veri yapısı sorusudur; yüzde 1 hata kabul edilir.",
+            "\"Bu ziyaretçiyi bu ürünün tekil ziyaretçilerine ekle\" ve \"kaç tekil ziyaretçi\"; yüzde 1 hata kabul edilir, ürün başına bellek küçük kalmalı.",
+            "Her ziyaretçi id'si tek tek saklanırsa milyonlarca id bellekte ya da diskte yer tutar; aynı ziyaretçi iki kez sayılırsa sayı şişer."),
+        row("EY", 10, "Ekran her 2 saniyede bu saatin bütün ürünlerini ve ilk 20'yi sorar.",
+            "Okuma: \"bu saatin bütün ürünleri ve sayıları\" ve \"şu an en çok bakılan 20 ürün\". Ekran her 2 saniyede okur.",
+            "İlk 20 her okumada bütün ürünler sıralanarak bulunursa ekranın her açılışı ağır bir sorgu olur."),
+        row("YD", 10, "Her saat sonunda sayılar Redshift'e yazılır ve bellekteki saat gitmelidir.",
+            "Saat bitince sayılar Redshift'e (data warehouse) yazılır ve o saatin key'leri kendiliğinden silinir.",
+            "Silinmeyen saatler her gün birikir ve bellek ya da storage dolar."),
+        row("R2", 20, "Saniyede 15.000, kampanya akşamı 50.000 olay; yarısı aynı 10 ürüne.",
+            "Saniyede 15.000, kampanya akşamı 50.000 artırma; yarısı aynı 10 ürüne. Ekran her 2 saniyede okur.",
+            "Olayların yarısı aynı birkaç key'e gider; bu key'leri tutan yer bu yükü tek başına taşımalıdır."),
+        row("R3", 5, "Son saatin sayıları kaybolursa ekran o saati eksik gösterir; kalıcı rapor Redshift'tedir.",
+            "Düşük: son saatin sayıları kaybolursa ekran o saati eksik gösterir. Muhasebe ve faturalama bu sayılara dayanmaz.",
+            "Sayılar bir vitrin ve bir eğilim göstergesidir; kalıcı rapor Redshift'tedir."),
+        row("R4", 15, "İki geliştirici ve bir analist yeni bir sistem öğrenmek istemiyor.",
+            "İki geliştirici; sunucu istenmiyor. Saat sonunda Redshift'e yazan bir iş kabul edilir.",
+            "Küçük ekipte zaman serisi database'i gibi yeni bir sistem öğrenmek bir çeyrek demektir."),
+        row("R5", 10, "Her olay bir yazmadır: ayda 40 milyar artırma.",
+            "Her olay bir yazmadır: ayda 40 milyar artırma. Veri küçüktür: bir saatin sayaçları birkaç MB.",
+            "Yazma başına fiyat bu iş yükünün faturasıdır."),
+    ],
+    cands=["ec", "ddb", "ix"],
+    scores={
+        "ec": [sc(10, "HINCRBY views:…:<n> P0001 1 sayacı okumadan ve atomik artırır; komutlar sırayla çalıştığı için aynı ürüne gelen her olay sayılır (Ö3). Puan kırılmadı."),
+               sc(10, "PFADD ve PFCOUNT tekil ziyaretçiyi ürün başına en fazla 12 KB ile, yüzde 0,81 standart hatayla sayar (Ö2). Puan kırılmadı."),
+               sc(9, "HGETALL bu saatin bütün ürünlerini tek komutta verir (Ö2). 1 puan kırıldı: \"en çok bakılan 20\" için aynı pipeline'da bir sorted set'e de ZINCRBY yazılır; iki yapı birlikte güncellenir."),
+               sc(9, "Saatin key'lerine EXPIRE verilir ve saat bitince tam anında giderler (Ö4). 1 puan kırıldı: Redshift'e yazan iş key'ler gitmeden önce çalışmalıdır; süre bunun için saatten biraz uzun seçilir."),
+               sc(8, "Valkey tek bir key'e gelen komutları tek shard'da sırayla çalıştırır (Ö6). 2 puan kırıldı: kampanya akşamı 25.000 olay saniyede aynı 10 ürüne, yani tek bir saat key'ine gider; o shard'ın payını korumak için key 16 parçaya bölünür ve ekran 16 hash'i toplar. Ayrıca boş bir Serverless cache saniyede 30.000 ECPU ile başlar; 50.000 olaylık kampanya için minimum ECPU önceden ayarlanır."),
+               sc(4, "Kalıcı bir yazma log'u yoktur. 6 puan kırıldı: bir arızada son saatin sayıları kaybolabilir; bu kartta kabul edilen bir sonuçtur."),
+               sc(10, "Cache zaten çalışır; HINCRBY, PFADD ve saat sonu işi birkaç satırdır. Puan kırılmadı."),
+               sc(9, "ECPU başına ödenir ve bir artırma yaklaşık 1 ECPU'dur. 1 puan kırıldı: PFADD ve sorted set komutları basit bir artırmadan biraz daha fazla ECPU harcar.")],
+        "ddb": [sc(9, "UpdateItem ADD sayacı okumadan ve atomik artırır. 1 puan kırıldı: her artırma item'ın tamamını yeniden yazar; item büyüdükçe bir artırmanın yazdığı veri de büyür."),
+                sc(3, "Tekil sayım için hazır bir veri yapısı yoktur. 7 puan kırıldı: ya her ziyaretçi id'si bir item ya da bir set alanı olarak saklanır (milyonlarca kayıt), ya da uygulama bir HyperLogLog'u binary alan olarak okuyup koşullu yazmayla günceller."),
+                sc(7, "\"Bu saatin bütün ürünleri\" saat partition key'i ile tek bir okumadır. 3 puan kırıldı: \"en çok bakılan 20\" için bütün ürünler okunur ve uygulamada sıralanır."),
+                sc(6, "TTL eski saatleri siler. 4 puan kırıldı: silme günler içinde olur; okuma eski saatleri key'den ayırt eder."),
+                sc(5, "Yazmalar partition'lara dağılır. 5 puan kırıldı: 25.000 olay saniyede 10 item'a gider ve bir partition saniyede yaklaşık 1.000 yazma birimi için tasarlanmıştır; ElastiCache'te bölme bir pay önlemidir, burada zorunludur: her sıcak item onlarca parçaya bölünmeli ve okumada toplanmalıdır."),
+                sc(10, "Her yazma birkaç AZ'de saklanır. Puan kırılmadı."),
+                sc(10, "Serverless. Puan kırılmadı: sayacın bölünmesi R2'de, tekil sayım kodu R1.2'de sayıldı."),
+                sc(4, "İstek başına ödenir. 6 puan kırıldı: ayda 40 milyar yazma birimi, aynı artırmaların ECPU fiyatının çok katıdır.")],
+        "ix": [sc(6, "Her olay bir point olarak yazılır ve sayı pencere toplamıyla hesaplanır. 4 puan kırıldı: engine artırmaz, ekler; saniyede 50.000 point saklanır ve sayı her okumada yeniden toplanır."),
+               sc(4, "Tekil ziyaretçi bir pencerede distinct sayımıdır. 6 puan kırıldı: ziyaretçi id'si tag olursa seri sayısı (cardinality) patlar, field olursa her okumada bütün point'ler taranır; yaklaşık sayım için hazır bir yapı yoktur."),
+               sc(8, "Ürüne göre saatlik pencere toplamı engine'in doğal sorusudur. 2 puan kırıldı: \"ilk 20\" her 2 saniyede bir gruplama ve sıralama sorgusudur."),
+               sc(10, "Retention süresi eski point'leri kendisi siler; downsampling task'ları saatlik özetleri tutar. Puan kırılmadı."),
+               sc(6, "Engine saniyede on binlerce point yazmayı taşıyabilir. 4 puan kırıldı: kampanya tepesinde 50.000 point/saniye yazma ile her 2 saniyede bir saatlik toplam aynı makinede yarışır ve ekranın sorgu süresi uzar (boyutlandırma R4'te sayıldı)."),
+               sc(9, "Multi-AZ instance seçeneği vardır. 1 puan kırıldı: yedek instance seçilmezse bir arıza son point'leri götürebilir."),
+               sc(5, "Yönetilen instance. 5 puan kırıldı: ekip için yeni bir sistem, yeni bir sorgu dili (Flux ya da InfluxQL) ve instance boyutlandırma; analist yine Redshift'te çalışır."),
+               sc(6, "Instance saat başına ödenir. 4 puan kırıldı: instance kampanya akşamı için boyutlanır ve gece de çalışır.")],
+    },
+    h2h={
+        "ddb": "Key-value (DynamoDB) ile kafa kafaya. DynamoDB atomik artırmayı ElastiCache kadar iyi yapar, ama bu iş yükünün diğer iki engine sorusunda geride kalır. "
+               "Tekil ziyaretçi sayımı için hazır bir yapı yoktur: ya milyonlarca id saklanır ya da uygulama bir HyperLogLog'u kendisi yazar (R1.2). Sıcak ürünlerin sayaçları tek bir item'da kalırsa bir partition'ın yazma sınırına dayanır ve bölünmesi gerekir (R2). "
+               "R5'te ayda 40 milyar yazma birimi faturanın büyük kısmıdır. DynamoDB'nin dayanıklılığı bu kartta önemsizdir, çünkü kalıcı rapor zaten Redshift'tedir. "
+               "Hangi koşul değişseydi DynamoDB seçilirdi: sayılar faturalamaya dayansaydı ve kaybolmamalı olsaydı, olay hızı yüz kat düşük olsaydı ve tekil sayım istenmeseydi.",
+        "ix": "Time series (Timestream for InfluxDB) ile kafa kafaya. Timestream for InfluxDB zaman pencereleri ve retention'da güçlüdür: saatlik özet ve eski verinin silinmesi onun doğal işidir (R1.4). "
+              "Ama bu kart bir sayaç iş yüküdür, bir ölçüm geçmişi değil: engine artırmaz, her olayı bir point olarak saklar ve sayıyı her okumada yeniden toplar; tekil ziyaretçi ise yüksek cardinality tuzağına düşer. "
+              "Ekip için yeni bir sistem ve yeni bir sorgu dili R4'te de puan kaybettirir. "
+              "Hangi koşul değişseydi Timestream for InfluxDB seçilirdi: ekran son saati değil son 30 günü dakika dakika gösterseydi ve sorgular zaman pencereleri üzerinde değişken olsaydı; o zaman bellek yerine bir zaman serisi engine'i doğru yer olurdu.",
+    },
+    verdict="Karar: ElastiCache {ec}, DynamoDB {ddb}, Timestream for InfluxDB {ix}. Bu iş yüküne en uygun servis ElastiCache'tir ve doğru mimari iki parçalıdır: canlı saat ElastiCache'te, saatlik geçmiş Redshift'te. Kararı R1 verir: atomik artırma, HyperLogLog ve hazır ilk 20 tek komutlardır. "
+            "ElastiCache seçtiğimizde artımız: kampanya akşamı da doğru sayılar, ürün başına 12 KB'lık tekil sayım, saat sonunda kendiliğinden giden key'ler. "
+            "Eksimiz: son saat bir arızada kaybolabilir; uygulama Redshift'e yazan işi key'ler gitmeden çalıştırmalı ve ekran eksik saati \"veri yok\" olarak göstermelidir. Bir koşul değişseydi: sayılar faturalamaya dayansaydı, olay hızı yüz kat düşük olsaydı ve tekil sayım istenmeseydi DynamoDB öne geçerdi; tek başına bu koşullardan biri farkı kapatmaz."))
+
+# ------------------------------------------------------------------ 6. pub/sub for live updates
+ELASTICACHE_W.append(wusecase("pubsub", 6,
+    title="Canlı güncellemeler için pub/sub",
+    key="Channel: order:<id> ve stock:<ürün>. Message: yeni durum ya da yeni stok sayısı.",
+    story=estory("pubsub"),
+    wnote="R1 toplam 40: bir olayın aboneleri bilmeden bütün sunuculara gitmesi, bunun milisaniyelerde olması ve mesajın saklanmaması bu iş yükünün tanımıdır. "
+          "R2 25 ile ikinci: 150.000 bağlı tarayıcıya saniyede 10.000 olay ve 500 ms sınırı. R4 ve R5 15'tir: ekip yeni bir mesajlaşma sistemi istemiyor ve mesajlar saklanmadığı için fiyatı mesaj başına ödeme belirler.",
+    rows=[
+        row("EY", 20, "Bir olayın hangi sunucudaki tarayıcıya gideceği bilinmez; yayının yolu bu iş yükünün kendisidir.",
+            "Bir olay bir kez yayınlanır ve o channel'a abone olan her WebSocket sunucusuna gider (fan-out). Yayınlayan, abonelerin kim olduğunu bilmez.",
+            "Her olay 20 sunucuya ayrı ayrı gönderilirse yayınlayan kod sunucu listesini bilmek zorunda kalır ve her yeni sunucu bir kod değişikliğidir."),
+        row("DA", 10, "500 ms sınırı mesajın bir yere yazılıp sonra okunmasıyla değil, doğrudan iletilmesiyle rahat karşılanır.",
+            "Olay yayınlandığı anda bağlı abonelere iletilmeli; arada bir yazma, bir okuma ve bir bekleme olmamalı.",
+            "Mesaj önce saklanıp sonra okunursa her olaya bir yazma ve bir okuma gecikmesi eklenir; \"3 adet kaldı\" geç gelir."),
+        row("YD", 10, "Mesaj geçmişi istenmez; kalıcı kayıt zaten Aurora'daki sipariş ve stok row'larıdır.",
+            "Mesaj iletildikten sonra hiçbir yerde kalmamalı; geçmiş tutulmaz, temizlik işi olmaz.",
+            "Saklanan her mesaj bir yazma ve bir silme demektir; saniyede 10.000 olay günde 860 milyon gereksiz kayıt üretir."),
+        row("R2", 25, "150.000 bağlı tarayıcıya saniyede 10.000 olay; tepe kampanya akşamıdır.",
+            "Saniyede 2.000, kampanya akşamı 10.000 olay; her olay 500 ms içinde tarayıcıda. Aynı anda 150.000 tarayıcı 20 sunucuya bağlıdır.",
+            "\"3 adet kaldı\" mesajı geç gelirse müşteri tükenmiş bir ürünü sepete ekler ve checkout'ta hayal kırıklığı yaşar."),
+        row("R3", 5, "Kaçan bir mesaj zararsızdır; sayfa yeniden bağlanınca son durumu okur.",
+            "Düşük: kaçan bir mesaj zararsızdır; sayfa yeniden bağlanınca son durumu Aurora'dan okur. Mesaj geçmişi istenmez.",
+            "Olay kaynağı Aurora'daki sipariş ve stoktur; mesaj sadece bir bildirimdir."),
+        row("R4", 15, "Üç geliştirici yeni bir mesajlaşma sistemi öğrenmek istemiyor.",
+            "Üç geliştirici, sunucu istemiyor; WebSocket sunucuları zaten var. Yeni bir mesajlaşma sistemi öğrenmek istenmiyor.",
+            "Mesajlaşma altyapısı ürünün kendisi değildir; ekibin zamanını almamalıdır."),
+        row("R5", 15, "Mesajlar küçüktür ve saklanmaz; fiyatı mesaj başına ödeme ve boşta çalışan kapasite belirler.",
+            "Mesajlar küçük (200 byte), saklanmaz. İstek başına ödeme tercih edilir.",
+            "Saklanmayan küçük mesajlarda belirleyici olan mesaj başına fiyattır."),
+    ],
+    cands=["ec", "mdb", "sns"],
+    scores={
+        "ec": [sc(10, "PUBLISH order:O1 … bir kez gönderilir ve SUBSCRIBE ile bağlı her WebSocket sunucusuna gider; yayınlayan aboneleri bilmez (Ö5). Puan kırılmadı."),
+               sc(10, "Mesaj bellekte, bağlı bağlantılara doğrudan iletilir; arada yazma yoktur (Ö1, Ö5). Puan kırılmadı."),
+               sc(10, "Pub/Sub mesajı hiçbir yerde saklamaz; istenen de budur (Ö5). Puan kırılmadı."),
+               sc(9, "Serverless saniyede 10.000 yayını taşır (Ö6). 1 puan kırıldı: klasik Pub/Sub'da mesaj cluster'ın node'ları arasında dolaşır; sipariş başına channel'larda sharded Pub/Sub (SPUBLISH) trafiği tek shard'da tutar ve abone kodu buna göre yazılır."),
+               sc(8, "Replica'lar bir node arızasında servisi sürdürür (Ö7). 2 puan kırıldı: bir failover abone bağlantılarını koparır ve o andaki mesajlar kaçar; sayfa yeniden bağlanıp son durumu okur. Bellekte saklanan bir veri yoktur (mesaj iletilir ve gider), bu yüzden \"verinin tek yeri bellek\" olan kartlardaki 4 puan burada verilmez."),
+               sc(10, "Cache zaten çalışır; SUBSCRIBE ve PUBLISH WebSocket sunucusunda birkaç satırdır. Puan kırılmadı."),
+               sc(9, "ECPU başına ödenir ve mesajlar saklanmadığı için GB-saat neredeyse yoktur. 1 puan kırıldı: her yayın ve her teslim aktarılan veriye göre ECPU harcar.")],
+        "mdb": [sc(10, "Aynı Valkey engine'i: PUBLISH ve SUBSCRIBE. Puan kırılmadı."),
+                sc(10, "Aynı engine: mesaj bellekte, doğrudan iletilir. Puan kırılmadı."),
+                sc(10, "Pub/Sub mesajı aynı biçimde saklanmaz. Puan kırılmadı."),
+                sc(9, "Yayın bir yazma değildir ve log'a işlenmez; hız aynıdır. 1 puan kırıldı: aynı biçimde sharded Pub/Sub tasarımı gerekir."),
+                sc(8, "Log key'lerdeki veriyi korur, Pub/Sub mesajlarını değil. 2 puan kırıldı: ElastiCache'teki gibi failover'daki mesajlar kaçar; log bu kartta bir şey eklemez."),
+                sc(6, "Yönetilen node'lar. 4 puan kırıldı: serverless seçenek yoktur ve Lale Market'te zaten çalışan cache'in yanına ikinci bir bellek içi sistem eklenir."),
+                sc(4, "Node saat başına ödenir. 6 puan kırıldı: hiç saklanmayan mesajlar için gece gündüz çalışan node'lar ve kullanılmayan bir dayanıklılık ödenir.")],
+        "sns": [sc(9, "Bir topic'e bir kez yayınlanan mesaj, topic'e abone olan her WebSocket sunucusunun HTTPS endpoint'ine gider; yayınlayan aboneleri bilmez. 1 puan kırıldı: her yeni sunucu bir abonelik olarak kaydedilir ve onaylanır; kapanan sunucunun aboneliği silinir."),
+                sc(7, "Mesaj servisin içinden her aboneye ayrı bir HTTPS isteğiyle teslim edilir. 3 puan kırıldı: açık bir bağlantıya yazmak yerine her teslim bir istek ve bir cevaptır; 500 ms sınırının içindedir ama payı ElastiCache'ten küçüktür."),
+                sc(10, "Teslim edilen mesaj tutulmaz; geçmiş ve temizlik işi yoktur. Puan kırılmadı."),
+                sc(8, "Servis yayınları kendisi ölçekler. 2 puan kırıldı: saniyede 10.000 yayın 20 sunucuya saniyede 200.000 HTTPS teslimi demektir; tepe anında bu istekleri WebSocket sunucuları da karşılamalıdır."),
+                sc(10, "Yayınlanan mesajlar birden fazla veri merkezinde saklanır; ulaşılamayan bir sunucuya teslim yeniden denenir. Puan kırılmadı."),
+                sc(8, "Serverless, node yok. 2 puan kırıldı: ekip için yeni bir servis; topic, abonelikler ve sunucuların HTTPS endpoint'leri kurulur."),
+                sc(4, "Yayın ve teslim başına ödenir. 6 puan kırıldı: saniyede 200.000 teslim ayda yüz milyarlarca teslimdir; aynı mesajlar ElastiCache'te ECPU olarak bunun çok küçük bir kısmına mal olur.")],
+    },
+    h2h={
+        "mdb": "Kalıcı bellek içi key-value (MemoryDB) ile kafa kafaya. İkiz servisler aynı Pub/Sub'ı çalıştırır ve R1'de ikisi de 40'ta 40 alır. "
+               "Bu kart ikizlerin farkının bile sıfıra indiği bir durumu gösterir: MemoryDB'nin asıl artısı olan log key'lerdeki veriyi korur, Pub/Sub mesajlarını değil; failover'da kaçan mesaj iki serviste de kaçar (R3 eşit). "
+               "Geriye yalnız servis tasarımının bedeli kalır: serverless seçenek yoktur, Lale Market'te zaten çalışan cache'in yanına ikinci bir sistem eklenir ve hiç saklanmayan mesajlar için node'lar gece gündüz ödenir (R4, R5). "
+               "Hangi koşul değişseydi MemoryDB seçilirdi: mesajlar Pub/Sub yerine bir stream'e yazılsaydı ve kaçan mesaj zarar verseydi (örneğin \"kargoya verildi\" olayından bir e-posta doğsaydı); o zaman log stream key'ini korurdu.",
+        "sns": "Yayın-abone servisi (SNS) ile kafa kafaya. SNS bu iş yükünün en yakın yönetilen alternatifidir: bir yayını abonelere dağıtmak onun işidir, mesajları birden fazla veri merkezinde saklar ve ulaşılamayan aboneye teslimi yeniden dener (R3). "
+               "Fark teslim biçimindedir: Valkey mesajı WebSocket sunucularının açık bağlantılarına doğrudan yazar; SNS her sunucuya ayrı bir HTTPS isteği gönderir. Saniyede 10.000 olay ve 20 sunucu, saniyede 200.000 teslim demektir; bu hem gecikme payını küçültür (R1.2) hem de teslim başına ödenen faturayı büyütür (R5). "
+               "Bu kartta mesaj bir bildirimdir ve kaybı zararsızdır; SNS'in dayanıklılığı bedelini geri almaz. "
+               "Hangi koşul değişseydi SNS seçilirdi: aboneler WebSocket sunucuları değil, birkaç arka plan servisi (e-posta, stok, analitik) olsaydı ve her olayın her aboneye kesin ulaşması gerekseydi. Ekip WebSocket sunucularını hiç işletmek istemeseydi ise önce yönetilen bir WebSocket servisi (API Gateway WebSocket API ya da AppSync Events) değerlendirilirdi; bu hikâyede sunucular zaten çalıştığı için aday değildir.",
+    },
+    verdict="Karar: ElastiCache {ec}, MemoryDB {mdb}, SNS {sns}. Bu iş yüküne en uygun servis ElastiCache'tir. Engine uyumunda iki Valkey servisi eşittir; ElastiCache'i öne geçiren zaten çalışan bir cache'te sunucusuz işletim ve saklanmayan mesajlar için node ödememesidir. "
+            "ElastiCache seçtiğimizde artımız: bir PUBLISH bütün sunuculara, milisaniyeler içinde; geçmiş ve temizlik yok. "
+            "Eksimiz: mesajlar at-most-once'tır; uygulama bağlantı koptuğunda son durumu Aurora'dan yeniden okumalı ve kaçan mesajın zarar verdiği bir olay için Pub/Sub değil stream ya da yönetilen bir kuyruk kullanmalıdır. Bu kartın mimarisi de ikisi birliktedir: kayıt Aurora'da, bildirim ElastiCache'te. Bir koşul değişseydi: kaçan mesaj zarar verseydi stream ve MemoryDB öne çıkardı."))
+
+# ------------------------------------------------------------------ 7. distributed lock for the seller payout (the clear loss)
+ELASTICACHE_W.append(wusecase("lock", 7, sim="w_lock",
+    title="Dağıtık kilitler: satıcı ödemesi tam bir kez çalışsın",
+    key="Key: lock:payout:2026-10-28. Value: kilidi alan worker'ın rastgele değeri; süre 15 dakika.",
+    story=estory("lock"),
+    wnote="R1 toplam 45 ve en ağır grup; içinde en ağır satır atomikliktir (25): \"iki worker asla aynı kilidi tutmamalı\" bu iş yükünün tanımıdır. "
+          "R3 30 ile ikinci ve R2'den çok ağırdır: kaybolan bir kilit bir gecenin çift ödemesidir, yani 4 milyon TL. R2 5'te, en düşük sınırdadır: günde bir kilit alınır.",
+    rows=[
+        row("TA", 25, "Bu kartın tanımı: altı worker aynı saniyede denerse tam olarak biri kilidi almalı.",
+            "\"Bu gecenin kilidi kimsede değilse bana ver, 15 dakika süreyle\" tek atomik adım olmalı. Kilit onaylandıktan sonra başka bir worker onu alamamalı.",
+            "İki worker aynı anda \"kilit boş\" görürse ikisi de ödeme yapar ve her satıcıya iki kez ödenir."),
+        row("YD", 10, "Worker ölürse kilit kendiliğinden düşmeli, yoksa o gecenin ödemesi hiç yapılmaz.",
+            "Kilidi tutan worker ölürse kilit 15 dakika sonra kendiliğinden düşmeli ve başka bir worker işi devralabilmeli.",
+            "Süresi olmayan bir kilit, ölen bir worker'la sonsuza kadar kalır; satıcılar o gece ödeme almaz."),
+        row("OY", 5, "Bırakma ve uzatma günde bir kez olur, ama yanlış yapılırsa başkasının kilidi silinir.",
+            "Kilidi sadece alan worker bırakabilmeli ve iş uzarsa süresini uzatabilmeli; her biri tek bir istek olmalı.",
+            "Başka bir worker'ın kilidini silmek, iki worker'ın aynı anda çalışmasıyla aynı sonucu verir."),
+        row("EY", 5, "Soru basittir: tarihli tek bir key.",
+            "Tek soru: \"bu gecenin kilidi\". Key tarih ile bilinir.",
+            "Key ile doğrudan gidilemezse kilit alma yavaşlar; bu kartta hız önemli değildir."),
+        row("R2", 5, "Günde bir kilit; hız bu iş yükünde önemli değildir.",
+            "Günde bir kilit alma ve bir bırakma; altı worker aynı saniyede dener. Kilit 1 saniye içinde alınmalı.",
+            "Hız bu iş yükünde önemli değildir; asıl ölçek \"altı worker aynı anda\" yarışıdır."),
+        row("R3", 30, "Kaybolan kilit bir gecenin çift ödemesidir: 4 milyon TL ve haftalar süren bir banka süreci.",
+            "Onaylanan bir kilit hiçbir arızada kaybolmamalı. Kilit kaybolursa ikinci bir worker onu alır ve aynı gece iki ödeme yapılır.",
+            "Bir gecenin çift ödemesi 4 milyon TL'dir ve geri almak haftalar süren bir banka sürecidir; bu kartta dayanıklılık bir iş kuralıdır."),
+        row("R4", 15, "İki geliştirici; kilit kodu birkaç satır olmalı ve hikâye yalnız kilit için yeni bir sistem istemediğini açıkça söyler.",
+            "İki geliştirici; sunucu istenmiyor; kilit kodu birkaç satır olmalı. Lale Market zaten ElastiCache ve DynamoDB kullanıyor.",
+            "Kilit kodu karmaşıksa hatası gece 02:00'de, kimse bakmazken ortaya çıkar."),
+        row("R5", 5, "Maliyet hikâyede önemsizdir; satır en düşük ağırlıktadır.",
+            "Günde birkaç istek; maliyet önemsizdir.",
+            "Maliyet kararı tek başına çevirmez; ama günde iki istek için yıl boyu ödenen bir cluster yine de görünür bir kalemdir."),
+    ],
+    cands=["ddb", "mdb", "ec"],
+    scores={
+        "ddb": [sc(10, "PutItem attribute_not_exists(pk) OR expires_at < :now kilidi yalnız boşsa ya da süresi dolduysa yazar; aynı saniyedeki diğer beş istek ConditionalCheckFailedException alır. Puan kırılmadı."),
+                sc(7, "Süre sonu koşulun içindedir: ölen worker'ın kilidi expires_at geçince bir sonraki denemede geçersiz olur. 3 puan kırıldı: item kalır ve TTL onu günler içinde siler; her deneme süreyi kendisi karşılaştırır."),
+                sc(10, "DeleteItem ve UpdateItem bir koşulla (owner = :me) kilidi yalnız sahibine bıraktırır ve uzattırır; her biri tek istektir. Puan kırılmadı."),
+                sc(10, "GetItem ve PutItem tarihli key ile doğrudan gider. Puan kırılmadı."),
+                sc(10, "Günde bir istek DynamoDB için önemsizdir. Puan kırılmadı."),
+                sc(10, "Koşullu yazma onaylanmadan önce birkaç AZ'de saklanır; failover penceresi yoktur. Puan kırılmadı."),
+                sc(10, "Lale Market DynamoDB'yi zaten kullanır; serverless ve birkaç satır. Puan kırılmadı."),
+                sc(10, "Günde birkaç istek, birkaç kuruş. Puan kırılmadı.")],
+        "mdb": [sc(10, "SET lock:payout:… <rastgele değer> NX PX 900000 tek komuttur; Valkey komutları sırayla çalıştırdığı için yalnız bir worker kilidi alır. Puan kırılmadı."),
+                sc(10, "PX 900000 kilidi tam 15 dakikada siler. Puan kırılmadı."),
+                sc(8, "Bırakma \"değer benimse sil\" kuralıdır. 2 puan kırıldı: kural tek komut değildir; küçük bir Lua script'i (EVAL) değeri karşılaştırıp siler ya da uzatır."),
+                sc(10, "Key ile doğrudan erişim. Puan kırılmadı."),
+                sc(10, "Günde bir istek; log'a işlenen yazmanın milisaniyesi önemsizdir. Puan kırılmadı."),
+                sc(10, "Kilit çoklu AZ'li transaction log'una işlendikten sonra onaylanır; failover'da kaybolmaz. Puan kırılmadı."),
+                sc(6, "Yama ve failover yönetilir. 4 puan kırıldı: serverless seçenek yoktur; yalnız bu kilit için node tipi seçilen yeni bir cluster işletilir."),
+                sc(4, "Node saat başına ödenir. 6 puan kırıldı: günde iki istek için en küçük çoklu AZ'li cluster bile yıl boyu çalışır.")],
+        "ec": [sc(10, "SET … NX PX 900000 test ve yazmayı tek adımda yapar; altı worker'dan yalnız biri kilidi alır (Ö3). Puan kırılmadı."),
+               sc(10, "PX süreyi milisaniye hassasiyetle uygular; ölen worker'ın kilidi tam 15 dakikada düşer (Ö4). Puan kırılmadı."),
+               sc(8, "Bırakma ve uzatma küçük bir Lua script'idir (EVAL, Serverless'ta desteklenir) (Ö3). 2 puan kırıldı: \"değer benimse sil\" tek komut değildir; script yazılır ve test edilir."),
+               sc(10, "Key ile doğrudan erişim (Ö1). Puan kırılmadı."),
+               sc(10, "Günde bir istek; önemsiz bir yük. Puan kırılmadı."),
+               sc(1, "Replica'lar failover yapar (Ö7), ama kopyalama asenkrondur ve Serverless'ta kalıcı log yoktur. 9 puan kırıldı: \"OK\" alınmış kilit, primary kopyalamadan düşerse yeni primary'de yoktur ve ikinci worker onu alır (B8). Bu satırın isteği \"hiçbir arızada kaybolmamalı\"dır; kaybın kabul edildiği kartlardaki 4 puan burada verilemez."),
+               sc(10, "Cache zaten çalışır; kilit birkaç satırdır. Puan kırılmadı: Lua script'i R1.3'te sayıldı."),
+               sc(10, "Var olan cache'te günde birkaç komut; ek maliyet yoktur. Puan kırılmadı.")],
+    },
+    h2h={
+        "mdb": "Kalıcı bellek içi key-value (MemoryDB) ile kafa kafaya. MemoryDB R1'de DynamoDB'den öndedir: SET NX PX hem atomik kilidi hem de tam 15 dakikalık süre sonunu tek komutta verir; DynamoDB'de süre koşulun içinde karşılaştırılır. "
+               "Dayanıklılıkta da DynamoDB kadar güçlüdür: kilit log'a işlendikten sonra onaylanır. Fark servis tasarımında kapanır ve tersine döner: günde iki istek için serverless olmayan, yıl boyu çalışan yeni bir cluster işletilir (R4, R5). "
+               "Hangi koşul değişseydi MemoryDB seçilirdi: kilit günde bir kez değil saniyede binlerce kez alınsaydı ve milisaniyenin altında alınmak zorunda olsaydı, ya da ekip zaten başka işler için bir MemoryDB cluster'ı işletiyor olsaydı.",
+        "ec": "Bellek içi key-value (ElastiCache) ile kafa kafaya: bu sayfanın net kaybı. ElastiCache R1'de MemoryDB ile eşittir, çünkü aynı engine'i çalıştırırlar: kilit atomik, süre sonu tam, bırakma küçük bir script. "
+              "Kararı tek bir satır verir ve o satır bu kartın ikinci en ağır satırıdır: R3. Kopyalama asenkrondur ve Serverless'ta her yazmayı kalıcı kılan bir log yoktur; primary \"OK\" deyip replica'ya kopyalamadan düşerse kilit yeni primary'de yoktur ve ikinci worker aynı gece ikinci ödemeyi yapar (B8'deki simülasyon). "
+              "Atomik olmak kalıcı olmak değildir. Kilidi ElastiCache'te bırakıp asıl korumayı ödeme talimatının DynamoDB'ye koşullu yazılmasına taşımak da bir çözümdür; ama o zaman kilit sadece bir verimlilik aracıdır. "
+              "Bu karttaki ElastiCache adayı Lale Market'in kullandığı Serverless'tır. Node'lu bir Valkey 9.0 cluster'ında senkron kalıcılık açılsaydı R3 MemoryDB gibi tam puan alırdı, ama R4 ve R5 de MemoryDB'ninki gibi olurdu (yalnız kilit için node'lu bir cluster); sonuç MemoryDB'nin yanında, DynamoDB'nin gerisinde kalırdı. Hangi koşul değişseydi ElastiCache seçilirdi: kilidin kaybı zararsız olsaydı (örneğin bir cache'in stampede kilidi, B6) ya da korunan iş idempotent olsaydı, yani iki kez çalışması aynı sonucu verseydi.",
+    },
+    verdict="Karar: DynamoDB {ddb}, MemoryDB {mdb}, ElastiCache {ec}. Bu iş yüküne en uygun servis DynamoDB'dir ve ElastiCache burada net olarak kaybeder: üçüncüdür. Engine uyumunda üç aday birbirine yakındır; kararı R3 verir: onaylanan kilit hiçbir arızada kaybolmamalıdır. "
+            "Yine de ElastiCache seçersek artımız: kilit zaten çalışan cache'te, birkaç satır ve tam süre sonuyla. "
+            "Eksimiz: bir failover'da kilit kaybolabilir ve satıcılara iki kez ödenebilir; ElastiCache seçilirse uygulama ödeme talimatını satıcı ve gün başına benzersiz bir id ile DynamoDB'ye koşullu yazmalı, yani asıl korumayı kalıcı bir store'a taşımalıdır. Hangi servis seçilirse seçilsin süreli bir kilit, takılan bir worker'ın süresi dolunca ikinci bir worker'a geçebilir; bu yüzden ödeme talimatı her durumda satıcı ve gün başına benzersiz bir id ile koşullu yazılır (B8): kilit verimliliği, benzersiz id doğruluğu sağlar. Bir koşul değişseydi: korunan iş idempotent olsaydı ElastiCache yeterdi."))
+
+# ------------------------------------------------------------------ 8. job queue for image thumbnails (SQS wins, also on R1)
+ELASTICACHE_W.append(wusecase("queue", 8, sim="w_queue",
+    title="İş kuyruğu: ürün görseli küçültme",
+    key="ElastiCache'te key: jobs:thumbs; value bir stream ve onun consumer group'u (thumbs-workers). SQS'te bir queue ve bir dead-letter queue.",
+    story="Satıcılar ürün görsellerini S3'e yükler. Her yükleme, görselin dört boyutta küçültülmesi için bir iş üretir; 8 worker işleri alır ve sonucu S3'e yazar. "
+          "Normal günde saniyede 30 iş, yeni sezon başında saniyede 500 iş gelir ve iki saat sürer. İş 5 saniye içinde başlamalıdır. "
+          "Bozuk bir görsel küçültmeyi her seferinde çökertebilir: üç kez başarısız olan iş kuyruktan ayrılmalı ve bir ekranda gösterilmelidir, yoksa worker'ları sonsuza kadar meşgul eder. "
+          "Bir iş kaybolursa görsel küçültülmeden kalır, ama gece çalışan bir kontrol S3'teki küçültülmemiş görselleri bulur ve işi yeniden üretir. Bir işin iki kez yapılması zararsızdır (aynı dosya yeniden yazılır). "
+          "Ekip iki geliştirici; Lale Market'te ElastiCache zaten var ve ekip kuyruğu oraya koymayı düşünüyor.",
+    wnote="R1 toplam 40 ve en ağır grup: bir işin nasıl eklenip alındığı, çöken worker'ın işinin geri gelmesi ve üç kez başarısız olan işin ayrılması bu iş yükünün kurallarıdır. "
+          "R2 20 ile ikinci: sezon başında on altı kat iş ve 5 saniyelik başlama sınırı. R3 ve R4 15'tir: kaybolan iş bir gece gecikir, ekip ise iki kişidir.",
+    rows=[
+        row("OY", 15, "Her iş bir ekleme ve bir alma; worker'lar boşken sürekli sormamalı.",
+            "Üretici işi kuyruğun sonuna ekler; bir worker kuyruğun başından bir iş alır. Kuyruk boşken worker sürekli sormamalı, iş gelince uyanmalı.",
+            "Yoklama yapan 8 worker saniyede binlerce boş istek demektir; geç başlayan iş satıcının ürün sayfasını görselsiz bırakır."),
+        row("TA", 15, "İki worker aynı işi almamalı ve çöken worker'ın işi kaybolmamalı.",
+            "İki worker aynı işi almamalı. Worker işi alırken ya da işlerken çökerse iş bir süre sonra kendiliğinden kuyruğa dönmeli.",
+            "Çöken worker'ın işi hiçbir yerde kalmazsa görsel küçültülmez; iki worker aynı işi alırsa iş boşa tekrarlanır."),
+        row("AO", 10, "Üç kez başarısız olan iş ayrılmazsa bozuk bir görsel worker'ları sonsuza kadar meşgul eder.",
+            "Her işin kaç kez denendiği sayılmalı; üç kez başarısız olan iş otomatik olarak ayrı bir yere taşınmalı ve orada incelenebilmeli.",
+            "Bozuk bir iş sonsuza kadar yeniden denenirse sezon başında 8 worker'ın biri sürekli aynı işle meşgul olur."),
+        row("R2", 20, "Sezon başında saniyede 500 iş iki saat sürer; iş 5 saniye içinde başlamalı.",
+            "Saniyede 30, sezon başında 500 iş; her iş 5 saniye içinde başlamalı.",
+            "Kuyruk tepe anında yavaşlarsa iş birikir ve satıcıların görselleri saatlerce küçültülmeden kalır."),
+        row("R3", 15, "Kaybolan iş gece kontrolüyle geri gelir; ama satıcı o gün görselini küçük boyutta görmez.",
+            "Orta: kaybolan iş gece kontrolüyle yeniden üretilir, ama satıcı o gün görselini küçük boyutta görmez.",
+            "Kayıp bir gecikmedir, veri kaybı değildir; asıl dosya S3'te kalıcıdır."),
+        row("R4", 15, "İki geliştirici; sunucu ve yeni bir bakım işi istenmiyor.",
+            "İki geliştirici; sunucu istenmiyor. Kuyruğun kendisi için ayrı bir bakım işi yazılmamalı.",
+            "Küçük ekipte kuyruğun etrafına yazılan her yardımcı iş (temizlik, geri koyma) bir nöbet listesi demektir."),
+        row("R5", 10, "İşler küçüktür; istek başına ödeme ve boşta sıfıra yakın maliyet istenir.",
+            "İşler küçük (200 byte); kuyruk tepe anında bile birkaç MB. İstek başına ödeme tercih edilir.",
+            "Küçük işlerde belirleyici olan istek başına fiyattır."),
+    ],
+    cands=["sqs", "ec", "mdb"],
+    scores={
+        "sqs": [sc(10, "SendMessage ekler, ReceiveMessage alır ve long polling ile 20 saniyeye kadar bekler: worker iş gelince uyanır, boş yoklama yapmaz. Puan kırılmadı."),
+                sc(9, "Alınan mesaj visibility timeout boyunca diğer worker'lardan gizlenir; worker silmeden çökerse mesaj süre bitince kuyruğa kendiliğinden döner. 1 puan kırıldı: standard queue at-least-once'tır ve bir iş seyrek olarak iki kez gelebilir; bu iş yükünde zararsızdır."),
+                sc(10, "Her mesajın alınma sayısı tutulur; redrive policy maxReceiveCount = 3 ile üç kez başarısız olan işi dead-letter queue'ya kendisi taşır. Puan kırılmadı."),
+                sc(10, "Standard queue saniyede neredeyse sınırsız istek kabul eder; saniyede 500 iş ayarsız karşılanır. Puan kırılmadı."),
+                sc(10, "SQS mesajı onaylamadan önce birkaç AZ'de saklar. Puan kırılmadı."),
+                sc(9, "Serverless: kapasite ve node yoktur. 1 puan kırıldı: ekip için yeni bir servis; queue, dead-letter queue ve IAM izni bir kez kurulur."),
+                sc(10, "İstek başına ödenir ve boşta maliyet sıfıra yakındır; long polling boş istekleri azaltır. Puan kırılmadı.")],
+        "ec": [sc(9, "XADD işi stream'e ekler, XREADGROUP … BLOCK işi bekleyerek alır ve worker iş gelince uyanır (Ö5). 1 puan kırıldı: iş bitince XACK ile onaylanır ve stream XADD … MAXLEN ile kırpılmalıdır."),
+               sc(8, "Consumer group bir mesajı yalnız bir worker'a verir; çöken worker'ın onaylanmamış mesajı bekleyenler listesinde kalır (Ö5). 2 puan kırıldı: mesaj kendiliğinden geri dönmez; bir worker belirli aralıklarla XAUTOCLAIM … <min-idle> çalıştırıp uzun süre bekleyen mesajları sahiplenmelidir."),
+               sc(6, "Stream her mesajın kaç kez teslim edildiğini tutar (XPENDING) (Ö5). 4 puan kırıldı: dead-letter taşıması yoktur; üç kez teslim edilip onaylanmayan işi ayrı bir \"failed\" stream'ine yazıp onaylayan kodu uygulama yazar."),
+               sc(10, "Bekleyen worker'lar saniyede 500 işi gecikmesiz alır; Serverless yükü taşır (Ö6). Puan kırılmadı."),
+               sc(4, "Kalıcı bir yazma log'u yoktur. 6 puan kırıldı: bir arızada kuyruktaki son işler kaybolabilir; gece kontrolü onları yeniden üretir ve bu kartta kabul edilen bir sonuçtur."),
+               sc(10, "Cache zaten çalışır; serverless. Puan kırılmadı: XAUTOCLAIM ve bozuk iş kodu R1.2 ve R1.3'te sayıldı."),
+               sc(9, "ECPU başına ödenir ve kuyruk birkaç MB'tır. 1 puan kırıldı: kuyruk birkaç MB olsa da Serverless'ta en az 100 MB saklama ödenir.")],
+        "mdb": [sc(9, "Aynı Valkey engine'i: XADD, XREADGROUP, XACK. 1 puan kırıldı: iş onaylanmalı ve stream kırpılmalıdır."),
+                sc(8, "Aynı engine: consumer group ve bekleyenler listesi. 2 puan kırıldı: XAUTOCLAIM aynı biçimde uygulamanın işidir."),
+                sc(6, "Aynı engine: teslim sayısı var, dead-letter taşıması yok. 4 puan kırıldı: aynı uygulama kodu gerekir."),
+                sc(9, "Bekleyen worker'lar işi hemen alır. 1 puan kırıldı: her XADD, XREADGROUP ve XACK bir yazmadır ve log'a işlendikten sonra onaylanır; 5 saniyenin çok içindedir ama iş başına birkaç milisaniye ekler."),
+                sc(10, "Her yazma çoklu AZ'li log'da kalıcıdır; kuyruktaki iş arızada kaybolmaz. Puan kırılmadı."),
+                sc(6, "Yönetilen node'lar. 4 puan kırıldı: serverless seçenek yoktur ve zaten çalışan cache'in yanına node'lu ikinci bir sistem gelir."),
+                sc(4, "Node saat başına ödenir. 6 puan kırıldı: yılda birkaç kez yoğun bir kuyruk için cluster yıl boyu çalışır.")],
+    },
+    h2h={
+        "ec": "Bellek içi key-value (ElastiCache) ile kafa kafaya. Bu kartta kaybın büyük kısmı R1'dedir, yani engine'in doğasındadır. Valkey'in en iyi kuyruk aracı consumer group'lu bir stream'dir: XREADGROUP işi bir worker'a verir ve worker'ı iş gelince uyandırır, onaylanmamış iş bekleyenler listesinde kalır ve teslim sayısı tutulur. "
+              "Ama bir kuyruğun iki aracı yine uygulamaya kalır: uzun süre bekleyen işi başka bir worker'a veren XAUTOCLAIM'i biri periyodik çalıştırmalıdır (SQS'te görünürlük süresi bunu kendisi yapar) ve üç denemeden sonra işi ayıran bir dead-letter taşıması yoktur. "
+              "R1'deki 7 puanlık fark bu iki satırdan gelir; geri kalan fark R3'tedir: kalıcı log olmadan kuyruktaki son işler arızada kaybolabilir. ElastiCache'in zaten çalışıyor olması R4'te artıdır, ama SQS de sunucusuzdur ve kurulumu bir kerelik iştir. "
+              "Hangi koşul değişseydi ElastiCache seçilirdi: işler milisaniyenin altında başlamak zorunda olsaydı, yeniden deneme ve bozuk iş ayrımı gerekmeseydi (örneğin kaybı ve tekrarı zararsız bir önbellek ısıtma işi) ya da kuyruk aynı key'lerle birlikte bir Lua script'inde atomik işlenmek zorunda olsaydı.",
+        "mdb": "Kalıcı bellek içi key-value (MemoryDB) ile kafa kafaya. MemoryDB ElastiCache'in ikizidir ve R1'de onunla aynı puanı alır: aynı stream, aynı eksik araçlar. "
+               "Tek artısı R3'tür: log stream'deki işi bir arızada korur. Ama bu kartta kaybolan iş gece kontrolüyle geri gelir; dayanıklılığın değeri sınırlıdır. Buna karşılık serverless seçenek yoktur ve zaten çalışan cache'in yanına node'lu bir sistem gelir (R4, R5). "
+               "SQS ise hem dayanıklılığı hem kuyruğun araçlarını (görünürlük süresi, dead-letter queue) hem de sunucusuz işletimi aynı anda verir. "
+               "Hangi koşul değişseydi MemoryDB seçilirdi: kuyruk zaten MemoryDB'de duran verilerle aynı Lua script'inde işlenmek zorunda olsaydı ve iş kaybı kabul edilmeseydi.",
+    },
+    verdict="Karar: SQS {sqs}, ElastiCache {ec}, MemoryDB {mdb}. Bu iş yüküne en uygun servis Amazon SQS'tir; ElastiCache ikincidir ve farkın büyük kısmı R1'den gelir: görünürlük süresi ve dead-letter queue bir kuyruğun engine araçlarıdır; Valkey'in stream'i teslim sayısını ve bekleyenler listesini verir, ama geri vermeyi ve ayırmayı uygulama yazar. "
+            "Yine de ElastiCache seçersek artımız: kuyruk zaten çalışan cache'te, XREADGROUP ile iş gelince uyanan worker'lar ve milisaniyelik başlama. "
+            "Eksimiz: uygulama XAUTOCLAIM'i periyodik çalıştıran bir iş ve üç kez teslim edilen işi bir \"failed\" stream'ine taşıyan kodu yazmalıdır; bir arızada kuyruğun son işleri kaybolabilir ve gece kontrolü onları yeniden üretmelidir. Bir koşul değişseydi: yeniden deneme ve bozuk iş ayrımı gerekmeseydi ElastiCache yeterdi."))
+
+# ------------------------------------------------------------------ 9. recommendation cache (the DynamoDB card "ads": same rows, weights, points)
+ELASTICACHE_W.append(wusecase("reco", 9,
+    title="Öneri listeleri için cache",
+    key="Key: reco:<kullanıcı id'si>. Value: önceden hesaplanmış 50 ürünlük liste (string, 2 KB).",
+    story=estory("reco"),
+    wnote="R1 toplam 50: katı 5 ms sınırı engine'in veriyi nerede tuttuğuyla (20) ve gece toplu yazma biçimiyle (15) ilgilidir. "
+          "R2 20 ile ikinci: gündüz saniyede 100.000 okuma. R5 bu kartta 15'tir, çünkü saniyede 100.000 okumanın ve 40 GB'ın fiyatı belirleyicidir. R3 5'te, en düşük sınırdadır: liste her gece yeniden hesaplanır.",
+    rows=[
+        row("EY", 10, "Soru basittir: kullanıcı id'si ile tek bir liste; bu kartın riski hızda ve okuma fiyatındadır.",
+            "Tek soru: \"bu kullanıcının listesi\". Listeye göre sorgu yoktur.",
+            "Ana sayfa bu okumayı bekler; key ile doğrudan gidilemezse sayfa genel listeye düşer."),
+        row("DA", 20, "5 ms sınırı katıdır ve engine'in veriyi bellekte mi diskte mi tuttuğuyla belirlenir.",
+            "Okuma 5 ms içinde dönmeli; dönmezse sayfa beklemez ve genel bir liste gösterir.",
+            "Sınırı aşan her okuma boşa giden bir öneridir; disk tabanlı bir engine'in tek haneli milisaniyesi yükte 5 ms'yi zaman zaman aşar."),
+        row("OY", 15, "Gece 30 dakikada 20 milyon yazma, gündüz sıfır yazma; bu biçim engine'i zorlar.",
+            "Gece 30 dakikada 20 milyon listeyi toplu yazmak (saniyede 11.000), gündüz yalnız okumak.",
+            "Toplu yazma yavaşsa gece işi sabaha sarkar ve kullanıcılar dünkü listeyi görür."),
+        row("VM", 5, "Value basittir: 2 KB'lık tek bir liste; şekli iş yükünü zorlamaz.",
+            "Liste tek bir value'dur: 50 ürün id'si, 2 KB.",
+            "Liste parçalara bölünürse her okuma birkaç istek olur."),
+        row("R2", 20, "Gündüz saniyede 100.000 okuma; gece saniyede 11.000 yazma.",
+            "Gündüz saniyede 100.000 okuma; gece 30 dakikada saniyede 11.000 yazma, gündüz sıfır yazma.",
+            "Gece yazma penceresi dar: 30 dakikada bitmezse sabah eski listeler kalır; gündüz okuma yavaşlarsa öneriler gösterilmez."),
+        row("R3", 5, "Liste her gece yeniden hesaplanır; kaybı bir günlük genel listedir.",
+            "Düşük: liste her gece yeniden hesaplanır; kaybolursa bir gün genel liste gösterilir.",
+            "Türetilmiş veri; kaynağı modeldir ve yarın yeniden üretilir."),
+        row("R4", 10, "Veri ekibi batch işleri ve SDK biliyor, sunucu istemiyor.",
+            "Veri ekibi batch işleri ve AWS SDK biliyor, sunucu istemiyor. Gece toplu yazma için ayrı bir büyütme işi istenmiyor.",
+            "Her gece elle kapasite artırıp sabah düşürmek sürdürülemez; otomatik olmalıdır."),
+        row("R5", 15, "Okuma çok yüksek ve düz; okuma başına fiyat ve 40 GB verinin bellekteki fiyatı belirleyicidir.",
+            "Okuma çok yüksek ve düz; okuma başına fiyat belirleyicidir. 20 milyon × 2 KB = 40 GB veri.",
+            "Günde 8,6 milyar okuma: okuma birimi fiyatı bu iş yükünün faturasıdır; bellekte 40 GB her saat ödenir."),
+    ],
+    cands=["ec", "mdb", "ddb"],
+    scores={
+        "ec": [sc(10, "GET reco:{user} key ile doğrudan okumadır (Ö1). Puan kırılmadı."),
+               sc(10, "Liste bellekteki hash table'dadır; okuma mikrosaniyelerdedir ve 5 ms sınırının çok altındadır (Ö1). Puan kırılmadı."),
+               sc(9, "Pipeline (komutları cevap beklemeden art arda göndermek) ile toplu SET saniyede 11.000 yazmayı kolayca taşır. 1 puan kırıldı: gece işi her listeye süre (EX, Ö4) koymalı ya da eski listeleri üzerine yazmalıdır."),
+               sc(10, "2 KB'lık liste tek bir string value'dur (Ö2). Puan kırılmadı."),
+               sc(9, "Serverless saniyede 100.000 okumayı taşır (Ö6). 1 puan kırıldı: gece yazma sıçraması için minimum ECPU ayarı önerilir."),
+               sc(4, "Kalıcı bir yazma log'u yoktur. 6 puan kırıldı: bir arızada listeler yeniden yüklenmelidir; bu kartta kabul edilen bir sonuçtur."),
+               sc(9, "Serverless. 1 puan kırıldı: yeniden yükleme işi bir arıza planına yazılmalıdır."),
+               sc(6, "ECPU ve GB-saat başına ödenir. 4 puan kırıldı: 40 GB verinin bellekteki saklama fiyatı diskten çok yüksektir ve faturanın büyük kısmıdır (B9).")],
+        "mdb": [sc(10, "Aynı Valkey engine'i: GET ile doğrudan okuma. Puan kırılmadı."),
+                sc(10, "Okumalar bellekten, mikrosaniyelerde. Puan kırılmadı."),
+                sc(9, "Aynı Valkey engine'i: toplu SET pipeline ile yapılır. 1 puan kırıldı: gece işi her listeye süre koymalı ya da eski listeleri üzerine yazmalıdır."),
+                sc(10, "Tek bir string value. Puan kırılmadı."),
+                sc(7, "Replica ekleyerek okuma ölçeklenir. 3 puan kırıldı: gündüz okumaları etkilenmez, ama her gece yazması log'a işlendikten sonra onaylanır; 30 dakikalık pencere ancak daha çok paralel bağlantı ve pipeline ile tutar ve bunun bir yük testiyle doğrulanması gerekir. Bu, DynamoDB sayfasının aynı kartındaki kırılımdır."),
+                sc(10, "Her yazma kalıcıdır. Puan kırılmadı: ama bu kartta dayanıklılık önemsizdir."),
+                sc(6, "Yönetilen node'lar. 4 puan kırıldı: serverless seçenek yoktur; node ve replica sayısı ekibin işidir."),
+                sc(4, "Node saat başına ödenir; gecelik 40 GB yazma ayda 10 TB'lık ücretsiz yazma payının içindedir. 6 puan kırıldı: 40 GB veri ve replica'lar için büyük node'lar sürekli çalışır; bu kartın istemediği dayanıklılığa para verilir.")],
+        "ddb": [sc(10, "GetItem kullanıcı id'si ile doğrudan okumadır. Puan kırılmadı."),
+                sc(6, "Veri SSD'deki partition'lardadır; okuma tipik olarak tek haneli milisaniyedir. 4 puan kırıldı: yük altında okumaların bir kısmı 5 ms'yi aşabilir; sınırı garanti etmek için önüne DAX gerekir."),
+                sc(9, "BatchWriteItem 25'er value yazar ve gece işi paralel çalışır. 1 puan kırıldı: S3'ten import yalnız yeni bir table oluşturur; var olan table'a toplu yükleme yazma birimi harcar."),
+                sc(10, "Liste bir list alanıdır. Puan kırılmadı."),
+                sc(8, "Okumalar partition'lara dağılır. 2 puan kırıldı: gece yazmadan gündüz okumaya geçiş bir sıçramadır; on-demand mod bir önceki tepenin iki katına kadar anında uyum sağlar, daha hızlı bir sıçramada kısa bir throttling olabilir."),
+                sc(10, "Her yazma birkaç AZ'de saklanır. Puan kırılmadı: ama bu kartta dayanıklılık önemsizdir."),
+                sc(10, "Serverless. Puan kırılmadı."),
+                sc(5, "Okuma birimi başına ödenir. 5 puan kırıldı: günde milyarlarca okuma, eventually consistent okumayla bile bellek içi cache'in istek fiyatından çok yüksektir; DAX eklenirse onun node'ları da ödenir.")],
+    },
+    h2h={
+        "mdb": "Kalıcı bellek içi key-value (MemoryDB) ile kafa kafaya. MemoryDB ElastiCache ile aynı Valkey engine'ini çalıştırır ve okumada aynı mikrosaniyeleri verir; R1'de ikisi de 48,5 alır. "
+               "Fark servis tasarımındadır ve bu kartta MemoryDB'nin aleyhinedir: her gece 20 milyon yazma log'a işlenir ve yazılan GB ayrıca ödenir; serverless seçenek yoktur ve 40 GB için büyük node'lar sürekli çalışır. "
+               "Bütün bunlar, her gece yeniden hesaplanan ve kaybı bir günlük genel liste olan veri için ödenen bir dayanıklılıktır. Farkın tamamı servis tasarımından gelir. "
+               "Hangi koşul değişseydi MemoryDB seçilirdi: listeler yeniden hesaplanamasaydı (örneğin elle düzenlenen kampanya listeleri) ve hem mikrosaniye okuma hem kalıcılık aynı anda istenseydi.",
+        "ddb": "Key-value (DynamoDB) ile kafa kafaya. DynamoDB üçüncüdür ama MemoryDB'ye yarım puan uzaktadır ve kararı R1'in depolama satırı verir. İki aday da key ile tek okuma yapar ve gece toplu yazmayı taşır; DynamoDB dayanıklılıkta öndedir. "
+               "Ama 5 ms sınırı katıdır: ElastiCache listeyi bellekte tutar ve mikrosaniyede döner, DynamoDB ise SSD'deki partition'lardan tek haneli milisaniyede döner ve yük altında okumaların bir kısmı sınırı aşar. "
+               "Sınırı garanti etmek için DynamoDB'nin önüne DAX konur; bu durumda mimari zaten bir bellek içi cache içerir. R5'te de günde milyarlarca okumanın istek başına fiyatı yüksektir. "
+               "Hangi koşul değişseydi DynamoDB seçilirdi: sınır 5 ms değil 20 ms olsaydı, okuma hacmi on kat düşük olsaydı ya da listeler kalıcı bir kayıt olsaydı (kullanıcının kendisinin kaydettiği listeler).",
+    },
+    verdict="Karar: ElastiCache {ec}, MemoryDB {mdb}, DynamoDB {ddb}. Bu iş yüküne en uygun servis ElastiCache'tir; MemoryDB ve DynamoDB neredeyse eşittir. Kararı R1'deki depolama algoritması verir: katı 5 ms sınırı bellekte tutulan veriyle garanti edilir. "
+            "ElastiCache seçtiğimizde artımız: mikrosaniye okuma, gece işi için pipeline, sunucusuz işletim. "
+            "Eksimiz: 40 GB her saat bellek fiyatıyla ödenir ve bir arızada listeler yeniden yüklenmelidir; uygulama bir yükleme işini arıza planına yazmalı, liste yoksa genel listeyi göstermeli ve gece işini yarıda kalmaya karşı korumalıdır: yeni listeler yeni bir sürüm key'ine (reco:v2026-10-31:<id>) yazılır ve iş bitince okunan sürüm değiştirilir. Bir koşul değişseydi: sınır 20 ms olsaydı DynamoDB kazanırdı."))
+
+# ------------------------------------------------------------------ 10. nearby couriers: geospatial lookups (Aurora wins R1, ElastiCache wins the total)
+ELASTICACHE_W.append(wusecase("geo", 10, sim="w_geo",
+    title="Yakındaki kuryeler: konum araması",
+    key="Key: couriers:istanbul. Value: konum index'i (koordinatı score olarak saklayan bir sorted set); member kurye id'si.",
+    story=estory("geo"),
+    wnote="R1 toplam 50: arama sorusunun kendisi, 30 saniyelik eskime kuralı, konumların sürekli üzerine yazılması ve aramanın nerede çalıştığı. "
+          "R2 20 ile ikinci: kampanya akşamı saniyede 2.000 arama ve 800 yazma. R4 15'tir: ekip üç kişidir ve coğrafi sorgu için yeni bir sistem öğrenmek istemiyor. R3 5'tir: konumlar 5 saniyede bir yeniden gelir.",
+    rows=[
+        row("EY", 15, "Her sipariş bu soruyu sorar; kurye atanmadan sipariş ekranı ilerlemez.",
+            "\"Şu noktaya 3 km içindeki boş kuryeler, yakından uzağa, ilk 5\". Sorunun elinde bir koordinat ve bir yarıçap vardır, kurye id'si yoktur.",
+            "Arama yanlış ya da eksik kurye verirse kurye 10 km uzaktan çağrılır ve aynı gün teslimat sözü tutulmaz."),
+        row("YD", 15, "Telefonu kapanan bir kurye çağrılırsa sipariş bekler; bu kural her aramada geçerli olmalı.",
+            "Konumu 30 saniyedir gelmeyen kurye (telefonu kapanmış, tünelde) aramada çıkmamalı; eskiyen konum kendiliğinden geçersiz olmalı.",
+            "Eski bir konumla çağrılan kurye cevap vermez; sipariş ikinci bir aramayı bekler ve müşteri dakikalar kaybeder."),
+        row("OY", 10, "Saniyede 800 konum yazması bir üzerine yazmadır; biçimi basit ama sürekli.",
+            "\"Bu kuryenin konumu şu\": her 5 saniyede bir üzerine yazma; geçmiş tutulmaz (S3'e ayrıca yazılır).",
+            "Her yazma eski bir sürüm bırakıyorsa sürekli üzerine yazılan 4.000 kurye bir temizlik yükü üretir."),
+        row("DA", 10, "20 ms sınırı aramanın bellekte mi, diskteki bir index'te mi çalıştığıyla ilgilidir.",
+            "Arama 20 ms içinde dönmeli, çünkü sipariş ekranı bekler.",
+            "Yavaş arama her siparişi yavaşlatır; kampanya akşamı en çok sipariş en yavaş atamayı görür."),
+        row("R2", 20, "Kampanya akşamı saniyede 2.000 arama ve 800 yazma checkout tepesiyle aynı anda gelir.",
+            "Saniyede 800 konum yazması, kampanyada saniyede 2.000 arama; her arama 20 ms içinde. Tepe checkout tepesiyle aynı akşamdır.",
+            "Sipariş ekranı kurye atanana kadar bekler; yavaş arama ya da yorulan bir database her siparişi yavaşlatır."),
+        row("R3", 5, "Konumlar 5 saniyede bir yeniden gelir; kayıp 5 saniyede geri dolar.",
+            "Düşük: konumlar 5 saniyede bir yeniden gelir; kaybolan konumlar 5 saniyede geri dolar.",
+            "Konum tablosu bir anlık durumdur; geçmiş S3'te ayrıca kalıcıdır."),
+        row("R4", 15, "Üç geliştirici; coğrafi sorgu için yeni bir sistem öğrenmek istenmiyor.",
+            "Üç geliştirici; sunucu istenmiyor; coğrafi sorgu için yeni bir sistem öğrenmek istenmiyor. Teslimat bölgeleri Aurora'da (PostGIS) zaten vardır.",
+            "Coğrafi sistemler projeksiyon, index türü ve sıralama gibi yeni kavramlar ister."),
+        row("R5", 10, "Veri küçüktür; yazma ve arama süreklidir.",
+            "Veri küçüktür: 4.000 kurye. Yazma ve arama sürekli; istek başına ödeme tercih edilir.",
+            "Küçük ve sürekli değişen veride belirleyici olan istek fiyatıdır."),
+    ],
+    cands=["ec", "aur", "os"],
+    scores={
+        "ec": [sc(9, "GEOSEARCH couriers:istanbul FROMLONLAT … BYRADIUS 3 km ASC COUNT 5 soruyu tek komutta, yakından uzağa cevaplar (Ö2). 1 puan kırıldı: \"boş\" koşulu index'te yoktur; meşgul kuryeler ayrı bir set'tedir ve uygulama ilk sonuçları onunla eler (ya da bir Lua script'i birlikte yapar)."),
+               sc(5, "Süre key başınadır, member başına değildir (Ö4). 5 puan kırıldı: 30 saniyedir susan kurye konum index'inde kalır; son görülme zamanı ikinci bir sorted set'te tutulur ve eski member'ları ZREMRANGEBYSCORE (score'u bir aralıkta olan member'ları silen komut) ve ZREM ile silen periyodik bir iş yazılır."),
+               sc(10, "GEOADD var olan member'ın konumunu yerinde değiştirir; eski sürüm kalmaz (Ö2). Puan kırılmadı."),
+               sc(10, "Konum index'i bellekteki bir sorted set'tir; arama milisaniyenin altındadır (Ö1). Puan kırılmadı."),
+               sc(10, "Saniyede 2.000 arama ve 800 yazma Serverless için küçük bir yüktür ve Aurora'ya dokunmaz (Ö6). Puan kırılmadı."),
+               sc(4, "Kalıcı bir yazma log'u yoktur. 6 puan kırıldı: bir arızada son konumlar kaybolabilir; 5 saniye sonra yeniden dolarlar ve bu kartta kabul edilen bir sonuçtur."),
+               sc(10, "Cache zaten çalışır; GEOADD ve GEOSEARCH birkaç satırdır. Puan kırılmadı: eskiyen kuryeleri silen iş R1.2'de sayıldı."),
+               sc(9, "ECPU başına ödenir ve veri çok küçüktür. 1 puan kırıldı: GEOSEARCH basit bir GET'ten daha fazla ECPU harcar.")],
+        "aur": [sc(10, "ST_DWithin ile 3 km, ORDER BY konum <-> nokta LIMIT 5 ile en yakın beş ve WHERE status = 'free' tek bir SQL sorgusudur; GiST index'i kullanılır. Puan kırılmadı."),
+                sc(10, "WHERE last_seen > now() - interval '30 seconds' aynı sorgudadır; eskiyen konum doğruluk için bir temizlik işi istemez. Puan kırılmadı."),
+                sc(6, "UPDATE couriers SET pos = … her 5 saniyede bir yapılır. 4 puan kırıldı: PostgreSQL her UPDATE'te row'un yeni bir sürümünü yazar (MVCC) ve GiST index'ini günceller; saniyede 800 güncelleme sürekli bir VACUUM yükü üretir."),
+                sc(8, "GiST index'i buffer cache'te durur ve arama birkaç milisaniyedir. 2 puan kırıldı: 20 ms sınırının içindedir, ama arama bellekten değil bir index sayfa zincirinden gelir."),
+                sc(5, "Okumalar reader'lara gönderilebilir. 5 puan kırıldı: saniyede 800 güncelleme checkout'u yapan tek writer'dan geçer ve kampanya akşamı checkout tepesiyle aynı anda gelir; tepe anında konum yazmaları ile siparişler aynı writer'ı bekler."),
+                sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                sc(8, "Aurora ve PostGIS zaten çalışır ve ekip bölgeleri orada sorgular. 2 puan kırıldı: kampanya için bir reader eklemek ve aramaları reader endpoint'ine yönlendirmek ekibin işidir; VACUUM yükü R1.3'te sayıldı."),
+                sc(6, "Var olan cluster'a eklenir. 4 puan kırıldı: kampanya akşamı için bir reader ve daha yüksek bir minimum ACU ödenir.")],
+        "os": [sc(9, "geo_distance filtresi, mesafeye göre sıralama ve status filtresi tek bir sorgudur. 1 puan kırıldı: sonuç bir sonraki refresh'e kadar en yeni konumu görmeyebilir."),
+               sc(8, "last_seen üzerinde bir range filtresi aynı sorgudadır. 2 puan kırıldı: refresh aralığı yüzünden \"30 saniye\" sınırı yaklaşık bir saniye geç uygulanır."),
+               sc(4, "Her konum güncellemesi document'ın yeniden index'lenmesidir. 6 puan kırıldı: saniyede 800 yeniden index'leme segment birleştirme yükü ve silinmiş document'lar üretir."),
+               sc(7, "Konumlar diskteki bir geo index'indedir ve sık okunan kısmı bellekte tutulur. 3 puan kırıldı: arama onlarca milisaniyeye çıkabilir ve 20 ms sınırına yaklaşır."),
+               sc(6, "Data node'ları eklenerek ölçeklenir. 4 puan kırıldı: kampanya tepesinde 800 yeniden index'leme ve segment birleştirmesi 2.000 aramayla aynı node'larda yarışır (node boyutlandırması R4'te sayıldı)."),
+               sc(9, "Replica shard'ları bir node arızasını karşılar. 1 puan kırıldı: kayıt sistemi değildir; konumlar 5 saniyede yeniden gelir."),
+               sc(4, "Yönetilen domain. 6 puan kırıldı: ekip için yeni bir sistem; node sayısı ve tipi, mapping, shard ve refresh ayarı üç kişilik ekibin işidir."),
+               sc(5, "Data node'ları saat başına ödenir. 5 puan kırıldı: 4.000 kuryelik küçük bir veri için node'lar gece gündüz çalışır.")],
+    },
+    h2h={
+        "aur": "İlişkisel (Aurora) ile kafa kafaya. Bu kartta engine uyumunu Aurora kazanır ve bunu açıkça söylemek gerekir: PostGIS tek bir SQL sorgusunda yarıçapı, en yakın beşi, \"boş\" koşulunu ve 30 saniyelik eskime kuralını birlikte uygular; ElastiCache'te son ikisi ikinci bir yapı ve bir temizlik işidir. "
+               "Ama Aurora'nın engine'i sürekli üzerine yazmayı sevmez: her UPDATE yeni bir row sürümü bırakır ve saniyede 800 güncelleme bir VACUUM yüküdür (R1.3). "
+               "Toplamı R2 ve R5 çevirir: bu yazmalar checkout'u yapan tek writer'dan, kampanya akşamı checkout tepesiyle aynı anda geçer. "
+               "Doğru mimari ikisi birliktedir: bölgelerin çokgenleri ve fiyatları Aurora'da (PostGIS), canlı konumlar ElastiCache'te. "
+               "Hangi koşul değişseydi Aurora seçilirdi: kurye sayısı ve konum sıklığı on kat düşük olsaydı ya da arama her seferinde bölge çokgenleriyle aynı sorguda birleştirilmek zorunda olsaydı.",
+        "os": "Search engine (OpenSearch) ile kafa kafaya. OpenSearch'ün geo sorguları güçlüdür: mesafe, sıralama ve filtreler tek bir sorguda birleşir ve konumu metinle ya da başka alanlarla birlikte aramak onun işidir. "
+              "Ama bu iş yükü bir arama değil, saniyede 800 kez değişen küçük bir anlık durumdur. Her konum değişikliği bir yeniden index'lemedir ve yeni konum ancak refresh'ten sonra görünür (R1.2, R1.3). "
+              "Üç kişilik ekip için yeni bir sistem ve gece gündüz çalışan data node'ları R4 ve R5'te de puan kaybettirir. "
+              "Hangi koşul değişseydi OpenSearch seçilirdi: kurye aramasıyla birlikte metin araması istenseydi (örneğin \"yakındaki ve yorumunda 'hızlı' geçen restoranlar\") ve konumlar dakikada bir değişseydi.",
+    },
+    verdict="Karar: ElastiCache {ec}, Aurora {aur}, OpenSearch {os}. Bu iş yüküne en uygun servis ElastiCache'tir, ama engine uyumunda Aurora öndedir: PostGIS bütün kuralı tek sorguda uygular. ElastiCache'i öne geçiren R2'dir: sürekli yazmalar ve kampanya aramaları checkout'un writer'ından uzak kalır. "
+            "ElastiCache seçtiğimizde artımız: tek komutla en yakın beş, yerinde üzerine yazma, milisaniyenin altında arama ve Aurora'ya sıfır yük. "
+            "Eksimiz: 30 saniyelik kural ikinci bir sorted set ve periyodik bir silme işiyle uygulanır, \"boş\" kuryeler uygulamada elenir; bölge ve fiyat soruları için Aurora'ya gidilir, yani mimari ikisi birliktedir. Bir koşul değişseydi: konumlar on kat seyrek gelseydi ve kampanya aramaları checkout tepesiyle çakışmasaydı (iki koşul birlikte; yalnız biri farkı kapatmaz) Aurora tek başına yeterdi."))
+
+USECASES_W["elasticache"] = ELASTICACHE_W
+PAGE_SVC["elasticache"] = "ec"

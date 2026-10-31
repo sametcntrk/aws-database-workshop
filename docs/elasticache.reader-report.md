@@ -1,270 +1,169 @@
-# ElastiCache (TR) soğuk okuyucu raporu
-
-Okunan sayfa: `/tmp/elasticache_tr_reader.html`. Sayfanın HTML metnini, `<details class="uc">` kartlarını ve 11 `application/json` simülasyon bloğunu okudum (5 karar simülasyonu ve 6 pratik simülasyonu).
-Okuyucu profili: ElastiCache, Valkey ve Redis'i hiç kullanmamış biri.
-Not: Sayfa gereksinimleri de "R1–R5" diye adlandırıyor. Karışmasın diye bu rapordaki bulgular **R1, R2, …** diye numaralı, sayfanın gereksinimleri ise "gereksinim R2" diye geçiyor.
-
----
-
-## 1. Anlamadığım cümleler
-
-**R1 — M2 `#usecases`, kart 1, gereksinim R2.** "1 ms ile 5 ms arasındaki fark, ürün sayfasının toplam süresinin yüzde 5'idir."
-Yüzde 5 sonucu, sayfanın toplam süresinin 80 ms olduğunu varsayıyor. 80 ms sayfanın hiçbir yerinde geçmiyor.
-Beklediğim: "ürün sayfası toplam X ms sürer" bilgisi, ya da bu cümlenin hiç olmaması.
-
-**R2 — A10 `#summary`, checkpoint cevabı.** "Ö7'nin kalıcı biçimi gerekir."
-Sayfa Ö7'yi "kopyalama asenkron olduğu için son yazmalar kaybolabilir" diye tanımlıyor. Bu tanımla "Ö7'nin kalıcı biçimi" çelişiyor. Kalıcı log Ö1–Ö8 listesinde ayrı bir özellik değil.
-Beklediğim: Ö7'nin iki biçimi açıkça yazılmalı (asenkron replica ve kalıcı log). Ya da kalıcı log ayrı bir satır olmalı.
-
-**R3 — A6 `#expiry`, TTL kavram kartı.** "'The expire error is from 0 to 1 milliseconds': süresi dolmuş bir key bir okumada görünmez."
-Alıntı bir hata payından söz ediyor. Ondan sonraki sonuç ise kesin bir söz veriyor. Arada mantık bağı kurulmamış.
-Beklediğim: "süre en fazla 1 ms geç uygulanır; okumada store süreyi kontrol eder, bu yüzden key görünmez."
-
-**R4 — B4 `#slotsb` ve C3 `#lalemarket`.** "ElastiCache Serverless'ta uygulama shard'ları görmez … proxy katmanı her komutu doğru cache node'una gönderir" diyor, ama hemen ardından "Engine App Python'daki RedisCluster istemcisiyle bağlanır; istemci slot hesabını kendisi yapar" diyor.
-Proxy topolojiyi gizliyorsa istemci neden slot hesaplıyor? İstemcim cluster istemcisi mi olmalı, yoksa sıradan bir istemci de olur mu?
-Beklediğim: Serverless'a hangi tür istemcinin bağlanacağını ve nedenini anlatan tek bir cümle.
-
-**R5 — C2 `#service`, "Serverless ile node'lu cluster arasında nasıl seçerim?"** Sayfa AWS'ten şunu alıntılıyor: "We recommend creating serverless caches … better fault tolerance". Aynı sayfa B8 ve M5'te kalıcı log'un sadece node'lu Valkey 9.0'da olduğunu söylüyor.
-Okuyucu olarak "dayanıklılık için Serverless mı, node'lu mu?" diye kaldım.
-Beklediğim: "fault tolerance (kesinti kısalığı)" ile "durability (onaylanan yazmanın kaybolmaması)" arasındaki farkı açıkça yazan bir cümle.
-
-**R6 — C2 `#service`, görsel açıklaması.** "Okun üzerinde bir onay yoktur; kopyalama asenkrondur."
-Bir diyagramdaki okun üstünde etiket olmamasından asenkron kopyalama sonucu çıkmaz. Bu cümle okuyucuya yanlış bir okuma yöntemi öğretiyor.
-
-**R7 — M2 `#usecases`, kart 6, gereksinim R1.** "Mesajın sırası bir kanal içinde korunmalıdır." Zorunlu bir gereksinim bu, ama hiçbir adayın gerekçesi sıralamadan söz etmiyor.
-Pub/Sub sırayı koruyor mu? DynamoDB Streams + Lambda koruyor mu? Puanlar bu konuda hiçbir şey söylemiyor.
-
----
-
-## 2. Anlamını bilmeden karşılaştığım terimler
-
-**R8 — Sayfa başı, A2, A10.** **Valkey** ne demek, hiç tanımlanmıyor. Başlık "Amazon ElastiCache (Valkey)". A10 "Valkey (Redis OSS ile uyumlu; Redis OSS de seçilebilir)" diyor. Redis'i hiç kullanmamış bir okuyucu Valkey ile Redis arasındaki ilişkiyi (çatallanma, aynı komutlar, lisans) ve neden Valkey seçildiğini öğrenemiyor.
-
-**R9 — A4 `#slots` (ve M5'ten önceki bütün metin).** "**node'lu cluster**" ve "**node**" A4'teki bir FAQ'da ilk kez geçiyor ("Kendi çalıştırdığın ya da node'lu bir cluster'da"). Tanımı ancak M5 ve C2'de dolaylı olarak geliyor. "Serverless ile node'lu" ayrımı A bölümünün tamamında açıklanmadan kullanılıyor.
-
-**R10 — A5 `#atomic`.** **Lua script'i (EVAL)** tablonun içinde ve Ö3'ün adında geçiyor, ama tanımı hiçbir yerde yok. Script nerede yazılır, nasıl gönderilir, ne kadar uzun olabilir: bunlar yok. Aynı tabloda `SET lock:payout worker-A NX PX 900000`: **PX** (milisaniye cinsinden süre) açıklanmıyor. EX, B2'de açıklanıyor.
-
-**R11 — A3 `#types`.** **BLMOVE** ilk kez A3 tablosunda geçiyor. Açıklaması B7'de geliyor.
-
-**R12 — M1 `#signals`, Ö6 bloğu.** "saniyede 30.000 **ECPU**" geçiyor ama ECPU'nun tanımı M2'deki terim tablosunda ve B9'da. Aynı yerde Ö1 bloğu **DAX**'tan söz ediyor, onun tanımı da M2'deki terim tablosunda.
-
-**R13 — M2, kart 7.** "**fencing token**" ve "**idempotent**" tanımsız. Kilit kartının bütün dersi bu iki kavrama dayanıyor.
-
-**R14 — A8, B1, C1–C3.** Tanımsız altyapı terimleri: **WebSocket** (A8), **TLS**, **VPC / subnet / security group**, **ACL** (sayfa başındaki "Kimlik doğrulama: Password (Secrets Manager, ACL user)" satırında ve C1'de), **AOF** (C2 tablosu: "AOF açabilirsin"), **SLA** (M1 Ö7). Bunlardan AOF içeriğe en çok etki ediyor, çünkü kalıcılık karşılaştırmasının bir parçası.
-
-**R15 — A4 `#slots`, görsel; A9 `#replicas`, görsel.** "**cluster mode disabled**" yalnızca görselde ve açıklamasında geçiyor. Metin sadece cluster mode'u tanımlıyor. Cluster mode kapalı bir kurulum ne zaman var, Serverless'ta seçilebilir mi: bunlar yok.
-
-**R16 — M2, kartlar 1 ve 4.** "**global table**" (DynamoDB) tanımsız. Ayrıca terim tablosunda yok.
-
-**R17 — B1 `#names`, M2 kart 2, M6.** "**ElastiCache Engine App**", "**Admin Console'daki Seed**", "**Live leaderboard sayfası**" workshop'a özgü isimler. İlk geçtikleri yerde ne oldukları söylenmiyor.
-
----
-
-## 3. "Ya … olursa?" sorularım, sayfanın cevaplamadığı durumlar
-
-**R18 — A6 `#expiry`, B5 `#expiryb`.** **ElastiCache Serverless hangi eviction politikasını kullanıyor, değiştirebilir miyim?** Sayfa node'lu cluster'larda varsayılanın volatile-lru olduğunu ve bunun parametre ile değiştirildiğini söylüyor. Lale Market'in kullandığı Serverless için bunu hiç söylemiyor. Oysa A6'daki örnek tam olarak "süresiz lm:leaderboard yanlış bir politikayla silinebilir" riski.
-
-**R19 — A9 `#replicas` / C2 port tablosu.** **Süresi dolmuş bir oturum 6380 portundan (replica) okunursa ne olur?** A6, kopyaların süreyi kendileri uygulamadığını ve ana node'un silmesini beklediklerini söylüyor. Kart 1 "süresi dolmuş oturum asla okunmaz" diye 10 puan veriyor. Replica okumasında bu söz geçerli mi?
-
-**R20 — M5 `#aws`, B8 `#failure`.** **Serverless'ta bir failover ne kadar sürer?** MemoryDB için "under 20 seconds" verilmiş. Serverless için sadece B8 simülasyonundaki "saniyeler içinde" var. Ayrıca kart 7'de MemoryDB için "birkaç saniyelik yazma kesintisi" deniyor, M5 ise 20 saniyeye kadar diyor.
-
-**R21 — M2, kart 1 ve 4; M5.** **Uygulama birkaç Region'dan çalışırsa ne olur?** DynamoDB için global table bir "koşul değişseydi" nedeni olarak geçiyor. ElastiCache'in Region'lar arası bir seçeneği olup olmadığı hiç söylenmiyor, bu yüzden karşılaştırma tek taraflı kalıyor.
-
-**R22 — A5 `#atomic`.** **MULTI/EXEC ve Lua, cluster mode'da farklı slot'lardaki key'lere dokunursa ne olur?** A5 bundan söz etmiyor. Kural yalnızca A4'te MGET için ve M1'de genel bir cümleyle veriliyor. (Bkz. R34: A5'in kendi örneği bu kurala takılıyor.)
-
-**R23 — B5 `#expiryb`.** **lm:active sorted set'inden eski ziyaretçiler nasıl silinir?** Her sayfa `ZADD lm:active <şimdi> id` gönderiyor ve sorgu ZCOUNT ile yapılıyor. Silme (ZREMRANGEBYSCORE) yok. Set süresiz büyüyor mu?
-
-**R24 — M2, kart 1, karar.** **Bütün cache bir süre erişilemezse oturumlara ne olur?** Kart "oturum bulunamazsa login'e yönlendir" diyor. Bu durumda bütün kullanıcılar aynı anda çıkış yapmış olur, ve sayfa bunu "kabul edilir ama istenmez" diye geçiyor. Kart 3 için fail-open önerisi var. Kart 1 için ise bir yedek plan (örneğin imzalı cookie) tartışılmıyor.
-
-**R25 — M2, kart 4; A7.** **Kampanya akşamı cache soğuk başlarsa Aurora writer saniyede 6.000 JOIN'i kaç dakika taşır?** M4'ün ikinci sorusu tam olarak bunu sordurtuyor, ama kart bu soruyu cevaplamıyor (bkz. R41).
-
-**R26 — M5 `#aws`, M2.** **MemoryDB'nin sunucusuz bir seçeneği var mı?** Bütün kartlarda MemoryDB'nin puanı "node'lu cluster" olduğu için gereksinim R4 ve R5'te kırılıyor. Okuyucu bunun her durumda doğru olup olmadığını bilemiyor.
-
----
-
-## 4. İkna etmeyen karar gerekçeleri ve mimara sorum
-
-**R27 — M2 `#usecases`, puan ölçeği; M7 simülasyonları.** Ölçek şöyle diyor: "Zorunlu bir gereksinimde 0 ya da 1 alan aday diskalifiye olur." Ama kartlarda zorunlu sınırı karşılamayan adaylar 5–7 alıyor:
-- kart 1: DynamoDB, gereksinim R2 = 6 ("1 ms'nin altı … karşılanmaz")
-- kart 3: DynamoDB, gereksinim R2 = 5 ve MemoryDB, gereksinim R2 = 6 ("2 ms sınırı … tutulamaz")
-- kart 6: DynamoDB, gereksinim R2 = 7, oysa "olaylar saniyeler içinde gelir" ve sınır 500 ms
-- kart 7: ElastiCache, zorunlu gereksinim R3 = 2
-
-Bütün simülasyonlarda "diskalifiye: 0" çıkıyor. Kural hiç tetiklenmiyor.
-Mimara sorum: "Zorunlu bir sınırı karşılamamak neden 0–1 değil de 5–7? Bu kural ne zaman uygulanıyor?"
-
-**R28 — M2, kart 7 ve M7 ödeme kilidi simülasyonu.** Sonuç: ElastiCache 39 ile ikinci, MemoryDB 38 ile üçüncü. Kafa kafaya paragrafı ise MemoryDB için "ElastiCache'ten farklı olarak doğru bir cevaptır" diyor.
-Toplam puan, zorunlu gereksinimi karşılamayan adayı doğru adayın önüne koyuyor.
-Sorum: "Yanlış cevap neden ikinci sırada?"
-
-**R29 — M2, kart 1.** Karar 43'e 42, yani bir puanlık fark ve gerekçesi "1 ms'nin altı". Sayfanın kendi canlı ölçümü ise ElastiCache için 1–2 ms (A1, M1 Ö1, C3; bkz. R35).
-Sorum: "Ölçülen gecikme 1–2 ms ise ElastiCache bu zorunlu sınırı nasıl karşılıyor? Bu kart ElastiCache'i neden seçiyor?"
-
-**R30 — M2, kart 9.** Karar şöyle bitiyor: "listelerin kaybı gerçekten önemsiz olsaydı ElastiCache tek başına seçilirdi." Ama gereksinim R3 zaten "Düşük: kaybolursa bir gün genel liste gösterilir" diyor.
-Ayrıca ElastiCache'in R5 gerekçesi DynamoDB'nin okuma faturası için "belirgin yüksek" diyor, buna rağmen R5 farkı sadece 1 puan.
-Kartın önerdiği çözüm ("ikisi birlikte") hiç puanlanmıyor ve maliyeti verilmiyor.
-Sorum: "İki store birlikte kaç para tutar ve DynamoDB tek başına kaç para tutar?"
-
-**R31 — M2, kart 4, ElastiCache gereksinim R3 = 9.** Zorunlu gereksinim R2 "Aurora writer'ının yükü kampanya akşamı normal günden fazla olmamalı" diyor. Soğuk cache ise saniyede 6.000 JOIN'in writer'a gitmesi demek. Bu durum için sadece 1 puan kırılıyor. Serverless'ta snapshot da kapalı.
-Sorum: "Soğuk cache zorunlu gereksinim R2'yi bozuyorsa neden sadece 1 puan kırılıyor?"
-
-**R32 — M2, kart 6, karar.** "Her olayın kesin işlenmesi gerekseydi DynamoDB Streams ya da bir Valkey stream'i seçilirdi."
-A8 ve M3 ise kaybı kabul edilmeyen akışlar için SQS / Kinesis / MSK diyor. Kalıcı log olmadan Valkey stream'i de arızada kaybedebilir (A8 tablosu).
-Sorum: "Kesin işleme gerekiyorsa Valkey stream'i nasıl bir cevap olabilir?"
-
-**R33 — A1 `#why` FAQ ve A3 giriş cümlesi; M2 kartlar 3, 5, 7.** A1 şöyle diyor: "sayaç, sıralı liste ve kuyruk gibi value tipleri disk tabanlı bir key-value database'te yoktur." A3 şöyle diyor: "Disk tabanlı bir key-value database value'nun içine bakmaz."
-Kartlarda ise DynamoDB UpdateItem ADD ile atomik sayaç yapıyor, kısmi değiştirme yapıyor ve koşullu yazma yapıyor. Okuyucu DynamoDB'yi A bölümünden yanlış tanıyor.
-Sorum: "DynamoDB'nin sayaç ve koşullu yazması varsa, gerçek fark tam olarak hangi tiplerde (sorted set, HLL, list, geo)?"
-
----
-
-## 5. TR / EN farkları ve sayfanın kendi içindeki çelişkiler
-
-TR/EN karşılaştırması: **uygulanamaz** (sadece Türkçe sayfa var). Sayfanın kendi içindeki çelişkiler şunlar:
-
-**R34 — A5 `#atomic` ve A4 `#slots`.** A5'teki MULTI örneği: "MULTI; DEL lm:deal; SET lm:deal:stock 0; EXEC: iki değişiklik birlikte görünür."
-A4, B4 ve B4 simülasyonu ise lm:deal'i slot 3299'a, lm:deal:stock'u slot 1725'e koyuyor ve farklı slot'lara giden çok key'li komutun CROSSSLOT ile reddedildiğini söylüyor. B4 de "ElastiCache Serverless her zaman cluster mode'da çalışır" diyor.
-Bu örnek Lale Market'in kendi cache'inde çalışmaz.
-
-**R35 — M2 kart 1 / M1 Ö1 / A1 / C3.** Kart 1 ElastiCache için "1 ms'nin çok altı" diyerek gereksinim R2'ye 10 puan veriyor. Aynı sayfa canlı ölçümü "1–2 milisaniye" olarak veriyor (A1 "Bizim verimizde", M1 Ö1, C3). B1'deki komutlar 1,4 ms ve B2'dekiler 1,3–1,6 ms. Sayfanın kendi ölçtüğü değer, kendi koyduğu zorunlu sınırın üstünde.
-
-**R36 — M2, kart 2.** "Tabloyu 300 ekran her 5 saniyede okur ve her müşteri kendi sırasını görür …: saniyede 3.000 okuma."
-300 ekranın 5 saniyede bir okuması saniyede 60 okuma eder. 3.000 sayısının nereden geldiği (müşterilerin kendi sıra sorguları mı?) yazılmamış.
-
-**R37 — M2, kart 5.** Key tasarımı şöyle: saat başına **tek bir hash** (`views:2026-10-28T14`), field ürün id'si. Bu tasarımda saniyede 50.000 artırmanın hepsi aynı key'e, dolayısıyla tek shard'a gidiyor.
-Gereksinim R2 gerekçesi ise "tek bir key'e saniyede 25.000 artırma" diyor, yani yarısını hesaba katıyor. A4 ve B4 "tek bir sıcak key tek shard'a yüklenir; daha fazla shard yardım etmez" diyor.
-Sayı yanlış ve sıcak key riski bu kartta hiç tartışılmıyor.
-
-**R38 — B1 `#names`, Keyspace kavram kartı.** "lm: ile başlayan **altı** tür key vardır: kampanya, kampanya stoğu, oturumlar, sıralama, aktif ziyaretçiler, sipariş sayacı ve müşteri adları." Sayılan tür sayısı yedi.
-
-**R39 — B3 `#structures`.** Q4 ve "öğretici tablo" aynı key'i kullanıyor: `lm:leaderboard`. Orada C00002 (Mert) 98.210,10 puanda ve tabloda 5 member var.
-Aynı bölümde ve A3'te gerçek `lm:leaderboard`'da C00002 1.168.114,91 puanda ve ZCARD 994.
-Okuyucu Q4'ü çalıştırmanın gerçek sıralamayı değiştirip değiştirmediğini ve öğretici tablonun hangi key'de durduğunu anlayamıyor.
-
-**R40 — M2, kart 8.** Puan tablosu ve karar sırası şöyle: "ElastiCache 40, DynamoDB 37, MemoryDB 38". Diğer bütün kartlarda adaylar puana göre sıralı. Burada 37 puanlık aday 38 puanlığın önünde. Hangisinin "en yakın alternatif" olduğu belirsiz kalıyor.
-
-**R41 — M4 `#questions` ve M2 kart 4.** M4 "cache boşken database bu yükü kaç dakika taşır?" sorusunu öğretiyor. Sayfanın tek cache-aside kartı bu soruyu cevaplamıyor (bkz. R25, R31).
-
-**R42 — M2 kart 7, gereksinim R3 (MemoryDB) ve M5.** Kart 7 failover sırasında "birkaç saniyelik bir yazma kesintisi" diyor, M5 ise "typically … under 20 seconds" diyor (bkz. R20).
-
-**R43 — A9 `#replicas`, "Kalıcı log" kavramı ve tablo.** Kavram kartı asenkron kalıcılıkta "son birkaç saniye kaybolabilir" diyor. Tablo, M5 ve B8 ise "up to 10 seconds" diyor. Küçük bir fark ama sayı bir yerde belirsiz, başka yerde kesin.
-
-**R44 — C3 `#lalemarket`.** "B1–B5'teki canlı cevaplar bu yoldan 1–2 milisaniyede geldi." B1'deki ilk komut ise 300 ms sürdü (yeni TLS bağlantısı). Küçük bir tutarsızlık.
-
----
-
-## 6. Ne görmem gerektiğini söylemeyen görsel açıklamaları
-
-**R45 — A2 `#model`, hash table görseli.** Açıklama, görseldeki numaralı yerlere "slot" diyor ("sağdaki tek bir numaralı yere (slot) düşer"). Hemen sonra A4 "hash slot"u bambaşka bir kavram olarak tanımlıyor (16.384 parça, CRC16, shard).
-Açıklama bu iki "slot"un aynı şey olmadığını söylemiyor. Okuyucu ikisini karıştırır.
-
-**R46 — A1 `#why`, bellek hiyerarşisi görseli.** Piramidin tepesinde "cache" katı var (CPU cache). Açıklama bu "cache"in ElastiCache'teki "cache" kelimesiyle ilgisi olmadığını söylemiyor. Yeni okuyucu "ElastiCache en üst katta mı?" diye sorar.
-
-**R47 — A4 `#slots`, node group görseli.** Görselde iki node group ve "Redis OSS Cluster" yazıyor, ama metin ve simülasyon üç shard kullanıyor. Açıklama görselin neden iki shard gösterdiğini ve "Redis OSS" ile "Valkey" arasındaki ilişkiyi söylemiyor.
-Ayrıca açıklama primary ve replica'ya bakmayı söylüyor, ama bu kavramlar A9'da geliyor. Okuyucu o noktada neye bakacağını bilmiyor.
-
-**R48 — A9 `#replicas`, "cluster mode disabled / enabled" görseli.** Açıklama iki tarafı tarif ediyor ama ne zaman hangisinin seçileceğini ve Lale Market'in Serverless cache'inin hangi tarafta olduğunu söylemiyor (B4'e göre her zaman "enabled"). Asenkron kopyalama sonucunun okun etiketsiz olmasından çıkarılması da yanlış bir okuma yöntemi (R6).
-
-**R49 — C2 `#service`, Serverless mimari görseli.** Açıklama "'A' yazan node'lar aynı verinin kopyalarıdır" diyor, ama shard'ların görselde nerede olduğunu göstermiyor ("bu sağ kutunun içindedir" deniyor ve orada bitiyor). Ayrıca "Service VPC" ve "VPC Endpoint" terimleri tanımsız (R14).
-
----
-
-## 7. Son soru: bu sayfadan sonra bir meslektaşıma anlatabilir miyim?
-
-**ElastiCache mi, DynamoDB mi: büyük ölçüde evet.** Şu kuralları sayfadan çıkarabildim:
-- Veri kaybolabiliyorsa ya da yeniden kurulabiliyorsa (oturum, rate limit, sıralama, kopya) ElastiCache: mikrosaniye, tam anında TTL, sorted set / HLL / list / geo, yoğun ve küçük yazmalarda daha ucuz.
-- Veri resmi kayıtsa ya da kaybı para demekse (kilit, sipariş, ödeme) DynamoDB: koşullu yazma kalıcı, büyük ve soğuk veride daha ucuz.
-- Kart 7 ve B8'deki kilit örneği bu ayrımı çok iyi gösteriyor.
-
-Eksik olanlar:
-- Gecikme iddiası sayfanın kendi ölçümüyle çelişiyor (R29, R35). "1 ms'nin altı" sınırı ayrımın ana gerekçesi olduğu için bu ayrımı savunmak zorlaşıyor.
-- DynamoDB ile ElastiCache arasında **sayısal bir maliyet karşılaştırması yok**. B9 sadece ElastiCache için örnek veriyor. Kart 3, 5 ve 9'daki "belirgin pahalı" ifadeleri rakamsız (R30).
-- DynamoDB'nin yetenekleri A bölümünde olduğundan az gösteriliyor (R33).
-- DAX ile ElastiCache arasında ne zaman seçim yapılacağı tek cümleyle geçiyor (M1 Ö8, M5). Kaynak DynamoDB olduğunda hangisinin seçileceği bir kartla gösterilmiyor.
-- Diskalifiye kuralı tetiklenmediği için toplam puanlar kararı her zaman açıklamıyor (R27, R28).
-
-**ElastiCache mi, MemoryDB mi: kısmen.** Ana kuralı çıkarabildim: "onaylanan yazmanın kaybı kabul edilmiyorsa ve bellek hızı da gerekiyorsa MemoryDB; kayıp kabul ediliyorsa ElastiCache. Bunun bedeli tek haneli milisaniye yazma ve node-saat."
-
-Eksik olanlar:
-- **MemoryDB'nin kazandığı hiçbir kart yok.** On kartın hepsinde MemoryDB ikinci ya da üçüncü. "MemoryDB seçilirdi" durumları sadece varsayım olarak geçiyor (A10 checkpoint'indeki oyun, kartlardaki "koşul değişseydi" cümleleri). MemoryDB'nin kazandığı tek bir kart, kararı gösterirdi.
-- **ElastiCache'in node'lu Valkey 9.0 kalıcılık seçeneği ile MemoryDB arasında ayrım yapılmıyor.** M5 birine "cache ile aynı cluster'da kaybı kabul edilmeyen veri", diğerine "cache + database yerine tek store" diyor. Bu iki tarif okuyucuya aynı şey gibi geliyor. Bu seçenek hiçbir kartta aday olarak da puanlanmıyor (örneğin kart 7'de).
-- MemoryDB için fiyat (node-saat rakamı), sunucusuz seçenek olup olmadığı (R26) ve failover süresiyle ilgili tutarlı bir bilgi (R20, R42) yok.
-- "Fault tolerance" ile "durability" arasındaki ayrım net değil (R5). Bu ayrım tam olarak ElastiCache Serverless ile MemoryDB arasındaki farkın kendisi.
-
----
-
-## Özet: kategori başına bulgu sayısı
-
-| Kategori | Bulgular | Sayı |
+# Reader simulation: Amazon ElastiCache (elasticache), Türkçe sayfa, model 2
+Tarih: 2026-10-31
+Okuyucu: bellek içi bir key-value store (Redis/Valkey) ya da ElastiCache hiç kullanmamış, DynamoDB ve Aurora sayfalarını okumuş bir geliştirici (soğuk okuyucu). Kaynak: /tmp/ec_w/elasticache.tr.txt (baştan sona), /tmp/ec_w/page.html (resim altyazıları, kart tabloları, beş simülasyonun JSON'u), karşılaştırma için http://localhost:8797/e2etutorial/dynamodb (kartlar uc-session, uc-rate, uc-ads). Kural referansı: e2e-tech-tutorial/references/decisions.md (yalnız kuralları bilmek için).
+
+## Genel izlenim
+Bölüm A çok iyi bir temel veriyor: "bu veri kaybolursa ne olur?" sorusu baştan sona taşınıyor, her kavramın bütün durumları tabloda, canlı ölçümler (59 satışlık yarış, 5 saniyelik TTL) ikna edici. On kartın aritmetiği doğru: her hücre, her R1 ara toplamı, her toplam, özet tablosundaki farklar (10, 1, 14, 11, 24, 13,5, 8, 19, 7, 10) ve beş simülasyonun son adımları (sim-w_board 90/89/73,5, sim-w_session 95/85/76,5, sim-w_geo 87/77/64, sim-w_queue 97/78/74, sim-w_lock 97/89/72) kartlarla aynı. Oturum, rate limit ve öneri kartlarının puanları DynamoDB sayfasındaki uc-session, uc-rate ve uc-ads kartlarıyla birebir aynı. Yedi kartta MemoryDB'nin R1'i ElastiCache ile eşit. Her kafa kafaya paragrafında farkın yeri, öbür adayın dürüst gücü ve bir koşul var; her kararda artı, eksi ve uygulamanın yapması gereken iş yazılı.
+
+Sorunlar puanların tutarlılığında ve aday seçiminde: aynı mekanizma kartlara göre farklı puan kaybettiriyor (R3'teki "kalıcı log yok", MemoryDB'nin log gecikmesi, sıcak key'i bölmek). Bazı zayıflıklar birden fazla satırda sayılıyor (fiyat R1'de ve R5'te, boyutlandırma R2'de ve R4'te). İki kartta daha güçlü bir AWS alternatifi tabloda yok (kart 6, kart 4). Kart 8'de ElastiCache aynı engine'in daha uygun aracıyla (stream) değil, list ile puanlanıyor. Kart 2'nin "yakın yarış" sonucu ölçülmemiş bir maliyet iddiasına dayanıyor.
+
+## Bulgular
+
+### R1 (yüksek): Kart 6'da gerçek alternatifler yok; ikinci ve üçüncü adaylar zayıf seçilmiş
+Bölüm: M2 kart 6 (uc-pubsub, "Canlı güncellemeler için pub/sub"). Alıntı: "key-value (DynamoDB) … 19 / 40 | 56,5" ve "DynamoDB'nin değişiklik akışı bir olay kaynağıdır, ama bir yayın kanalı değildir."
+Tür: ikna etmeyen gerekçe (en uygun servis gerçekten en uygun mu).
+Sorun: Sayfa Ö5'te kendisi "fan-out servisi (Amazon SNS)" diyor, ama kart SNS'i, AWS AppSync Events'i ve API Gateway WebSocket API'ı aday yapmıyor. Bu servisler "20 WebSocket sunucusuna yayın" ve "150.000 tarayıcıya canlı mesaj" işini yönetilen olarak yapar; AppSync Events ya da API Gateway WebSocket, WebSocket sunucularını bile ortadan kaldırabilir. Tabloda bunların yerine DynamoDB Streams + Lambda + bağlantı table'ı var. Bu zinciri kimse bu iş için seçmez, bu yüzden 95'e 56,5 sonucu bir şey öğretmiyor. İkinci aday MemoryDB de aynı engine olduğu için gerçek bir alternatif değil. Okuyucu "ElastiCache Pub/Sub'ı SNS ya da AppSync'e karşı ne zaman seçerim?" sorusunun cevabını bulamıyor.
+Mimara soru: Bu iş yüküne en yakın AWS servisi hangisi: SNS mi, AppSync Events mi, API Gateway WebSocket mi? Tabloya bunlardan biri girse ElastiCache yine birinci mi olur, ve hangi satırda kazanır?
+
+### R2 (yüksek): Aynı mekanizma (kalıcı log yok, kayıp kabul edilir) R3'te kartlara göre 4, 7 ya da 8 alıyor
+Bölüm: M2 kartlar 1, 2, 3, 4, 5, 6, 8, 9, 10, satır R3. Alıntı: kart 1 "R3 | 4 … bu kartta kabul edilen bir sonuçtur"; kart 4 "R3 | 7 … Bu kartta kopya kaybı zararsızdır, bu yüzden kırılım diğer kartlardan küçüktür"; kart 6 "R3 | 8".
+Tür: ikna etmeyen gerekçe (aynı mekanizma aynı biçimde mi düşürülüyor).
+Sorun: Puan ölçeğine göre puan, satırdaki "ne istiyoruz" cümlesinin ne kadar karşılandığını ölçer. Kart 1'in R3 isteği "Düşük: … yeniden login olması kabul edilir", kart 3'ünki "bir dakikalık boşluk kabul edilir". ElastiCache bu istekleri karşılıyor ama 4 alıyor. Kart 4'ün isteği de "Düşük", orada 7 alıyor. Kart 2'nin isteği "Orta" (4 dakikalık boş vitrin), orada da 4 alıyor. Yani puan bazı kartlarda mutlak dayanıklılığı, bazı kartlarda isteğin karşılanmasını ölçüyor. "Kopya kaybı zararsızdır" gerekçesi kart 1, 3, 5, 9 ve 10 için de geçerli (oturum, sayaç, öneri, konum, hepsi yeniden kurulur ya da yeniden gelir). Bu, yakın yarışı da etkiliyor: kart 2'de ElastiCache, kart 4'teki mantıkla 7 alsaydı 94,5'e 89 olurdu ve yarış artık yakın olmazdı.
+Mimara soru: R3 puanı mutlak dayanıklılığı mı ölçüyor, yoksa bu kartın R3 isteğinin karşılanmasını mı? Hangisiyse, dokuz kartta aynı kural uygulanınca hangi puanlar değişir?
+
+### R3 (yüksek): MemoryDB'nin log gecikmesi kartlara göre farklı düşüyor; kart 1'de iki tam puan birlikte doğru olamaz
+Bölüm: M2 kart 1 (MemoryDB R1.3, R1.4, R2), kart 3 (MemoryDB R2), kart 9 (MemoryDB R2). Alıntı: kart 1 "R1.3 | 10 → 10 | GETEX okuma ve yenilemeyi tek komutta yapar" ve "R1.4 | 10 → 15 | … okumalar mikrosaniyelerdedir" ve "R2 | 7 … 3 puan kırıldı: her süre yenilemesi bir yazmadır …"; kart 3 "R2 | 5 … 5 puan kırıldı"; kart 9 "R2 | 7 … 20 milyon yazma daha uzun sürer".
+Tür: ikna etmeyen gerekçe (aynı mekanizma aynı biçimde mi düşürülüyor).
+Sorun: GETEX … EX süreyi değiştirdiği için bir yazmadır. MemoryDB'de yazma log'a işlendikten sonra onaylanır, bu yüzden her sayfa isteği tek haneli milisaniye bekler. Kartın 1 ms isteği (R1.4) ile tek komut isteği (R1.3) MemoryDB'de aynı anda karşılanamaz. Ya GETEX kullanılır ve okuma milisaniyelere çıkar, ya da GET ile ayrı bir EXPIRE gönderilir ve iki istek olur. Bu durum yalnız tepe anlarında değil, her istekte olur; ama kart bunu yalnız R2'de, "tepe anında" diye 3 puanla sayıyor. Aynı mekanizma kart 3'te (her API isteğinin önünde bir INCR, 2 ms sınırı) 5 puan kırıyor, kart 9'da ise kritik yolda olmayan gece toplu yazmasında yine 3 puan kırıyor. Kritik yolda her istekte olan gecikme (kart 1) ile hiçbir isteği bekletmeyen gece yazması (kart 9) aynı indirimi almamalı.
+Mimara soru: Kart 1'de MemoryDB'de 1 ms sınırı hangi komut dizisiyle karşılanıyor? Log gecikmesi kritik yoldaysa (kart 1 ve 3) ve değilse (kart 2 ve 9) R2'de kaç puan kırılır? Bunun kuralı nedir?
+
+### R4 (orta): Kart 2'nin yakın yarışı ölçülmemiş bir maliyet iddiasına dayanıyor
+Bölüm: M2 kart 2 (uc-board), R4 ve R5. Alıntı: MemoryDB "R5 | 5 … node'lar kampanya akşamı için boyutlanır ve boş saatlerde de çalışır"; ElastiCache "R5 | 9 … sorted set komutları basit bir GET'ten daha fazla ECPU harcar".
+Tür: ikna etmeyen gerekçe.
+Sorun: Fark tek puan; R4 ile R5'teki 8 puanlık fark kararı veriyor. Veri birkaç yüz MB ve trafik saniyede yaklaşık 3.000 okuma. İki küçük MemoryDB node'unun aylık fiyatı ile saniyede 3.000 sorted set komutunun aylık ECPU fiyatı birbirine yakın olabilir. Kart aylık bir rakam vermiyor. MemoryDB R5'te 5 yerine 7 alsaydı kazanan değişirdi. Kart 3'te ve B9'da sayfa rakam veriyor (ayda 9.500 $, ayda 900 $), bu kartta vermiyor.
+Mimara soru: Bu iş yükünde iki servisin aylık faturası kaç dolar? R5'teki 5'e 9'luk farkı hangi rakam taşıyor?
+
+### R5 (orta): 1 ms ve 2 ms sınırları, sayfanın kendi ölçümüyle çelişiyor
+Bölüm: A1, Ö1, B1–B5, C3 ve kart 1 (R1.4, R2), kart 3 (R1.2). Alıntı: A1 "Engine App'in ölçümünde cevap 1–2 milisaniyede gelir"; B3 "her biri 1,4–1,8 milisaniye"; kart 1 "Okuma 1 milisaniyenin altında dönmeli" ve ElastiCache "Puan kırılmadı".
+Tür: anlaşılmayan cümle / ikna etmeyen gerekçe.
+Sorun: Sayfanın kendi canlı ölçümü 1,3–1,8 ms. Kart 1 her okumanın 1 ms'nin altında olmasını istiyor ve ElastiCache tam puan alıyor. Kanıt olarak yalnız AWS'in p50 değeri ("okumaların yarısı") veriliyor; p99 hakkında bilgi yok. R1 · DA'nın komutun kendi süresini, R2'nin ise uçtan uca süreyi ölçtüğü söylenmiyor. Okuyucu, ölçülen 1,4 ms ile 1 ms isteğini nasıl uzlaştıracağını bilmiyor.
+Mimara soru: 1 ms sınırı komutun süresi mi, yoksa uygulamanın gördüğü gidiş-dönüş mü? Lale Market'in 1,4 ms ölçümü bu kartta neden bir puan kırmıyor?
+
+### R6 (orta): Kart 7'de ElastiCache'in kendi kalıcılık seçeneği hesaba katılmıyor
+Bölüm: M2 kart 7 (uc-lock), M5, B8. Alıntı: M5 "ElastiCache node'lu Valkey 9.0, kalıcılık açık … 'designed for zero data loss'"; kart 7 ElastiCache "R3 | 1 … Serverless'ta kalıcı log yoktur".
+Tür: eksik durum.
+Sorun: Sayfa birçok yerde ElastiCache'te senkron kalıcı log seçeneği olduğunu söylüyor (A9, Ö7, M5, B8). Ama kartlardaki "ElastiCache (Valkey)" adayı her zaman Serverless olarak puanlanıyor ve bu hiçbir yerde açıkça yazmıyor. Kart 7'nin kafa kafaya paragrafındaki koşul ("kilidin kaybı zararsız olsaydı … ya da korunan iş idempotent olsaydı") bu seçeneği anmıyor. Okuyucu şunu soruyor: zaten node'lu bir ElastiCache çalıştırsaydık ve kalıcılığı açsaydık ElastiCache kazanır mıydı?
+Mimara soru: Kartlardaki "ElastiCache" adayı Serverless mı? Node'lu Valkey 9.0 ve senkron kalıcılıkla kart 7'nin sonucu ne olur, ve bu bir "koşul değişseydi" cümlesi olmamalı mı?
+
+### R7 (orta): Kart 7'de süreli kilit DynamoDB'de de "tam bir kez" garanti etmiyor
+Bölüm: M2 kart 7, DynamoDB R1.1 ve karar paragrafı. Alıntı: "Kilit onaylandıktan sonra başka bir worker onu alamamalı" ve DynamoDB "R1.1 | 10 … Puan kırılmadı"; karar: "ElastiCache seçilirse uygulama ödeme talimatını … DynamoDB'ye koşullu yazmalı".
+Tür: ikna etmeyen gerekçe / eksik durum.
+Sorun: Kilit 15 dakikalık bir süreyle alınıyor. Worker A takılırsa (uzun bir GC duraklaması, yavaş bir banka çağrısı) ve süre dolarsa, worker B koşullu yazmayla kilidi meşru olarak alır ve iki worker birlikte ödeme yapar. Bu durum DynamoDB'de de olur. Sayfanın B8'de gösterdiği gerçek koruma (gün ve satıcı başına benzersiz id ile koşullu yazma, yani idempotency) yalnız ElastiCache seçildiğinde öneriliyor. DynamoDB'nin TA satırında 10 alması, okuyucuya "DynamoDB kilidi çift ödemeyi kesin önler" izlenimini veriyor.
+Mimara soru: DynamoDB kilidiyle de süre dolduğunda iki worker çalışabilir mi? Çalışabiliyorsa idempotent ödeme talimatı her adayın kararında olmalı değil mi?
+
+### R8 (orta): Kart 8'de ElastiCache list ile puanlanıyor; aynı engine'in stream aracı eksikleri kapatıyor
+Bölüm: M2 kart 8 (uc-queue), A8, B7. Alıntı: kart 8 ElastiCache "R1.2 | 7 … çöken worker'ın işi kendi 'işleniyor' listesinde kalır" ve "R1.3 | 4 … Engine'de deneme sayacı, görünürlük süresi ve bozuk iş kuyruğu yoktur"; A8 "Onaylanmamış mesaj bekleyenler listesinde kalır; başka okuyucu sahiplenebilir".
+Tür: ikna etmeyen gerekçe.
+Sorun: Valkey stream'inin consumer group'u, onaylanmamış mesajı bir süre sonra başka bir okuyucuya verir (XAUTOCLAIM ile, bir min-idle süresiyle; görünürlük süresine benzer) ve her mesajın teslim sayısını tutar (XPENDING). Bu araçlarla "üç kez başarısız olan iş" ayrılabilir. Kart en zayıf yapıyı (list) puanlıyor ve "engine'de yok" diyor. Stream ile R1.2 ve R1.3 daha yüksek olurdu. Bu, SQS'in kazanmasını değiştirmeyebilir (dead-letter queue taşıması yine kod ister), ama farkın "tamamı R1'den" cümlesi olduğundan büyük görünür.
+Mimara soru: Bu iş yükünde list yerine consumer group'lu bir stream kullanılsa R1.2 ve R1.3 kaç alır, ve fark yine 19 puan mı olur?
+
+### R9 (orta): Kapasite boyutlandırma birden fazla satırda sayılıyor
+Bölüm: kart 5 (Timestream for InfluxDB), kart 10 (OpenSearch), kart 9 (DynamoDB). Alıntı: Timestream "R2 | 6 … Instance yazma hızına göre boyutlanır. 4 puan kırıldı", "R4 | 5 … instance boyutlandırma", "R5 | 6 … instance kampanya akşamı için boyutlanır"; OpenSearch "R2 | 6 … node sayısı ve tipi önceden boyutlanır"; DynamoDB kart 9 "R2 | 8 … on-demand ya da zamanlanmış auto scaling bir ayardır".
+Tür: ikna etmeyen gerekçe (bir zayıflık birden fazla satırda).
+Sorun: Sayfanın kendi kuralı "node tipi ve shard sayısı seçmek R4'tür, tepeyi karşılamak R2". Timestream'de boyutlandırma hem R2'de hem R4'te puan kırıyor, R5'te de üçüncü kez geçiyor. OpenSearch'te R2'deki kırılım gerekçesi bir boyutlandırma işi, yani R4'ün konusu. DynamoDB kart 9'da bir ayar işi R2'de sayılıyor. Kartlar kazananı değiştirmiyor, ama okuyucu kuralı kartlardan öğrenemiyor.
+Mimara soru: Timestream ve OpenSearch R2'de tepeyi karşılayamadığı için mi puan kaybediyor, yoksa boyutlandırma iş olduğu için mi? İkincisiyse R2'deki kırılım neden R4'teki ile aynı şey değil?
+
+### R10 (orta): Fiyat R1'in içinde ve aynı maliyet iki kez sayılıyor
+Bölüm: kart 1 (DynamoDB R1.3 ve R5), kart 2 (DynamoDB R1.1 ve R5), kart 3 (DynamoDB R1.1), kart 5 (DynamoDB R1.1 ve R5), kart 8 (ElastiCache ve MemoryDB R1.1 ve R5). Alıntı: kart 3 "1 puan kırıldı: … reddedilen yazma da birim tüketir"; kart 5 "1 puan kırıldı: her artırma item'ın tamamını yeniden yazan bir yazma birimidir"; kart 1 "her sayfa görüntüleme bir yazma olur; yazma okumadan yavaş ve pahalıdır" ve R5 "her sayfada bir yenileme yazması"; kart 8 R1.1 "bir iş üç komuttur" ve R5 "bir iş üç komut".
+Tür: ikna etmeyen gerekçe (R1 yalnız engine'i mi puanlıyor; bir zayıflık birden fazla satırda).
+Sorun: Sayfa "R1 satırları yalnız engine'in kendisini puanlar; … ECPU ya da node-saat fiyatı … R1'de sayılmaz" diyor. Ama "birim tüketir", "yazma birimidir" ve "pahalıdır" faturalama gerekçeleri ve R1'de puan kırıyorlar. Aynı yazma birimleri R5'te ikinci kez sayılıyor. Kart 2'de "kaçıncı sıradayım" sayımı R1.1'de, okuma birimleri R5'te. Kart 8'de "üç komut" hem R1.1'de hem R5'te bir puan kırıyor.
+Mimara soru: Bu R1 kırılımları engine'in hangi davranışını ölçüyor? Fiyat kısmı R5'e taşınırsa R1.1 kaç olur?
+
+### R11 (orta): Kart 5'te sıcak key'i bölmek ElastiCache'te bedelsiz, DynamoDB'de 5 puan
+Bölüm: M2 kart 5 (uc-views), R1.1 ve R2. Alıntı: ElastiCache "HINCRBY views:…:{n} P0001 1" ve "R2 | 9 … Key 16 parçaya bölündüğü için sıcak ürünlerin yükü birkaç shard'a dağılır … 1 puan kırıldı: boş bir Serverless cache …"; DynamoDB "R2 | 5 … sıcak sayaçlar N parçaya bölünmeli ve okumada toplanmalıdır".
+Tür: ikna etmeyen gerekçe (aynı mekanizma) ve erken terim.
+Sorun: Gerçek projede key'in 16 parçaya bölündüğü yazmıyor. R1.1'de "{n}" açıklanmadan görünüyor ve R2'de bölmenin yapılmış olduğu varsayılıyor. ElastiCache'teki tek kırılım ön ölçeklendirme için; bölmenin kodu ve okumada 16 hash'i birleştirmek (ilk 20 için de) hiçbir satırda sayılmıyor. DynamoDB'de aynı iş 5 puan kırıyor. B4 ise "Bir bellek içi node için saniyede binlerce DECR küçük bir yüktür" diyor; bu doğruysa ElastiCache'te bölmeye hiç gerek yok, o zaman "16 parça" cümlesi neden var?
+Mimara soru: ElastiCache'te 25.000 olay/saniyelik sıcak bir key bölünmeli mi? Bölünmeliyse bu iş hangi satırda ve kaç puan? Bölünmemeliyse R2 cümlesi neden bölmeyi anlatıyor?
+
+### R12 (orta): Kart 4'te CloudFront aday değil; Aurora'nın JOIN'i üç satırda sayılıyor
+Bölüm: M2 kart 4 (uc-cache). Alıntı: "Fiyat değişince en geç 5 dakika içinde sayfada görünmesi kabul edilir; stok … da 5 dakika eski olabilir"; Aurora "R1.1 | 7 … aynı cevap her açılışta yeniden hesaplanır", "R1.3 | 7 … her okuma bir sorgu planı ve bir JOIN çalıştırır", "R2 | 5 … her görüntülemede yeniden çalışan bir JOIN".
+Tür: ikna etmeyen gerekçe (daha iyi bir AWS servisi eksik mi; bir zayıflık birden fazla satırda).
+Sorun: Herkes için aynı olan ve 5 dakika eski olabilen bir ürün sayfası, ilk akla gelen bir CDN önbelleği işidir (CloudFront, TTL 300). İstek uygulamaya bile gelmez. Kart CloudFront'u ne aday yapıyor ne de neden dışarıda bıraktığını söylüyor. İkinci aday DynamoDB'nin Aurora'nın önünde bir kopya store'u olarak kullanılması doğal bir seçim değil (kart 1'deki DAX gibi). Ayrıca "her açılışta JOIN" Aurora'da R1.1, R1.3 ve R2'de üç kez puan kırıyor.
+Mimara soru: Sayfa kişiye özel değilse CloudFront bu iş yükünde nerede durur? ElastiCache'i CloudFront'a karşı seçtiren koşul nedir (kişisel fiyat, oturuma bağlı içerik, API cevabı)?
+
+### R13 (orta): A10 matrisi MemoryDB'ye ½ veriyor, kartlar R1'de hep tam puan veriyor
+Bölüm: A10 özellik × ürün matrisi ve M2'deki yedi MemoryDB kartı. Alıntı: matris "Ö1 … ½ Okuma mikrosaniye, yazma tek haneli milisaniye", "Ö4 … ½ … eviction istenmez", "Ö8 … ½"; kart 1 "R1'in dört alt maddesinde ikisi de tam puan alır".
+Tür: anlaşılmayan cümle.
+Sorun: Matris engine özelliği ile servis tasarımını karıştırıyor. Okuyucu A10'da "MemoryDB'de Ö1 yarım" diye öğreniyor, sonra M2'de "aynı engine, R1 aynı" okuyor. Sayfanın hiçbir yerinde matrisin servisi, kartların R1'inin ise engine'i ölçtüğü söylenmiyor.
+Mimara soru: Matrisin "½"leri engine farkı mı, servis farkı mı? Servis farkıysa matrise bunu söyleyen bir not girmeli mi?
+
+### R14 (orta): R3–R5 ağırlığının gerekçesi, ağırlık kuralıyla çelişiyor
+Bölüm: Mimar gözüyle, "Neden R1 en ağır, R3–R5 neden daha hafif ama silinmez?" ve hemen altındaki ağırlık paragrafı. Alıntı: "AWS bu ikisini tek serviste birleştirebilir ya da yalnız birini çıkarabilirdi. Bu yüzden R3–R5'in ağırlığı R1 kadar yüksek olamaz." ve "Ağırlık puanlardan önce, iş yükünün önceliğinden belirlenir".
+Tür: anlaşılmayan cümle.
+Sorun: İlk cümle ağırlığı üreticinin tasarımının değişebilir olmasına bağlıyor, ikinci cümle iş yükünün önceliğine. Kart 7'de R3 30 alıyor, R1'in her alt maddesinden ve R2'den ağır. Okuyucu hangi kuralın geçerli olduğunu anlamıyor. "AWS birleştirebilirdi" bir iş yükünün dayanıklılığa ne kadar ihtiyaç duyduğunu değiştirmez.
+Mimara soru: Bir iş yükünde dayanıklılık en önemli şeyse (kart 7) R3 R1'den ağır olabilir mi? Olabiliyorsa "R1 kadar yüksek olamaz" cümlesi ne anlatıyor?
+
+### R15 (düşük): Kart 6'da DynamoDB'nin fan-out zinciri altı satırda sayılıyor
+Bölüm: M2 kart 6, DynamoDB. Alıntı: "R1.1 … fan-out uygulama kodudur", "R1.2 … Yol bir yazma, bir değişiklik akışı kaydı ve bir fonksiyon çağrısıdır", "R2 … fonksiyon eşzamanlılığı", "R4 … üç yeni parça … ve aralarındaki hata yönetimi ekibe kalır", "R5 … saklanmaması gereken mesajlar için üç kez ödenir".
+Tür: ikna etmeyen gerekçe (ek kod hem R1'de hem R4'te).
+Sorun: Aynı tasarım (akış + fonksiyon + bağlantı table'ı) R1.1, R1.2, R1.3, R2, R4 ve R5'te puan kırıyor. Diğer kartlarda sayfa "R1.x'te sayıldı" notuyla çift saymayı önlüyor; bu kartta bu not yok.
+Mimara soru: Fonksiyon ve bağlantı table'ının kodu R1.1'de mi, R4'te mi sayılır?
+
+### R16 (düşük): Kart 7'de R5 ağırlığı hikâyeyle uyuşmuyor
+Bölüm: M2 kart 7, R5. Alıntı: "Günde birkaç istek; maliyet önemsizdir, ama sadece kilit için yeni bir sistem işletmek istenmez" ve ağırlık 10; MemoryDB "R4 | 6 … yalnız bu kilit için … yeni bir cluster işletilir" ve "R5 | 4 … en küçük çoklu AZ'li cluster bile yıl boyu çalışır".
+Tür: ikna etmeyen gerekçe (ağırlık hikâyeden mi geliyor).
+Sorun: Hikâye maliyetin önemsiz olduğunu söylüyor, ama R5 10 ağırlık alıyor. "Yeni bir sistem işletmek" R4'ün konusu, ve MemoryDB'de hem R4'te hem R5'te puan kırıyor.
+Mimara soru: Maliyet önemsizse R5 neden en düşük sınırda (5) değil?
+
+### R17 (düşük): Kart 9'da MemoryDB'nin gece yazma penceresi iddiası kanıtsız
+Bölüm: M2 kart 9 (uc-reco), MemoryDB R2. Alıntı: "3 puan kırıldı: her gece yazması log'a işlendikten sonra onaylanır; 20 milyon yazma daha uzun sürer ve 30 dakikalık pencereyi zorlar."
+Tür: ikna etmeyen gerekçe.
+Sorun: Saniyede 11.000 yazma, pipeline ve birkaç shard ile birçok bağlantıdan gönderilir. Tek haneli milisaniye gecikme, bu hızın 30 dakikada bitmesini neden engellesin, bir hesap yok. Bu bir verim sorusu, gecikme sorusu değil.
+Mimara soru: Kaç shard ve kaç paralel bağlantıyla MemoryDB 20 milyon yazmayı 30 dakikada bitiremez?
+
+### R18 (düşük): Bazı terimler tanımlanmadan önce kullanılıyor
+Bölüm: başlık, A1, R1 kataloğu, kart 5, kart 10. Alıntı: başlık "Lale Market'teki yeri: Flash deal and live data · Kimlik doğrulama: Password (Secrets Manager, ACL user)"; A1 "Engine App'in ölçümünde"; katalog "pipeline toplu yazar (A5)"; katalog "GETEX okur ve süreyi yeniler"; kart 5 "views:…:{n}" ve "Redshift"; kart 10 "ZREMRANGEBYSCORE"; R1–R5 paragrafı "bir kırılım servisin paketlemesinden geliyorsa".
+Tür: erken terim.
+Sorun: "Engine App" C3'e kadar açıklanmıyor. "pipeline" kataloğun gösterdiği A5'te yok; tanımı M2'nin terim tablosunda ve B5'te. "ACL user" B1'de açıklanıyor. "{n}" hiç açıklanmıyor. "Redshift" kart 5'te açıklanmadan geçiyor (M3'te "data warehouse"). "ZREMRANGEBYSCORE" B5'e kadar açıklanmıyor. "kırılım" puan kaybı anlamında bir jargon. Başlık satırı İngilizce.
+Mimara soru: Bu terimler ilk göründükleri yerde tek cümleyle açıklanabilir mi, ve katalog pipeline için doğru bölüme mi gönderiyor?
+
+### R19 (düşük): A4 resim altyazısında HTML etiketi metin olarak görünüyor
+Bölüm: A4, ElastiCache User Guide'dan alınan cluster mode resmi. Alıntı: "Soldaki tek shard'lı düzen <b>cluster mode disabled</b>'dır".
+Tür: resim altyazısı.
+Sorun: page.html'de "&lt;b&gt;cluster mode disabled&lt;/b&gt;" olarak kaçışlı yazılmış. Okuyucu kalın yazı yerine "<b>" etiketlerini görüyor. Altyazının geri kalanı neye bakılacağını iyi anlatıyor. Diğer beş "Şuna bak" altyazısında sorun yok.
+Mimara soru: —
+
+### R20 (düşük): Bazı "ya şöyle olursa?" durumları cevapsız
+Bölüm: kart 3, kart 2, kart 9, A9, M5. Alıntı: kart 3 "İlk INCR'den sonra EXPIRE 60 (ya da bir script'te ikisi birlikte)"; kart 2 "ayın en çok alışveriş yapan 10 müşterisi"; kart 9 "Hesap gece 02:00'de 30 dakikada toplu yapılır".
+Tür: eksik durum.
+Sorun: (a) Cache'e hiç ulaşılamazsa gateway ne yapar: istekleri geçirir mi (fail-open), reddeder mi (fail-closed)? Kart 3 ve kart 1 bunu söylemiyor. (b) INCR ile EXPIRE arasında gateway çökerse key süresiz kalır; tam puan veren R1.3 bunu anmıyor. (c) Aylık sıralama ay sonunda nasıl sıfırlanır: ay başına bir key mi, TTL mi? (d) Gece toplu yüklemesi yarıda kalırsa kullanıcıların bir kısmı eski, bir kısmı yeni listeyi görür; ne yapılır? (e) Kullanıcılar iki Bölgedeyse ne olur? Global Datastore ya da MemoryDB Multi-Region hiç geçmiyor.
+Mimara soru: Bu beş durumun hangisi bu sayfanın kapsamında, ve kapsamdaysa hangi bölümde cevaplanmalı?
+
+### R21 (düşük): İki kararın "bir koşul değişseydi" cümlesi kafa kafaya paragrafından zayıf
+Bölüm: kart 5 kararı, kart 10 kararı. Alıntı: kart 5 karar "sayılar faturalamaya dayansaydı DynamoDB öne geçerdi" ve kafa kafaya "sayılar faturalamaya dayansaydı …, olay hızı yüz kat düşük olsaydı ve tekil sayım istenmeseydi"; kart 10 karar "konumlar on kat seyrek gelseydi Aurora tek başına yeterdi".
+Tür: ikna etmeyen gerekçe.
+Sorun: Kart 5'te karar üç koşulun yalnız birini veriyor; 24 puanlık fark yalnız R3 ile kapanmıyor gibi görünüyor. Kart 10'da Aurora'nın R2 kırılımının bir kısmı saniyede 2.000 aramadan geliyor; konumlar on kat seyrek gelse de bu kırılım kalır, ve 10 puanlık farkın kapandığı hesapla gösterilmiyor.
+Mimara soru: Yalnız bu koşul değişince yeni puanlar ne olur, kazanan gerçekten değişir mi?
+
+## Sonuç: bir meslektaşa anlatabilir miyim?
+Büyük ölçüde evet.
+
+- DynamoDB'ye karşı: Evet. Sorunun her isteğin önünde durduğu, 1–5 ms sınırının katı olduğu, TTL'in saniyesinde uygulanması gerektiği (oturum, dakikalık sayaç) ya da değerin bir veri yapısı olduğu (sorted set ile "kaçıncı sıradayım", HyperLogLog) durumlarda ElastiCache. Çok sık artırmanın yazma birimi fiyatı da ElastiCache lehine (kart 3: ayda yaklaşık 9.500 $'a karşı birkaç yüz $). Kayıt kalıcı olmalıysa, birkaç milisaniye yetiyorsa ya da kaybın bedeli para ise (kart 7) DynamoDB. Eksik olan: kaynak zaten DynamoDB ise DAX'a karşı ElastiCache sorusu yalnız Ö8'de bir cümle; kart yok. Kart 7'deki "DynamoDB kilidi kesin korur" izlenimi de düzeltilmeli (R7).
+- SQS'e karşı: Kısmen. "Görünürlük süresi ve dead-letter queue gerekiyorsa SQS, işler milisaniyenin altında başlamalıysa ya da kayıp ve tekrar zararsızsa ElastiCache" diyebilirim. Ama aynı engine'in stream ve consumer group aracı puanlanmadığı için (R8), "ElastiCache stream'i SQS'e karşı ne zaman yeter?" sorusunu cevaplayamam.
+- MemoryDB'ye karşı: Kavram olarak evet: aynı engine, fark kalıcı log (R3) ile serverless işletim ve fiyat (R4, R5). Onaylanan yazma kaybolmamalıysa MemoryDB, kayıp kabul ediliyorsa ElastiCache Serverless. Ama farkı sayıyla savunamam. Kart 2'deki yakın yarış aylık bir rakama dayanmıyor (R4). Log gecikmesinin indirimi kartlara göre değişiyor (R3). ElastiCache'in kendi Valkey 9.0 kalıcılık seçeneği kartların dışında kalıyor (R6). "Kalıcı log'lu node'lu ElastiCache mi, MemoryDB mi?" sorusunun cevabı M5'te tek bir hücre.
+- Aurora'ya karşı: Evet. Ürün sayfasında ElastiCache Aurora'nın önünde bir kopyadır, onun yerine geçmez; sıcak küme varsa, 5 dakikalık eskime kabul ediliyorsa ve okuma writer'ı yoruyorsa. Konumda PostGIS engine uyumunu kazanır, ama saniyede 800 güncelleme writer'ı ve VACUUM'u yorar. Eksik olan: kart 4'te CloudFront karşılaştırması (R12), ve kart 6'da gerçek bir yayın servisi (SNS, AppSync Events, API Gateway WebSocket) karşısında ElastiCache Pub/Sub'ın yeri (R1).
+
+## Kapanış (yazar)
+| Bulgu | Durum | Ne yapıldı |
 |---|---|---|
-| 1. Anlaşılmayan cümleler | R1–R7 | 7 |
-| 2. Tanımından önce geçen terimler | R8–R17 | 10 |
-| 3. Cevaplanmayan "ya … olursa?" soruları | R18–R26 | 9 |
-| 4. İkna etmeyen karar gerekçeleri | R27–R33 | 7 |
-| 5. TR/EN farkı (uygulanamaz) / iç çelişkiler | R34–R44 | 11 |
-| 6. Neye bakılacağını söylemeyen görseller | R45–R49 | 5 |
-| **Toplam** | | **49** |
-
-Önce kapatılması gerekenler: R34 (MULTI örneği CROSSSLOT'a takılıyor), R35/R29 (1 ms sınırı ile ölçülen 1–2 ms çelişiyor), R27/R28 (diskalifiye kuralı tetiklenmiyor, yanlış cevap ikinci sırada), R37 (kart 5'te sıcak key sayısı yanlış), R18 (Serverless eviction politikası), son sorudaki MemoryDB ile Valkey 9.0 kalıcılık seçeneğinin ayrımı.
-
----
-
-## Yazarın kapatmaları (her bulgu: düzeltildi ya da neden kusur olmadığı)
-
-Düzeltmelerden sonra: `check_usecases.py` usecases: OK, `clarity.py` clarity: OK, simülasyon testi TR `sim-errors []`, `jserr` boş.
-
-| No | Durum | Ne yapıldı |
-|---|---|---|
-| R1 | Düzeltildi | Kart 1 gereksinim R2: "yüzde 5" cümlesi çıkarıldı; "1 ms ile 5 ms arasındaki fark her sayfaya 4 ms ekler" oldu. |
-| R2 | Düzeltildi | A10 checkpoint açıklaması: Ö7'nin iki biçimi (asenkron replica ve kalıcı log, A9) açıkça yazıldı. |
-| R3 | Düzeltildi | TTL kartı: "süre en fazla 1 ms geç uygulanır; okumada store süreye bakar ve dolmuş key'i yok sayar". |
-| R4 | Düzeltildi | B4: Serverless cluster mode'da çalıştığı için cluster mode'u destekleyen TLS'li bir istemci gerektiği, proxy'nin yeniden keşfi gereksiz kıldığı yazıldı. |
-| R5 | Düzeltildi | C2 "Serverless mı node'lu mu" kutusu: fault tolerance ile durability ayrımı tanımlandı; kalıcılık için Valkey 9.0 ya da MemoryDB. |
-| R6 | Düzeltildi | A9 görsel açıklaması: "okun üzerinde onay yok" çıkarımı silindi; asenkronluğun kaynağı Valkey belgesidir. |
-| R7 | Düzeltildi | Kart 6 gereksinim R1'den puanlanmayan sıralama cümlesi çıkarıldı. |
-| R8 | Düzeltildi | A1'e Valkey'in tanımı eklendi (Redis OSS'un çatalı, aynı komutlar; ElastiCache onu çalıştıran servis). |
-| R9 | Düzeltildi | A4 Shard kartında "node" tanımlandı; A4 kutusunda "node'lu cluster" (Serverless'ın karşıtı) açıklandı. |
-| R10 | Düzeltildi | A5 tablosu: Lua script'i bir cümleyle tanımlandı; PX (milisaniye, 900.000 ms = 15 dakika) açıklandı. |
-| R11 | Düzeltildi | A3 tablosunda LPUSH, RPOP ve BLMOVE kısa açıklamalarıyla. |
-| R12 | Düzeltildi | M1'de ECPU ve DAX ilk geçtikleri yerde açıklandı. |
-| R13 | Düzeltildi | Kart 7'de fencing token ve idempotent tanımlandı. |
-| R14 | Kısmen düzeltildi | WebSocket (A8), AOF (C2), SLA (M1) tanımlandı. TLS, VPC, subnet, security group ve ACL bu workshop'un genel altyapı terimleridir ve diğer tutorial'larda da tanımsız kullanılır; sözlük sayfası (/e2etutorial/glossary) onları taşır. Kusur sayılmadı. |
-| R15 | Düzeltildi | A4 görsel açıklaması: cluster mode disabled'ın ne olduğu, sadece node'lu cluster'da seçilebildiği, Serverless'ın her zaman cluster mode'da olduğu. |
-| R16 | Düzeltildi | M2 terim tablosuna global table (ve ElastiCache'in Global Datastore'u) eklendi. |
-| R17 | Düzeltildi | M2 terim tablosuna Engine App, Admin Console, Seed, Live leaderboard eklendi. |
-| R18 | Düzeltildi | A6 "Serverless'ta bellek dolar mı" kutusu: AWS'in Serverless belgesi seçilebilir bir maxmemory-policy listelemez; eviction sadece bir üst sınırda başlar; Lale Market'te üst sınır yok. |
-| R19 | Düzeltildi | A9 kutusu: süresi saniyesinde önemli okumalar (oturum, kilit) 6379'dan; replica'lar silmeyi primary'den bekler. Kart 1'in oturumları 6379'dan okunur. |
-| R20 | Düzeltildi | A9 soğuk cache kutusu: node'lu failover "usually takes just a few seconds", MemoryDB "under 20 seconds"; Serverless için AWS süre yayınlamaz. |
-| R21 | Düzeltildi | Terim tablosu: ElastiCache'in çok Region'lı karşılığı node'lu Global Datastore'dur, Serverless'ta yoktur (AWS FAQ). |
-| R22 | Düzeltildi | A5 MULTI kartı: cluster mode'da transaction ve Lua'nın bütün key'leri aynı slot'ta olmalı. |
-| R23 | Düzeltildi | B5: lm:active member'ları kendiliğinden gitmez; workshop sıfırlaması siler, üretimde ZREMRANGEBYSCORE. |
-| R24 | Kusur değil | Kart 1 gereksinim R3 bunu açıkça kabul eder ("bütün kullanıcıların yeniden login olması kabul edilir ama istenmez") ve puanı 5'e indirir; karar "oturuma kaybı kabul edilmeyen veri koyma" der. |
-| R25 | Düzeltildi | Kart 4 R3 gerekçesi: stampede kilidiyle soğuk cache saniyede 6.000 JOIN değil, sıcak 50 ürün için birkaç saniyede yaklaşık 50 JOIN demektir. |
-| R26 | Kusur değil | MemoryDB'nin AWS belgelerinde (What is MemoryDB, FAQ) bir sunucusuz biçimi anlatılmaz; sayfa MemoryDB'yi belgedeki gibi node'lu bir cluster olarak puanlar. |
-| R27 | Düzeltildi | M2'ye ölçek notu eklendi: 0–1 "hiç karşılamaz" demektir; sınırı aşan ama işi taşıyan aday 5–7 alır. Kart 7'de ElastiCache R3 = 1 ve diskalifiye (DynamoDB sayfasının idempotency kartıyla aynı mantık). Kart 1, 3, 9'daki DynamoDB puanları DynamoDB sayfasıyla tutarlı kalmak için değişmedi. |
-| R28 | Düzeltildi | Kart 7: DynamoDB 48, MemoryDB 38, ElastiCache R3'te diskalifiye (38). Yanlış cevap artık ikinci değil. |
-| R29 | Düzeltildi | Kart 1 R2 gerekçesi: AWS'in ölçümüne göre Serverless'ta p50 okuma 1 ms'nin altında; Engine App'in 1–2 ms ölçümü Python istemcisini ve izleme kodunu içerir. A1 kavram kartı ve M1 Ö1 aynı açıklamayı kaynakla verir. |
-| R30 | Kusur değil | Kart 9 DynamoDB sayfasındaki öneri kartıyla aynı puanları kullanır (tutarlılık şartı). Doğru cevap "ikisi birlikte"dir ve kart bunu söyler; iki servisin aylık fiyat karşılaştırması Bölge'ye ve sözleşmeye bağlıdır, bu sayfanın kapsamı dışında bırakıldı (B9 ElastiCache tarafının hesabını verir). |
-| R31 | Düzeltildi | R25 ile aynı düzeltme. |
-| R32 | Düzeltildi | Kart 6 kararı: kesin işleme için DynamoDB Streams ya da SQS; Valkey stream'i ancak kalıcı log'lu store'da (MemoryDB). |
-| R33 | Düzeltildi | A1 kutusu ve A3 girişi: DynamoDB'de atomik sayaç ve koşullu yazma olduğu, eksik olanın sıralı küme, kuyruk, konum ve tekil sayım tipleri olduğu yazıldı. |
-| R34 | Düzeltildi | A5 MULTI örneği hash tag'li key'lerle yeniden yazıldı ({lm:deal}:info, {lm:deal}:stock) ve CROSSSLOT nedeni açıklandı. |
-| R35 | Düzeltildi | R29 ile aynı. |
-| R36 | Düzeltildi | Kart 2: 300 ekran saniyede 60 okuma + müşterilerin kendi sıra sorguları saniyede yaklaşık 3.000. |
-| R37 | Düzeltildi | Kart 5: saat hash'i 16 parçaya bölündü (views:<saat>:{0..15}); R1 1 puan kırıldı (16 HGETALL); R2 gerekçesi slot dağılımını ve en sıcak 10 ürünü anlatır. Toplam 44'ten 43'e. |
-| R38 | Düzeltildi | B1: "yedi tür key". |
-| R39 | Düzeltildi | Öğretici sıralama simülasyonu ve canlı deneme lm:tut:board key'ini kullanır; B3'te gerçek lm:leaderboard'a dokunulmadığı yazıldı. |
-| R40 | Düzeltildi | Kart 8 adayları puana göre sıralandı: ElastiCache, MemoryDB, DynamoDB. |
-| R41 | Düzeltildi | R25 ile aynı. |
-| R42 | Düzeltildi | Kart 7 MemoryDB R3: "AWS'e göre planlanmamış failover genellikle 20 saniyenin altında". |
-| R43 | Düzeltildi | Kalıcı log kartı: "AWS'e göre en fazla 10 saniye". |
-| R44 | Düzeltildi | C3: ilk komutun 300 ms'si (yeni TLS bağlantısı) ayrıca belirtildi. |
-| R45 | Düzeltildi | A2 hash table açıklaması: resimdeki "slot" ile A4'teki 16.384 parçalık slot'un farklı olduğu yazıldı. |
-| R46 | Düzeltildi | A1 piramit açıklaması: "processor cache" ElastiCache'in cache'i değildir. |
-| R47 | Düzeltildi | A4 görsel açıklaması: iki shard ile üç shard farkı, Redis OSS ile Valkey ilişkisi. |
-| R48 | Düzeltildi | A9 görsel açıklaması: Lale Market'in Serverless cache'i sağdaki (cluster mode enabled) düzendedir. |
-| R49 | Düzeltildi | C2 görsel açıklaması: Customer VPC, Service VPC ve VPC Endpoint tanımlandı. |
-| Son soru: MemoryDB'nin kazandığı kart yok | Kusur değil (bilinçli) | On kart domain-map'in ElastiCache use case listesidir ve bu listede bellek içi kategorinin ilk seçim olduğu iş yükleri vardır. MemoryDB'nin kazandığı durum A10 checkpoint'inde (oyun puanları tek kayıt) ve kart 2, 3, 7, 8'in "hangi koşul değişseydi MemoryDB seçilirdi" cümlelerinde verilir; kart 7'de MemoryDB ElastiCache'in kaybettiği R3'ü kazanır. |
-| Son soru: Valkey 9.0 kalıcılık ile MemoryDB ayrımı | Düzeltildi | M5 tablosu: Valkey 9.0 kalıcılığı ElastiCache'in node'lu cluster'ında bir özelliktir (asenkron seçeneğiyle); MemoryDB baştan kalıcı birincil database olarak tasarlanmış ayrı bir servistir. |
-
-Açık bulgu yoktur.
+| R1 Kart 6'da gerçek alternatifler yok | kapandı | Kart 6'da DynamoDB çıkarıldı, en yakın yönetilen alternatif SNS aday oldu (SVC/CATEGORY/LINK'e yalnız ekleme). Sonuç ElastiCache 95, MemoryDB 81,5, SNS 78. SNS'in kafa kafaya paragrafı API Gateway WebSocket ve AppSync Events'i de anar: WebSocket sunucuları hiç istenmeseydi önce onlar değerlendirilirdi; bu hikâyede sunucular zaten çalıştığı için aday değiller. |
+| R2 R3'te aynı mekanizma 4, 7 ya da 8 | kapandı | Tek kural yazıldı (mimar gözüyle, ağırlık paragrafından sonra): verinin o anki tek yeri bellekse ve kayıp kabul ediliyorsa 4; "hiç kaybolmamalı" ise 1; bellekte yalnız kaynağı tam olan bir kopya varsa (kart 4) ya da hiç veri yoksa (kart 6) kaybolan bir şey yoktur ve puan yalnız soğuk cache ya da kopan bağlantılar için kırılır. Kart 4 ve 6'nın gerekçeleri bu kurala bağlandı. Kart 2'nin isteği "Orta" ama veri yalnız bellektedir ve 4 dakika görünür bir boşluk vardır, bu yüzden 4 kaldı. |
+| R3 MemoryDB log gecikmesi kartlara göre farklı; kart 1'de iki tam puan çelişiyor | kapandı | Kart 1'de MemoryDB'nin R1.3 gerekçesi, GETEX'in log'u beklemesinin servis tasarımı olduğunu ve R2'de sayıldığını söyler; R2 gerekçesi 1 ms için okumanın GET ile yapılıp sürenin yarı ömürde ayrıca yenilendiğini yazar (B5). Kart 3'te her istek bir yazma olduğu için kırılım 5'tir; gerekçe bunu söyler. Kart 9'un gerekçesi gecikme değil yazma penceresi olarak yeniden yazıldı. Kart 1, 3 ve 9'un puanları DynamoDB sayfasındaki aynı kartlarla aynı kalır (görevin tutarlılık kuralı). |
+| R4 Kart 2 yakın yarışı ölçülmemiş maliyete dayanıyor | kapandı | Price List API'dan eu-central-1 fiyatları alındı: Serverless Valkey 0,101 $/GB-saat ve milyon ECPU 0,0027 $; MemoryDB Valkey db.t4g.small 0,0378 $/saat, db.r7g.large 0,2597 $/saat, 10 TB'a kadar yazılan veri ücretsiz. Kart 2'de ElastiCache yaklaşık 65 $, iki küçük MemoryDB node'u yaklaşık 55 $ (güvenli boy yaklaşık 380 $). MemoryDB R5 5'ten 7'ye çıktı ve kartı 91'e 90 kazandı: ElastiCache'in ikizine kaybettiği kart. Özet, M7 ve checkpoint ec-a1 buna göre değişti. Kart 3 ve 9'da "yazılan GB ücreti" yanlış gerekçesi düzeltildi (puan aynı). |
+| R5 1 ms ve 2 ms sınırları sayfanın kendi ölçümüyle çelişiyor | kapandı | Kart 1 R1.4 gerekçesi: satır engine'in kendi süresini puanlar; AWS'e göre p50 1 ms'nin altındadır; Lale Market'in 1,3–1,8 ms ölçümü Python istemcisi ve TLS dahil uçtan uca süredir. |
+| R6 Kart 7'de ElastiCache Valkey 9.0 kalıcılık seçeneği yok | kapandı | M2 girişine "kartlardaki ElastiCache adayı Serverless'tır" cümlesi eklendi. Kart 7'nin ElastiCache kafa kafaya paragrafı node'lu Valkey 9.0 senkron kalıcılığını puanlar: R3 tam olur ama R4–R5 MemoryDB'ninki gibi olur, sonuç DynamoDB'nin gerisinde kalır. |
+| R7 Kart 7'de süreli kilit DynamoDB'de de tam bir kez değil | kapandı | Kart 7'nin kararına eklendi: hangi servis seçilirse seçilsin süreli kilit takılan worker'dan sonra ikinci worker'a geçebilir; ödeme talimatı her durumda satıcı ve gün başına benzersiz id ile koşullu yazılır (B8). Puan değişmedi, çünkü bu her aday için aynıdır; TA satırı kilidin alınmasının atomikliğini puanlar. |
+| R8 Kart 8'de list puanlanıyor, stream değil | kapandı | Kart 8'de ElastiCache ve MemoryDB consumer group'lu stream ile puanlandı: R1.2 8 (XAUTOCLAIM uygulama işi), R1.3 6 (teslim sayısı var, dead-letter taşıması yok). ElastiCache 81,5, MemoryDB 77,5, SQS 97; R1 farkı 7. Key satırı, kafa kafaya, karar, checkpoint ec-a2, terim tablosu ve B7'deki kod (XAUTOCLAIM satırı) güncellendi. |
+| R9 Boyutlandırma birden fazla satırda | kapandı | Timestream ve OpenSearch R2 gerekçeleri yalnız tepe anındaki yarışı sayar, boyutlandırma R4'te kalır (OpenSearch R4 gerekçesine node sayısı ve tipi eklendi). Kart 9 DynamoDB R2 gerekçesi on-demand'in bir önceki tepenin iki katına kadar uyumu olarak yeniden yazıldı. |
+| R10 Fiyat R1'de ve iki kez | kapandı | R1'deki fiyat ifadeleri çıkarıldı: kart 3 DynamoDB R1.1 (koşulun hata yolu), kart 5 DynamoDB R1.1 (item'ın tamamını yeniden yazma), kart 1 DynamoDB R1.3 (fiyat R5'te), kart 2 DynamoDB R5 (sayım okumaları R1.1'de), kart 8 R5 (en az 100 MB). Puanlar aynı kaldı; kırılımın engine nedeni yazıldı. |
+| R11 Kart 5'te sıcak key bölme ElastiCache'te bedelsiz | kapandı | Kart 5'in key satırı parçalamayı açıkça anlatır (<n>, 16 parça, ekran 16 hash'i toplar). ElastiCache R2 9'dan 8'e indi: bölme ve toplama işi orada sayıldı; DynamoDB'nin gerekçesi bölmenin orada partition sınırı yüzünden zorunlu olduğunu söyler. ElastiCache 90. |
+| R12 Kart 4'te CloudFront yok; JOIN üç satırda | kapandı | Kart 4'ün Aurora kafa kafaya paragrafına CloudFront eklendi: sayfa herkese aynıysa ilk katman CDN'dir; bu kart uygulamanın okuduğu sayfa verisini ve CDN miss'lerini önbellekler. Aurora R1.3 gerekçesi JOIN'i R1.1'e bıraktı (7'den 8'e, Aurora 74,5). |
+| R13 A10 matrisi ile kartların R1'i çelişiyor | kapandı | A10 matrisinin altına not eklendi: MemoryDB'nin ½'leri engine farkı değil, log ve kayıt olmasından gelen servis farkıdır; bu yüzden M2'de R1 eşittir. |
+| R14 R3–R5 ağırlık gerekçesi ağırlık kuralıyla çelişiyor | kapandı | Callout yeniden yazıldı: R3–R5 çoğu kartta R1'den hafiftir, ağırlığı her kartta iş yükünün önceliği belirler; dayanıklılık bir iş kuralıysa R3 R1'in her alt maddesinden ağır olabilir (kart 7, R3 30); R1 grup olarak en ağırdır. |
+| R15 Kart 6 DynamoDB zinciri altı satırda | kapandı | Kart 6'da DynamoDB zinciri artık aday değil (R1'deki SNS değişikliği). |
+| R16 Kart 7 R5 ağırlığı hikâyeyle uyuşmuyor | kapandı | Kart 7'de R4 15, R5 5 oldu; R5'in gerekçesi "maliyet önemsiz"dir ve "yeni sistem" yalnız R4'te sayılır. MemoryDB 90. |
+| R17 Kart 9 MemoryDB gece yazma iddiası kanıtsız | kapandı | Gerekçe yeniden yazıldı: gündüz okumaları etkilenmez; pencere ancak daha çok paralel bağlantı ve pipeline ile tutar ve yük testiyle doğrulanmalıdır. Puan DynamoDB sayfasındaki aynı kartla aynı kaldı. |
+| R18 Terimler tanımdan önce | kapandı | Engine App A1'de, pipeline ve GETEX katalogda (A5, B5), ZREMRANGEBYSCORE kart 10'da, Redshift kart 5'te ilk kullanımda açıklandı; {n} kaldırıldı; "kırılım" ağırlık paragrafında tanımlandı. Başlıktaki İngilizce satır ("Flash deal and live data", "ACL user") ortak çerçevenin index verisinden gelir; ortak parça olduğu için bu sayfada değiştirilmedi. |
+| R19 A4 altyazısında kaçışlı HTML | kapandı | A4 altyazısındaki <b> etiketi kaldırıldı; render edilen sayfada kaçışlı etiket yok. |
+| R20 Cevapsız "ya şöyle olursa" durumları | kapandı | (a) kart 3 kararına fail-open / yerel sınır kararı; (b) INCR ve EXPIRE tek MULTI/EXEC'te (kart 3 R1.3); (c) kart 2 kararına aylık key ve eski aya süre; (d) kart 9 kararına sürüm key'i ile yarıda kalmaya karşı yükleme; (e) M5'e Global Datastore satırı (iki ek Region, AWS FAQ ve features sayfası). |
+| R21 İki kararın koşul cümlesi zayıf | kapandı | Kart 5'in kararı üç koşulu birlikte verir ve tek koşulun farkı kapatmadığını söyler; kart 10'un kararı iki koşulu birlikte verir (konum sıklığı ve kampanya aramalarının checkout tepesiyle çakışmaması). |

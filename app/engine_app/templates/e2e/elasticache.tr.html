@@ -1,14 +1,14 @@
 {% extends "e2e/_base.html" %}
 {% import "e2e/_macros.html" as k with context %}
 {# Turkish page of the ElastiCache (Valkey) tutorial. The old English page elasticache.html is a separate, older page. Terms stay in English; the explanations are Turkish.
-   Cards: e2e_usecases.EC_USECASES. Simulations: e2e_sims.elasticache(). Scope: docs/elasticache.scope.md. #}
+   Cards: e2e_usecases_w.ELASTICACHE_W (model 2). Simulations: e2e_sims.elasticache(). Scope: docs/elasticache.scope.md. #}
 {% block body %}
 
 <h2 id="goal" data-short="Ne öğreneceksin" data-group="Başlarken">Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
 <p>Bu sayfa genel fikirden AWS servisine dört adımda gider:</p>
 <ol>
   <li><b>Bölüm A, Temel.</b> Bellek içi bir key-value store nedir: verinin neden bellekte durduğu, key'in tek parçalı olması, value'nun tipleri, key'lerin makinelere dağılması, tek adımlık komutlar, kendini silen veri ve bellek dolunca ne olduğu, bir database'in önünde kopya tutmak, mesajlaşma ve bir arızada neyin kaybolabileceği. Her kavram bütün durumlarıyla bir tabloda verilir ve bölüm sekiz özelliğin (Ö1–Ö8) listesi ve Redis/Valkey / Memcached / MemoryDB matrisiyle biter.</li>
-  <li><b>Mimar gözüyle.</b> Bellek içi store ne zaman doğru seçimdir, ne zaman değildir: on use case, her birinde seçimin nedeni, en yakın iki alternatifin (DynamoDB, MemoryDB, Aurora ve diğerleri) aynı gereksinimlere cevabı ve yine de ElastiCache seçersek artı ve eksilerimiz. Sonra AWS'teki seçenekler ve hangi durumda ElastiCache'in seçileceği. Biri net kazanma, biri net kaybetme, üçü yakın yarış olan beş karar simülasyonu.</li>
+  <li><b>Mimar gözüyle.</b> Bellek içi store ne zaman doğru seçimdir, ne zaman değildir: on use case, her birinde seçimin nedeni, her iş yüküne en uygun servis (bazen ElastiCache değil), en yakın iki alternatifin (MemoryDB, DynamoDB, Aurora, SQS ve diğerleri) aynı gereksinimlere cevabı ve yine de ElastiCache seçersek artı ve eksilerimiz. Sonra AWS'teki seçenekler ve hangi durumda ElastiCache'in seçileceği. Beş karar simülasyonu: ikizi MemoryDB'nin tek puanla kazandığı bir yakın yarış, ikizlerin R1'de eşit olduğu ve ElastiCache'in kazandığı bir kart, engine uyumunu başka bir engine'in kazandığı bir kart ve ElastiCache'in SQS'e ve DynamoDB'ye kaybettiği iki kart.</li>
   <li><b>Bölüm B, İleri.</b> Pratikte Valkey: canlı Lale Market key'leri, komutlar ve cevapları, yarış ve düzeltmesi, sıralama, key'lerin yeri, süre ve bellek ayarları, cache kodu, mesajlaşma, bir arızanın adım adım resmi ve maliyet.</li>
   <li><b>Bölüm C, AWS servisi.</b> Valkey'i kendin çalıştırdığında ne yapman gerekir ve ElastiCache Serverless senin için neyi yapar.</li>
 </ol>
@@ -36,7 +36,7 @@
 {% endcall %}
 {{ k.concept("Bellek içi key-value store",
    "Bütün verisini bilgisayarın ana belleğinde (RAM) tutan ve her veriye bir <b>key</b> ile ulaşan bir store. Disk tabanlı bir database verisini diskte tutar ve sadece sık okunan kısmı bellekte saklar; bellek içi store'da diske hiç gidilmez. Bu yüzden bir istek mikrosaniyeler sürer.",
-   "Lale Market'in kampanya stoğu <code>lm:deal:stock</code> key'inde, bellekte bir sayı olarak durur: canlı sistemde 46. Her \"Satın al\" bu sayıyı düşürür ve Engine App'in ölçümünde cevap 1–2 milisaniyede gelir; bu sürenin çoğu ağ, TLS ve Python istemcisidir, komutun kendisi mikrosaniyedir. AWS'in ölçümünde ElastiCache Serverless'ta p50 okuma gecikmesi (okumaların yarısının bittiği süre) 1 milisaniyenin altındadır.",
+   "Lale Market'in kampanya stoğu <code>lm:deal:stock</code> key'inde, bellekte bir sayı olarak durur: canlı sistemde 46. Her \"Satın al\" bu sayıyı düşürür ve Engine App'in (Lale Market'in cache'e bağlanan uygulaması, C3) ölçümünde cevap 1–2 milisaniyede gelir; bu sürenin çoğu ağ, TLS ve Python istemcisidir, komutun kendisi mikrosaniyedir. AWS'in ölçümünde ElastiCache Serverless'ta p50 okuma gecikmesi (okumaların yarısının bittiği süre) 1 milisaniyenin altındadır.",
    "Pastanenin tezgâhı: küçük, pahalı, çok hızlı. Depo (disk) büyük, ucuz, yavaş.") }}
 {{ k.fig("elasticache-memory-hierarchy.png", "piramidin ortasındaki \"random access memory\" katı: sağda \"fast, affordable\", ortada \"power on, very short term\" yazıyor. Yani bellek hızlıdır ama elektrik gidince içindekini tutmaz. Hemen altındaki katlar (flash, hard drives) büyük ve ucuzdur ama yavaştır. Bellek içi store verinin tamamını o orta katta tutar. Tepedeki \"processor cache\" işlemcinin kendi küçük önbelleğidir; ElastiCache'in adındaki cache ile ilgisi yoktur.") }}
 <p>Bu sayfadaki store'un adı <b>Valkey</b>'dir: Redis OSS'tan çatallanan (fork), aynı komutları kullanan açık kaynak bir bellek içi store. Amazon ElastiCache, Valkey'i (istersen Redis OSS'u ya da Memcached'i) senin için çalıştıran AWS servisidir. Sayfada "Redis / Valkey" yazan yerlerde ikisi aynı davranır.</p>
@@ -189,7 +189,7 @@
   <div><h4>shard 3 · slot 10923–16383</h4><span class="chip">lm:orders:today (15337)</span></div>
 </div>
 <p class="flow-cap">Altı gerçek Lale Market key'inin gerçek slot'ları ve öğretici üç shard'daki yerleri. B4'teki simülasyon aynı yerleşimi adım adım hesaplar.</p>
-{{ k.fig("elasticache-node-groups.png", "sağdaki \"Redis OSS Cluster\": iki node group (shard), birincinin altında \"Slots 0-8191\", ikincinin altında \"Slots 8192-16383\" yazıyor. 16.384 slot iki shard'a bölünmüş. Soldaki tek node group'ta bütün slot'lar (0-16383) tek yerde. Resim iki shard gösterir, metin üç shard kullanır: shard sayısı bir seçimdir, kural aynıdır. Soldaki tek shard'lı düzen <b>cluster mode disabled</b>'dır (bütün slot'lar tek yerde; sadece node'lu cluster'larda seçilebilir); ElastiCache Serverless her zaman sağdaki gibi cluster mode'dadır. Resimdeki \"Redis OSS\" Valkey'in çatallandığı projedir; kural Valkey'de aynıdır. Kutulardaki Primary Node ve Replica Node'lar A9'un konusudur.") }}
+{{ k.fig("elasticache-node-groups.png", "sağdaki \"Redis OSS Cluster\": iki node group (shard), birincinin altında \"Slots 0-8191\", ikincinin altında \"Slots 8192-16383\" yazıyor. 16.384 slot iki shard'a bölünmüş. Soldaki tek node group'ta bütün slot'lar (0-16383) tek yerde. Resim iki shard gösterir, metin üç shard kullanır: shard sayısı bir seçimdir, kural aynıdır. Soldaki tek shard'lı düzen cluster mode disabled'dır (bütün slot'lar tek yerde; sadece node'lu cluster'larda seçilebilir); ElastiCache Serverless her zaman sağdaki gibi cluster mode'dadır. Resimdeki \"Redis OSS\" Valkey'in çatallandığı projedir; kural Valkey'de aynıdır. Kutulardaki Primary Node ve Replica Node'lar A9'un konusudur.") }}
 <table class="data">
   <caption>bütün durumlar: key'ler ve slot'lar</caption>
   <thead><tr><th>Durum</th><th>Ne olur</th><th>Örnek</th></tr></thead>
@@ -254,7 +254,7 @@
 <p>Hayır. İkisi de "araya başka bir şey girmesin" sözü verir, ama ilişkisel database bir hata olursa bütün değişiklikleri geri alır (ROLLBACK) ve commit edilen değişikliği diske yazar. MULTI/EXEC geri almaz ve diske yazmayı garanti etmez. Bu yüzden "stok düşsün, sipariş yazılsın, ödeme açılsın; biri olmazsa hiçbiri olmasın" gibi bir kural bellek içi store'un işi değildir (bkz. <a href="/e2etutorial/aurora?lang=tr">Aurora tutorial'ı</a>).</p>
 {% endcall %}
 {% call k.ask("Komutlar tek sırada çalışıyorsa yavaş bir komut herkesi bekletmez mi?") %}
-<p>Bekletir. Bu yüzden komutların çoğu sabit sürelidir ve bütün key'leri gezen bir komut (örneğin <code>KEYS *</code>) üretimde kullanılmaz; yerine sayfa sayfa ilerleyen <code>SCAN</code> kullanılır. Büyük bir sorted set'in tamamını okumak ya da uzun bir Lua script'i de diğer istemcileri bekletir. Kural: her komut küçük bir iş yapsın.</p>
+<p>Bekletir. Bu yüzden komutların çoğu sabit sürelidir ve bütün key'leri gezen bir komut (örneğin <code>KEYS *</code>) üretimde kullanılmaz (ElastiCache Serverless'ta <code>KEYS</code> komutu hiç yoktur, <a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/SupportedCommands.html">Supported commands</a>); yerine sayfa sayfa ilerleyen <code>SCAN</code> kullanılır. Büyük bir sorted set'in tamamını okumak ya da uzun bir Lua script'i de diğer istemcileri bekletir. Kural: her komut küçük bir iş yapsın.</p>
 {% endcall %}
 {{ k.quiz("ec-q3", "Kampanya stoğu için DECR neden güvenlidir, ama GET ve sonra SET değildir?",
    ["DECR iki komuttan daha hızlıdır", "DECR değeri diske yazar", "DECR okuma ve yazmayı tek komutta yapar", "DECR key'i bir saniye kilitler"],
@@ -473,6 +473,7 @@
     <tr><td><b>Ö8</b> Cache desenleri</td><td class="y">✓ En yaygın kullanımı</td><td class="y">✓ Klasik cache; başka işi yok</td><td class="p">½ Yapılabilir, ama kalıcı log'un bedeli bir cache için gereksizdir; MemoryDB birincil database olarak tasarlanmıştır</td></tr>
   </tbody>
 </table>
+<p>MemoryDB sütunundaki ½'ler engine farkı değildir: MemoryDB aynı Valkey engine'ini çalıştırır; yazmanın milisaniye sürmesi log'dan, eviction'ın istenmemesi verinin bir database kaydı olmasından gelir. Bu yüzden M2'deki kartlarda MemoryDB'nin R1'i (engine uyumu) ElastiCache ile her zaman eşittir ve fark R2–R5'te görünür.</p>
 <p>Matris bir ürünün "iyi" ya da "kötü" olduğunu söylemez. Memcached'de Ö2, Ö5 ve Ö7 yoktur ve bu onu en basit cache yapar. MemoryDB'de Ö7 tamdır ve bunun bedeli yazma gecikmesi ve fiyattır. Soru her zaman şudur: iş yükü hangi özelliği istiyor ve veri kaybolursa ne olur?</p>
 {% call k.ask("MemoryDB her şeyi daha kalıcı yapıyorsa neden her zaman MemoryDB seçmiyoruz?") %}
 <p>Çünkü kalıcılığın bir bedeli var ve çoğu bellek içi iş yükü o bedeli geri almaz. MemoryDB'de her yazma log'a yazıldığı için tek haneli milisaniye sürer (ElastiCache'te mikrosaniye) ve MemoryDB node'lu bir cluster'dır: node tipini sen seçersin ve node'lar gece gündüz ödenir. Oturum, sayaç ve kopya gibi kaybı kabul edilen verilerde bu bedel bir şey kazandırmaz; M2'deki kartların çoğunda MemoryDB bu yüzden ikinci ya da üçüncüdür.</p>
@@ -489,18 +490,39 @@
 
 <p><b>Kısaca:</b> bellek içi store, aynı küçük veriyi saniyede binlerce kez okuyan ya da değiştiren iş yükleri içindir ve her isteği mikrosaniyelerde cevaplar. Bu hızı sadece verinin kaybını kabul edebiliyorsan ya da veriyi başka bir yerden yeniden kurabiliyorsan bedelsiz alırsın.</p>
 <p>Önemli kelime yine {{ k.term("access pattern") }}'dir: uygulamanın sorduğu bir soru, o anda bildiği değerlerle birlikte. Bellek içi store'da ikinci bir kelime de aynı ağırlıktadır: kaybın anlamı. "Bu kullanıcının oturumu" bir access pattern'dir ve kaybı yeni bir login'dir; "bu gecenin ödeme kilidi" de bir access pattern'dir ve kaybı çift ödemedir. İkisi aynı komutla (SET NX) yazılır, ama ikincisi bellek içi store'a ait değildir.</p>
-<p>Bu bölümdeki her karar aynı beş gereksinimle anlatılır. M2'deki kartlar ve M7'deki simülasyonlar aynı beş başlığı kullanır:</p>
+<p>Bu bölümdeki her karar aynı beş gereksinimle anlatılır. M2'deki kartlar ve M7'deki simülasyonlar aynı beş başlığı kullanır. Son sütun her gereksinimin cevabının nereden geldiğini söyler:</p>
 <table class="data">
   <caption>R1–R5: her iş yükünün beş gereksinimi</caption>
-  <thead><tr><th>No</th><th>Gereksinim</th><th>Sorusu</th></tr></thead>
+  <thead><tr><th>No</th><th>Gereksinim</th><th>Sorusu</th><th>Kaynağı</th></tr></thead>
   <tbody>
-    <tr><td><b>R1</b></td><td>Access pattern</td><td>Uygulama hangi soruları, elinde hangi değerlerle soruyor? Hangi kurallar yazma anında korunmalı?</td></tr>
-    <tr><td><b>R2</b></td><td>Ölçek ve trafik şekli</td><td>Saniyede kaç istek, ne kadar veri, trafik düz mü dalgalı mı, tepe anında ne kadar gecikme kabul edilir?</td></tr>
-    <tr><td><b>R3</b></td><td>Dayanıklılık</td><td>Bir arızada bu verinin kaybı ne demek: yeni bir login mi, çift çekilen bir kart mı?</td></tr>
-    <tr><td><b>R4</b></td><td>Operasyon ve ekip</td><td>Kim işletecek, ekip hangi API'ı biliyor, sunucu boyutlandırmak isteniyor mu?</td></tr>
-    <tr><td><b>R5</b></td><td>Maliyet modeli</td><td>İstek başına mı, saat başına mı, GB başına mı ödenir ve bu trafik şekline uyar mı?</td></tr>
+    <tr><td><b>R1</b></td><td>Engine uyumu: veri, erişim ve garanti modeli</td><td>İş yükünün verisi, soruları ve kuralları engine'in çalışma prensibine, algoritmasına ve sunduğu araçlara ne kadar uyuyor? Access pattern bu gereksinimin bir parçasıdır (R1 · EY).</td><td>engine'in doğası</td></tr>
+    <tr><td><b>R2</b></td><td>Ölçek ve trafik şekli</td><td>Saniyede kaç istek, ne kadar veri, trafik düz mü dalgalı mı, tepe anında ne kadar gecikme kabul edilir?</td><td>ikisi birlikte: engine'in ölçeklenme modeli ve servisin kapasite yönetimi</td></tr>
+    <tr><td><b>R3</b></td><td>Dayanıklılık</td><td>Bir arızada bu verinin kaybı ne demek: yeni bir login mi, 4 dakikalık boş bir tablo mu, çift ödenen bir gece mi?</td><td>üreticinin servis tasarımı</td></tr>
+    <tr><td><b>R4</b></td><td>Operasyon ve ekip</td><td>Kim işletecek, ekip hangi API'ı biliyor, node boyutlandırmak isteniyor mu, sistemde zaten çalışan bir cache ya da database var mı?</td><td>üreticinin servis tasarımı</td></tr>
+    <tr><td><b>R5</b></td><td>Maliyet modeli</td><td>İstek başına mı, saat başına mı, GB başına mı ödenir ve bu trafik şekline uyar mı?</td><td>üreticinin servis tasarımı</td></tr>
   </tbody>
 </table>
+{% call k.callout("why", "Neden R1 en ağır, R3–R5 neden daha hafif ama silinmez?") %}
+<p>R1'in cevabı platformdan bağımsızdır. R1 satırları yalnız engine'in kendisini puanlar; bir kırılım servisin paketlemesinden geliyorsa (kalıcı bir log, serverless olmaması, ECPU ya da node-saat fiyatı) R2–R5'e yazılır ve R1'de sayılmaz. Valkey'in komutları tek sırada çalıştırması, sorted set'in sırayı her yazmada koruması ve süre sonunu key başına tutması, engine hangi bulutta ya da hangi makinede çalışırsa çalışsın aynıdır. Bu yüzden bir iş yüküne hangi engine'in uyduğu en çok R1'de görünür.</p>
+<p>R3–R5'in cevabı ise büyük ölçüde üreticinin tasarım kararıdır. Aynı Valkey engine'ini AWS iki servisle sunar: ElastiCache Serverless'ta kalıcı bir log olmadan ve sunucusuz, MemoryDB'de çoklu AZ'li bir transaction log'u ile ve yalnız node'lu cluster olarak. AWS bu ikisini tek serviste birleştirebilir ya da yalnız birini çıkarabilirdi. Bu yüzden R3–R5 çoğu kartta R1'den hafiftir; ağırlığı yine de her kartta iş yükünün önceliği belirler. Dayanıklılık bir iş kuralıysa R3 tek başına R1'in her alt maddesinden ağır olabilir (kart 7'de R3 30'dur); R1 grup olarak yine en ağırdır. R3–R5 hiçbir kartta silinmez: ElastiCache ile MemoryDB arasındaki seçim tam olarak bu satırlarda yapılır. Bu sayfanın yedi kartında MemoryDB adaydır; hepsinde R1'i ElastiCache ile aynıdır ve kararı R2–R5 verir.</p>
+{% endcall %}
+<p>R1 tek bir puan değildir. Bir iş yükünde engine'e sorulan birkaç soru vardır ve her kart bu soruları aşağıdaki sabit katalogdan seçer: katalog üç ile beş arası alt maddeye izin verir; bu sayfanın kartlarında üç ya da dört alt madde vardır. Kartta alt maddeler sırayla numaralanır ve katalog kodunu taşır, örneğin "R1.1 · OY Okuma/yazma şekli". Katalog bütün database sayfalarında aynıdır; böylece bu sayfanın kartlarını DynamoDB ve Aurora sayfalarının kartlarıyla aynı dille karşılaştırabilirsin.</p>
+<table class="data">
+  <caption>R1 kataloğu: Engine uyumunun sekiz alt maddesi (database'ler için)</caption>
+  <thead><tr><th>Kod</th><th>Alt madde</th><th>Ne sorar</th><th>ElastiCache'te (Valkey) örnek</th></tr></thead>
+  <tbody>
+    <tr><td><b>VM</b></td><td>Veri modeli ve value tipi</td><td>Value'nun yapısı ne: structured, semi-structured, iç içe, blob, graph, zaman serisi? Bir value ne kadar büyük?</td><td>Value bir data type'tır: string, hash, list, set, sorted set, stream, konum index'i, HyperLogLog; iç içe yapı yoktur; bir string en fazla 512 MB (A2, A3)</td></tr>
+    <tr><td><b>ŞE</b></td><td>Şema elverişliliği</td><td>Şema yazarken mi okurken mi uygulanır? Alanlar kayıttan kayda değişebilir mi, şema nasıl evrilir?</td><td>Şema yoktur: bir hash'in field'ları key'den key'e değişir, store değerleri doğrulamaz; doğrulama uygulamanındır (A2)</td></tr>
+    <tr><td><b>EY</b></td><td>Erişim yolu</td><td>Soru hangi değerle sorulur: key, aralık, ikincil alan, join ve toplam, metin, coğrafya, ilişki, zaman penceresi?</td><td>Tek parçalı key; yapının içinde score aralığı, sıra (ZREVRANK) ve yarıçap araması (GEOSEARCH); value'nun içine göre arama ve JOIN yok (Ö1, Ö2)</td></tr>
+    <tr><td><b>OY</b></td><td>Okuma/yazma şekli</td><td>Hacim değil, işlemin biçimi: yerinde güncelleme mi, ekleme mi, oku-değiştir-yaz mı, sayaç mı, toplu yazma mı?</td><td>INCR, HINCRBY, ZINCRBY okumadan değiştirir; GETEX okur ve süreyi aynı komutta yeniler; pipeline (komutları cevap beklemeden art arda göndermek) toplu yazar (A5, B5)</td></tr>
+    <tr><td><b>TA</b></td><td>Tutarlılık ve atomiklik</td><td>Engine hangi garantileri verir: okuma tutarlılığı, koşullu yazma, transaction kapsamı, izolasyon?</td><td>Tek komut atomiktir (SET NX); MULTI/EXEC ve Lua araya komut sokmaz ama geri almaz; replica'dan okuma eventually consistent (Ö3, A9)</td></tr>
+    <tr><td><b>DA</b></td><td>Depolama algoritması</td><td>Engine'in çalışma algoritması bu erişime uyuyor mu: bellek içi hash, B-tree, LSM, columnar, inverted index?</td><td>Bütün veri bellekteki bir hash table'da; sorted set sırayı yazma anında korur; komut mikrosaniyeler (Ö1)</td></tr>
+    <tr><td><b>YD</b></td><td>Veri yaşam döngüsü</td><td>Veri nasıl sona erer, değişikliği nasıl dışarı yayılır: TTL, sürüm, değişiklik akışı?</td><td>EXPIRE key başına, milisaniye hassasiyetle; member ya da field başına süre yok (Valkey 8.1); eviction politikası; değişiklik akışı yerine Pub/Sub ve stream (Ö4, Ö5)</td></tr>
+    <tr><td><b>AO</b></td><td>Ayar ve optimizasyon araçları</td><td>Engine geliştiriciye hangi sıkılaştırma araçlarını verir: index tipleri, projection, sparse index, sıkıştırma, script?</td><td>Lua script'i, hash tag ile aynı slot, pipeline; ikinci index ve kuyruk araçları (görünürlük süresi, dead-letter) yok (Ö3, Ö6)</td></tr>
+  </tbody>
+</table>
+<p>Her kartta her satırın bir <b>ağırlığı</b> vardır ve ağırlıkların toplamı 100'dür. Ağırlık puanlardan önce, iş yükünün önceliğinden belirlenir ve kartta tek cümlelik nedeniyle yazılır. Çoğu kartta R1 en ağır gereksinimdir; R2–R5'in her biri en az 5 alır. Bir aday her satırda 0–10 puan alır ve katkısı puan × ağırlık / 10'dur. Zorunlu satır ve eleme yoktur: bir iş yükünün önceliği olan satırda zayıf kalan aday, toplamda kendiliğinden geride kalır. Puan ile ağırlığın işi ayrıdır: <b>puan</b> satırdaki "ne istiyoruz" cümlesinin ne kadar karşılandığını ölçer, <b>ağırlık</b> o satırın bu iş yükü için ne kadar önemli olduğunu. Bir eksik yalnız bir satırda sayılır: gecikme verinin diskte durmasından geliyorsa R1 · DA'da, MemoryDB'nin her yazmayı log'a işlemesinden geliyorsa R2'de; node tipi ve shard sayısı seçmek R4'tür, tepeyi karşılamak R2. Fiyat yalnız R5'tedir. Kartların gerekçelerinde puan kaybına kısaca "kırılım" denir: "3 puan kırıldı" o satırda 10'dan 3 puan düşüldüğü demektir.</p>
+<p>ElastiCache'in R3 puanı tek bir kurala uyar. Verinin o anki tek yeri bellekse (oturum, sayaç, sıralama, öneri listesi, konum) ve kartın R3 satırı kaybı kabul ediyorsa ElastiCache Serverless 4 alır: Serverless'ta kalıcı log yoktur, kayıp olur ama iş yükü onu taşır. Satır "hiçbir arızada kaybolmamalı" diyorsa 1 alır (kart 7). Bellekteki veri yalnız bir kopyaysa ve her değeri o anda başka bir yerde tam olarak varsa (kart 4) ya da bellekte hiç veri saklanmıyorsa (kart 6, Pub/Sub) kaybolan bir şey yoktur; o kartlarda puan yalnız soğuk cache ya da kopan bağlantılar için kırılır (7 ve 8).</p>
 
 <h2 id="signals" data-short="Ö1–Ö8: sinyal ve sınır"><span class="sec">M1</span>Bellek içi store'un sekiz özelliği: hangi sinyal çağırır, sınırı nedir</h2>
 <p>Bu tablo M2'deki kartların referansıdır. Bir kart "Ö3 ile çözer" dediğinde buraya dönersin. Her satır A10'daki özelliği iş yükündeki sinyaliyle ve sınırıyla, yani yapamadığı şeyle birleştirir. Sınırlar, alternatiflerin neden bazen daha iyi olduğunu da açıklar.</p>
@@ -592,38 +614,49 @@
   </tbody>
 </table>
 
-<h2 id="usecases" data-short="Use case'ler, alternatifleriyle"><span class="sec">M2</span>Use case'ler: neden bellek içi store, en yakın alternatif neyi karşılar, yine de seçersek ne olur</h2>
-<p>Her kart bir iş yükünü anlatır ve beş parçadan oluşur. (1) <b>Gerçek projede:</b> iş yükü kim için, hangi ekranda, hangi sayılarla. (2) <b>Gereksinimler R1–R5:</b> her biri için "ne istiyoruz" (sayılı) ve "neden önemli, karşılanmazsa ne olur". (3) <b>Puan tablosu:</b> seçilen servis (ElastiCache) ve en yakın iki alternatif, her gereksinimde 10 üzerinden. (4) <b>Her adayın gerekçesi:</b> gereksinim gereksinim nasıl karşıladığı (A10'daki Ö-numarasıyla), kaç puan aldığı ve puanın neden kırıldığı; her alternatif için uzun bir <b>kafa kafaya</b> paragrafı: nerede ayrışır, bu iş yükünde neden seçilmedi, hangi koşul değişseydi o seçilirdi. (5) <b>Karar:</b> toplamın okunuşu ve "yine de ElastiCache seçersek" artı ve eksilerimiz. Simülasyonu olan beş kart M7'de aynı puanlarla adım adım oynar. Başlığa tıklayarak kartı aç.</p>
-<p>Ölçek hakkında bir not: zorunlu bir gereksinimde 0 ya da 1, adayın o gereksinimi hiç karşılayamadığı demektir (kart 7'de ElastiCache'in kilidi). Bir gecikme sınırını aşan ama iş yükünü taşıyan aday 5–7 alır: sınır aşılır, iş durmaz. Bu yüzden diskalifiye seyrektir ve karar, toplamla birlikte "karar veren gereksinim" cümlesiyle okunur.</p>
-<p>On kartın ikisinde ElastiCache kazanmaz: kart 7'de (ödeme kilidi) net kaybeder, kart 9'da (öneri listeleri) bir puanla kaybeder ve doğru cevap "ikisi birlikte"dir. Kart 4'te (ürün sayfası) ElastiCache kazanır ama Aurora'nın yerine değil önüne konur.</p>
+<h2 id="usecases" data-short="Use case'ler, alternatifleriyle"><span class="sec">M2</span>Use case'ler: hangi servis en uygun, ElastiCache nerede kazanır, nerede kaybeder</h2>
+<p>Her kart bir iş yükünü anlatır ve altı parçadan oluşur. (1) <b>Bu iş yüküne en uygun servis:</b> kartın en üstünde, ağırlıklı toplamı en yüksek olan aday durur. Bu aday ElastiCache olmayabilir; ElastiCache her kartta tabloda kalır ve "bu sayfanın servisi" işaretini taşır. Kartlardaki ElastiCache adayı Lale Market'in kullandığı ElastiCache Serverless'tır (Valkey); node'lu bir cluster'ın farkı gereken kartlarda kafa kafaya paragrafında yazılıdır. (2) <b>Gerçek projede:</b> iş yükü kim için, hangi ekranda, hangi sayılarla. (3) <b>Gereksinimler ve ağırlıklar:</b> R1'in alt maddeleri (R1.1, R1.2, …) ve R2–R5; her satırda ağırlık ve nedeni, "ne istiyoruz" ve "neden önemli, karşılanmazsa ne olur". (4) <b>Puan tablosu:</b> bu iş yüküne gerçekten uyan üç servis; her hücrede 10 üzerinden puan ve ağırlıklı katkı, R1'in toplamı ve 100 üzerinden toplam. (5) <b>Her adayın gerekçesi:</b> satır satır nasıl karşıladığı (ElastiCache için A10'daki Ö-numarasıyla), kaç puan aldığı ve puanın neden kırıldığı; en uygun servisin dışındaki her aday için uzun bir <b>kafa kafaya</b> paragrafı: nerede ayrışır, bu iş yükünde neden geride kalır, hangi koşul değişseydi o seçilirdi. (6) <b>Karar:</b> toplamların okunuşu ve "ElastiCache seçersek" artı ve eksilerimiz. Simülasyonu olan beş kart M7'de aynı puanlarla adım adım oynar. Başlığa tıklayarak kartı aç.</p>
 <table class="data">
-  <caption>puan ölçeği: her kartta aynı</caption>
+  <caption>puan ölçeği: her satırda ve her kartta aynı</caption>
   <thead><tr><th>Puan</th><th>Anlamı</th></tr></thead>
   <tbody>
-    <tr><td class="y">10</td><td>Gereksinimi doğrudan, ek iş olmadan ve sayıları aşarak karşılar.</td></tr>
+    <tr><td class="y">10</td><td>Satırı doğrudan, ek iş olmadan ve sayıları aşarak karşılar.</td></tr>
     <tr><td class="y">8–9</td><td>Karşılar; küçük bir ek iş ya da küçük bir maliyet vardır.</td></tr>
-    <tr><td class="p">5–7</td><td>Karşılar, ama uygulama tarafında belirgin ek iş, boyutlandırma ya da bir sınırla.</td></tr>
-    <tr><td class="p">2–4</td><td>Kısmen: gereksinimin bir parçası karşılanmaz ya da ciddi bir bedelle karşılanır.</td></tr>
-    <tr><td class="n">0–1</td><td>Karşılamaz. Zorunlu bir gereksinimde 0 ya da 1 alan aday diskalifiye olur ama tabloda kalır.</td></tr>
+    <tr><td class="p">4–7</td><td>Karşılar, ama uygulama tarafında belirgin ek iş, boyutlandırma ya da bir sınırla.</td></tr>
+    <tr><td class="n">0–3</td><td>Kısmen ya da hiç: satırın bir parçası karşılanmaz ya da ciddi bir bedelle karşılanır.</td></tr>
   </tbody>
 </table>
+<p>Kartlar ElastiCache'in servis terimlerini ve alternatiflerin terimlerini Bölüm B ve C'den önce kullanır. Kısa anlamları bu tablodadır; alternatiflerin ayrıntısı kendi tutorial'larındadır.</p>
 <table class="data">
-  <caption>kartlarda geçen ve başka sayfalarda tanımlanan terimler</caption>
-  <thead><tr><th>Terim</th><th>Ne demek</th><th>Nerede</th></tr></thead>
+  <caption>kartlarda geçen servis terimleri (ayrıntısı Bölüm B, Bölüm C ve M5'te)</caption>
+  <thead><tr><th>Terim</th><th>Ne demek</th></tr></thead>
   <tbody>
-    <tr><td>ECPU, GB-saat</td><td>ElastiCache Serverless'ın iki fatura birimi: istekler (yaklaşık her KB için 1 ECPU) ve saatlik ortalama saklanan veri</td><td>B9</td></tr>
-    <tr><td>MemoryDB</td><td>Valkey uyumlu, her yazmayı Multi-AZ transaction log'una yazan bellek içi database; node'lu bir cluster</td><td>A9, M5</td></tr>
-    <tr><td>GetItem, PutItem, UpdateItem, ADD, ConditionExpression, attribute_not_exists</td><td>DynamoDB'nin key ile okuma, yazma, kısmi değiştirme, atomik artırma ve koşullu yazma işlemleri</td><td><a href="/e2etutorial/dynamodb?lang=tr">DynamoDB tutorial'ı</a> B2, B3</td></tr>
-    <tr><td>GSI, TTL (DynamoDB), Streams, on-demand, DAX</td><td>DynamoDB'nin ikinci index'i, arka planda (genellikle birkaç gün içinde) silen süre sonu, değişiklik akışı, istek başına ödeme ve önündeki bellek içi cache</td><td><a href="/e2etutorial/dynamodb?lang=tr">DynamoDB tutorial'ı</a> B4, B5, M5</td></tr>
-    <tr><td>Global table</td><td>DynamoDB'nin birkaç AWS Region'ında okuma ve yazma alan kopyaları. ElastiCache'in node'lu karşılığı Global Datastore'dur: bir Region'da yazma, en fazla iki başka Region'da okuma; Serverless'ta yoktur.</td><td><a href="/e2etutorial/dynamodb?lang=tr">DynamoDB tutorial'ı</a> M5</td></tr>
-    <tr><td>Engine App, Admin Console, Seed, Live leaderboard</td><td>Lale Market workshop'unun parçaları: her database'e bağlanan uygulama, yönetim ekranı, verileri baştan kuran iş ve sıralamayı gösteren sayfa</td><td>M6, C3</td></tr>
-    <tr><td>Reader instance, ACU, vacuum, PostGIS, JSONB</td><td>Aurora'nın okuma kopyası, kapasite birimi, eski row versiyonlarının temizliği, coğrafi eklentisi ve JSON column'u</td><td><a href="/e2etutorial/aurora?lang=tr">Aurora tutorial'ı</a></td></tr>
-    <tr><td>Point, pencere toplamı, Flux / InfluxQL</td><td>Timestream for InfluxDB'nin zamanlı ölçümü ve sorguları</td><td><a href="/e2etutorial/influxdb?lang=tr">Timestream for InfluxDB tutorial'ı</a></td></tr>
-    <tr><td>geo_point, refresh, mapping</td><td>OpenSearch'ün konum alanı, yeni dokümanların aranabilir olduğu an ve alan tanımı</td><td><a href="/e2etutorial/opensearch?lang=tr">OpenSearch tutorial'ı</a></td></tr>
+    <tr><td>Serverless ve node'lu cluster</td><td>ElastiCache'in iki biçimi. Serverless'ta node seçilmez; servis belleği ve trafiği izleyip kendisi büyür. Node'lu cluster'da node tipini, shard ve replica sayısını sen seçersin ve node saat başına ödenir (M5, C2).</td></tr>
+    <tr><td>ECPU, GB-saat, minimum ECPU</td><td>Serverless'ın iki fatura birimi: istekler (basit bir komut aktarılan her KB için yaklaşık 1 ECPU) ve saatlik ortalama saklanan veri; Valkey'de en az 100 MB faturalanır. Boş bir cache saniyede 30.000 ECPU ile başlar ve kapasitesini 2-3 dakikada iki katına çıkarabilir; daha hızlı bir sıçrama için tepeden önce bir minimum ECPU ayarlanır (B9).</td></tr>
+    <tr><td>MemoryDB, transaction log</td><td>ElastiCache ile aynı Valkey engine'ini çalıştıran, her yazmayı onaylamadan önce çoklu AZ'li bir log'a işleyen bellek içi database. Okuma mikrosaniye, yazma tek haneli milisaniyedir; serverless seçeneği yoktur, node'lu bir cluster'dır (A9, M5).</td></tr>
+    <tr><td>GETEX, ZREVRANK, GEOSEARCH, SPUBLISH, EVAL, pipeline</td><td>Valkey komutları: oku ve süreyi aynı komutta yenile; bir member'ın sırası (en yüksek score 0'dır); bir noktaya yarıçap içindeki member'lar; sharded Pub/Sub ile yalnız bir shard'da yayın; bir Lua script'i çalıştır; birkaç komutu cevap beklemeden art arda gönder (B2–B7).</td></tr>
+    <tr><td>XADD, XREADGROUP, XACK, XPENDING, XAUTOCLAIM</td><td>Stream ve consumer group komutları (A8, B7): mesaj ekle; gruptan bir okuyucu olarak bekleyerek oku; işlendiğini onayla; onaylanmamış mesajları ve kaç kez teslim edildiklerini listele; belirli bir süreden uzun bekleyen onaylanmamış mesajları başka bir okuyucuya devret.</td></tr>
+    <tr><td>Seed, Admin Console</td><td>Lale Market workshop'unun yönetim ekranı ve verileri baştan kuran işi; sıralamayı Aurora'daki siparişlerden yeniden hesaplar (C3).</td></tr>
+    <tr><td>DynamoDB: GetItem, PutItem, UpdateItem ADD, koşullu yazma, item, TTL, ikinci index (GSI), değişiklik akışı, on-demand, okuma ve yazma birimi, DAX</td><td>Key ile okuma ve yazma; okumadan artırma; "şu koşul doğruysa yaz" (başarısız olursa ConditionalCheckFailedException); DynamoDB'de bir value'nun adı; arka planda, genellikle birkaç gün içinde silen süre sonu; farklı key'li ikinci kopya; her yazmayı 24 saat dışarı veren akış; istek başına ödeme; ölçü birimleri (bir partition saniyede yaklaşık 3.000 okuma ve 1.000 yazma birimi için tasarlanmıştır); DynamoDB'nin önündeki bellek içi cache (<a href="/e2etutorial/dynamodb?lang=tr">DynamoDB tutorial'ı</a>).</td></tr>
+    <tr><td>Aurora: writer ve reader, ACU, MVCC ve VACUUM, PostGIS, ST_DWithin, GiST</td><td>Bütün yazmaları alan tek instance ve okuma kopyaları; Serverless v2'nin kapasite birimi; PostgreSQL'in her UPDATE'te row'un yeni sürümünü yazması ve eski sürümleri temizleyen bakım işi; coğrafi extension, "şu mesafe içinde" fonksiyonu ve coğrafi index türü (<a href="/e2etutorial/aurora?lang=tr">Aurora tutorial'ı</a>).</td></tr>
+    <tr><td>Amazon SNS: topic, abonelik</td><td>AWS'in yönetilen yayın-abone servisi: bir topic'e yayınlanan mesaj, topic'e abone olan her endpoint'e (örneğin bir sunucunun HTTPS adresi ya da bir SQS kuyruğu) teslim edilir; mesajlar birden fazla veri merkezinde saklanır ve teslim yeniden denenir. Bu workshop'ta kendi sayfası yoktur; kart 6 onu karşılaştırır.</td></tr>
+    <tr><td>Amazon SQS: standard queue, visibility timeout, long polling, dead-letter queue, maxReceiveCount</td><td>AWS'in yönetilen mesaj kuyruğu. Standard queue mesajı en az bir kez teslim eder (seyrek olarak iki kez). Alınan mesaj bir süre (visibility timeout) diğer okuyuculardan gizlenir; silinmezse kuyruğa döner. Long polling boş kuyrukta 20 saniyeye kadar bekler. Bir mesaj maxReceiveCount kez alınıp işlenmezse ayrı bir kuyruğa (dead-letter queue) taşınır. SQS'in bu workshop'ta kendi sayfası yoktur; bu sayfanın kart 8'i ve M3'ü onu karşılaştırır.</td></tr>
+    <tr><td>Timestream for InfluxDB: point, tag, cardinality, retention, downsampling, Flux / InfluxQL</td><td>Zamanlı tek bir ölçüm; ölçümü gruplayan etiket; farklı etiket değerlerinin (serilerin) sayısı; eski verinin kendiliğinden silinme süresi; eski veriyi özetlere indirmek; sorgu dilleri (<a href="/e2etutorial/influxdb?lang=tr">Timestream for InfluxDB tutorial'ı</a>).</td></tr>
+    <tr><td>OpenSearch: geo_distance, refresh, segment, data node, mapping</td><td>Mesafe filtresi; yeni yazmanın aramada görünür olduğu periyot (varsayılan 1 saniye); index'in diskteki parçaları; veriyi tutan node'lar; alanların type tanımı (<a href="/e2etutorial/opensearch?lang=tr">OpenSearch tutorial'ı</a>).</td></tr>
   </tbody>
 </table>
-{% for uc in usecases %}{{ k.usecase(uc) }}
+<p>Toplam 100 üzerindendir: her hücrenin katkısı puan × ağırlık / 10'dur. İlk iki aday arasındaki fark 5 puan ya da daha azsa kart "yakın yarış" işaretini taşır; bu bir bilgidir, karar yine toplamdır.</p>
+{% for uc in usecases %}{{ k.wusecase(uc) }}
 {% endfor %}
+<table class="data">
+  <caption>on kartın özeti: en uygun servis, ikinciyle farkı ve ElastiCache'in yeri</caption>
+  <thead><tr><th>Kart</th><th>En uygun servis</th><th class="num">Fark</th><th>ElastiCache</th></tr></thead>
+  <tbody>{% for uc in usecases %}
+    <tr><td><a href="#uc-{{ uc.id }}">{{ uc.no }}. {{ uc.title }}</a></td><td>{{ uc.best.name }} ({{ uc.best.total }}){% if uc.race %} · yakın yarış{% endif %}</td><td class="num">{{ uc.gap }}</td>
+      <td>{% for c in uc.cands %}{% if c.page %}{{ loop.index }}. sıra, {{ c.total }}{% endif %}{% endfor %}</td></tr>{% endfor %}
+  </tbody>
+</table>
+<p>Özetin okunuşu: ElastiCache, verisi küçük ve sıcak olan, her isteğin önünde duran ve kaybı kabul edilen ya da başka yerden yeniden kurulabilen iş yüklerinde öndedir: oturum, sayaç, kopya, bildirim, öneri, konum (kart 1, 3–6, 9, 10). Bu kartların çoğunda ikizi MemoryDB R1'de onunla eşittir; ElastiCache'i öne geçiren servis tasarımıdır: sunucusuz işletim ve kullanım kadar ödeme. Üç kartta ElastiCache kaybeder. Kart 2'de (liderlik tablosu) ikizi MemoryDB tek puanla kazanır: tablo küçüktür, iki küçük node'un faturası Serverless'a yakındır ve log 4 dakikalık boş vitrini önler; bu sayfanın en yakın yarışıdır. Kart 7'de (ödeme kilidi) kararı R3 verir: atomik olmak kalıcı olmak değildir ve kalıcı koşullu yazmasıyla DynamoDB kazanır. Kart 8'de (iş kuyruğu) farkın büyük kısmı R1'dedir: görünürlük süresi ve dead-letter queue bir kuyruğun araçlarıdır; Valkey'in stream'i teslim sayısını tutar ama geri vermeyi ve ayırmayı uygulama yazar; SQS kazanır. Dört kartın doğru mimarisi "ikisi birlikte"dir: ürün sayfasında ElastiCache Aurora'nın önündedir, onun yerinde değil (kart 4); canlı sayaçlar ElastiCache'te, saatlik geçmiş Redshift'tedir (kart 5); kayıt Aurora'da, bildirim ElastiCache'tedir (kart 6); konum aramasında engine uyumunu Aurora'nın PostGIS'i kazanır, canlı konumlar ise checkout'un writer'ından uzakta, ElastiCache'te durur (kart 10). Kart 1, 3 ve 9, DynamoDB sayfasındaki oturum, rate limit ve öneri kartlarıyla aynı iş yükleridir ve aynı puanları taşır.</p>
 
 <h2 id="away" data-short="Uzaklaştıran sinyaller"><span class="sec">M3</span>Bellek içi store'dan uzaklaştıran sinyaller</h2>
 <table class="data">
@@ -634,7 +667,7 @@
     <tr><td>Büyük ve nadiren okunan veri (yıllık geçmiş, dosyalar)</td><td>Bellek GB başına çok pahalıdır ve her GB her saat ödenir.</td><td><a href="/e2etutorial/s3?lang=tr">S3</a> ya da disk tabanlı bir database</td></tr>
     <tr><td>Her column'da değişen sorular, JOIN, GROUP BY</td><td>Store key ile bulur; genel bir sorgu dili yoktur.</td><td><a href="/e2etutorial/aurora?lang=tr">İlişkisel database (Aurora)</a></td></tr>
     <tr><td>Metinle, yazım hatasıyla ve relevance ile arama</td><td>Key ile bulma metni sıralamaz.</td><td><a href="/e2etutorial/opensearch?lang=tr">Search engine (OpenSearch)</a></td></tr>
-    <tr><td>Kaybı kabul edilmeyen mesajlar ve iş akışları</td><td>Pub/Sub at-most-once'tır; list ve stream kalıcı log olmadan arızada kaybolabilir; yeniden deneme ve bozuk mesaj kuyruğu elle yazılır.</td><td>Yönetilen kuyruk (Amazon SQS) ya da akış servisi (Kinesis, MSK)</td></tr>
+    <tr><td>Kaybı kabul edilmeyen mesajlar ve iş akışları</td><td>Pub/Sub at-most-once'tır; list ve stream kalıcı log olmadan arızada kaybolabilir; yeniden deneme ve bozuk mesaj kuyruğu elle yazılır (M2 kart 8).</td><td>Yönetilen kuyruk (Amazon SQS) ya da akış servisi (Kinesis, MSK)</td></tr>
     <tr><td>Aylar ve yıllar üzerinde rapor</td><td>Bellek şimdiyi tutar, geçmişi değil.</td><td><a href="/e2etutorial/redshift?lang=tr">Data warehouse (Redshift)</a></td></tr>
   </tbody>
 </table>
@@ -672,6 +705,7 @@
     <tr><td>Serverless ya da node'lu</td><td>Serverless'ta kapasite ve shard servisindir; node'luda senindir. Valkey'in Serverless'ta en düşük faturalanan veri miktarı 100 MB'tır.</td><td>Trafik dalgalıysa ya da ekip sunucu istemiyorsa Serverless; düz ve büyük yükte ya da parametre ayarı gerekiyorsa node'lu.</td></tr>
     <tr><td>Okuma replica'lardan (Serverless'ta 6380 portu)</td><td>Daha düşük gecikmeli, eventually consistent okuma.</td><td>Okuma ağırlıklı ve az önceki yazmayı görmek zorunda olmayan okumalar.</td></tr>
     <tr><td>Kullanım sınırları ve önceden ölçeklendirme</td><td>Üst sınır faturayı korur (sınırda veri silinir ya da yazma reddedilir); alt sınır kapasiteyi önceden hazırlar ve AWS'e göre 60 dakika içinde hazır olur.</td><td>Bir kampanya ya da lansman öncesi; ve beklenmedik bir faturaya karşı.</td></tr>
+    <tr><td>Global Datastore</td><td>Node'lu bir cluster'ın başka Region'lardaki okuma kopyaları: bir Region'da yazma, en fazla iki başka Region'da okuma; AWS'e göre kopyalama gecikmesi "typically under 1 second" ve bir Region bozulursa ikinci bir Region bir dakikanın altında primary olabilir (<a href="https://aws.amazon.com/elasticache/features/">ElastiCache features</a>). AWS bu özelliği node'lu cluster'lar için anlatır; Lale Market'in Serverless cache'i tek Region'dadır.</td><td>Kullanıcılar birkaç Region'dayken düşük gecikmeli okuma ya da Region kaybına karşı bir yedek gerektiğinde.</td></tr>
     <tr><td>Snapshot (yedek)</td><td>Cache'in bir anlık kopyasını S3'e yazar; geri yükleme yeni bir cache kurar. Günlük otomatik snapshot ve en fazla 35 gün saklama.</td><td>Yeniden kurulması uzun süren veri (büyük sıralamalar) için; saniye düzeyinde geri dönüş vermez.</td></tr>
   </tbody>
 </table>
@@ -686,24 +720,24 @@
 </ul>
 
 <h2 id="decide" data-short="Karar simülasyonları"><span class="sec">M7</span>Karar simülasyonları: M2'nin beş kartı adım adım</h2>
-<p>Her simülasyon M2'deki bir kartın verisini kullanır: aynı iş yükü, aynı R1–R5, aynı üç aday, aynı 10'luk puanlar ve aynı gerekçeler. Fark şudur: simülasyon gereksinimleri teker teker açar ve puan tablosu adım adım dolar; sonunda kazananı, ikinciyi ve kartın karar paragrafını görürsün. Oynat'a basmadan önce kartı okuyup kazananı tahmin et.</p>
-<p>Beş simülasyonun biri net bir kazanma (rate limit), biri net bir kaybetme (ödeme kilidi, DynamoDB kazanır), üçü yakın yarıştır (oturum, liderlik tablosu, öneri listesi). Üçüncü yarışı ElastiCache bir puanla kaybeder: yakın yarış her zaman seçilen servisin kazandığı yarış değildir.</p>
-{{ k.sim("win_rate", "Kart 3: rate limit sayaçları (net bir kazanma)") }}
-{{ k.sim("lose_lock", "Kart 7: satıcı ödemesinin kilidi (net bir kaybetme: DynamoDB kazanır)") }}
-{{ k.sim("race_session", "Kart 1: oturumlar, ElastiCache mi DynamoDB mi? (yakın yarış)") }}
-{{ k.sim("race_board", "Kart 2: liderlik tablosu, ElastiCache mi MemoryDB mi? (yakın yarış)") }}
-{{ k.sim("race_reco", "Kart 9: öneri listeleri, ElastiCache mi DynamoDB mi? (yakın yarış, ikisi birlikte)") }}
+<p>Her simülasyon M2'deki bir kartın verisini birebir kullanır: aynı iş yükü, aynı satırlar ve ağırlıklar, aynı üç aday, aynı puanlar ve aynı gerekçeler. Fark şudur: simülasyon her adımda bir satır açar. Önce satırın ağırlığını ve nedenini, sonra her adayın puanını ve ağırlıklı katkısını görürsün; puan tablosu ve toplamlar adım adım dolar. Sonunda en uygun servisi, ikinciyi, aradaki farkı ve kartın karar paragrafını görürsün. Oynat'a basmadan önce kartı okuyup sonucu tahmin et.</p>
+<p>Beş simülasyon öğrettikleri şeye göre seçildi. Liderlik tablosunda Valkey engine'inin özellikleri iş yükünün kendisidir: iki Valkey servisi R1'de DynamoDB'nin 18,5 puan önündedir; aralarındaki yarışı ise servis tasarımı verir ve MemoryDB log'u ve küçük faturası sayesinde tek puanla kazanır (yakın yarış). Oturumda iki Valkey servisi R1'de 55'te 55 ile eşittir ve kararı yalnız servis tasarımı verir. Konum aramasında engine uyumunu Aurora 44'e 41 kazanır, toplamı ElastiCache R2 sayesinde alır. İş kuyruğunda ElastiCache ikincidir ve kaybın nedeni R1'dedir: SQS kuyruğun araçlarını engine'inde taşır. Ödeme kilidinde ElastiCache üçüncüdür: R1'de öndedir, ama R3 tek başına kararı verir. Simülasyonun puan tablosunda "R1 ara toplam" sütunu R1.1–R1.n katkılarının toplamını gösterir.</p>
+{{ k.sim("w_board", "Kart 2: canlı liderlik tablosu, MemoryDB mi ElastiCache mi? (yakın yarış, MemoryDB en uygun)") }}
+{{ k.sim("w_session", "Kart 1: oturumlar, ElastiCache ve MemoryDB (R1 eşit, kararı servis verir)") }}
+{{ k.sim("w_geo", "Kart 10: yakındaki kuryeler (R1'i Aurora kazanır, toplamı ElastiCache)") }}
+{{ k.sim("w_queue", "Kart 8: iş kuyruğu (SQS en uygun, ElastiCache ikinci)") }}
+{{ k.sim("w_lock", "Kart 7: satıcı ödemesinin kilidi (DynamoDB en uygun, ElastiCache net kaybeder)") }}
 <p>Her kararın son cümlesine bak: "Bir koşul değişseydi". İyi bir mimar bu cümleyi karar kaydına yazar. Koşul daha sonra değişirse ekip kararın yeniden kontrol edilmesi gerektiğini bilir. Bellek içi store'da bu koşul çoğunlukla aynıdır: "verinin kaybı kabul edilmeseydi".</p>
 
 {{ k.quiz("ec-a1", "Bir online mağaza son bir saatin en çok satan 20 ürününü ana sayfada göstermek istiyor. Sayfa dakikada 3.000 kez açılıyor ve sayılar siparişlerden yeniden hesaplanabiliyor. Ne en iyi oturur ve hangi koşul cevabı değiştirir?",
-   ["ZINCRBY ile güncellenen bir ElastiCache sorted set'i. Sayılar başka hiçbir yerde olmasaydı MemoryDB seçilirdi.", "Her görüntülemede siparişler üzerinde GROUP BY. Sipariş azsa DynamoDB seçilirdi.", "Her gece çalışan bir Redshift raporu. Sayfa az açılsaydı S3 seçilirdi.", "Her görüntülemede sipariş table'ının Scan'i. Ürün azsa Memcached seçilirdi."],
-   0, "Sıra sürekli değişir ve her görüntüleme onu hemen ister; sorted set sırayı yazma anında korur. Sayılar siparişlerden yeniden kurulabildiği için kayıp kabul edilir; tek kayıt olsalardı kalıcı log gerekirdi.") }}
-{{ k.quiz("ec-a2", "Bir bilet sitesi koltuk tutmalarını 10 dakikalık SET NX EX ile ElastiCache'te tutmak istiyor; tutma kaybolursa aynı koltuk iki kişiye satılabilir. Ne dersin?",
-   ["Uygun, SET NX atomik olduğu için kayıp olmaz", "Atomik olmak kalıcı olmak değildir: failover'da tutma kaybolabilir, kalıcı bir koşullu yazma (DynamoDB) ya da MemoryDB gerekir", "Uygun, sadece TTL'i kısaltmak yeter", "Uygun değil, ElastiCache SET NX desteklemez"],
-   1, "Kural doğru ama kayıp penceresi vardır: primary OK deyip replica'ya kopyalamadan düşerse tutma yeni primary'de yoktur. Kaybı çift satış olan bir tutma kalıcı bir store ister (kart 7 ile aynı ders).") }}
+   ["ZINCRBY ile güncellenen bir Valkey sorted set'i. ElastiCache ile MemoryDB arasında kaybın bedeli ve işletim karar verir.", "Her görüntülemede siparişler üzerinde GROUP BY. Sipariş azsa DynamoDB seçilirdi.", "Her gece çalışan bir Redshift raporu. Sayfa az açılsaydı S3 seçilirdi.", "Her görüntülemede sipariş table'ının Scan'i. Ürün azsa Memcached seçilirdi."],
+   0, "Sıra sürekli değişir ve her görüntüleme onu hemen ister; sorted set sırayı yazma anında korur (kart 2). İki Valkey servisi R1'de eşittir; kart 2'de MemoryDB log'u ve küçük faturası sayesinde tek puanla kazanır. Tablo saniyeler içinde yeniden kurulabilseydi ElastiCache'in sunucusuz işletimi öne geçerdi.") }}
+{{ k.quiz("ec-a2", "Bir ekip görsel işlerini ElastiCache'te consumer group'lu bir stream ile kuyruğa koymak istiyor. Üç kez başarısız olan iş ayrılmalı ve çöken worker'ın işi kendiliğinden geri gelmeli. Ne dersin?",
+   ["Uygun, consumer group bu iki kuralı da kendisi uygular", "SQS daha iyi uyar: görünürlük süresi ve dead-letter queue onun araçlarıdır, stream'de bunları uygulama yazar", "Uygun, sadece stream'e bir TTL vermek yeter", "Uygun değil, Valkey'de stream tipi yoktur"],
+   1, "Consumer group işi bir worker'a verir ve teslim sayısını tutar, ama bekleyen işi geri veren XAUTOCLAIM'i uygulama periyodik çalıştırır ve dead-letter taşıması yoktur (kart 8). Bu kurallar istenmeseydi ve iş kaybı zararsız olsaydı ElastiCache yeterdi.") }}
 {{ k.quiz("ec-a3", "Bir web mağazasının oturumları bir milisaniyenin altında okunmalı ve kaybolan bir oturum sadece yeni bir login demek. Hangi AWS servisi kazanır ve hangi koşul cevabı değiştirir?",
-   ["DynamoDB. Trafik iki katına çıksaydı ElastiCache kazanırdı.", "ElastiCache. Oturumun kaybı kabul edilemez olsaydı ya da sınır 10 ms olsaydı DynamoDB kazanırdı.", "Redshift. Oturumlar daha büyük olsaydı S3 kazanırdı.", "Aurora. Kullanıcıların arkadaşları olsaydı Neptune kazanırdı."],
-   1, "Hız ve tam anında süre sonu bellek içi store'u öne çıkarır (kart 1: 43 ile 42). Kararı DynamoDB'ye taşıyacak koşul dayanıklılık ya da gevşeyen gecikme sınırıdır.") }}
+   ["DynamoDB. Trafik iki katına çıksaydı ElastiCache kazanırdı.", "ElastiCache. Oturumun kaybı pahalı olsaydı aynı engine'i log ile çalıştıran MemoryDB kazanırdı.", "Redshift. Oturumlar daha büyük olsaydı S3 kazanırdı.", "Aurora. Kullanıcıların arkadaşları olsaydı Neptune kazanırdı."],
+   1, "Bellekteki veri ve tam anında süre sonu R1'de Valkey'i öne çıkarır (kart 1: ElastiCache 95, MemoryDB 85, DynamoDB 76,5). İki Valkey servisi R1'de eşittir; aralarındaki fark dayanıklılık ve işletimdir, yani kararı MemoryDB'ye taşıyacak koşul oturum kaybının pahalı olmasıdır.") }}
 
 <div class="part"><b>Bölüm B</b><h2 id="partB" data-short="Bölüm B: İleri">İleri: pratikte Valkey ve ElastiCache</h2>
 <p>Bölüm A'daki fikirlerin Valkey'deki adları, canlı Lale Market key'leri ve cevapları, yarış ve düzeltmesi, key'lerin yeri, süre ayarları, cache kodu, mesajlaşma, bir arızanın resmi ve maliyet.</p></div>
@@ -1016,6 +1050,7 @@ XADD lm:events MAXLEN ~ 100000 * type shipped order O000001
 XGROUP CREATE lm:events mailer $ MKSTREAM
 XREADGROUP GROUP mailer m1 COUNT 10 BLOCK 5000 STREAMS lm:events &gt;
 XACK lm:events mailer 1692632086370-0
+XAUTOCLAIM lm:events mailer m2 60000 0-0 COUNT 10
 
 # List kuyruğu: bir iş, tek bir worker
 LPUSH jobs:thumbs "uploads/P0001.jpg"
@@ -1026,6 +1061,7 @@ LREM jobs:thumbs:processing:w3 1 "uploads/P0001.jpg"</code></pre>
   <tr><td>XADD … MAXLEN ~ 100000 *</td><td>Stream'e bir mesaj ekle; <code>*</code> id'yi zamandan üret; stream'i yaklaşık 100.000 mesajda kırp.</td></tr>
   <tr><td>XREADGROUP … &gt;</td><td>mailer grubunun m1 okuyucusu, gruba henüz verilmemiş mesajları okur; 5 saniye bekler.</td></tr>
   <tr><td>XACK</td><td>Mesaj işlendi; bekleyenler listesinden çıkar.</td></tr>
+  <tr><td>XAUTOCLAIM … 60000 0-0</td><td>60 saniyeden uzun süredir onaylanmayan mesajları m2 okuyucusuna devret (çöken okuyucunun işi böyle geri gelir); her devir mesajın teslim sayısını bir artırır ve XPENDING bu sayıyı gösterir. Bunu periyodik çalıştırmak uygulamanın işidir.</td></tr>
   <tr><td>BLMOVE … 0</td><td>Kuyruğun sonundaki işi atomik olarak worker'ın "işleniyor" listesine taşı; kuyruk boşsa iş gelene kadar bekle (0 = süresiz).</td></tr>
   <tr><td>LREM …</td><td>İş bitti; "işleniyor" listesinden sil.</td></tr>
 </table>
@@ -1043,7 +1079,7 @@ LREM jobs:thumbs:processing:w3 1 "uploads/P0001.jpg"</code></pre>
   <thead><tr><th>Yol</th><th>Ne sağlar</th><th>Bedeli</th></tr></thead>
   <tbody>
     <tr><td>Kilidi ElastiCache'te bırak, işi idempotent yap</td><td>Ödeme talimatı satıcı ve gün başına benzersiz bir id ile kalıcı bir store'a koşullu yazılır (DynamoDB <code>attribute_not_exists</code>); ikinci worker'ın yazması reddedilir.</td><td>Asıl koruma kalıcı store'a taşınır; kilit sadece verimlilik içindir.</td></tr>
-    <tr><td>Kilidi DynamoDB'de tut</td><td>Koşullu PutItem onaylanmadan önce birkaç AZ'de saklanır; failover penceresi yoktur.</td><td>Tek haneli milisaniye; burada önemsiz (kart 7: 48 puan).</td></tr>
+    <tr><td>Kilidi DynamoDB'de tut</td><td>Koşullu PutItem onaylanmadan önce birkaç AZ'de saklanır; failover penceresi yoktur.</td><td>Tek haneli milisaniye; burada önemsiz (kart 7: 97 puanla en uygun servis).</td></tr>
     <tr><td>Kilidi MemoryDB'de ya da kalıcılığı açık node'lu Valkey 9.0'da tut</td><td>Aynı SET NX komutu; senkron yazmada onaylanan kilit kaybolmaz.</td><td>Node'lu cluster ve node-saat; günde iki istek için orantısız.</td></tr>
     <tr><td><code>WAIT</code> komutuyla replica'ların yazmayı almasını beklemek</td><td>Yazmanın en az bir replica'ya ulaştığını bekler.</td><td><b>Kesin bir çözüm değildir:</b> failover yine de o replica'yı seçmeyebilir; Valkey'in belgesi asenkron kopyalamada kaybın her zaman mümkün olduğunu yazar.</td></tr>
     <tr><td>Kaybı yok saymak</td><td>—</td><td><b>Kabul edilemez</b> bu iş yükünde: bir gecenin çift ödemesi 4 milyon TL.</td></tr>
