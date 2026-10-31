@@ -2493,63 +2493,656 @@ steps:
           - [Bileşik index, "Birden fazla alanı birlikte tutan index. Alanların sırası önemlidir."]
           - [explain, "Veritabanına \"bu sorguyu nasıl çalıştırdın, kaç doküman okudun?\" diye sormak."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde iç içe alanlar için hazırlık
+      t1:
+        title: Önceden ne vardı? Renk ürünün içine nasıl girdi, index'e nasıl yerleşti?
         intro: >-
-          Renk listesi hiç kullanılmadan, dokümanın şekli ve bu filtrenin index'i hazırlanır. Aşağıdaki beş adım bu hazırlığın
-          sırasıdır.
-        text:
-          - title: Önce sayfanın sorusu yazılır
-            text: >-
-              Kategori sayfasının ikinci sorusu: "bu kategori, şu renk, puanı yüksek olan önce, en fazla 48". Renk listesinin
-              kendisi de bir sorudur: "bu kategoride hangi renkler var?".
-            code: |-
-              db.products.find({ category: "Elektronik", "attributes.renk": "siyah" }).sort({ rating: -1 }).limit(48)
-              db.products.distinct("attributes.renk", { category: "Elektronik" })
-          - title: Değişken özellikler bir bölümde toplanır
-            text: >-
-              Her üründe olan alanlar üst seviyede, ürüne göre değişenler attributes altında durur. Böylece yeni bir özellik
-              eklemek şema değişikliği gerektirmez; sadece yeni dokümanlar o alanı taşır.
-            code: |-
-              { _id: "P0021", category: "Elektronik", rating: 4.8, …,
-                attributes: { renk: "siyah", garanti_ay: 36, agirlik_kg: 5.1 } }
-          - title: Sık sorulan birleşim için bileşik index kurulur
-            text: >-
-              Alan sırası kuralı (ESR): eşitlik alanları önce (category, attributes.renk), sıralama alanı sonra (rating). Bu
-              index'le veritabanı doğrudan "Elektronik · siyah" bölümüne gider ve okuduğu her doküman sonuca girer.
-            code: |-
-              db.products.createIndex({ category: 1, "attributes.renk": 1, rating: -1 })
-          - title: Plan explain ile kontrol edilir
-            text: >-
-              Veritabanı her sorgu için genelde tek bir index seçer. Sadece { "attributes.renk": 1 } index'i varsa, sıralamayı
-              da karşılayan { category: 1, rating: -1 } seçilebilir ve renk okunduktan sonra elenir. explain'de okunan doküman
-              sayısı dönen sayıdan büyükse index eksiktir.
-            code: |-
-              ….explain("executionStats")  →  totalDocsExamined: 40, nReturned: 9   (index eksik)
-          - title: Çok çeşitli özellikler için tek bir dizi kullanılır
-            text: >-
-              Ürün türü arttıkça özellik sayısı yüzlere çıkar ve her biri için index kurmak imkânsızlaşır. O zaman özellikler
-              { k, v } çiftlerinden oluşan bir diziye yazılır ve tek bir index hepsini karşılar.
-            code: |-
-              attrs: [ { k: "renk", v: "siyah" }, { k: "garanti_ay", v: 36 } ]
-              db.products.createIndex({ "attrs.k": 1, "attrs.v": 1 })
-      feed:
-        title: Veri nereden geliyor?
-        writes: >-
-          Katalog yönetimi: ürün ekleyen ve özelliklerini güncelleyen arka ofis ekranları ya da tedarikçi dosyalarını aktaran
-          bir iş. Tedarikçi yeni bir özellik gönderdiğinde (ör. "su geçirmez") doküman o alanı kendisi taşır.
-        reads: Uygulama, kategori ve ürün sayfaları için.
-        kind: >-
-          Uygulama orkestrasyonu. DocumentDB başka bir veritabanından kendiliğinden veri çekmez. Kendi değişikliklerini ise
-          change streams ile dışarı verebilir.
-        with: >-
-          Kategori sayfası tek bir veritabanıyla çalışmaz: ürün görselleri nesne deposundan (S3, büyük sistemlerde bir CDN ile)
-          gelir, oturum bellekte (ElastiCache) tutulur. Çok sayıda özellikle aynı anda filtreleme ve her filtrenin yanında
-          sayılar (facet) gerekiyorsa bu iş bir arama motoruna (OpenSearch) verilir.
-        best: >-
-          Katalog tek yerde tutulur, arama motoru oradan beslenir (DocumentDB'nin OpenSearch ile zero-ETL entegrasyonu ya da
-          change streams). Basit ve sık kullanılan filtreler DocumentDB'de index'le; çok boyutlu filtre ve facet'ler arama
-          motorunda çalışır.
+          Renk listesine dokunmadan önce DocumentDB'deki her ürün dokümanının içinde attributes adlı küçük bir bölüm var ve
+          rengi orada hep aynı yazımla duruyor: "siyah" diye; "Siyah" ya da "Black" diye değil. Burada bu bölümü dolduran gerçek zinciri
+          görüyorsun: tedarikçinin yazdığı rengin sözlükteki ada nasıl çevrildiğini, doğrulama kuralının yanlış bir rengi ya da
+          bilinmeyen bir özelliği kapıda nasıl durdurduğunu, iç içe alanın index'e nasıl girdiğini ve yeni bir özelliğin nasıl
+          güvenle eklendiğini. Önce zincirin bileşenleri, sonra bir simülasyon, sonra dört aşama (tasarım, ilk yükleme, sürekli
+          besleme, tutarlılık ve onarım).
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1", "t0'daki renk seçiminden önceki zaman. Kategori sayfasının ilk açılışı da bu zamana düşer; bu bölüm ondan da önceki hazırlığı anlatır: ürünlerin, renklerinin ve index'lerin DocumentDB'ye nasıl geldiğini."]
+          - ["Ekip, katalog ekibi ve tedarikçi", "Ekip: mağazanın sistemini kuran ve işleten mühendisler; alarmlara onlar bakar. Katalog ekibi: ürün ekleyen ve değiştiren çalışanlar; kod yazmaz, arka ofis ekranını kullanır. Tedarikçi: ürünleri mağazaya satan firma; ürün bilgilerini her gece bir dosyayla gönderir."]
+          - ["Koleksiyon ve doküman", "DocumentDB'de koleksiyon bir dosya dolabı (burada products), doküman içindeki tek bir kayıt: bir ürünün bütün bilgisi."]
+          - ["Özellik, anahtar ve değer", "Özellik (attribute): attributes bölümündeki bir bilgi, ör. renk. Anahtar özelliğin adı (renk), değer içindeki bilgi (siyah). Bu katalogda bugün her ürünün üç özelliği var: renk, garanti_ay (garanti süresi, ay), agirlik_kg (ağırlık, kilogram)."]
+          - ["Özellik sözlüğü", "Hangi özelliklerin olabileceğini, türlerini, izinli değerlerini ve tedarikçilerin aynı değeri nasıl farklı yazdığını tutan tek liste; bir dilin sözlüğü gibi. Doğrulama kuralı, içe aktarma işinin eşlemesi ve ürün ekranındaki renk listesi bu listeden üretilir."]
+          - ["Eşleme ve eş anlamlı", "Eşleme: tedarikçinin yazdığını mağazanın yazımına çevirmek (\"Black\" → siyah, \"12 months\" → 12). Eş anlamlı: aynı değerin başka bir yazımı (\"Siyah\", \"SİYAH\", \"Black\" hepsi siyah)."]
+          - ["Kesit", "Simülasyonda gösterilen birkaç kayıt. Gerçek koleksiyonda 200 ürün var, Elektronik'te 40; kesit t0'daki simülasyonun 8 Elektronik ürünü."]
+          - ["Index ve index girişi", "Index, bir ya da birkaç alana göre sıralı tutulan ayrı bir liste; kitabın sonundaki dizin gibi. Her dokümanın her index'te bir satırı vardır: index girişi (ör. \"siyah → P0021\": aranan değer ve dokümanın numarası). İç içe bir alan da index'e girebilir; adı adresiyle yazılır: \"attributes.renk\"."]
+          - ["Bileşik index ve ESR", "Bileşik index birden fazla alanı birlikte tutar. ESR (Equality, Sort, Range) alan sırası kuralıdır: önce eşitlikle aranan alanlar, sonra sıralama alanı, en sonda aralık alanı."]
+          - ["Doğrulama kuralı (validator, $jsonSchema)", "Koleksiyona konan giriş kontrolü; kapıdaki bilet kontrolü gibi. Kural $jsonSchema ile yazılır: enum (sadece listedeki değerler), bsonType (tür: metin, tam sayı, ondalık sayı), additionalProperties: false (listede olmayan anahtar giremez). Kurala uymayan doküman yazılmaz; DocumentDB \"Document failed validation\" hatası verir."]
+          - ["collMod", "Var olan bir koleksiyonun ayarını değiştiren komut; burada doğrulama kuralını genişletmek için kullanılır. Koleksiyon boşaltılmaz, dokümanlar yerinde kalır."]
+          - ["Upsert", "\"Bu numarayla doküman varsa güncelle, yoksa yarat.\" Aynı satır kaç kez gelirse gelsin tek doküman (ve her index'te tek giriş) olur."]
+          - ["S3, S3 olayı ve AWS Lambda", "S3, AWS'in dosya deposu. Klasöre yeni dosya gelince S3 bir haber (olay) gönderir. Lambda, bu haber gelince kısa bir kodu çalıştıran AWS servisi; sunucuyu AWS yönetir."]
+          - ["explain, plan ve hint", "explain veritabanına \"bu sorguyu nasıl çalıştırırsın?\" diye sorar; cevap plandır: IXSCAN (index'te arama), COLLSCAN (bütün koleksiyonu okuma), SORT (bellekte ayrıca sıralama). hint, \"bu index'i kullan\" diye zorlamak; plan kontrolü iki planı karşılaştırmak için kullanır."]
+          - ["İki anlamlı söz: renk filtresi", "Sayfadaki renk listesi (senin seçimin) ile planda okunan her dokümana uygulanan \"filter\" adımı. t0'daki şerit başlığında \"kategori index'i + renk filtresi\" ikinci anlamda: DocumentDB dokümanı okuduktan sonra rengine bakar."]
+          - ["Küme, primary ve replica", "Küme (cluster): bir veritabanının birlikte çalışan sunucuları. Primary yazan sunucu, replica sadece okuyan sunucu; aynı diski paylaşırlar. Uygulamanın okuma tercihi secondaryPreferred: okumalar önce replica'ya gider."]
+          - ["distinct", "\"Bu alanda hangi farklı değerler var?\" sorusu; renk listesini getiren komut. Her değer bir kez döner."]
+          - ["$exists, $unset, $nor", "$exists: \"bu alan var mı?\" diye sorar. $unset: dokümandan bir alanı siler. $nor: \"bunların hiçbirine uymayanlar\" demek; gece denetiminde \"kurala uymayanlar\" için kullanılır."]
+          - ["Dağıtım hattı (CI/CD)", "Yeni kodun yayına çıkmadan önce geçtiği otomatik adımlar: test eder, kurar, kontrol eder. Bir kontrol başarısızsa kod yayına çıkmaz."]
+          - ["Background index kurulumu ve sparse index", "Background: mağaza okumaya ve yazmaya devam ederken index arkada kurulur. Sparse: alanı olmayan dokümanları index'e koymayan index; DocumentDB onu sadece sorguda $exists varsa kullanır."]
+          - ["Profiler, CloudWatch ve $indexStats", "Profiler: DocumentDB'nin yavaş işlem kaydı (100 ms'yi aşanlar). CloudWatch: AWS'in ölçüm ve alarm servisi. $indexStats: her index'in kaç kez kullanıldığını söyleyen komut."]
+          - ["Sürekli yedek (PITR)", "Point-in-time recovery: veritabanını geçmişteki herhangi bir saniyeye, yeni bir kümede geri açabilme."]
+          - ["Görev adımları", "\"Adım 1\", \"Adım 3\" gibi adlar bu görevin (mağazadaki 37 adımın) adımlarıdır. Simülasyonun sayacındaki \"Adım 1 / 16\" ise simülasyonun karesidir."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra"
+          sütunu veriyi kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim kodumuz" etiketli
+          parçaları mağazanın ekibi yazar. Parçalar Adım 1 ve Adım 3'teki katalog zincirinin aynısı; bu sayfada bir parça daha
+          öne çıkıyor: özellik sözlüğü. Renk ürünün içine üç kapıdan geçerek girer: içe aktarma işinin eşlemesi (yazımı
+          düzeltir), doğrulama kuralı (sözlükte olmayanı durdurur) ve index (rengi sıralı tutar). Aynı parçalar aşağıdaki
+          simülasyonda birer kutu: üst sırada ürünleri yazan ve kuran parçalar, sonra sözlük, ortada DocumentDB, altta okuyan,
+          izleyen ve yandaki işler.
+        inventory:
+          - id: staging
+            name: S3 (içe aktarma klasörü)
+            kind: aws
+            what: Amazon S3 bucket'ı
+            does: >-
+              Eski katalog sisteminin dışa aktardığı ürün dosyaları (ilk yükleme) ve tedarikçilerin her gece gönderdiği ürün
+              dosyaları buraya gelir. Dosyada renk tedarikçinin yazdığı gibidir ("Black", "Siyah "). Yeni dosya gelince S3 olayı
+              içe aktarma işini başlatır.
+            box: Ürün dosyalarının geldiği klasör; renkler tedarikçinin yazımıyla. Yeni dosya işi başlatır.
+            phases: [2, 3, 4]
+            before: Eski katalog sistemi, tedarikçiler
+            after: importer
+          - id: importer
+            name: İçe aktarma işi (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod
+            does: >-
+              Dosyayı satır satır okur. Her özelliği sözlükle eşler: rengi sözlükteki ada çevirir ("Black" → siyah), garantiyi
+              ve ağırlığı sayıya çevirir ("4100 g" → 4.1). Sözlükte olmayan bir anahtarı yazmaz, ayırır. Ürünü ürün numarasıyla
+              DocumentDB'ye yazar (upsert). Reddedilen satırı hata klasörüne, sayılarını CloudWatch'a yazar.
+            box: "Özellikleri sözlükle eşler (\"Black\" → siyah), ürünü ürün no'suyla yazar (upsert); sayıları CloudWatch'a."
+            phases: [2, 3, 4]
+            before: [staging, sozluk]
+            after: [docdb, rejects, monitor]
+          - id: admin
+            name: Katalog yönetim servisi
+            kind: code
+            what: arka ofis programı (ürün ekranlarının arka ucu)
+            does: >-
+              Katalog ekibinin ekranda eklediği ya da değiştirdiği ürünü kontrol eder ve ürün numarasıyla DocumentDB'ye yazar.
+              Ekrandaki renk listesi sözlükten gelir; çalışan rengi elle yazmaz, listeden seçer.
+            box: Ürün ekranından gelen ürünü yazar; renk sözlükteki listeden seçilir.
+            phases: [3]
+            before: [Katalog ekibi (arka ofis ekranı), sozluk]
+            after: docdb
+          - id: indexjob
+            name: Index ve plan kontrolü (dağıtım hattı)
+            kind: code
+            what: dağıtım hattında (CI/CD) çalışan kod
+            does: >-
+              Her yayından önce ve ayrıca her gece çalışır. Doğrulama kuralını sözlükten üretip koleksiyona koyar (ilk kurulumda
+              createCollection, sonra collMod) ve gereken index'leri kurar; canlı koleksiyonda arka planda. Sayfaların her
+              sorusunu explain ile dener. Gece ayrıca kurala uymayan eski dokümanları sayar. Sonucu CloudWatch'a yazar.
+            box: "Kuralı sözlükten üretir, index'leri kurar; her soruyu explain ile dener, gece kurala uymayanları sayar."
+            phases: [1, 2, 3, 4]
+            before: [Ekip (yeni ekran, yeni sorgu), sozluk]
+            after: [docdb, monitor]
+          - id: sozluk
+            name: Özellik sözlüğü
+            kind: code
+            what: kod deposundaki sürümlü dosya
+            does: >-
+              Her özelliğin adını, türünü, izinli değerlerini ve tedarikçilerin eş anlamlı yazımlarını tutar. Değişikliği ekip
+              ve katalog ekibi birlikte yapar; dosya dağıtım hattından geçerek yayına çıkar. Doğrulama kuralı, içe aktarma
+              işinin eşlemesi ve ürün ekranındaki renk listesi buradan üretilir.
+            box: "Özellikler, türleri, izinli değerler, eş anlamlılar; kural, eşleme ve ekran listesi buradan."
+            phases: [1, 2, 3, 4]
+            before: Ekip ve katalog ekibi (değişiklik isteği)
+            after: [indexjob, importer, admin]
+          - id: docdb
+            name: DocumentDB (shop.products)
+            kind: aws
+            what: katalog veritabanı (bir primary, bir replica)
+            does: >-
+              Ürünlerin asıl kaydı ve index'leri. Doğrulama kuralı attributes bölümüne de bakar: renk 6 izinli değerden biri,
+              garanti tam sayı, ağırlık sayı, başka anahtar yok. Her doküman yazılırken bütün index'leri günceller; renk index'i
+              iç içe alanı "attributes.renk" adresiyle tutar.
+            box: "Ürünler ve index'leri; kural attributes'a da bakar, renk index'i iç içe alanı tutar."
+            phases: [1, 2, 3, 4]
+            before: [importer, admin, indexjob]
+            after: [web, profiler, backup]
+          - id: web
+            name: Uygulama (mağaza sayfaları)
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucusunda)
+            does: >-
+              Renk seçilince kategori + renk sorgusunu, sayfa açılınca renk listesi için distinct komutunu DocumentDB'ye
+              gönderir (t0'daki istek); okuma tercihi secondaryPreferred olduğu için sorgular replica'ya gider. Kataloğa yazmaz.
+            box: "Kategori + renk sorgusunu ve renk listesini ister (replica'dan); kataloğa yazmaz."
+            phases: [3, 4]
+            before: Tarayıcı (sayfa açılışları, renk seçimi)
+            after: docdb
+          - id: profiler
+            name: DocumentDB profiler
+            kind: aws
+            what: DocumentDB'nin yavaş işlem kaydı
+            does: >-
+              Eşikten (burada 100 ms) uzun süren işlemleri koleksiyonu, süresi ve plan özetiyle CloudWatch Logs'a yazar. Eşiğin
+              altında kalan işlemi yazmaz.
+            box: "100 ms'yi aşan işlemleri plan özetiyle CloudWatch Logs'a yazar."
+            phases: [3, 4]
+            before: docdb
+            after: monitor
+          - id: monitor
+            name: CloudWatch alarmları
+            kind: aws
+            what: AWS'in izleme servisi
+            does: >-
+              İçe aktarma işinin sayılarını (reddedilenleri sebebine göre: bilinmeyen renk, bilinmeyen özellik), plan kontrolünün
+              ve gece denetiminin sonucunu ve profiler kayıtlarını izler; eşik aşılınca ekibe alarm gönderir.
+            box: "Reddedilenler (sebebiyle), plan kontrolü, gece denetimi, yavaş sorgular; alarm verir."
+            phases: [2, 3, 4]
+            before: [importer, indexjob, profiler]
+            after: Ekip (alarm)
+          - id: rejects
+            name: Hata klasörü (S3)
+            kind: aws
+            what: Amazon S3 bucket'ı
+            does: >-
+              Kabul edilmeyen satırları ve ayrılan özellikleri sebebiyle saklar; diğer satırlar beklemeden yazılır. Ekip sözlüğü
+              ya da satırı düzeltip yeniden gönderir.
+            box: Reddedilen satırlar ve ayrılan özellikler, sebebiyle.
+            phases: [4]
+            before: importer
+            after: Ekip (düzeltir, yeniden gönderir)
+          - id: backup
+            name: DocumentDB sürekli yedeği (PITR)
+            kind: aws
+            what: DocumentDB'nin yedekleme özelliği
+            does: >-
+              Kataloğu saklama süresi içindeki (1–35 gün) herhangi bir saniyeye, yeni bir kümede geri açar. Yanlış bir eşleme
+              birçok ürünün rengini bozarsa doğru dokümanlar oradan geri yazılır.
+            box: Kataloğu geçmişteki bir saniyeye yeni bir kümede açar.
+            phases: [4]
+            before: docdb
+            after: Ekip (geri yükleme)
+        sim_title: "Simülasyon: renk ürünün içine nasıl girdi, index'e nasıl yerleşti?"
+        sim:
+          kind: pipeline
+          title: Dosyalar ve ekran → sözlükle eşleme → DocumentDB (ürünler, attributes ve index'ler) → okuyan ve izleyenler
+          caption: >-
+            DocumentDB kutusunda dört tablo var: index listesi, ürünler (attributes bölümüyle), kategori index'inin girişleri
+            ve renk index'inin girişleri. Ürünler ve girişler kesit: t0'daki simülasyonun 8 Elektronik ürünü (katalogda 200,
+            Elektronik'te 40); _id ve puan index'lerinin girişleri yer kazanmak için gösterilmiyor. Ürün adları t0'daki gibi tam.
+            Önce kuralın ve index'lerin kurulması ve ilk yükleme, sonra ekrandan bir ürün, gece dosyasından yeni bir ürün, canlı
+            koleksiyonda renk index'i, renk sorusunun plan kontrolü ve bir renk düzeltmesi, en sonda tutarlılık ve onarım oynuyor.
+            4. aşamada "Örnek durum" diye başlayan kareler bu zincirde yaşanmış durumlar; "Olsaydı" diye başlayanlar yaşanmadı,
+            yaşansaydı ne olacağını gösteriyor. Ürün no, ad, puan ve özellikler canlı sistemden. Temsilî değerler: tedarikçi
+            yazımları ve eş anlamlılar, dosya adları, P0166'nın ilk yüklemedeki rengi (gri), oran sınırı (10), P0202 ve
+            "antrasit", su_gecirmez. Son karede koleksiyon, kategori sayfasının açıldığı andaki (t0) hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım}
+          rows:
+            - {id: writers, title: "Ürünleri yazanlar ve index'leri kuranlar", side: true}
+            - {id: rules, title: "Özelliklerin tek listesi"}
+            - {id: stores, title: "Kategori sayfasının okuduğu depo"}
+            - {id: helpers, title: "Okuyan, izleyen ve yandaki işler", side: true}
+          summary: >-
+            Kuralı ve index'leri dağıtım hattı sözlükten, veri gelmeden kurdu. Ürünleri içe aktarma işi ve ürün ekranı yazdı;
+            tedarikçinin her yazımı sözlükteki ada çevrildi ("Black" → siyah). Renk index'i sonradan, canlı koleksiyonda arka
+            planda kuruldu ve bir renk değişince girişi kendi yerine taşındı. İkinci kez gelen dosya kopya yaratmadı; sözlükte
+            olmayan bir renk kapıda kaldı. Son durum: kesitte 8 doküman; renk index'inde beyaz 3, gri 2, siyah 3 giriş; t0'daki
+            simülasyonun başladığı durum.
+          boxes:
+            - id: staging
+              row: writers
+            - id: importer
+              row: writers
+            - id: admin
+              row: writers
+            - id: indexjob
+              row: writers
+            - id: sozluk
+              row: rules
+              tables:
+                - name: "renk: izinli değerler (6) ve eş anlamlılar"
+                  cols: [değer, tedarikçi yazımları]
+                  rows:
+                    - {key: s_beyaz, değer: beyaz, tedarikçi yazımları: "Beyaz, BEYAZ, White", hidden: true}
+                    - {key: s_gri, değer: gri, tedarikçi yazımları: "Gri, Grey, Gray", hidden: true}
+                    - {key: s_kirmizi, değer: kırmızı, tedarikçi yazımları: "Kırmızı, Red", hidden: true}
+                    - {key: s_lacivert, değer: lacivert, tedarikçi yazımları: "Lacivert, Navy", hidden: true}
+                    - {key: s_siyah, değer: siyah, tedarikçi yazımları: "Siyah, SİYAH, Black", hidden: true}
+                    - {key: s_yesil, değer: yeşil, tedarikçi yazımları: "Yeşil, Green", hidden: true}
+                - name: "özellikler (3) ve türleri"
+                  cols: [anahtar, tür, birim]
+                  rows:
+                    - {key: k_renk, anahtar: renk, tür: "metin (6 değerden biri)", birim: "—", hidden: true}
+                    - {key: k_garanti, anahtar: garanti_ay, tür: tam sayı, birim: ay, hidden: true}
+                    - {key: k_agirlik, anahtar: agirlik_kg, tür: ondalık sayı, birim: kg, hidden: true}
+            - id: docdb
+              row: stores
+              tables:
+                - name: "index listesi (koleksiyonun bütün index'leri)"
+                  cols: [index, alanlar, kimin için]
+                  rows:
+                    - {key: ix_id, index: "_id_", alanlar: "{ _id: 1 }", kimin için: "ürün sayfası (tek ürün)", hidden: true}
+                    - {key: ix_cr, index: "category_1_rating_-1", alanlar: "{ category: 1, rating: -1 }", kimin için: kategori sayfası, hidden: true}
+                    - {key: ix_r, index: "rating_-1", alanlar: "{ rating: -1 }", kimin için: ana sayfa vitrini, hidden: true}
+                    - {key: ix_renk, index: "attributes.renk_1", alanlar: "{ \"attributes.renk\": 1 }", kimin için: "renk filtresi için kuruldu (kullanımı izleniyor)", hidden: true}
+                - name: "shop.products (kesit: t0'daki 8 Elektronik ürünü; katalogda 200, Elektronik'te 40)"
+                  cols: [_id, name, rating, attributes]
+                  rows:
+                    - {_id: P0001, name: Alpen Kablosuz Kulaklık 1, rating: 4.8, attributes: "{ renk: siyah, garanti_ay: 12, agirlik_kg: 2.45 }", hidden: true}
+                    - {_id: P0021, name: Bosphorus Akıllı Saat 21, rating: 4.8, attributes: "{ renk: siyah, garanti_ay: 36, agirlik_kg: 5.1 }", hidden: true}
+                    - {_id: P0121, name: Toros Bluetooth Hoparlör 121, rating: 4.8, attributes: "{ renk: beyaz, garanti_ay: 36, agirlik_kg: 6.25 }", hidden: true}
+                    - {_id: P0141, name: Anadolu Mekanik Klavye 141, rating: 4.5, attributes: "{ renk: beyaz, garanti_ay: 24, agirlik_kg: 0.89 }", hidden: true}
+                    - {_id: P0166, name: Anadolu Akıllı Saat 166, rating: 4.3, attributes: "{ renk: gri, garanti_ay: 24, agirlik_kg: 7.93 }", hidden: true}
+                    - {_id: P0071, name: Toros Akıllı Saat 71, rating: 4.2, attributes: "{ renk: gri, garanti_ay: 12, agirlik_kg: 5.73 }", hidden: true}
+                    - {_id: P0016, name: Nordwind Powerbank 16, rating: 3.7, attributes: "{ renk: gri, garanti_ay: 12, agirlik_kg: 7.13 }", hidden: true}
+                    - {_id: P0096, name: Bosphorus Mekanik Klavye 96, rating: 3.5, attributes: "{ renk: beyaz, garanti_ay: 12, agirlik_kg: 4.1 }", hidden: true}
+                - name: "index category_1_rating_-1: girişleri (kesit; hepsi Elektronik bölümünde, puan büyükten küçüğe)"
+                  cols: [category, rating, _id]
+                  rows:
+                    - {key: cP0001, category: Elektronik, rating: 4.8, _id: P0001, hidden: true}
+                    - {key: cP0021, category: Elektronik, rating: 4.8, _id: P0021, hidden: true}
+                    - {key: cP0121, category: Elektronik, rating: 4.8, _id: P0121, hidden: true}
+                    - {key: cP0141, category: Elektronik, rating: 4.5, _id: P0141, hidden: true}
+                    - {key: cP0166, category: Elektronik, rating: 4.3, _id: P0166, hidden: true}
+                    - {key: cP0071, category: Elektronik, rating: 4.2, _id: P0071, hidden: true}
+                    - {key: cP0016, category: Elektronik, rating: 3.7, _id: P0016, hidden: true}
+                    - {key: cP0096, category: Elektronik, rating: 3.5, _id: P0096, hidden: true}
+                - name: "index attributes.renk_1: girişleri (kesit; renk sırasıyla, aynı renkte ürün no sırasıyla)"
+                  cols: [attributes.renk, _id]
+                  rows:
+                    - {key: rP0096, attributes.renk: beyaz, _id: P0096, hidden: true}
+                    - {key: rP0121, attributes.renk: beyaz, _id: P0121, hidden: true}
+                    - {key: rP0141, attributes.renk: beyaz, _id: P0141, hidden: true}
+                    - {key: rP0016, attributes.renk: gri, _id: P0016, hidden: true}
+                    - {key: rP0071, attributes.renk: gri, _id: P0071, hidden: true}
+                    - {key: rP0166g, attributes.renk: gri, _id: P0166, hidden: true}
+                    - {key: rP0001, attributes.renk: siyah, _id: P0001, hidden: true}
+                    - {key: rP0021, attributes.renk: siyah, _id: P0021, hidden: true}
+                    - {key: rP0166s, attributes.renk: siyah, _id: P0166, hidden: true}
+            - id: web
+              row: helpers
+            - id: profiler
+              row: helpers
+            - id: monitor
+              row: helpers
+            - id: rejects
+              row: helpers
+            - id: backup
+              row: helpers
+          frames:
+            - phase: 2
+              who: indexjob
+              lit: [indexjob, sozluk, docdb]
+              packet: {at: docdb, text: "createCollection(\"products\", { validator: { $jsonSchema: { … attributes: { enum, bsonType, additionalProperties: false } } } }) · createIndex × 2"}
+              show: {sozluk: [s_beyaz, s_gri, s_kirmizi, s_lacivert, s_siyah, s_yesil, k_renk, k_garanti, k_agirlik], docdb: [ix_id, ix_cr, ix_r]}
+              fresh: {sozluk: [s_beyaz, s_gri, s_kirmizi, s_lacivert, s_siyah, s_yesil, k_renk, k_garanti, k_agirlik], docdb: [ix_id, ix_cr, ix_r]}
+              note: {sozluk: "6 renk · 3 özellik", indexjob: "kurulan: koleksiyon + kural + 2 index", docdb: "3 index · 0 doküman"}
+              say: >-
+                Koleksiyon henüz yok. Ekip ve katalog ekibi önce özellik sözlüğünü yazdı: üç özellik (renk, garanti_ay,
+                agirlik_kg), rengin 6 izinli değeri ve tedarikçilerin aynı rengi nasıl farklı yazdığı. Dağıtım hattındaki index ve
+                plan kontrolü doğrulama kuralını bu sözlükten üretti ve koleksiyonu onunla kurdu. Kural attributes bölümüne de
+                bakar: renk sadece bu 6 değerden biri olabilir, garanti tam sayı, ağırlık sayı olmalı ve sözlükte olmayan bir
+                anahtar giremez. Sonra iki index kuruldu (kategori + puan, puan); _id index'ini DocumentDB kendisi kurar.
+            - phase: 2
+              who: staging
+              lit: [staging]
+              packet: {at: staging, text: "eski-katalog/products-0001.json · { urun_no: \"P0001\", Renk: \"Siyah \", Garanti: \"12 ay\", Ağırlık: \"2,45 kg\" } …"}
+              note: {indexjob: "", sozluk: "", docdb: ""}
+              say: >-
+                Eski katalog sistemi ürünlerini dosyalara döktü; dosyalar S3'teki içe aktarma klasörüne kondu. Dosyada özellikler
+                eski sistemin yazımıyla duruyor: rengin baş harfi büyük ve sonunda bir boşluk var ("Siyah "), garanti "12 ay", ağırlık
+                virgüllü "2,45 kg". S3 olayı içe aktarma işini başlattı. Kesitte bu dosyanın 6 ürününü göreceksin; diğer ikisi
+                sonra gelecek.
+            - phase: 2
+              who: importer
+              lit: [staging, importer, sozluk, docdb, monitor]
+              packet: {at: importer, text: "\"Siyah \" → siyah · \"12 ay\" → 12 · \"2,45 kg\" → 2.45 → updateOne({ _id }, { $set: { …, attributes: { … } } }, upsert) · bulk_write(ordered: false)"}
+              show: {docdb: [P0001, P0021, P0121, P0166, P0071, P0016, cP0001, cP0021, cP0121, cP0166, cP0071, cP0016]}
+              fresh: {docdb: [P0001, P0021, P0121, P0166, P0071, P0016, cP0001, cP0021, cP0121, cP0166, cP0071, cP0016]}
+              note: {docdb: "kesitte 6 doküman · her biri 3 index'e birer giriş = 18 giriş", importer: "kesitte eşlenen değer: 18 (6 ürün × 3 özellik)", monitor: "ilk yükleme: okunan = yazılan · reddedilen 0"}
+              say: >-
+                İçe aktarma işi dosyayı satır satır okudu ve her özelliği sözlükle eşledi: boşluğu ve büyük harfi temizleyip rengi
+                sözlükteki ada çevirdi ("Siyah " → siyah), garantiyi ve ağırlığı sayıya çevirdi. Üç özelliği tek bir alt
+                dokümana, attributes'a koydu ve ürünleri ürün numarasıyla toplu yazdı (kesitte 6; katalogdaki öteki ürünler aynı
+                yoldan geldi). Doğrulama kuralı her dokümanın attributes bölümünü kapıda kontrol etti. Eski sistem Anadolu Akıllı
+                Saat 166'yı (P0166) gri olarak kaydetmişti; bu ürünü de satan bir tedarikçi bunu bir sonraki aşamada düzeltecek.
+            - phase: 3
+              who: admin
+              lit: [admin, sozluk, docdb]
+              packet: {at: admin, text: "updateOne({ _id: \"P0141\" }, { $set: { …, attributes: { renk: \"beyaz\", garanti_ay: 24, agirlik_kg: 0.89 } } }, upsert: true)"}
+              show: {docdb: [P0141, cP0141]}
+              fresh: {docdb: [P0141, cP0141]}
+              note: {importer: "", monitor: "", admin: "yazılan 1 · reddedilen 0", docdb: "1 doküman + 3 index girişi"}
+              say: >-
+                Mağaza açıldı. Katalog ekibi ürün ekranından yeni bir ürün ekledi: Anadolu Mekanik Klavye 141 (P0141, puan 4.5).
+                Ekrandaki renk kutusu serbest yazı değil, sözlükteki 6 renkten oluşan bir liste; çalışan "beyaz"ı seçti. Katalog
+                yönetim servisi dokümanı yazdı; DocumentDB 3 index'i de güncelledi.
+            - phase: 3
+              who: importer
+              lit: [staging, importer, sozluk, docdb, monitor]
+              packet: {at: importer, text: "tedarikci/2026-10-29.json · { urun_no: \"P0096\", Color: \"White\", Warranty: \"12 months\", Weight: \"4100 g\" } → beyaz · 12 · 4.1"}
+              show: {docdb: [P0096, cP0096]}
+              fresh: {docdb: [P0096, cP0096]}
+              note: {admin: "", monitor: "gece dosyası: okunan 1 · yazılan 1 · reddedilen 0", docdb: "1 doküman + 3 index girişi", importer: "eşlenen değer: 3"}
+              say: >-
+                Gece bir tedarikçinin dosyası klasöre geldi; S3 olayı içe aktarma işini başlattı. Bu tedarikçi sütunlara İngilizce
+                ad veriyor: Color, Warranty, Weight. Sözlükteki eşleme her sütunu doğru özelliğe bağladı ve değerleri çevirdi:
+                "White" → beyaz, "12 months" → 12, "4100 g" → 4.1 kg. Yeni ürün Bosphorus Mekanik Klavye 96 (P0096) yazıldı.
+                Kategori index'inde girişi en alta, 3.5 puanla girdi.
+            - phase: 3
+              who: indexjob
+              lit: [indexjob, docdb, monitor]
+              packet: {at: docdb, text: "createIndexes: \"products\", indexes: [{ key: { \"attributes.renk\": 1 }, background: true }] · currentOp → stage 8/8 … 100%"}
+              show: {docdb: [ix_renk, rP0096, rP0121, rP0141, rP0016, rP0071, rP0166g, rP0001, rP0021]}
+              fresh: {docdb: [ix_renk, rP0096, rP0121, rP0141, rP0016, rP0071, rP0166g, rP0001, rP0021]}
+              note: {monitor: "", importer: "", indexjob: "yeni index: 1 (arka planda) · süre: dakikalar", docdb: "4 index · renk index'inde 8 giriş (kesitte)"}
+              say: >-
+                Ekip kategori sayfasına renk listesini ekledi (t0'da kullandığın liste). Yayından önce index ve plan kontrolü renk
+                için bir index kurdu: { "attributes.renk": 1 }. İç içe alan da üst seviyedeki bir alan gibi index'e girer; adı
+                adresiyle yazılır. Koleksiyon dolu ve canlı olduğu için index arka planda (background) kuruldu; mağaza okumaya ve
+                yazmaya devam etti. DocumentDB her dokümanın rengini okudu ve en alttaki tabloyu kurdu: girişler renk sırasıyla,
+                aynı renk içinde ürün numarası sırasıyla. P0166 şimdilik gri bölümünde.
+            - phase: 3
+              who: indexjob
+              lit: [indexjob, docdb, monitor]
+              packet: {at: indexjob, text: "explain(find({ category: \"Elektronik\", \"attributes.renk\": \"siyah\" }).sort({ rating: -1 })) → IXSCAN category_1_rating_-1 + filter · hint(attributes.renk_1) → + SORT"}
+              note: {docdb: "", indexjob: "renk sorusu (kesitte): okunan 8 · dönen 2 · ayrı SORT yok", monitor: "plan kontrolü: 6 soru (kategori listesi, vitrin, ürün sayfası, ana sayfa gruplaması, renk filtresi, renk listesi) · beklenmeyen COLLSCAN 0 · renk sorusu: okunan / dönen ≈ 4 (sınır 10)"}
+              say: >-
+                Yayından önce plan kontrolü yeni iki soruyu (renk filtresi ve renk listesi) eskilerle birlikte explain ile denedi.
+                Kategori + renk sorusunda DocumentDB kategori index'ini seçti: Elektronik bölümünü puan sırasıyla okuyor ve her
+                dokümanın rengine sonradan bakıyor (planda "filter"). Kesitte 8 doküman okundu, 2'si siyah. Kontrol hint ile renk
+                index'ini de denedi: o planda kesitte sadece 2 siyah giriş okunuyor, ama sonuç puana göre bellekte ayrıca
+                sıralanıyor (SORT). Canlı
+                katalogda seçilen plan 40 okuyup 9 döndürüyor; oran (≈ 4) ekibin sınırının (10) altında, yayın çıktı.
+            - phase: 3
+              who: importer
+              lit: [staging, importer, sozluk, docdb, monitor]
+              packet: {at: importer, text: "tedarikci/2026-10-30.json · { urun_no: \"P0166\", Color: \"Black\" } → updateOne({ _id: \"P0166\" }, { $set: { \"attributes.renk\": \"siyah\" } })"}
+              set: {docdb: {P0166: {attributes: "{ renk: siyah, garanti_ay: 24, agirlik_kg: 7.93 }"}}}
+              hide: {docdb: [rP0166g]}
+              show: {docdb: [rP0166s]}
+              fresh: {docdb: [P0166, rP0166s]}
+              note: {indexjob: "", monitor: "gece dosyası: okunan 1 · yazılan 1 · reddedilen 0", docdb: "1 doküman · renk girişi gri → siyah · kategori girişi aynı", importer: "eşlenen değer: 1"}
+              say: >-
+                Ertesi gece aynı tedarikçi (Anadolu Akıllı Saat 166'yı da o satıyor) P0166'nın rengini düzeltti: "Black". Eşleme siyah yaptı. Dosyada sadece renk vardı; iş
+                bu yüzden sadece o iç alanı değiştirdi ("attributes.renk" adresiyle), garanti ve ağırlık yerinde kaldı.
+                DocumentDB renk index'indeki girişi gri bölümünden silip siyah bölümüne koydu. Kategori index'indeki giriş
+                değişmedi: kategori ve puan aynı.
+            - phase: 3
+              who: web
+              lit: [web, docdb, profiler, monitor]
+              packet: {at: web, text: "find({ category: \"Elektronik\", \"attributes.renk\": \"siyah\" }).sort({ rating: -1 }).limit(48) · distinct(\"attributes.renk\", { category }) → replica"}
+              note: {importer: "", docdb: "kesitte: okunan 8 · dönen 3 · renk listesi: beyaz, gri, siyah", profiler: "eşik 100 ms · bugün yazılan kayıt 0", monitor: "yavaş sorgu kaydı 0"}
+              say: >-
+                Sıradan bir gün. Bir müşteri Elektronik'te siyahı seçti; uygulama kategori + renk sorgusunu ve renk listesi için
+                distinct komutunu gönderdi, ikisi de replica'ya gitti. Kesitte 8 doküman okundu, 3'ü siyah döndü (P0166 artık
+                aralarında). Renk listesinde her renk bir kez çıkar, çünkü bütün yazımlar sözlükteki tek ada çevrildi; "Siyah" ve
+                "siyah" iki ayrı seçenek olmadı. Profiler 100 ms'yi aşan bir işlem görmedi.
+            - phase: 4
+              who: importer
+              lit: [staging, importer, docdb, monitor]
+              packet: {at: importer, text: "aynı dosya yine geldi → updateOne(P0166, { $set: { \"attributes.renk\": \"siyah\" } }) → eşleşen 1, değişen 0"}
+              mark: {docdb: {P0166: fix, rP0166s: fix}}
+              note: {profiler: "", docdb: "", monitor: "aynı dosya (2. kez): okunan 1 · eşleşen 1 · değişen 0"}
+              say: >-
+                Örnek durum: S3 olayı aynı dosya için ikinci kez geldi (S3 olayları en az bir kez teslim edilir; nadiren iki kez).
+                İş satırı ürün numarasıyla yazdığı için aynı dokümanı buldu; renk zaten siyahtı, hiçbir şey değişmedi. Renk
+                index'inde ikinci bir P0166 girişi oluşmadı; ürün listede iki kez görünmez.
+            - phase: 4
+              who: importer
+              lit: [importer, sozluk, docdb, rejects, monitor]
+              packet: {at: docdb, text: "Document failed validation (P0202, attributes.renk: \"antrasit\")"}
+              mark: {docdb: {P0166: "", rP0166s: ""}}
+              note: {rejects: "1 satır · P0202 · bilinmeyen renk: antrasit", monitor: "gece dosyası: okunan 4 · yazılan 3 · reddedilen 1 (bilinmeyen renk) → alarm"}
+              say: >-
+                Örnek durum: bir gece yeni bir ürünün (P0202, kesitin dışında) rengi "Antrasit" geldi. Sözlükte böyle bir eş anlamlı
+                yok; eşleme onu sadece sadeleştirdi ("antrasit") ve doğrulama kuralı reddetti: "antrasit" 6 izinli renkten biri değil.
+                Doküman koleksiyona girmedi, renk index'inde "antrasit" bölümü açılmadı, renk listesinde yedinci bir seçenek
+                çıkmadı. İş satırı sebebiyle hata klasörüne yazdı; alarm gitti. Katalog ekibi karar verecek: "antrasit"i gri'nin eş
+                anlamlısı mı yapacak, yoksa yeni bir renk mi? Dosyadaki diğer 3 satır kesitin dışındaydı ve yazıldı.
+            - phase: 4
+              who: importer
+              lit: [staging, importer, sozluk, rejects, monitor]
+              packet: {at: importer, text: "olsaydı: { urun_no: \"P0121\", Waterproof: \"yes\" } → sözlükte yok → yazılmaz, ayrılır"}
+              note: {rejects: "olsaydı: 1 özellik ayrıldı · P0121 · bilinmeyen özellik: Waterproof", monitor: "olsaydı: bilinmeyen özellik 1 → alarm"}
+              say: >-
+                Olsaydı: bir tedarikçi sözlükte olmayan yeni bir sütun gönderseydi, ör. Toros Bluetooth Hoparlör 121 için "Waterproof"
+                (su geçirmez). İş sözlükte karşılığı olmayan bir anahtarı dokümana yazmaz; satırın bilinen alanlarını yazar,
+                bilinmeyen özelliği sebebiyle hata klasörüne ayırır ve alarm verir. İş bir hatayla anahtarı yazmaya kalksaydı
+                doğrulama kuralı (additionalProperties: false) dokümanı yine durdururdu. Yeni özellik, 3. aşamadaki sırayla
+                eklenir: önce sözlük, sonra kural, sonra eşleme, en son veri.
+            - phase: 4
+              who: indexjob
+              lit: [indexjob, docdb, monitor]
+              packet: {at: indexjob, text: "find({ $nor: [{ $jsonSchema: <kural> }] }).count() → 0 · aggregate($group: \"$attributes.renk\") → 6 değer, hepsi sözlükte"}
+              note: {rejects: "", indexjob: "gece denetimi: kurala uymayan 0 · sözlük dışı renk 0", monitor: "gece denetimi: 0 → alarm yok"}
+              say: >-
+                Örnek durum: her gece plan kontrolü bir denetim de yapar. Doğrulama kuralı sadece yazma anında çalışır; kural
+                sonradan değişirse eski dokümanlar kendiliğinden yeniden kontrol edilmez. Denetim kuralın aynısıyla "kurala uymayan
+                doküman var mı?" diye sorar, renkleri sayar ve sayıları sözlükle ve bir önceki geceyle karşılaştırır. Bu gece: kurala uymayan 0; Elektronik'te 6 renk var (siyah 9, beyaz
+                9, kırmızı 9, yeşil 5, gri 5, lacivert 3), hepsi sözlükte. Denetim ayrıca $indexStats ile renk index'inin kaç kez
+                kullanıldığına bakar.
+            - phase: 4
+              who: indexjob
+              lit: [indexjob, docdb, profiler, monitor]
+              packet: {at: docdb, text: "olsaydı: renk sorusu okunan / dönen > 10 → alarm → createIndex({ category: 1, \"attributes.renk\": 1, rating: -1 }, { background: true })"}
+              note: {indexjob: "olsaydı: renk sorusu oranı sınırı aştı", profiler: "olsaydı: yavaş renk sorguları kaydedilir", monitor: "olsaydı: plan kontrolü → alarm"}
+              say: >-
+                Olsaydı: Elektronik yüzlerce ürüne büyüseydi ve bir renk az ürüne düşseydi, kategori index'iyle okunan doküman
+                sayısı dönenin 10 katını aşardı. Gece plan kontrolü bunu en geç ertesi sabah gösterirdi. Sorgu 100 ms'yi aşarsa profiler ve alarm dakikalar içinde
+                gösterirdi. Ekip o zaman üç alanlı index'i arka planda kurardı: önce kategori ve renk (eşitlik),
+                sonra puan (sıralama). t0'daki simülasyonun sağ şeridi bu index olsaydı ne olacağını gösteriyor; bugün yok.
+            - phase: 4
+              who: backup
+              lit: [sozluk, docdb, backup]
+              note: {indexjob: "", profiler: "", monitor: "", backup: "olsaydı: geri dönüş, ör. son 7 gün içinde bir saniye"}
+              say: >-
+                Olsaydı: biri sözlükte bir eş anlamlıyı yanlış bağlasaydı ("Black" → beyaz) ve gece dosyası yüzlerce ürünün
+                rengini bozsaydı, doğrulama kuralı bunu yakalamazdı: "beyaz" izinli bir renk. Ekip önce sözlüğü düzeltir; sonra
+                sürekli yedek kataloğu bozulmadan bir saniye önceki hâliyle yeni bir kümede açar. Doğru renkler oradan bir dosyaya dışa aktarılır
+                (mongoexport), dosya içe aktarma klasörüne konur ve içe aktarma işi onları her zamanki gibi geri yazar. DocumentDB renk index'ini her yazmada yine kendisi düzeltir.
+            - phase: 4
+              who: docdb
+              lit: [docdb]
+              note: {backup: "", docdb: "kesitte 8 doküman · renk index'i: beyaz 3 · gri 2 · siyah 3"}
+              say: >-
+                Hazır: kesitte 8 doküman, hepsinin attributes bölümünde sözlükteki yazımla bir renk. Renk index'inde beyaz 3, gri
+                2, siyah 3 giriş; kategori index'inin Elektronik bölümünde 8 giriş, puan sırasıyla. Gerçek katalogda Elektronik'te
+                40 ürün, 9'u siyah. t0'daki simülasyon bu 8 dokümanla başlıyor: siyahı seçince DocumentDB kategori index'iyle
+                8'ini okuyacak ve 3'ünü döndürecek.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Önce sayfanın soruları yazılır, sonra ürüne göre değişen bilgilerin nerede, hangi adla ve hangi yazımla duracağına
+              karar verilir. Karar tek bir yerde durur: özellik sözlüğünde.
+            cards:
+              - title: Sayfanın soruları ve iç içe alan
+                text: >-
+                  Ortak alanlar (ad, kategori, fiyat, puan) dokümanın üst seviyesinde, ürüne göre değişen bilgiler attributes adlı
+                  alt dokümanda durur. Sorular iç içe alana adresiyle ulaşır: "attributes.renk". Her soru bir index'e bağlanır.
+                map:
+                  cols: [Soru, Index, Neden]
+                  rows:
+                    - ["kategori + renk: find({ category, \"attributes.renk\" }).sort({ rating: -1 }).limit(48)", "category_1_rating_-1", "Bu adımın sorusu. DocumentDB kategori bölümünü puan sırasıyla okur, rengi her dokümanda kontrol eder; ayrı sıralama gerekmez."]
+                    - ["renk listesi: distinct(\"attributes.renk\", { category })", "—", "Sayfa açılınca o kategorideki renkleri getirir; planı plan kontrolünde ölçülür. Yazımlar tek olduğu için her renk listede bir kez çıkar."]
+                    - ["renk index'i: { \"attributes.renk\": 1 }", "attributes.renk_1", "Renk filtresi için kuruldu. Plan kontrolü, kategori + renk sorusunda DocumentDB'nin onu seçmediğini gösterdi (3. aşama). Kullanımı $indexStats ile izlenir; hep 0 kalırsa silinir ya da yerini üç alanlı index'e bırakır."]
+                    - ["bekleyen: { category, \"attributes.renk\" } + rating sırası", "{ category: 1, \"attributes.renk\": 1, rating: -1 }", "ESR'ye tam uyar ama bugün kurulmadı: bir index daha her yazmayı pahalılaştırır. Kategori büyüyünce kurulur (4. aşama)."]
+              - title: "Özellik sözlüğü: ad, tür, izinli değer, eş anlamlı"
+                text: >-
+                  Her özellik için tek bir satır. Doğrulama kuralı, içe aktarma işinin eşlemesi ve ürün ekranındaki renk listesi bu
+                  dosyadan üretilir; üçü hiçbir zaman birbirinden ayrılmaz. Anahtar adları küçük harf ve alt çizgiyle yazılır;
+                  nokta ve $ kullanılmaz, çünkü nokta adreste "içindeki" demektir. Değerler de tek yazımla durur: veritabanı
+                  "siyah" ile "Siyah"ı harf harf karşılaştırır ve iki ayrı değer sayar; ikisi de olsaydı filtre birini kaçırır,
+                  renk listesinde iki seçenek çıkardı.
+                map:
+                  cols: [Özellik, Tür ve izinli değerler, Tedarikçi yazımları → hedef]
+                  rows:
+                    - [renk, "metin: beyaz, gri, kırmızı, lacivert, siyah, yeşil", "\"Black\", \"SİYAH\", \"Siyah \" → siyah · \"Grey\", \"Gray\" → gri (temsilî)"]
+                    - [garanti_ay, "tam sayı, 0 ya da büyük (ay)", "\"12 ay\", \"12 months\" → 12"]
+                    - [agirlik_kg, "ondalık sayı, 0'dan büyük (kg)", "\"2,45 kg\" → 2.45 · \"4100 g\" → 4.1"]
+              - title: Doğrulama kuralı attributes'a da bakar
+                text: >-
+                  Adım 1'deki kural (ad, 5 kategoriden biri, sayı olarak fiyat) attributes bölümünü de kapsar. Kural sözlükten
+                  üretilir; elle yazılmaz. DocumentDB'nin $jsonSchema'sı burada üç anahtar kelime kullanır: enum, bsonType ve
+                  additionalProperties. Kural her eklemede ve güncellemede çalışır.
+                code:
+                  - {code: "attributes: { bsonType: \"object\", additionalProperties: false,", tag: Index ve plan kontrolü → DocumentDB, say: "attributes bir alt doküman; sözlükte olmayan anahtar giremez."}
+                  - {code: "  properties: { renk: { enum: [\"beyaz\", \"gri\", \"kırmızı\", \"lacivert\", \"siyah\", \"yeşil\"] },", tag: DocumentDB'nin içinde, say: "Renk sadece bu 6 yazımdan biri."}
+                  - {code: "    garanti_ay: { bsonType: \"int\", minimum: 0 },", tag: DocumentDB'nin içinde, say: "Garanti tam sayı, eksi olamaz."}
+                  - {code: "    agirlik_kg: { bsonType: \"double\", minimum: 0 } } }", tag: DocumentDB'nin içinde, say: "Ağırlık ondalık sayı, eksi olamaz."}
+              - title: Hangi index'ler, hangi bedelle?
+                text: >-
+                  İç içe alan index'e üst seviyedeki bir alan gibi girer; her doküman her index'e bir giriş yazar. AWS'e göre her
+                  yazma koleksiyonun bütün index'lerini günceller; AWS'in DocumentDB blogu bir koleksiyonda en fazla beş index
+                  önerir. Bu koleksiyonda dört var; beşinci index son boş yer olur ve her ek index her yazmayı biraz daha
+                  yavaşlatır. Üç alanlı index bu yüzden "lazım olunca" kurulur; ne zaman lazım olduğunu plan kontrolünün okunan /
+                  dönen oranı söyler.
+                code:
+                  - {code: "db.products.createIndex({ \"attributes.renk\": 1 })", tag: Index ve plan kontrolü → DocumentDB, say: "Renk index'i; adı attributes.renk_1 olur. Canlı koleksiyonda arka planda kurulur (3. aşama)."}
+                  - {code: "// bekleyen: { category: 1, \"attributes.renk\": 1, rating: -1 }", tag: Index ve plan kontrolünün içinde, say: "Kategori büyüyünce kurulacak üç alanlı index; bugün yok."}
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              Mağaza açılmadan önce eski katalog bir kez taşınır. Sıra bilerek böyledir: önce sözlük, kural ve index'ler, sonra
+              veri, sonra sayım.
+            cards:
+              - title: Önce sözlük ve kural, sonra veri
+                text: >-
+                  Kural sözlükten üretildiği için önce sözlük yazılır. Kural baştan durduğu için yanlış yazılmış bir renk ya da
+                  bilinmeyen bir anahtar ilk günden içeri giremez. Index'ler de veriden önce kurulur; AWS büyük bir yüklemeden önce
+                  index'leri kurmayı önerir.
+                code:
+                  - {code: "db.createCollection(\"products\", { validator: { $jsonSchema: kural(sozluk) } })", tag: Index ve plan kontrolü → DocumentDB, say: "Koleksiyon, sözlükten üretilen kuralla."}
+              - title: "Eşleme: tedarikçinin yazdığı → sözlükteki ad"
+                text: >-
+                  İçe aktarma işi her özelliği sözlükle eşler: sütun adını özelliğe (Renk, Color → renk), değeri sözlükteki
+                  yazıma çevirir. Önce değer sadeleştirilir (kodda sade()): baştaki ve sondaki boşluk silinir, harfler Türkçe kuralla küçültülür.
+                  Türkçe kural şart: Python'un sıradan lower() komutu "SİYAH"ı "siyah" değil, noktalı bir "i̇" ile yazar; bu yüzden
+                  sözlük tedarikçi yazımlarını tek tek de listeler. Sonra sade değer eş anlamlılarda aranır. Karşılığı yoksa sade
+                  hâliyle bırakılır; kapıda kural onu durdurur.
+                code:
+                  - {code: "renk = ES_ANLAM.get(sade(row[\"Renk\"]), sade(row[\"Renk\"]))", tag: İçe aktarma işinin içinde, say: "\"Siyah \" → siyah; karşılığı olmayan değer sade hâliyle kalır."}
+                  - {code: "garanti = int(row[\"Garanti\"].split()[0])", tag: İçe aktarma işinin içinde, say: "\"12 ay\" → 12."}
+                  - {code: "agirlik = kg(row[\"Ağırlık\"])", tag: İçe aktarma işinin içinde, say: "\"2,45 kg\" → 2.45; \"4100 g\" → 4.1."}
+                  - {code: "doc[\"attributes\"] = { \"renk\": renk, \"garanti_ay\": garanti, \"agirlik_kg\": agirlik }", tag: İçe aktarma işinin içinde, say: "Üç özellik tek bir alt dokümanda."}
+              - title: Toplu yazma ve index girişleri
+                text: >-
+                  İş her satırı ürün numarasıyla upsert eder ve yüzlerce satırı tek pakette, sırasız gönderir (ordered: false):
+                  bir satır reddedilirse diğerleri yine yazılır. DocumentDB her doküman için her index'e bir giriş ekler. Renk
+                  index'i bu sırada henüz yok; o sonradan, dolu koleksiyonda kurulacak.
+                code:
+                  - {code: "ops.append(UpdateOne({ \"_id\": doc[\"_id\"] }, { \"$set\": doc }, upsert=True))", tag: İçe aktarma işinin içinde, say: "Varsa güncelle, yoksa yarat."}
+                  - {code: "db.products.bulk_write(ops, ordered=False)", tag: [İçe aktarma işi → DocumentDB, DocumentDB → İçe aktarma işi], say: "Paket tek seferde gider; reddedilenler cevapta tek tek döner."}
+              - title: Yükleme renk renk sayılır
+                text: >-
+                  İş okunan, yazılan ve reddedilen satır sayılarını CloudWatch'a yazar; okunan = yazılan + reddedilen olmalı. Ekip
+                  ayrıca her rengin ürün sayısını kaynak dosyadakiyle karşılaştırır. Sayılar tutmuyorsa bir yazım sözlükte eksik
+                  kalmış ya da yanlış bağlanmıştır.
+                code:
+                  - {code: "db.products.aggregate([{ $group: { _id: \"$attributes.renk\", n: { $sum: 1 } } }])", tag: [Ekip → DocumentDB, DocumentDB → Ekip], say: "Renk başına ürün sayısı; iç içe alan burada da adresiyle yazılır."}
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              Mağaza açıldıktan sonra özellikler iki yoldan gelir: ürün ekranı ve gece gelen tedarikçi dosyaları. Yeni bir soru
+              yeni bir index, yeni bir özellik ise belli bir sırayla yapılan bir değişiklik getirir.
+            cards:
+              - title: Ürün ekranında renk listeden seçilir
+                text: >-
+                  Katalog yönetim servisi ekrandaki renk kutusunu sözlükten doldurur; çalışan rengi yazmaz, seçer. Böylece ekrandan
+                  gelen değer her zaman izinli bir değerdir. Servis dokümanı yazar; DocumentDB index'leri aynı yazmada günceller.
+                code:
+                  - {code: "db.products.update_one({ \"_id\": \"P0141\" }, { \"$set\": { …, \"attributes\": { \"renk\": \"beyaz\", \"garanti_ay\": 24, \"agirlik_kg\": 0.89 } } }, upsert=True)", tag: Katalog yönetim servisi → DocumentDB, say: "Yeni ürün, üç özelliğiyle."}
+              - title: Gece dosyası sadece gelen özelliği değiştirir
+                text: >-
+                  Tedarikçi çoğu gece sadece değişen bilgiyi gönderir. İş o zaman iç alanı adresiyle günceller. attributes'u bütün
+                  olarak yazsaydı, dosyada olmayan garanti ve ağırlık dokümandan silinirdi.
+                code:
+                  - {code: "{ \"$set\": { \"attributes.renk\": \"siyah\" } }", tag: İçe aktarma işi → DocumentDB, say: "Doğru: sadece renk değişir, diğer özellikler yerinde kalır."}
+                  - {code: "{ \"$set\": { \"attributes\": { \"renk\": \"siyah\" } } }", tag: İçe aktarma işinin içinde, say: "Yanlış: attributes'un yerine sadece renk yazılır; garanti ve ağırlık gider."}
+              - title: İç içe alana index, canlı koleksiyonda
+                text: >-
+                  Renk listesi eklenince renk index'i dolu koleksiyonda arka planda (background: true) kurulur; mağaza okumaya ve
+                  yazmaya devam eder, ilerleme currentOp ile izlenir. Bundan sonra bir ürünün rengi değişince DocumentDB o ürünün
+                  renk girişini eski bölümden silip yeni bölüme koyar; rengi değişmeyen index'lerdeki girişlere dokunmaz.
+                code:
+                  - {code: "db.runCommand({ createIndexes: \"products\", indexes: [{ key: { \"attributes.renk\": 1 }, name: \"attributes.renk_1\", background: true }] })", tag: Index ve plan kontrolü → DocumentDB, say: "Mağaza çalışırken arka planda kurulur."}
+              - title: Renk sorusunun planı kontrol edilir
+                text: >-
+                  Plan kontrolü yeni soruyu explain ile dener ve hint ile renk index'ini de dener. Canlı sistemde DocumentDB
+                  kategori index'ini seçiyor: Elektronik'in 40 dokümanını okuyor, 9 siyah dönüyor; planda ayrı bir SORT yok.
+                  Ekibin kuralı: okunan, dönenin en fazla 10 katı olabilir (temsilî sınır); burada ≈ 4.
+                code:
+                  - {code: "explain(find({ category: \"Elektronik\", \"attributes.renk\": \"siyah\" }).sort({ rating: -1 }).limit(48))", tag: [Index ve plan kontrolü → DocumentDB, DocumentDB → Index ve plan kontrolü], say: "Sorgu çalıştırılır ve nasıl çalıştığı ölçülür."}
+                  - {code: "  → IXSCAN category_1_rating_-1 · filter: { \"attributes.renk\": \"siyah\" } · okunan 40 · dönen 9", tag: DocumentDB → Index ve plan kontrolü, say: "Canlı sistemdeki plan: kategori bölümü, renk sonradan kontrol edilir."}
+                  - {code: "if okunan > 10 * donen: alarm(\"renk sorusu: üç alanlı index gerekiyor\")", tag: Index ve plan kontrolünün içinde, say: "Oran sınırı aşılırsa yayın durur, gece çalışmasında alarm."}
+              - title: Yeni bir özellik güvenle eklenir
+                text: >-
+                  Sıra hep aynıdır. 1) Sözlüğe yeni satır: ad (ör. su_gecirmez), tür (evet / hayır), tedarikçi yazımları. 2)
+                  Dağıtım hattı kuralı collMod ile genişletir; koleksiyon boşaltılmaz. 3) Eşleme ve ürün ekranı güncellenir. 4)
+                  Veri gelir; eski ürünlerde bu alan yoktur ve olmaması bir sorun değildir. 5) Bir sayfa bu özellikle filtreleyecekse
+                  index kurulur; alan sadece bazı ürünlerde varsa sparse index. Sıra ters olursa (önce veri) kural yeni anahtarı
+                  reddeder. Kaldırmak ters sırayla yapılır: önce sayfa ve eşleme, sonra alanın silinmesi ($unset), en son kural.
+                code:
+                  - {code: "db.runCommand({ collMod: \"products\", validator: { $jsonSchema: kural(sozluk) }, validationLevel: \"strict\" })", tag: Index ve plan kontrolü → DocumentDB, say: "Kural yeni anahtarı da kabul edecek şekilde genişler."}
+                  - {code: "db.products.createIndex({ \"attributes.su_gecirmez\": 1 }, { sparse: true })", tag: Index ve plan kontrolü → DocumentDB, say: "Sadece bu alanı olan ürünler index'e girer; sorguda $exists gerekir."}
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              Aynı dosya iki kez gelirse, sözlükte olmayan bir renk ya da anahtar gelirse, kural değişince eski dokümanlar ne olur,
+              renk sorusu yavaşlarsa ve bir eşleme yanlışsa? Her biri için zincirde bir parça vardır; her parçanın ne zaman
+              çalıştığı ve neyi yakalamadığı aşağıda.
+            cards:
+              - title: Aynı dosya iki kez gelirse
+                text: >-
+                  S3 olayları en az bir kez teslim edilir; nadiren aynı olay iki kez gelir. İş her satırı ürün numarasıyla yazdığı
+                  için ikinci geliş aynı dokümanı bulur; kopya doküman ve renk index'inde kopya giriş oluşmaz. Ne zaman: her dosyada,
+                  yazma anında. Yakalamadığı: eski bir dosya yenisinden sonra gelirse eski renk yenisinin üstüne yazılır; bu yüzden
+                  iş dosyaları adlarındaki tarih sırasıyla işler.
+              - title: Sözlükte olmayan renk kapıda kalır
+                text: >-
+                  "Antrasit" gibi sözlükte olmayan bir değer eşlemeden geçer ama doğrulama kuralına (enum) takılır; doküman
+                  yazılmaz, index'e girmez, renk listesinde yeni bir seçenek çıkmaz. İş satırı sebebiyle hata klasörüne yazar,
+                  alarm gider; katalog ekibi sözlüğe eş anlamlı ya da yeni renk ekler, satır yeniden gönderilir. Ne zaman: yazma
+                  anında. Yakalamadığı: izinli ama yanlış bir renk (beyaz bir ürüne "siyah") kapıdan geçer; onu ancak katalog ekibi
+                  ya da bir müşteri şikâyeti fark eder.
+                code:
+                  - {code: "except BulkWriteError as e:  # code 121: Document failed validation", tag: DocumentDB → İçe aktarma işi, say: "Reddedilen satırlar cevapta tek tek döner."}
+                  - {code: "    s3.put_object(Bucket=\"lm-import-rejects\", Key=f\"{dosya}.rejects.json\", Body=…)", tag: İçe aktarma işi → S3, say: "Satırlar ve sebepleri hata klasörüne."}
+              - title: Sözlükte olmayan anahtar ayrılır
+                text: >-
+                  İki kapı var. İçe aktarma işi sözlükte karşılığı olmayan bir sütunu dokümana yazmaz, hata klasörüne ayırır ve
+                  alarm verir; satırın diğer bilgileri yazılır. Bir hata yüzünden yazmaya kalkarsa kural (additionalProperties:
+                  false) dokümanı durdurur. Ne zaman: yazma anında. Yakalamadığı: sözlükte var olan ama eşlemede yanlış sütuna
+                  bağlanmış bir özellik (ör. garanti yerine kargo süresi); onu yükleme sonrası sayım ve katalog ekibi fark eder.
+              - title: Gece denetimi eski dokümanlara bakar
+                text: >-
+                  Kural sadece yazma anında çalışır; kural değişince eski dokümanlar kendiliğinden yeniden kontrol edilmez. Plan
+                  kontrolünün gece çalışması kuralın aynısını bir sorgu olarak kullanır ve "kurala uymayan doküman" sayar; renkleri
+                  de sayar ve sözlükle ve bir önceki gecenin sayılarıyla karşılaştırır. Ne zaman: her gece; sorun en geç ertesi sabah görülür. Yakalamadığı: kurala
+                  uyan yanlış değer.
+                code:
+                  - {code: "db.products.countDocuments({ $nor: [{ $jsonSchema: kural(sozluk) }] })", tag: [Index ve plan kontrolü → DocumentDB, DocumentDB → Index ve plan kontrolü], say: "Kurala uymayan doküman sayısı; 0 değilse alarm."}
+                  - {code: "db.products.aggregate([{ $indexStats: {} }])", tag: [Index ve plan kontrolü → DocumentDB, DocumentDB → Index ve plan kontrolü], say: "Her index kaç kez kullanıldı? Hiç kullanılmayan index silinmeye aday."}
+              - title: Renk sorusu yavaşlarsa
+                text: >-
+                  Plan kontrolü renk sorusunun okunan / dönen oranını her yayında ve her gece ölçer; sınırı aşarsa alarm verir.
+                  Profiler 100 ms'yi aşan sorguyu dakikalar içinde CloudWatch Logs'a yazar. Çare: üç alanlı index'i arka planda
+                  kurmak (t0'daki sağ şerit). Yakalamadığı: plan kontrolü listedeki soruları dener, listede olmayan bir sorguyu
+                  görmez; profiler eşiğin altında kalan bir sorguyu görmez.
+              - title: Yanlış bir eşleme
+                text: >-
+                  Sözlükte bir eş anlamlı yanlış bağlanırsa ("Black" → beyaz) değer izinli olduğu için kural onu durdurmaz. Gece
+                  sayımındaki ani değişiklik (siyah azaldı, beyaz arttı) ekibi uyarır. Ekip önce sözlüğü düzeltir; sonra sürekli
+                  yedek kataloğu bozulmadan önceki bir saniyeyle yeni bir kümede açar; doğru renkler oradan bir dosyaya dışa aktarılır (mongoexport) ve içe aktarma işiyle geri
+                  yazılır. Saklama
+                  süresi 1 ile 35 gün arasında seçilir (katalog için ör. 7 gün). Yakalamadığı: geri dönülen saniyeden sonra yapılan
+                  doğru değişiklikler yedekte yoktur; ekip onları yeniden uygular.
+                code:
+                  - {code: "aws docdb restore-db-cluster-to-point-in-time --source-db-cluster-identifier <katalog> \\", tag: Ekip → AWS, say: "Kataloğun eski hâli…"}
+                  - {code: "  --db-cluster-identifier katalog-geri --restore-to-time <bozulmadan önceki saniye>", tag: Ekip → AWS, say: "…yeni bir kümede açılır."}
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
