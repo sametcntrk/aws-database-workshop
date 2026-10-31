@@ -1392,6 +1392,9 @@ def doc_pipeline(lang):
 DOC_CANDS = ["DocumentDB", "Aurora PostgreSQL", "DynamoDB", "OpenSearch", "ElastiCache (Valkey)"]
 
 
+SVC.setdefault("doce", "DocumentDB elastic cluster")   # the sharded twin of DocumentDB (DocumentDB page, model 2)
+
+
 def docdb(lang):
     w1 = verdicts(DOC_CANDS, [
         V((1, "each document has its own fields", "her document'ın kendi alanları var"), (1, "JSONB column, or many tables", "JSONB column ya da birçok table"), (1, "items have free attributes", "item'ların serbest attribute'ları var"),
@@ -1431,6 +1434,8 @@ def docdb(lang):
         "update": doc_update(lang),
         # the Turkish page (templates/e2e/docdb.tr.html): five scorecard simulations built from the M2 cards (e2e_usecases.DOCDB_USECASES)
         **{uc["sim"]: usecase_scorecard(lang, uc) for uc in _uc.DOCDB_USECASES if uc["sim"]},
+        # model 2, the Turkish page: five weighted_scorecard simulations built from the M2 cards (e2e_usecases_w.DOCDB_W)
+        **({uc["sim"]: weighted_scorecard(lang, uc) for uc in _ucw.DOCDB_W if uc["sim"]} if lang == "tr" else {}),
     }
     return {k: _localize(v, lang) for k, v in spec.items()}
 
