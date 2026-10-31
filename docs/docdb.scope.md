@@ -1,10 +1,10 @@
 # Scope: Amazon DocumentDB (with MongoDB compatibility) (docdb)
 
-status: pilot
+status: verified domain-map row, regenerated in model 2 (weighted R1 "Engine uyumu")
 domain-map row: verified
-date: 2026-10-29
+date: 2026-10-31 (model 2); first version 2026-10-29 (model 1)
 
-Page: `app/engine_app/templates/e2e/docdb.tr.html` (Turkish only; the old English `docdb.html` stays untouched). Data: `DOCDB_USECASES` in `app/engine_app/e2e_usecases.py` (sources in the comment block above the list). Simulations: the DocumentDB section of `app/engine_app/e2e_sims.py` (five `usecase_scorecard` decisions from the cards, the mechanism simulations `scan`, `index`, `pipeline`, the new `update`; the old `decide_*` simulations stay for the English page only).
+Page: `app/engine_app/templates/e2e/docdb.tr.html` (Turkish only; the old English `docdb.html` stays untouched and still renders the model 1 data). Data: `DOCDB_W` at the end of `app/engine_app/e2e_usecases_w.py` (model 2, sources in the comment block above it), registered as `USECASES_W["docdb"]` and `PAGE_SVC["docdb"] = "doc"`; new entries `CATEGORY["doce"]`, `LINK["doce"]` (DocumentDB elastic cluster, the twin) and `SVC["doce"]` in `e2e_sims.py`. Simulations: `docdb()` in `app/engine_app/e2e_sims.py` adds `weighted_scorecard` for the five cards with a `sim` when `lang == "tr"` (`w_catalog`, `w_profiles`, `w_events`, `w_search`, `w_sessions`); the mechanism simulations `scan`, `index`, `pipeline`, `update` are unchanged. Kept for the English page: `DOCDB_USECASES` (model 1), `decide_*`, and the model 1 scorecards. Check: `check_usecases.py --app <abs app> docdb`.
 
 ## Part A topic and the everyday picture (A1)
 
@@ -51,22 +51,32 @@ Page: `app/engine_app/templates/e2e/docdb.tr.html` (Turkish only; the old Englis
 
 MongoDB, Amazon DocumentDB, DynamoDB
 
-## Use cases (M2) and their closest alternatives
+## Use cases (M2), model 2: candidates, totals, simulations
 
-| No | Use case | Alternative 1 | Alternative 2 | sim | Totals |
+| No | Use case | Candidates (best fit first) | Totals | R1 subtotals | sim |
 |---|---|---|---|---|---|
-| 1 | Product catalog with variable attributes (Lale Market) | Aurora | OpenSearch | win_catalog | DocumentDB 46, Aurora 41, OpenSearch 32 |
-| 2 | User profiles with nested preferences | DynamoDB | Aurora | race_profiles | DocumentDB 44, DynamoDB 43, Aurora 39 |
-| 3 | Content management: articles and blocks | DynamoDB | Aurora | none | DocumentDB 44, DynamoDB 41, Aurora 39 |
-| 4 | Event logs with flexible schema | DynamoDB | OpenSearch | lose_events | DynamoDB 46, OpenSearch 37, DocumentDB 31 |
-| 5 | IoT device configurations | DynamoDB | Aurora | none | DocumentDB 46, DynamoDB 44, Aurora 41 |
-| 6 | Mobile app sync (list documents) | DynamoDB | Aurora | none | DocumentDB 45, DynamoDB 42, Aurora 39 |
-| 7 | Order documents with line items | Aurora | DynamoDB | race_orders | DocumentDB 42, Aurora 41, DynamoDB 41 |
-| 8 | Catalog search by nested fields | OpenSearch | Aurora | race_search | DocumentDB 42, OpenSearch 41, Aurora 36 |
-| 9 | Session documents | ElastiCache | DynamoDB | none | ElastiCache 45, DynamoDB 40, DocumentDB 39 |
-| 10 | Feature flags and settings | DynamoDB | Aurora | none | DocumentDB 46, DynamoDB 44, Aurora 41 |
+| 1 | Product catalog with variable attributes (Lale Market) | DocumentDB, Aurora PostgreSQL, OpenSearch | 93,3 · 81,8 · 71,8 | 54,2 / 42,7 / 40,7 of 55 | w_catalog |
+| 2 | User profiles with nested preferences | DocumentDB, DynamoDB, Aurora PostgreSQL | 88,2 · 82,6 · 73,2 | 36,8 / 28,4 / 28,4 of 38 | w_profiles |
+| 3 | Content management: articles and blocks | DocumentDB, DynamoDB, Aurora PostgreSQL | 92,4 · 79,2 · 79,2 | 42,8 / 31,8 / 34,2 of 46 | |
+| 4 | Event logs with flexible schema | DynamoDB, DocumentDB elastic cluster, DocumentDB | 85,9 · 82,2 · 66,2 (close race) | 46,4 / 45,2 / 45,2 of 50 | w_events |
+| 5 | IoT device registry and configuration | DocumentDB, DynamoDB, Aurora PostgreSQL | 90,6 · 83,6 · 76,2 | 44,6 / 36,0 / 35,0 of 46 | |
+| 6 | Mobile app sync: list documents | DocumentDB, DynamoDB, DocumentDB elastic cluster | 89,4 · 83,8 · 82,2 | 42,8 / 35,4 / 42,8 of 44 | |
+| 7 | Order documents: read model next to Aurora | DocumentDB, Aurora PostgreSQL, DynamoDB | 92,8 · 82,6 · 80,2 | 46,0 / 38,8 / 37,8 of 46 | |
+| 8 | Catalog search by nested fields (filters, facets) | DocumentDB, OpenSearch, Aurora PostgreSQL | 77,6 · 76,8 · 68,0 (close race) | 30,4 / 40,8 / 31,0 of 42 | w_search |
+| 9 | Session documents (quote wizard) | ElastiCache (Valkey), DynamoDB, DocumentDB | 85,2 · 79,2 · 64,0 | 41,0 / 32,4 / 32,8 of 46 | w_sessions |
+| 10 | Feature flags and settings | DocumentDB, DynamoDB, Aurora PostgreSQL | 94,1 · 88,4 · 75,6 | 37,6 / 36,4 / 31,6 of 40 | |
 
-DocumentDB loses card 4 (DynamoDB) and card 9 (ElastiCache). "Both together" is the honest answer in card 1 (catalog + OpenSearch search copy), card 5 (device registry + time series telemetry), card 7 (Aurora record + DocumentDB read model), card 8 (once text search is required) and card 9 (sessions in ElastiCache, finished quotes in DocumentDB). No shared part changed: `SVC`, `CATEGORY` and `LINK` already had `doc`, `ddb`, `aur`, `os`, `ec`.
+DocumentDB is not the best fit in card 4 (DynamoDB; DocumentDB instance-based is third, a clear loss) and card 9 (ElastiCache; DocumentDB third). Another engine wins R1 but loses the total in card 8 (OpenSearch). Twins of one engine: DocumentDB instance-based and elastic cluster have the same R1 in cards 4 and 6; R2 (write scale) puts the elastic cluster second in card 4, R4 (no change streams) puts it third in card 6; the other cards say in the verdict why the twin is not a candidate. "Both together": card 1 and 8 (catalog in DocumentDB, search copy in OpenSearch), card 4 (Kinesis copy to the warehouse), card 5 (registry in DocumentDB, telemetry in Timestream for InfluxDB), card 7 (order record in Aurora, read model in DocumentDB), card 9 (live session in ElastiCache, finished quote in DocumentDB), card 10 (AppConfig for staged rollout when no content query is needed). Not candidates, with the reason on the page: MongoDB Atlas (not an AWS service, differs only in R3-R5), Kinesis (card 4), AWS AppConfig (card 10, not a database).
+
+Weights: R1 38-55 and the heaviest group on every card; R2-R5 at least 5. Placement rules used: the single primary is the scaling model of the instance-based cluster (R2), instance/replica/shard sizing is R4, the I/O price of TTL deletes and renewals is R5, missing elastic-cluster features are R3/R4.
+
+## Facts added for model 2 (official sources)
+
+- Elastic clusters: hash sharding, up to 32 shards, a shard has one writer and 0-15 replicas; not supported: ACID transactions, change streams, point-in-time restore, unique, partial, text and vector indexes, multi-field shard key, change shard key, DDL during scaling (https://docs.aws.amazon.com/documentdb/latest/devguide/elastic-how-it-works.html, https://docs.aws.amazon.com/documentdb/latest/devguide/docdb-using-elastic-clusters.html)
+- Elastic cluster pricing per vCPU-hour of each shard instance (US East example 0.132 USD), storage per GB-month (https://aws.amazon.com/documentdb/pricing/)
+- "Both TTL and change streams incur I/O's when data is written, read, and deleted" (https://docs.aws.amazon.com/documentdb/latest/devguide/best_practices.html)
+- AWS DMS homogeneous migration to DocumentDB: full load and CDC through the source oplog (https://aws.amazon.com/blogs/database/aws-dms-homogenous-migration-from-document-oriented-databases-to-amazon-documentdb/)
+- The other limits of the card reasons are listed with URLs in the comment block above `DOCDB_W`.
 
 ## Known traps (handled explicitly in Part A)
 
