@@ -73,7 +73,7 @@ The domain-map titles were kept where they make a decision; three titles were ad
 | 3 | Financial close | Redshift, Aurora, Redshift provisioned | EY, DA, ŞE, TA | 42 | 88,2 · 73,8 · 71,2 (Aurora wins R1 35,2 vs 34,2) | none |
 | 4 | Click stream (= Keyspaces card 7) | Keyspaces, DynamoDB, Redshift | EY, DA, OY, YD | 46 | 77,0 · 76,6 · 62,0 (Redshift third) | w_clicks |
 | 5 | Data sharing between teams and accounts | Redshift, Athena, Redshift provisioned | EY, DA, AO, TA | 44 | 94,8 · 80,6 · 79,8 | none |
-| 6 | ML feature preparation | Redshift, Athena, Aurora | EY, DA, OY, AO | 44 | 91,4 · 78,8 · 59,4 | none |
+| 6 | ML feature preparation | Redshift, Athena, Aurora | EY, DA, OY, AO | 44 | 91,4 · 78,8 · 60,8 | none |
 | 7 | Log aggregation and search | OpenSearch, Athena, Redshift | EY, VM, YD, DA | 44 | 85,6 · 64,4 · 62,4 (Redshift third) | w_logs |
 | 8 | Inventory forecasting inputs, flat 24/7 | Redshift provisioned, Redshift, Aurora | EY, DA, AO, OY | 46 | 93,0 · 89,8 · 68,0 (race; R1 equal 44,2) | w_forecast |
 | 9 | Executive dashboards | Redshift, OpenSearch, Aurora | EY, DA, AO, OY | 44 | 88,8 · 66,0 · 64,4 | none |

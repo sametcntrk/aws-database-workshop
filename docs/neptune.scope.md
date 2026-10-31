@@ -71,7 +71,7 @@ Domain: database. Catalog: simkit.R1_CATALOGS["database"] (VM, ŞE, EY, OY, TA, 
 | No | Use case | Candidates (best fit first) | R1 sub-items | R1 weight | Totals /100 | sim |
 |---|---|---|---|---|---|---|
 | 1 | Social graph: people you may know | np, aur, ddb | EY DA OY VM | 50 | 90,5 / 80,4 / 73,8 | w_social |
-| 2 | Fraud ring check at payment time | np, npa, aur | EY DA OY TA | 50 | 91,5 / 80,5 / 73,5 (R1 np = npa = 48,5) | w_fraud |
+| 2 | Fraud ring check at payment time | np, npa, aur | EY DA OY TA | 50 | 91,5 / 80,5 / 63,5 (R1 np = npa = 48,5) | w_fraud |
 | 3 | Recommendations by graph (Lale Market) | np, aur, ddb | EY DA OY VM | 45 | 81 / 79 / 70 (close race) | w_reco |
 | 4 | Product knowledge graph, GraphRAG | npa, os, np | EY DA VM AO | 50 | 87,5 / 77,5 / 73,5 | — |
 | 5 | Identity graph | np, ddb, npa | EY OY DA TA | 50 | 87 / 83 / 77 (close race; R1 npa 47 > np 46) | — |
