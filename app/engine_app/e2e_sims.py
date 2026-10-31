@@ -2661,7 +2661,8 @@ COUNT_TR.update({"values read (row store)": "okunan değer (row store)", "values
                  "blocks read (sorted)": "okunan blok (sıralı)", "blocks read (unsorted)": "okunan blok (sırasız)", "rows moved": "taşınan row",
                  "rows on disk": "diskteki row", "rows marked deleted": "silinmiş işaretli row", "unsorted rows": "sıralanmamış row"})
 SIMS["redshift"] = redshift
-SVC.setdefault("rsp", "Redshift provisioned")   # Redshift provisioned cluster, the twin of Redshift Serverless (Redshift cards 3, 5, 8, 10)
+SVC.setdefault("rsp", "Redshift provisioned")
+SVC.setdefault("ix3", "Timestream for InfluxDB 3")   # InfluxDB 3 Enterprise on Timestream: same data model as "ix", another engine (InfluxDB page, model 2)   # Redshift provisioned cluster, the twin of Redshift Serverless (Redshift cards 3, 5, 8, 10)
 
 
 # ================================================================ Timestream for InfluxDB (time series)
@@ -2788,10 +2789,50 @@ def influxdb(lang):
                                          ("Several records change as one unit", "Birkaç kayıt tek bir birim olarak değişir"),
                                          ("Rules between tables are enforced", "Table'lar arası kurallar uygulanır")], IX_CANDS, w2),
         "series": ix_series(lang), "window": ix_window(lang), "retention": ix_retention(lang),
+        **({"cardinality": ix_cardinality(lang)} if lang == "tr" else {}),
+        **({uc["sim"]: weighted_scorecard(lang, uc) for uc in _ucw.INFLUXDB_W if uc["sim"]} if lang == "tr" else {}),
     }
     return {k: _localize(v, lang) for k, v in spec.items()}
 
 
+# The cardinality simulation of the Turkish model 2 page (B2): the same six orders written twice, once with the order id in a
+# tag and once in a field. The series keys are computed from the lines, like ix_series.
+IX_ORDERS = [["O000061", "web", 2, "1793354411"], ["O000062", "web", 1, "1793354471"], ["O000063", "mobile", 3, "1793354531"],
+             ["O000064", "web", 1, "1793354591"], ["O000065", "mobile", 2, "1793354651"], ["O000066", "web", 1, "1793354711"]]
+EXTRA_TABLES["ix_orders"] = {"cols": ["order_id", "channel", "items", "time"], "rows": IX_ORDERS}
+
+
+def ix_cardinality(lang):
+    rows = deepcopy(IX_ORDERS)
+    steps = [{"say": T(lang, "Six orders. Design A puts order_id in a tag. Design B puts it in a field. Watch the number of series.",
+                       "Altı sipariş. Tasarım A order_id'yi bir tag'e koyar. Tasarım B onu bir field'a koyar. Series sayısını izle."),
+              "marks": {}, "rows": {"o": deepcopy(rows)}, "out": [], "count": {"series (A: tag)": 0, "series (B: field)": 0}}]
+    sa, sb, out = [], [], []
+    for i, (oid, ch, n, ts) in enumerate(IX_ORDERS):
+        ka = f"orders,channel={ch},order_id={oid} items"
+        kb = f"orders,channel={ch} items"
+        newa, newb = ka not in sa, kb not in sb
+        if newa:
+            sa.append(ka)
+        if newb:
+            sb.append(kb)
+        out.append([f"orders,channel={ch},order_id={oid} items={n}i {ts}", f"orders,channel={ch} items={n}i,order_id=\"{oid}\" {ts}"])
+        tr_a = "yeni bir series doğar" if newa else "yeni series doğmaz"
+        tr_b = "yeni bir series doğar" if newb else "point var olan series'in sonuna eklenir"
+        steps.append({"say": T(lang, f"Order {oid}: design A gets {'a new series' if newa else 'no new series'}, design B gets {'a new series' if newb else 'no new series'}.",
+                               f"{oid} siparişi: tasarım A'da {tr_a}, tasarım B'de {tr_b}."),
+                      "marks": {"o": {k: ("match" if k == i else "read") for k in range(i + 1)}}, "rows": {"o": deepcopy(rows)}, "out": deepcopy(out), "outmarks": {i: "new"},
+                      "count": {"series (A: tag)": len(sa), "series (B: field)": len(sb)}})
+    steps.append({"say": T(lang, f"Six points. Design A: {len(sa)} series, one for each order; a million orders give a million series. Design B: {len(sb)} series, one for each channel. An id that grows without limit goes into a field.",
+                           f"Altı point. Tasarım A: {len(sa)} series, her sipariş için bir tane; bir milyon sipariş bir milyon series demektir. Tasarım B: {len(sb)} series, her kanal için bir tane. Sınırsız büyüyen bir id field'a gider."),
+                  "marks": {"o": {k: "read" for k in range(len(rows))}}, "rows": {"o": deepcopy(rows)}, "out": out,
+                  "count": {"series (A: tag)": len(sa), "series (B: field)": len(sb)}})
+    return {"tables": [{"id": "o", "name": T(lang, "six orders", "altı sipariş"), "cols": ["order_id", "channel", "items", "time"], "rows": rows, "key": [0], "ref": []}],
+            "out": {"name": T(lang, "the same point in two designs", "aynı point iki tasarımda"), "cols": [T(lang, "A: order_id in a tag", "A: order_id tag'de"), T(lang, "B: order_id in a field", "B: order_id field'da")]},
+            "steps": steps}
+
+
+COUNT_TR.update({"series (A: tag)": "series (A: tag)", "series (B: field)": "series (B: field)"})
 COUNT_TR.update({"points": "point", "series": "series", "raw points read": "okunan ham point", "points returned": "dönen point",
                  "shard groups read": "okunan shard group", "shard groups deleted": "silinen shard group"})
 SIMS["influxdb"] = influxdb
