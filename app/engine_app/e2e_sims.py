@@ -2577,6 +2577,52 @@ def rs_dist(lang):
             "out": {"name": T(lang, "result", "sonuç"), "cols": ["-"]}, "steps": steps}
 
 
+# Teaching tables of the Turkish Redshift page (model 2): a dimension of the fact table sales, and the dictionary encoding of
+# its category column, computed from RS_ROWS so that the page and the simulations show the same values.
+RS_CUSTOMERS = [r for r in CUSTOMERS["rows"] if r[0] in {x[2] for x in RS_ROWS}]
+EXTRA_TABLES["rs_customers"] = {"cols": ["customer_id", "name", "city", "segment"], "rows": [[r[0], r[1], r[3], r[4]] for r in RS_CUSTOMERS]}
+RS_DICT = sorted({r[4] for r in RS_ROWS})
+EXTRA_TABLES["rs_dict"] = {"cols": ["kod", "category"], "rows": [[i, c] for i, c in enumerate(RS_DICT)]}
+EXTRA_TABLES["rs_encoded"] = {"cols": ["order_id", "category", T("tr", "stored code", "saklanan kod")],
+                              "rows": [[r[0], r[4], RS_DICT.index(r[4])] for r in RS_ROWS]}
+
+
+def rs_update(lang):
+    """UPDATE in a column store: the old row is marked as deleted and a new row is appended to the unsorted end; VACUUM
+    removes the marked row and sorts again. The same 8 rows as the page, sorted by order_date (the sort key)."""
+    cols = ["order_id", "order_date", "customer_id", "qty", "amount", T(lang, "deleted by", "silen")]
+    base = [[r[0], r[1], r[2], r[6], r[7], ""] for r in RS_ROWS]
+    tgt = next(i for i, r in enumerate(base) if r[0] == "O000061")
+    old = base[tgt]
+    newrow = [old[0], old[1], old[2], 3, round(old[4] / old[3] * 3, 2), ""]
+    s1 = deepcopy(base)
+    s2 = deepcopy(base); s2[tgt][5] = "xid 9123"
+    s3 = deepcopy(s2) + [newrow]
+    s4 = [r for r in s3 if not r[5]]
+    s5 = sorted(deepcopy(s4), key=lambda r: (r[1], r[0]))
+    pos = next(i for i, r in enumerate(s5) if r[0] == "O000061")
+    steps = [{"say": T(lang, f"The table sales holds {len(base)} rows, sorted by the sort key order_date. Query: UPDATE sales SET qty = 3 WHERE order_id = 'O000061' (now 2).",
+                       f"sales table'ı sort key order_date'e göre sıralı {len(base)} row tutar. Sorgu: UPDATE sales SET qty = 3 WHERE order_id = 'O000061' (şimdi 2)."),
+              "marks": {"u": {tgt: "read"}}, "rows": {"u": s1}, "out": [], "count": {"rows on disk": len(s1), "rows marked deleted": 0, "unsorted rows": 0}},
+             {"say": T(lang, "A column store does not change the value in place: every column of the row is in a different compressed block. The engine marks the old row as deleted by this transaction. The row stays on disk.",
+                       "Column store değeri yerinde değiştirmez: row'un her kolonu ayrı, sıkıştırılmış bir bloktadır. Engine eski row'u bu transaction'ın sildiği row olarak işaretler. Row diskte kalır."),
+              "marks": {"u": {tgt: "bad"}}, "rows": {"u": s2}, "out": [], "count": {"rows on disk": len(s2), "rows marked deleted": 1, "unsorted rows": 0}},
+             {"say": T(lang, "It appends the new version of the row at the end of the table, in the unsorted region. The update was one delete and one insert.",
+                       "Row'un yeni sürümünü table'ın sonuna, sıralanmamış bölgeye ekler. Güncelleme bir silme ve bir eklemeydi."),
+              "marks": {"u": {tgt: "bad", len(s3) - 1: "new"}}, "rows": {"u": s3}, "out": [], "count": {"rows on disk": len(s3), "rows marked deleted": 1, "unsorted rows": 1}},
+             {"say": T(lang, f"A query now reads {len(s3)} rows and skips the marked one. The new row is outside the sorted order, so its block has a wide zone map range and is read more often.",
+                       f"Bir sorgu şimdi {len(s3)} row okur ve işaretli olanı atlar. Yeni row sıralı düzenin dışındadır; bu yüzden bloğunun zone map aralığı geniştir ve daha sık okunur."),
+              "marks": {"u": {**{i: "read" for i in range(len(s3))}, tgt: "skip"}}, "rows": {"u": s3}, "out": [], "count": {"rows on disk": len(s3), "rows marked deleted": 1, "unsorted rows": 1}},
+             {"say": T(lang, "VACUUM DELETE removes the marked row and gives its space back. Redshift runs it in the background when the load is low.",
+                       "VACUUM DELETE işaretli row'u kaldırır ve yerini geri verir. Redshift bunu yük düşükken arka planda kendisi çalıştırır."),
+              "marks": {"u": {len(s4) - 1: "new"}}, "rows": {"u": s4}, "out": [], "count": {"rows on disk": len(s4), "rows marked deleted": 0, "unsorted rows": 1}},
+             {"say": T(lang, f"The sort phase puts the new row back into the order of the sort key, at place {pos + 1}. The cost of the update: one mark, one append, then background work. Many small updates multiply this work; that is why a warehouse prefers large loads.",
+                       f"Sıralama aşaması yeni row'u sort key sırasındaki yerine, {pos + 1}. sıraya koyar. Güncellemenin bedeli: bir işaret, bir ekleme, sonra arka plan işi. Çok sayıda küçük güncelleme bu işi katlar; bu yüzden bir warehouse büyük toplu yüklemeleri sever."),
+              "marks": {"u": {pos: "done"}}, "rows": {"u": s5}, "out": [], "count": {"rows on disk": len(s5), "rows marked deleted": 0, "unsorted rows": 0}}]
+    return {"tables": [{"id": "u", "name": T(lang, "sales on disk (sorted by order_date)", "diskteki sales (order_date'e göre sıralı)"), "cols": cols, "rows": s1, "key": [0], "ref": [2], "pk": [1]}],
+            "out": {"name": T(lang, "result", "sonuç"), "cols": ["-"]}, "steps": steps}
+
+
 RS_CANDS = ["Redshift", "Aurora PostgreSQL", "DynamoDB", "OpenSearch", "Neptune"]
 
 
@@ -2603,13 +2649,19 @@ def redshift(lang):
                                            ("Several rows change as one unit", "Birkaç row tek bir birim olarak değişir"),
                                            ("Rules between tables (foreign keys, CHECK)", "Table'lar arası kurallar (foreign key, CHECK)")], RS_CANDS, w2),
         "rowcol": rs_rowcol(lang), "zonemap": rs_zonemap(lang), "dist": rs_dist(lang),
+        # model 2, the Turkish page: five weighted_scorecard simulations built from the M2 cards (e2e_usecases_w.REDSHIFT_W).
+        # decide_report and decide_checkout stay for the untouched English redshift.html.
+        **({uc["sim"]: weighted_scorecard(lang, uc) for uc in _ucw.REDSHIFT_W if uc["sim"]} if lang == "tr" else {}),
+        **({"update": rs_update(lang)} if lang == "tr" else {}),
     }
     return {k: _localize(v, lang) for k, v in spec.items()}
 
 
 COUNT_TR.update({"values read (row store)": "okunan değer (row store)", "values read (column store)": "okunan değer (column store)",
-                 "blocks read (sorted)": "okunan blok (sıralı)", "blocks read (unsorted)": "okunan blok (sırasız)", "rows moved": "taşınan row"})
+                 "blocks read (sorted)": "okunan blok (sıralı)", "blocks read (unsorted)": "okunan blok (sırasız)", "rows moved": "taşınan row",
+                 "rows on disk": "diskteki row", "rows marked deleted": "silinmiş işaretli row", "unsorted rows": "sıralanmamış row"})
 SIMS["redshift"] = redshift
+SVC.setdefault("rsp", "Redshift provisioned")   # Redshift provisioned cluster, the twin of Redshift Serverless (Redshift cards 3, 5, 8, 10)
 
 
 # ================================================================ Timestream for InfluxDB (time series)

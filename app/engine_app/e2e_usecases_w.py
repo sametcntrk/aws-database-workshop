@@ -5303,3 +5303,742 @@ OPENSEARCH_W.append(wusecase("anomaly", 10,
 
 USECASES_W["opensearch"] = OPENSEARCH_W
 PAGE_SVC["opensearch"] = "os"
+
+
+# ====================================================================== Amazon Redshift Serverless (page id "redshift"), Turkish, model 2
+# Ten weighted cards of the Redshift page. "rs" is Redshift Serverless (the page's service); "rsp" is a Redshift provisioned
+# cluster: the same engine (twin rule), so the two always get the same R1 points and only R2-R5 separate them.
+# Card 1 repeats Aurora card 6 ("reporting") and card 4 repeats Keyspaces card 7 ("clicks"): rows, weights and points are
+# copied from those cards in code (decisions.md, "The same workload on two pages"); only the Redshift reasons are rewritten
+# with the feature numbers of this page, and the feature numbers of the other pages are removed from the borrowed reasons.
+# Sources of the limits and numbers in the reasons (the hedges are the hedges of the source), all read on 2026-10-31:
+#  - Columnar store, 1 MB blocks, compression encodings (AZ64, LZO, ZSTD): https://aws.amazon.com/blogs/big-data/getting-the-most-out-of-your-analytics-stack-with-amazon-redshift/
+#  - Zone map: min and max per 1 MB block, sort key: https://docs.aws.amazon.com/redshift/latest/dg/c_best-practices-sort-key.html,
+#    https://aws.amazon.com/blogs/big-data/amazon-redshift-engineerings-advanced-table-design-playbook-compound-and-interleaved-sort-keys/
+#  - Distribution styles AUTO, EVEN, KEY, ALL; "Your fact table can have only one distribution key":
+#    https://docs.aws.amazon.com/redshift/latest/dg/c_choosing_dist_sort.html, https://docs.aws.amazon.com/redshift/latest/dg/c_best-practices-best-dist-key.html
+#  - "Using individual INSERT statements to populate a table might be prohibitively slow": https://docs.aws.amazon.com/redshift/latest/dg/r_INSERT_30.html
+#  - Deleted rows are "marked for deletion, but not removed"; automatic VACUUM DELETE: https://docs.aws.amazon.com/redshift/latest/dg/t_Reclaiming_storage_space202.html
+#  - Unique, primary key and foreign key constraints are informational, "not enforced"; NOT NULL is enforced:
+#    https://docs.aws.amazon.com/redshift/latest/dg/t_Defining_constraints.html
+#  - SNAPSHOT (default) and SERIALIZABLE isolation: https://docs.aws.amazon.com/redshift/latest/dg/c_serial_isolation.html
+#  - Materialized views, incremental refresh: https://docs.aws.amazon.com/redshift/latest/dg/materialized-view-refresh.html
+#  - Result cache on the leader node, invalidated by INSERT, DELETE, UPDATE, COPY: https://docs.aws.amazon.com/redshift/latest/dg/c_challenges_achieving_high_performance_queries.html
+#  - Serverless: one RPU = 16 GB, default base 128 RPU, base from 4 RPU: https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-capacity.html;
+#    RPU-hours "on a per-second basis (with a 60-second minimum charge)", Spectrum and concurrency scaling included: https://aws.amazon.com/redshift/pricing/;
+#    "When no queries are running, you aren't billed for compute capacity": https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-billing-on-demand.html
+#  - Recovery points every 30 minutes, kept 24 hours: https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-snapshots-recovery-points.html
+#  - Price List API, eu-central-1, 2026-10-31: Serverless 0.451 USD per RPU-hour on demand, 0.352 USD with a 1-year reservation;
+#    ra3.4xlarge (12 vCPU, 96 GiB) 3.894 USD/h on demand, 1.6939 USD/h with a 3-year reservation (no upfront); ra3.large 0.649 USD/h;
+#    managed storage 0.0256 USD per GB-month.
+#  - Zero-ETL from Aurora: "within seconds of being written" (https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/zero-etl.html); in this
+#    workshop a new order reached aurora_live in about 30 seconds (two measurements, 2026-10-31); source tables need a primary key:
+#    https://docs.aws.amazon.com/redshift/latest/mgmt/zero-etl.reqs-lims.html
+#  - Data sharing of live data across workgroups, accounts and Regions: https://docs.aws.amazon.com/redshift/latest/dg/datashare-overview.html
+#  - Streaming ingestion from Kinesis Data Streams and MSK into a materialized view: https://docs.aws.amazon.com/redshift/latest/dg/materialized-view-streaming-ingestion.html
+#  - Redshift ML: CREATE MODEL in SQL, trained with SageMaker AI Autopilot: https://docs.aws.amazon.com/redshift/latest/gsg/machine-learning.html
+#  - Athena: "$5 per TB of data scanned", 10 MB minimum per query, columnar formats and partitions reduce the scan:
+#    https://docs.aws.amazon.com/whitepapers/latest/big-data-analytics-options/amazon-athena.html
+CATEGORY.setdefault("ath", ("query engine on S3", "S3 üzerinde sorgu motoru"))
+LINK.setdefault("ath", "redshift")     # Athena has no page yet; the Redshift page (cards 2, 5, 6, 7, 10) compares them
+CATEGORY.setdefault("rsp", ("data warehouse", "data warehouse"))
+LINK.setdefault("rsp", "redshift")     # the provisioned cluster is the twin of Redshift Serverless, taught on this page (M5, C2)
+
+_RS_A6 = next(u for u in AURORA_W if u["id"] == "reporting")
+_RS_K7 = next(u for u in KEYSPACES_W if u["id"] == "clicks")
+
+
+def _rsx(t):
+    """Remove the feature numbers of another page (Ö3 of Aurora is not Ö3 of Redshift) and use the page's word "kolon"."""
+    t = re.sub(r"\s*\((?:Ö\d(?:, )?)+\)", "", t)
+    for a, c in (("column'unu", "kolonunu"), ("column'u", "kolonu"), ("column'ları", "kolonları"), ("column bazlı", "kolon bazlı"), (" column ", " kolon ")):
+        t = t.replace(a, c)
+    return t
+
+
+def _rcopy(uc):
+    return [row(r["code"], r["w"], _rsx(r["wwhy"][1]), _rsx(r["want"][1]), _rsx(r["why"][1])) for r in uc["rows"]]
+
+
+def _rborrow(uc, c):
+    return [sc(p, _rsx(w[1])) for p, w in uc["scores"][c]]
+
+
+def _rsame(uc, c, mine):
+    assert [p for p, _ in mine] == [p for p, _ in uc["scores"][c]], f"{uc['id']}: {c} must keep the points of the other page"
+    return mine
+
+
+REDSHIFT_W = []
+
+# ------------------------------------------------------------------ 1. sales reporting over three years (= Aurora card 6)
+REDSHIFT_W.append(wusecase("reporting", 1, sim="w_reporting",
+    title="Yıllar boyu satış raporları: son 90 günden üç yıllık geçmişe",
+    key="Fact table: sipariş satırları (order_date, customer_id, category, amount); sort key order_date, distribution key customer_id. Kaynak Aurora, kopya zero-ETL ile.",
+    story=_rsx(_RS_A6["story"][1]),
+    wnote=_RS_A6["wnote"][1],
+    rows=_rcopy(_RS_A6),
+    cands=["rs", "aur", "os"],
+    scores={
+        "rs": _rsame(_RS_A6, "rs", [
+            sc(10, "Kolon bazlı saklama (Ö1): veri 1 MB'lık bloklarda kolon kolon durur ve tarama sadece sorgunun üç dört kolonunu okur; bloklar sıkıştırılmıştır (Ö2). Puan kırılmadı."),
+            sc(10, "Analitik SQL (Ö5): JOIN, GROUP BY ve window function'lar; analistler bildikleri SQL'i yazar ve yeni bir soru yeni bir cümledir. Puan kırılmadı."),
+            sc(9, "Kolon başına sıkıştırma (Ö2), sort key ile blok atlama (Ö3) ve materialized view (Ö6) engine'in kendi araçlarıdır. 1 puan kırıldı: sort key ve distribution seçimi bir tasarım işidir."),
+            sc(9, "Columnar engine ekleme akışını blok blok kabul eder (Ö7). 1 puan kırıldı: tek row'luk bir güncelleme eski row'u silinmiş işaretleyip yenisini ekler; çok güncellenen veride arka plandaki VACUUM ve sıralama işi artar."),
+            sc(10, "MPP (Ö4): sorgu bütün slice'lara paylaştırılır ve Serverless kapasiteyi eşzamanlı sorgulara göre artırır (Ö8); checkout ayrı bir database'tedir ve taramayı hissetmez. Puan kırılmadı."),
+            sc(9, "Recovery point'ler 30 dakikada bir alınır ve 24 saat tutulur; elle snapshot da alınır. 1 puan kırıldı: kopya kaybolursa zero-ETL entegrasyonu yeniden kurulur ve ilk yükleme sürer."),
+            sc(9, "Zero-ETL (Ö7) kod yazmadan kurulur; AWS kopyanın \"within seconds of being written\" güncellendiğini söyler, bu workshop'ta yeni bir sipariş yaklaşık 30 saniyede görünür. 1 puan kırıldı: workgroup'un base ve en fazla RPU ayarları ekibin işidir; sort key ve distribution tasarımı R1.3'te sayıldı."),
+            sc(8, "Serverless RPU-saat olarak, saniye başına ve 60 saniye minimumla ödenir; sorgu yokken compute ödenmez (Ö8). 2 puan kırıldı: dashboard'lar her beş dakikada yenilendiği için mesai boyunca kapasite çalışır; base RPU dikkatle seçilmelidir.")]),
+        "aur": _rborrow(_RS_A6, "aur"),
+        "os": _rborrow(_RS_A6, "os"),
+    },
+    h2h={"aur": _rsx(_RS_A6["h2h"]["aur"][1]), "os": _rsx(_RS_A6["h2h"]["os"][1])},
+    verdict="Karar: Redshift {rs}, Aurora {aur}, OpenSearch {os}. Kararı R1'in depolama satırı ve R2 verir: geçmişin tamamını tarayan ama birkaç kolon okuyan sorgular columnar (Ö1) ve MPP (Ö4) bir engine ister. Bu kart Aurora sayfasının 6. kartıyla aynı iş yüküdür ve aynı puanları taşır. "
+            "Redshift seçtiğimizde artımız: checkout taramayı hiç hissetmez, analistler aynı SQL'i yazar, kopya zero-ETL ile kod yazmadan gelir, boşta compute ödenmez. "
+            "Eksimiz: ikinci bir sistem ve verinin ikinci kopyası; kopya Aurora'dan yaklaşık 30 saniye geridedir, uygulama dashboard'da \"veri şu ana kadar\" saatini göstermelidir; sort key ve distribution kararları ekibin işidir. "
+            "Doğru mimari ikisi birliktedir: Aurora kayıt sistemi, Redshift rapor tarafı. Bir koşul değişseydi: raporlar son 90 günle sınırlı kalsaydı ve birkaç analist günde birkaç sorgu çalıştırsaydı Aurora'nın reader'ı yeterdi."))
+
+# ------------------------------------------------------------------ 2. marketing attribution (close race with Athena)
+REDSHIFT_W.append(wusecase("attribution", 2, sim="w_attribution",
+    title="Pazarlama attribution'ı: hangi reklam tıklaması satışı getirdi",
+    key="Fact table'lar: ad_clicks (S3'te Parquet, her gece) ve orders. Ortak kolon customer_id: distribution key; ad_clicks'in sort key'i click_time.",
+    story="Lale Market üç reklam ağında kampanya yürütüyor. Ağlar tıklama dosyalarını her gece S3'e Parquet olarak bırakıyor: yılda 900 milyon tıklama. Siparişler Aurora'da, ayda 600.000 sipariş; veri ekibi siparişleri zaten her gece S3'e de yazıyor. "
+          "Pazarlama her sabah 08:00'de \"son tıklama, 7 gün penceresi\" modeliyle her siparişi aynı müşterinin siparişten önceki son tıklamasına bağlamak istiyor. İş en geç 08:30'da bitmeli. "
+          "Sonra gün boyunca üç analist sonucu kampanyaya, kanala ve cihaza göre kesiyor; haftada bir \"ilk tıklama\" ve \"eşit pay\" modelleriyle karşılaştırma yapılıyor. "
+          "Ekip SQL biliyor; yarı zamanlı bir veri mühendisi var. Sonuçlar kaynaklardan yeniden hesaplanabilir.",
+    wnote="R1 toplam 46: işin kendisi büyük bir JOIN ve \"son olanı seç\" sorusudur (EY 16) ve 900 milyon tıklamanın birkaç kolonunu tarar (DA 14). "
+          "R4 18 ile en ağır ikinci satır: yarı zamanlı tek bir mühendis var ve veri iki yerde duruyor. R3 6'dır, çünkü sonuçlar kaynaktan yeniden hesaplanır.",
+    rows=[
+        row("EY", 16, "Attribution'ın kendisi bir JOIN ve bir window sorusudur; her model değişikliği bu satırı değiştirir.",
+            "Her siparişi aynı müşterinin 7 gün içindeki son tıklamasına bağlayan tek bir SQL: müşteriye göre JOIN, zamana göre sıralama, ROW_NUMBER ya da LAST_VALUE ile \"son olanı seç\". Model değişince SQL değişmeli, kod değil.",
+            "Attribution yanlışsa bütçe yanlış kanala gider. Her model değişikliği bir yazılım projesi olursa pazarlama yeni modeli hiç denemez."),
+        row("DA", 14, "Her sabah bir yılın tıklamaları taranır ama her tıklamanın dört kolonu okunur.",
+            "900 milyon tıklamanın sadece customer_id, click_time, campaign ve channel kolonları okunmalı; tarama 30 dakikalık pencereye sığmalı.",
+            "Tam row'ları okuyan bir tarama her sabah yüzlerce GB okur ve 08:30 sınırı kaçar."),
+        row("AO", 10, "İki büyük table aynı müşteri kolonu üzerinden birleşir; birlikte durmaları süreyi belirler.",
+            "Engine'in kendi araçlarıyla join'in ve taramanın maliyeti azaltılabilmeli: veri yerleşimi ayarlanabilmeli, tarih aralığı dışındaki veri hiç açılmamalı, gün içindeki kesitler için ara sonuç saklanabilmeli.",
+            "Bu araçlar yoksa her sabah aynı join ve aynı tarama baştan yapılır ve süre ile fatura büyür."),
+        row("OY", 6, "Yazma şekli basittir: gecede bir kez yeni dosyalar ve ara sıra bir iade.",
+            "Her gece yeni tıklamalar toplu eklenmeli; bir iade siparişin durumunu değiştirdiğinde bir sonraki sabah hesaba girmeli.",
+            "Toplu ekleme yavaşsa sabah işi başlamadan gecikir; iade görünmezse iade edilen siparişler kampanyalara sayılır."),
+        row("R2", 16, "Sabah 30 dakikalık ağır bir iş, gün içinde hafif kesitler: iki farklı yük.",
+            "08:00–08:30 arasında tek bir ağır join; gün içinde üç analistin kesitleri saniyeler içinde dönmeli. Checkout bu işleri hissetmemeli.",
+            "Sabah işi 08:30'u geçerse günlük bütçe kararı eski rakamla verilir."),
+        row("R3", 6, "Sonuçlar kaynaklardan yeniden hesaplanabilir.",
+            "Kaynaklar S3'te ve Aurora'dadır; sonuç table'ı kaybolursa bir sabah işiyle geri gelir. Günlük yedek yeterlidir.",
+            "Kayıp bir günlük rapor gecikmesidir; para kaybı değildir."),
+        row("R4", 18, "Yarı zamanlı tek bir mühendis var ve veri iki yerde duruyor.",
+            "Yeni bir boru hattı yazılmadan kurulmalı; tıklama dosyaları her gece kendiliğinden okunmalı; analistler SQL dışında bir araç öğrenmemeli.",
+            "Elle yazılan her iş tek mühendisin zamanını alır; o tatildeyken rapor durur."),
+        row("R5", 14, "Günde bir ağır iş ve hafif kesitler: ödeme modeli bu şekle uymalı.",
+            "Ağır iş günde 30 dakika sürer; günün geri kalanında az sorgu vardır. Kullanım kadar ödeme isteniyor; aynı veriyi iki kez saklamak istenmiyor.",
+            "7/24 çalışan kapasite günün 23 saati boş durur. Tıklamaların ikinci bir kopyası her ay storage faturasına eklenir."),
+    ],
+    cands=["rs", "ath", "aur"],
+    scores={
+        "rs": [sc(10, "Analitik SQL (Ö5): JOIN ve ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY click_time DESC) tek cümlede; model değişince sadece SQL değişir. Puan kırılmadı."),
+               sc(10, "Tıklamalar her gece COPY ile kolon bazlı bloklara yüklenir (Ö1, Ö7); sorgu dört kolonu okur ve click_time sort key'i aralık dışındaki blokları atlar (Ö3). Puan kırılmadı."),
+               sc(9, "İki table da DISTKEY customer_id ile aynı slice'larda durur ve join yerel çalışır (Ö4); ara sonuç materialized view olarak saklanır (Ö6). 1 puan kırıldı: sort key ve distribution seçimi bir tasarım işidir."),
+               sc(9, "Gecelik COPY toplu eklemenin kendisidir (Ö7); iadeler zero-ETL ile gelir. 1 puan kırıldı: güncellenen row eskisini silinmiş işaretler ve arka plandaki VACUUM işi artar."),
+               sc(10, "MPP (Ö4) sabah işini bütün slice'lara böler; Serverless kapasiteyi işin süresince artırır (Ö8); checkout ayrı database'tedir. Puan kırılmadı."),
+               sc(9, "Recovery point'ler 30 dakikada bir alınır ve 24 saat tutulur. 1 puan kırıldı: kopya kaybolursa COPY ve zero-ETL ile yeniden yükleme sürer."),
+               sc(8, "Siparişler zero-ETL ile, tıklamalar zamanlanmış bir COPY cümlesiyle gelir; ikisi de kod değil SQL'dir (Ö7). 2 puan kırıldı: gecelik COPY'nin zamanlaması ve hata takibi ile workgroup'un base RPU ayarı ekibin işidir; sort key ve distribution tasarımı R1.3'te sayıldı."),
+               sc(7, "RPU-saat, saniye başına ödenir ve sorgu yokken compute ödenmez (Ö8). Kaba tahmin: 32 RPU ile sabah 30 dakika, ayda yaklaşık 480 RPU-saat, yani 216 USD (0,451 USD/RPU-saat); gün içi kesitler bunun üstüne eklenir. 3 puan kırıldı: tıklamalar hem S3'te hem managed storage'da saklanır ve ikinci kopya GB başına ödenir; günde bir saatten az iş için bile kapasite-saat ödenir.")],
+        "ath": [sc(10, "Athena'nın SQL engine'i (Trino) JOIN ve window function'ları tam olarak destekler; aynı SQL çalışır. Puan kırılmadı."),
+                sc(8, "Parquet kolon bazlı bir dosya biçimidir; sorgu dört kolonu ve tarih partition'larını okur. 2 puan kırıldı: dosyaları reklam ağları yazar ve içleri click_time'a göre sıralı değildir; Parquet'in row group istatistikleri bir günün içindeki aralığı az eler."),
+                sc(7, "Tarihe göre partition ve müşteriye göre bucketing yapılabilir. 3 puan kırıldı: materialized view yoktur ve verinin yerleşimi engine'in değil dosyaları yazan işin kararıdır; join'de eşleşen row'lar her sorguda ağ üzerinden yeniden dağıtılır."),
+                sc(9, "Yeni gece dosyaları S3'e eklenir ve table hemen görür; siparişler her gece tam bir snapshot olarak yazıldığı için iadeler de girer. 1 puan kırıldı: gecelik snapshot her gün bütün sipariş dosyalarını yeniden yazar."),
+                sc(8, "Serverless; sorgu başına kapasite servisindir. 2 puan kırıldı: büyük join'ler hesap başına eşzamanlı sorgu kotasına ve sorgu kaynak sınırlarına takılabilir; sabah işi bir kez yeniden denenirse 08:30 kaçar."),
+                sc(10, "Veri S3'te birden fazla Availability Zone'da durur. Puan kırılmadı."),
+                sc(8, "Veri zaten S3'tedir; table tanımları Glue Data Catalog'dadır ve yeni bir boru hattı gerekmez. 2 puan kırıldı: dosya boyutu, partition ve bucketing düzeni ekibin işidir."),
+                sc(9, "Taranan TB başına ödenir (yaklaşık 5 USD/TB); boş saatler sıfırdır. Kaba tahmin: dört kolonun bir yılı Parquet'te birkaç on GB'tır, sabah işi ayda 1 TB'ın altında, yani birkaç on USD. 1 puan kırıldı: ödeme sorgu sayısıyla büyür; gün içindeki her kesit ayrı bir ödemedir.")],
+        "aur": [sc(10, "PostgreSQL SQL'i JOIN ve window function'ları tam olarak destekler. Puan kırılmadı."),
+                sc(3, "Index dar aralıkları hızlandırır. 7 puan kırıldı: PostgreSQL row'ları tam saklar; bir yılın tıklamalarını tarayan sorgu, dört kolon gerekse de her row'un tamamını okur."),
+                sc(6, "Zamana göre partition, BRIN index ve materialized view kullanılabilir. 4 puan kırıldı: kolon bazlı sıkıştırma yoktur ve materialized view'lar elle yenilenir."),
+                sc(8, "aws_s3 extension'ı ile dosyalar her gece table'a yüklenir; iadeler zaten Aurora'dadır. 2 puan kırıldı: 900 milyon row'luk table'a her gece toplu yazma index'leri de günceller."),
+                sc(5, "Sabah işi bir reader instance'ta çalışır ve writer'ın CPU'sunu kullanmaz. 5 puan kırıldı: reader'lar checkout ile aynı storage'ı okur ve büyük tarama storage I/O'sunu checkout ile paylaşır; tarama süresinin kendisi R1 · DA'da sayıldı."),
+                sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                sc(6, "Siparişler zaten oradadır. 4 puan kırıldı: tıklamaları her gece yükleyen iş, partition bakımı ve materialized view yenilemesi yarı zamanlı mühendisin işidir."),
+                sc(4, "Reader instance saat başına ödenir. 6 puan kırıldı: sabah işini 30 dakikada bitirecek büyük bir reader 7/24 çalışır ve tıklamalar row storage'da index'leriyle birlikte saklanır.")],
+    },
+    h2h={
+        "ath": "S3 üzerinde sorgu motoru (Athena) ile kafa kafaya. Bu kart yakın bir yarıştır ve iki servis aynı SQL'i yazar: JOIN ve window function ikisinde de vardır (R1.1 eşit). Farkı R1'in depolama satırları verir. "
+               "Redshift tıklamaları her gece kendi kolon bloklarına yükler, müşteriye göre aynı slice'lara dağıtır ve join yerel çalışır; Athena her sabah dosyaları S3'ten yeniden okur ve iki büyük table'ı join için ağ üzerinden yeniden dağıtır. "
+               "Athena'nın dürüst üstünlüğü servis tarafındadır: veri zaten S3'tedir, ikinci bir kopya yoktur ve boş saatler sıfıra iner (R5). Redshift ise tıklamaların ikinci bir kopyasını tutar ve yükleme zamanlamasını işletir. "
+               "Hangi koşul değişseydi Athena seçilirdi: attribution haftada bir çalışsaydı, gün içi kesitler olmasaydı ya da sabah işinin bir saatlik penceresi olsaydı; o zaman veriyi yerinde sorgulamanın sadeliği depolama farkından ağır basardı.",
+        "aur": "İlişkisel (Aurora PostgreSQL) ile kafa kafaya. Aurora'nın gücü gerçektir: siparişler zaten oradadır, SQL aynıdır ve iadeler anında görünür. "
+               "Ama attribution her sabah bir yılın 900 milyon tıklamasını tarar ve PostgreSQL row'ları tam olarak saklar; dört kolon isteyen sorgu her row'un tamamını okur (R1.2). Büyük tarama checkout'un storage'ını paylaşan bir reader'da çalışır (R2) ve 30 dakikalık pencereyi garanti etmek için büyük bir reader 7/24 ödenir (R5). "
+               "Tıklamaları her gece Aurora'ya yükleyen iş de yarı zamanlı mühendisin işidir. "
+               "Hangi koşul değişseydi Aurora seçilirdi: tıklama verisi yılda 900 milyon değil birkaç milyon olsaydı ve attribution son 30 günle sınırlı kalsaydı; o zaman checkout'un yanındaki bir reader yeterdi.",
+    },
+    verdict="Karar: Redshift {rs}, Athena {ath}, Aurora {aur}. Yakın bir yarış: iki servis de aynı SQL'i yazar; kararı R1'in depolama satırları verir, yani kolon blokları, sort key ve aynı müşterinin row'larının aynı slice'ta durması (Ö1, Ö3, Ö4). "
+            "Redshift seçtiğimizde artımız: sabah işi yerel bir join'dir ve 08:30'a rahat yetişir, gün içi kesitler materialized view'dan saniyeler içinde döner, siparişler zero-ETL ile kod yazmadan gelir. "
+            "Eksimiz: tıklamaların ikinci bir kopyası managed storage'da ödenir ve gecelik COPY zamanlanmalıdır; uygulama COPY başarısız olursa sabah işini başlatmamalı ve dashboard'da \"dünün verisi eksik\" uyarısını göstermelidir. "
+            "Bir koşul değişseydi: attribution haftada bir çalışsaydı ve gün içi kesitler olmasaydı Athena öne geçerdi; tıklamalar yerinde kalır ve sadece taranan veri ödenirdi."))
+
+# ------------------------------------------------------------------ 3. financial close (Aurora wins R1, Redshift wins on service design; twin)
+REDSHIFT_W.append(wusecase("finclose", 3,
+    title="Ay sonu finansal kapanış: üç yoğun gün, yirmi yedi sakin gün",
+    key="Fact table: journal_lines (account_id, cost_center, period, amount), Aurora'dan zero-ETL ile; düzeltme kayıtları Redshift'in dev database'inde ayrı bir table'da (adjustments), çünkü zero-ETL kopyası salt okunurdur. Sort key period, distribution key account_id.",
+    story="Lale Market'in muhasebe defteri siparişlerle aynı Aurora cluster'ındadır ve zero-ETL ile Redshift'e kopyalanır: yılda 80 milyon defter satırı. Her ayın ilk üç iş günü 12 muhasebeci kapanış yapar: 09:00–19:00 arasında yaklaşık 400 ağır sorgu (mizan, masraf merkezine göre dağılım, kur farkı). "
+          "Kapanış sırasında muhasebeciler kapanış aracından birkaç bin düzeltme kaydı girer; araç bu kayıtları kapanış raporlarının çalıştığı database'e yazar. Her düzeltme kaydının borç ve alacağı eşit olmalı ve hesap kodu var olmalı. "
+          "Bütün kapanış raporları ayın son gününün 23:59 hâlini görmeli. Ayın geri kalan 27 gününde günde birkaç sorgu çalışır. Ekipte bir finans BI geliştiricisi var; finans müdürü öngörülebilir bir fatura istiyor.",
+    wnote="R1 toplam 42: soruların biçimi (EY 10), bir yılın defterini taramak (DA 10), düzeltme kaydının kuralları (ŞE 14) ve kapanışın tek bir ânı görmesi (TA 8). "
+          "R5 20 ve R2 18 ile hemen arkasında: yük ayın üç gününde toplanır ve ödeme modeli bu şekle uymalıdır.",
+    rows=[
+        row("EY", 10, "Kapanış soruları değişmez ama karmaşıktır: hesap ağacı, masraf merkezi, kur.",
+            "Mizan, masraf merkezine göre dağılım ve kur farkı SQL ile yazılmalı: JOIN, GROUP BY ve dönem sonu bakiyesi için window function.",
+            "Bir rapor SQL ile yazılamazsa muhasebeci veriyi Excel'e indirir ve kapanışın izi kaybolur."),
+        row("DA", 10, "Her rapor bir dönemin ya da bir yılın defter satırlarını tarar.",
+            "Bir yılın 80 milyon satırından birkaç kolonu okuyan tarama bir dakikanın altında dönmeli.",
+            "Rapor dakikalar sürerse 400 sorgu üç güne sığmaz ve kapanış gecikir."),
+        row("ŞE", 14, "Düzeltme kayıtları bu database'e yazılır ve kuralları yazma anında korunmalı.",
+            "Database bir düzeltme kaydını borç ve alacak eşit değilse ya da hesap kodu yoksa reddetmeli: CHECK, foreign key ve satırları birlikte denetleyen kural.",
+            "Dengesiz bir düzeltme mizanı bozar; hata ancak denetimde bulunursa kapanış yeniden yapılır."),
+        row("TA", 8, "400 sorgu üç gün boyunca aynı ânı görmeli; bir düzeltmenin satırları birlikte yazılmalı.",
+            "Bir düzeltme kaydının satırları ya hep ya hiç yazılmalı; kapanış raporları ayın son gününün 23:59 hâlini görmeli, kaynak değişmeye devam etse de.",
+            "İki rapor iki farklı ânı görürse mizan ile masraf merkezi raporu birbirini tutmaz."),
+        row("R2", 18, "Yük ayın üç gününde toplanır: 400 ağır sorgu, 12 kişi aynı anda.",
+            "Üç gün boyunca 12 kişinin eşzamanlı ağır sorguları beklemeden dönmeli; ayın geri kalanında günde birkaç sorgu.",
+            "Sorgular kuyrukta beklerse 12 muhasebeci aynı anda bekler; kapanış bir gün kayarsa yönetim raporu gecikir."),
+        row("R3", 8, "Kapanış sonuçları denetim için yeniden üretilebilmeli.",
+            "Bir kapanışın verisi aylar sonra aynı hâliyle açılabilmeli; düzeltme kayıtları kaybolmamalı.",
+            "Denetçi bir rakamın kaynağını sorduğunda aynı rakam yeniden üretilemezse kapanış tekrar açılır."),
+        row("R4", 12, "Tek bir BI geliştiricisi var; kapasite planlamak istemiyor.",
+            "Ay başı için kapasite elle eklenmemeli; sunucu, düğüm sayısı ve bakım penceresi planlanmamalı.",
+            "Kapasite planı unutulursa kapanışın ilk sabahı yavaş başlar ve tek geliştirici bunu çözmeye çalışır."),
+        row("R5", 20, "Yük ayın 3 gününde, fatura 30 günde: fiyat modeli bu kartın kararıdır.",
+            "Ödeme yoğun üç güne göre olmalı; sakin 27 günde neredeyse sıfır. Finans müdürü öngörülebilir bir fatura istiyor.",
+            "Üç güne göre boyutlanan kapasite 27 gün boş durur ve ödenir."),
+    ],
+    cands=["rs", "aur", "rsp"],
+    scores={
+        "rs": [sc(10, "Analitik SQL (Ö5): JOIN, GROUP BY ve SUM() OVER ile dönem sonu bakiyesi tek cümlededir. Puan kırılmadı."),
+               sc(10, "Kolon bazlı saklama (Ö1) ve period sort key'i (Ö3): sorgu sadece dönemin bloklarını ve birkaç kolonu okur. Puan kırılmadı."),
+               sc(5, "NOT NULL uygulanır. 5 puan kırıldı: Redshift unique, primary key ve foreign key kurallarını \"not enforced\" olarak, yani sadece bilgi olarak tutar; CHECK yoktur. Dengesiz kaydı ve olmayan hesap kodunu kapanış aracı ya da bir kontrol sorgusu yakalamalıdır."),
+               sc(9, "Transaction'lar SNAPSHOT (varsayılan) ya da SERIALIZABLE izolasyonla çalışır; bir düzeltmenin satırları tek transaction'da yazılır (Ö7). 1 puan kırıldı: kaynak zero-ETL ile değişmeye devam eder; 23:59 hâli için kapanış başında bir CREATE TABLE AS kopyası alınır."),
+               sc(10, "Serverless (Ö8) üç gün boyunca kapasiteyi eşzamanlı sorgulara göre artırır ve MPP (Ö4) her sorguyu slice'lara böler. Puan kırılmadı."),
+               sc(9, "Recovery point'ler 30 dakikada bir alınır ve 24 saat tutulur; her kapanışın snapshot'ı elle alınır ve tutulur. 1 puan kırıldı: defter bir kopyadır; kaybolursa zero-ETL entegrasyonu yeniden kurulur ve ilk yükleme sürer."),
+               sc(9, "Düğüm planı yoktur; kapasite yükle gelir (Ö8). 1 puan kırıldı: base RPU ve en fazla RPU sınırı ekibin işidir; tablo tasarımı R1'de sayıldı."),
+               sc(9, "Sorgu yokken compute ödenmez; 12 kişinin ağır sorguları için ortalama 32 RPU varsayımıyla (kaba tahmin) yoğun üç gün 3 gün × 10 saat × 32 RPU = 960 RPU-saat, yani eu-central-1'de yaklaşık 433 USD (0,451 USD/RPU-saat, Price List API, 2026-10-31); sakin günler birkaç dolardır. 1 puan kırıldı: her sorgu en az 60 saniye ödenir.")],
+        "aur": [sc(10, "PostgreSQL SQL'i JOIN, GROUP BY ve window function'ları tam olarak destekler. Puan kırılmadı."),
+                sc(4, "Dönem partition'ı ve index'ler taramayı bir aya daraltır. 6 puan kırıldı: PostgreSQL row'ları tam saklar; yıllık raporlar 80 milyon row'un tamamını okur. Bu kartın verisi raporlama kartının iki milyar row'undan küçüktür, bu yüzden 7 değil 6 puan."),
+                sc(10, "CHECK, foreign key ve commit anında denetlenen bir constraint trigger dengesiz düzeltmeyi ve olmayan hesap kodunu reddeder. Puan kırılmadı."),
+                sc(9, "Ya hep ya hiç transaction ve row lock. 1 puan kırıldı: üç gün boyunca aynı ânı görmek için kapanış başında bir kopya table ya da dönem kilidi gerekir; tek bir transaction üç gün açık tutulamaz."),
+                sc(5, "Raporlar bir reader'da çalışır ve Serverless v2 ACU'su artar. 5 puan kırıldı: defter siparişlerle aynı cluster'dadır; reader'lar checkout'un yazdığı storage'ı okur ve 400 ağır sorgu storage I/O'sunu checkout ile paylaşır; tarama süresinin kendisi R1 · DA'da sayıldı."),
+                sc(10, "Üç AZ'de altı kopya ve point-in-time restore. Puan kırılmadı."),
+                sc(8, "Boru hattı yoktur, defter zaten oradadır. 2 puan kırıldı: dönem partition'larının ve materialized view'ların bakımı tek geliştiricinin işidir."),
+                sc(6, "Serverless v2 reader ACU-saat olarak ödenir ve sakin günlerde küçülür. 4 puan kırıldı: minimum ACU her gün ödenir ve Standard yapılandırmada her taramanın I/O'su ayrıca ödenir.")],
+        "rsp": [sc(10, "Aynı engine: analitik SQL (Ö5) Serverless ile aynıdır. Puan kırılmadı."),
+                sc(10, "Aynı kolon bazlı saklama ve sort key (Ö1, Ö3). Puan kırılmadı."),
+                sc(5, "Aynı engine, aynı kural: unique, primary key ve foreign key uygulanmaz, CHECK yoktur. 5 puan kırıldı: kontrol kapanış aracındadır."),
+                sc(9, "Aynı transaction modeli. 1 puan kırıldı: 23:59 hâli için CREATE TABLE AS kopyası gerekir."),
+                sc(7, "Concurrency scaling kuyruktaki sorgular için geçici cluster'lar açar. 3 puan kırıldı: ana cluster'ın düğüm sayısı sabittir; ağır sorgular önce kuyrukta bekler ve concurrency scaling her cluster için günde bir saatlik ücretsiz kredinin ötesinde ayrıca ödenir."),
+                sc(9, "Otomatik ve elle snapshot'lar. 1 puan kırıldı: defter bir kopyadır; kaybolursa entegrasyon yeniden kurulur."),
+                sc(6, "Yönetilen cluster. 4 puan kırıldı: düğüm tipi ve sayısı seçilir, ay başında resize ya da pause/resume zamanlaması tek geliştiricinin işidir."),
+                sc(5, "Düğüm saat başına ödenir. 5 puan kırıldı: üç güne göre seçilen düğümler ayın tamamında çalışır, örneğin iki ra3.xlplus eu-central-1'de ayda yaklaşık 1.895 USD (düğüm başına 1,298 USD/saat); pause/resume bunu azaltır ama elle planlanır.")],
+    },
+    h2h={
+        "aur": "İlişkisel (Aurora PostgreSQL) ile kafa kafaya. Bu kart sayfanın dürüst bir kartıdır: engine uyumunu (R1) Aurora 1 puanla kazanır, toplamı Redshift alır. "
+               "Aurora'nın üstünlüğü kural satırıdır (R1.3): CHECK, foreign key ve commit anında denetlenen kural dengesiz bir düzeltmeyi database'in kendisinde reddeder; Redshift primary key ve foreign key'i sadece planner için bilgi olarak tutar ve kontrol kapanış aracına kalır. "
+               "Redshift'in üstünlüğü tarama ve servis satırlarındadır: yılın defterini kolon bloklarından okur (R1.2), yoğun üç günde kapasiteyi kendisi artırır (R2) ve sakin 27 günde compute ödemez (R5). "
+               "Hangi koşul değişseydi Aurora seçilirdi: kapanış raporları sadece bir ayı okusaydı ve yük ay boyunca düz olsaydı; o zaman kurallar ve var olan cluster ağır basardı. Düzeltme kayıtlarını Aurora'da tutup raporları Redshift'te çalıştırmak da doğru bir \"ikisi birlikte\" tasarımıdır.",
+        "rsp": "Data warehouse, provisioned cluster (Redshift provisioned) ile kafa kafaya. İki servis aynı engine'i çalıştırır: R1 puanları aynıdır ve farkı sadece servis tasarımı verir. "
+               "Provisioned cluster'ın dürüst üstünlüğü düz ve sürekli yükte görünür: düğümler önceden ayrılır, rezervasyonla saat fiyatı düşer ve bakım penceresi bilinir (kart 8). "
+               "Bu kartta yük ayın üç gününde toplanır. Provisioned cluster ya üç güne göre boyutlanır ve 27 gün boş durur ya da daha küçük seçilir ve kapanışın ilk sabahı sorgular kuyrukta bekler; concurrency scaling bunu kısmen çözer ama ayrıca ödenir. Serverless kapasiteyi yükle getirir ve sakin günlerde compute ödemez. "
+               "Hangi koşul değişseydi Redshift provisioned seçilirdi: kapanış ayın tamamına yayılsaydı, cluster başka işlerle 7/24 dolu olsaydı ya da ekipte cluster işleten deneyimli bir DBA olsaydı.",
+    },
+    verdict="Karar: Redshift {rs}, Aurora {aur}, Redshift provisioned {rsp}. Kararı R5 ve R2 verir: yük ayın üç gününde toplanır ve Serverless kapasiteyi yükle getirip sakin günlerde compute ödemez (Ö8). R1'de Aurora 1 puan öndedir, çünkü düzeltme kaydının kurallarını database'in kendisi korur. "
+            "Redshift seçtiğimizde artımız: 400 ağır sorgu üç günde beklemeden döner, fatura üç güne göre çıkar, aynı SQL ve aynı engine. "
+            "Eksimiz: Redshift düzeltme kaydının dengesini ve hesap kodunu denetlemez; kapanış aracı her kaydı yazmadan önce doğrulamalı ve kapanış başında bir kontrol sorgusu dengesiz kayıt aramalıdır. 23:59 hâli için kapanış başında bir CREATE TABLE AS kopyası alınmalıdır. "
+            "Bir koşul değişseydi: kapanış ayın tamamına yayılsaydı ve cluster 7/24 dolu olsaydı provisioned cluster öne geçerdi; düzeltmeler başka bir sistemden doğrulanmadan gelseydi Aurora'da kalmaları gerekirdi."))
+
+# ------------------------------------------------------------------ 4. click stream: "continue where you left off" (= Keyspaces card 7; Redshift third)
+REDSHIFT_W.append(wusecase("clicks", 4, sim="w_clicks",
+    title="Tıklama akışı: kaldığın yerden devam et, haftalık okuma raporu",
+    key="Kişi başına şerit için partition key user_id, clustering column clicked_at (en yeni önce), TTL 30 gün. Haftalık rapor için analiz kopyası: Redshift.",
+    story=_RS_K7["story"][1],
+    wnote=_RS_K7["wnote"][1],
+    rows=_rcopy(_RS_K7),
+    cands=["ks", "ddb", "rs"],
+    scores={
+        "ks": _rborrow(_RS_K7, "ks"),
+        "ddb": _rborrow(_RS_K7, "ddb"),
+        "rs": _rsame(_RS_K7, "rs", [
+            sc(4, "Sort key'i okuyucu ve zaman olan bir table son 100 tıklamayı bulur (Ö3). 6 puan kırıldı: her ana sayfa açılışında tek bir okuyucunun row'larını getiren bir point lookup columnar ve MPP bir engine'in işi değildir; her sorgu leader node'da planlanır ve 20 ms'nin altı garanti edilmez. Table'ın tek bir sırası vardır: okuyucuya göre sıralanırsa haftalık rapor tarih aralığını daha az eler."),
+            sc(10, "Kolon bazlı saklama (Ö1) ve MPP (Ö4), haftanın bütün tıklamalarını kategoriye ve saate göre gruplamanın kendisidir. Puan kırılmadı."),
+            sc(5, "Streaming ingestion tıklamaları mikro-batch'lerle bir materialized view'a ekler (Ö7). 5 puan kırıldı: saniyede binlerce tek tek küçük ekleme columnar bloklara uymaz; AWS tek tek INSERT için \"prohibitively slow\" der, yazma toplu olmalıdır."),
+            sc(6, "Eski veri tarih aralığıyla silinir. 4 puan kırıldı: süre sonu yoktur; silme zamanlanmış bir DELETE işidir ve silinen row'lar arka plandaki VACUUM'a kadar yer tutar."),
+            sc(5, "Streaming ingestion (Ö7) tepeyi bir akış katmanı (Kinesis) üzerinden mikro-batch'lerle karşılar; AWS her yenilemenin saniyede yüzlerce MB alabildiğini söyler. 5 puan kırıldı: 40.000 tıklama/sn Redshift'e doğrudan değil akış katmanına yazılır ve rapora ancak materialized view yenilendiğinde girer; okuyucu başına 20 ms'lik okuma tepe anında da garanti değildir."),
+            sc(9, "Recovery point'ler ve akış katmanındaki saklama. 1 puan kırıldı: akış katmanındaki son saniyeler bir arızada yeniden oynatılır."),
+            sc(6, "Analistlerin SQL'i aynı sistemde, ikinci bir kopya olmadan çalışır (Ö5); DynamoDB'de SQL için yine Redshift'e bir kopya gerekir, bu yüzden kırılım DynamoDB'nin 5 puanından küçüktür. 4 puan kırıldı: sessionization işleri Spark Cassandra Connector'ından Redshift'e taşınır ve bir akış katmanı işletilir."),
+            sc(6, "RPU-saat ve akış katmanı ödenir. 4 puan kırıldı: istek başına ödeme yoktur; şerit sorguları gün boyu geldiği için Serverless kapasite gün boyu açık kalır.")]),
+    },
+    h2h={"ddb": _rsx(_RS_K7["h2h"]["ddb"][1]), "rs": _rsx(_RS_K7["h2h"]["rs"][1])},
+    verdict="Karar: Keyspaces {ks}, DynamoDB {ddb}, Redshift {rs}. Redshift bu kartı net kaybeder ve kaybı R1'in erişim yolundan gelir: ana sayfa şeridi her açılışta tek bir okuyucunun son 100 tıklamasını 20 ms'nin altında ister, bu bir point lookup'tır ve columnar bir engine'in işi değildir. Bu kart Keyspaces sayfasının 7. kartıyla aynı iş yüküdür ve aynı puanları taşır. "
+            "Yine de Redshift seçersek artımız: haftalık rapor tek bir SQL'dir ve bütün okuyucuları saniyeler içinde gruplar (Ö1, Ö4). "
+            "Eksimiz: şerit için ayrı bir cache ya da key-value store gerekir; tıklamalar bir akış katmanından mikro-batch'lerle gelir; 30 günlük silme zamanlanmış bir DELETE işidir. "
+            "Doğru mimari ikisi birliktedir: şerit Keyspaces'te, haftalık rapor Redshift'te; CDC stream'i tıklamaları S3 üzerinden Redshift'e taşır. Bir koşul değişseydi: şerit olmasaydı ve iş yalnız haftalık rapor olsaydı Redshift en uygun servis olurdu."))
+
+# ------------------------------------------------------------------ 5. data sharing between teams and accounts
+REDSHIFT_W.append(wusecase("datashare", 5,
+    title="Ekipler ve hesaplar arası veri paylaşımı: tek kopya, ayrı compute",
+    key="Üretici: satış table'ları (iki milyar row) tek bir workgroup'ta. Tüketiciler: finans, pazarlama ve başka bir AWS hesabındaki tedarikçi portalı; her biri kendi compute'uyla.",
+    story="Lale Market büyüdü ve üç ekip aynı satış verisine bakıyor: finans, pazarlama ve ayrı bir AWS hesabında çalışan tedarikçi portalı. Bugün veri ekibi her gece satış table'larını CSV olarak dışa aktarıyor ve her ekip kendi kopyasını yüklüyor; sabahları üç ekip üç farklı rakam söylüyor. "
+          "Satış geçmişi iki milyar row ve Redshift'te. Pazarlama kampanya akşamları ağır sorgular çalıştırıyor ve finansın raporlarını yavaşlatmamalı. Tedarikçi portalının 120 tedarikçisi var; her tedarikçi sadece kendi ürünlerinin satışını görmeli. "
+          "Yeni bir satış bütün ekiplere aynı anda görünmeli. Veri ekibi iki kişi; her ekip kendi sorgularının faturasını ödemek istiyor.",
+    wnote="R1 toplam 44: paylaşılan table'lar üzerinde serbest SQL (EY 12), büyük taramalar (DA 12), tedarikçinin sadece kendi row'larını görmesi (AO 12) ve herkesin aynı commit'i görmesi (TA 8). "
+          "R4 18 ile ikinci: tek kopya ve hesaplar arası yetki işin kendisidir. R2 ve R5 16'şar: her ekip kendi compute'unu ve faturasını istiyor.",
+    rows=[
+        row("EY", 12, "Her ekip kendi sorularını SQL ile soruyor.",
+            "Paylaşılan table'lar üzerinde JOIN ve GROUP BY içeren serbest SQL; her ekip kendi view'larını ve table'larını yanına ekleyebilmeli.",
+            "Paylaşılan veri sadece hazır raporlarla açılırsa ekipler yine kendi kopyalarını çıkarır."),
+        row("DA", 12, "Pazarlamanın kampanya sorguları iki milyar row'u tarar.",
+            "İki milyar row'un birkaç kolonunu okuyan taramalar saniyeler içinde dönmeli.",
+            "Tarama yavaşsa pazarlama veriyi yine kendi tarafına kopyalar."),
+        row("AO", 12, "120 tedarikçi aynı table'ı görür ama sadece kendi row'larını.",
+            "Engine'in kendi aracıyla row bazında erişim kuralı: tedarikçi T042 sadece supplier_id = T042 olan satışları görür; kural her sorguya kendiliğinden uygulanır.",
+            "Kural uygulamada kalırsa bir hata bir tedarikçiye rakibinin satışlarını gösterir; bu bir sözleşme ihlalidir."),
+        row("TA", 8, "Üç ekip sabah aynı rakamı söylemeli.",
+            "Yeni bir satış commit edildiği anda bütün tüketicilere görünmeli; her tüketici tutarlı bir ân görmeli.",
+            "Kopyalar farklı saatlerde güncellenirse ekipler yine farklı rakam söyler."),
+        row("R2", 16, "Pazarlamanın kampanya akşamı finansı yavaşlatmamalı.",
+            "Her ekip kendi compute'unda çalışmalı; bir ekibin ağır sorgusu diğerinin kuyruğuna girmemeli.",
+            "Tek bir compute paylaşılırsa kampanya akşamı finansın kapanış raporu bekler."),
+        row("R3", 6, "Satış geçmişi Aurora'dan gelen bir kopyadır.",
+            "Paylaşılan veri kaybolursa kaynaktan yeniden yüklenebilir; günlük yedek yeterlidir.",
+            "Kayıp birkaç saatlik bir rapor kesintisidir."),
+        row("R4", 18, "Tek kopya ve hesaplar arası yetki bu işin kendisidir; veri ekibi iki kişi.",
+            "Gece CSV aktarımı kalkmalı; başka bir AWS hesabına veri kopyalamadan erişim verilmeli; yetki tek yerden yönetilmeli.",
+            "Her ekip için ayrı bir kopya ve ayrı bir aktarım işi iki kişilik ekibin her sabahını alır."),
+        row("R5", 16, "Her ekip kendi sorgularının faturasını istiyor.",
+            "Her tüketici kendi compute'unu öder; verinin ikinci kopyası için storage ödenmez.",
+            "Bütün sorgular tek bir faturada toplanırsa pazarlamanın kampanyası finansın bütçesinden ödenir."),
+    ],
+    cands=["rs", "ath", "rsp"],
+    scores={
+        "rs": [sc(10, "Analitik SQL (Ö5); tüketici paylaşılan table'ların yanına kendi view ve table'larını ekler. Puan kırılmadı."),
+               sc(10, "Kolon bazlı saklama, sort key ve MPP (Ö1, Ö3, Ö4) tüketicinin compute'unda da aynı şekilde çalışır. Puan kırılmadı."),
+               sc(9, "Datashare yalnız seçilen nesneleri açar (Ö8); tedarikçi workgroup'unda paylaşılan table üzerine bir view kurulur: view, oturumun kullanıcısını (current_user) bir eşleme table'ında tedarikçi id'sine çevirir ve sadece o supplier_id'nin row'larını döndürür; tedarikçiye ana table değil sadece view açılır. AWS data sharing'de ince erişim için view'ları önerir; üretici tarafında row-level security policy'leri de vardır. 1 puan kırıldı: view'lar, role'ler ve datashare izinleri bir tasarım işidir."),
+               sc(10, "Data sharing canlı veriyi paylaşır: AWS'e göre veri \"live and available to all warehouses as soon as a write transaction is committed\" (Ö8). Puan kırılmadı."),
+               sc(10, "Her tüketici kendi Serverless workgroup'unda çalışır ve kendi kapasitesi yüküyle artar (Ö8); pazarlamanın akşamı finansın kuyruğuna girmez. Puan kırılmadı."),
+               sc(9, "Recovery point'ler ve snapshot'lar üretici tarafındadır. 1 puan kırıldı: veri bir kopyadır; kaybolursa yeniden yükleme sürer."),
+               sc(9, "Tek kopya; hesaplar ve Region'lar arası paylaşım bir datashare ile kurulur, CSV aktarımı kalkar (Ö8). 1 puan kırıldı: hesaplar arası paylaşımda iki hesapta da yetkilendirme adımları vardır."),
+               sc(9, "Her tüketici kendi RPU-saatini öder; paylaşılan veri için ikinci storage ödenmez. 1 puan kırıldı: her sorgu en az 60 saniye ödenir.")],
+        "rsp": [sc(10, "Aynı engine: analitik SQL (Ö5). Puan kırılmadı."),
+                sc(10, "Aynı kolon bazlı saklama, sort key ve MPP (Ö1, Ö3, Ö4). Puan kırılmadı."),
+                sc(9, "Aynı datashare ve aynı view'lar (Ö8). 1 puan kırıldı: view'lar, role'ler ve izinler bir tasarım işidir."),
+                sc(10, "RA3 cluster'ları aynı canlı data sharing'i kullanır (Ö8). Puan kırılmadı."),
+                sc(8, "Her tüketici kendi cluster'ında çalışır. 2 puan kırıldı: her cluster'ın düğüm sayısı sabittir; pazarlamanın kampanya akşamı kendi cluster'ının tepesine çarpar."),
+                sc(9, "Otomatik ve elle snapshot'lar. 1 puan kırıldı: veri bir kopyadır."),
+                sc(6, "Aynı datashare kurulumu. 4 puan kırıldı: her ekip bir cluster işletir; düğüm tipi, sayı ve resize üç ayrı ekip için iki kişilik veri ekibinin işidir."),
+                sc(5, "Her tüketici kendi cluster'ını öder. 5 puan kırıldı: üç cluster 7/24 saat başına ödenir; tedarikçi portalının seyrek sorguları için de bütün ay düğüm çalışır.")],
+        "ath": [sc(10, "Athena'nın SQL engine'i (Trino) JOIN ve GROUP BY'ı tam olarak destekler. Puan kırılmadı."),
+                sc(9, "Parquet kolon bazlıdır ve partition'lar taramayı daraltır. 1 puan kırıldı: dosyaların içi sıralı değilse row group istatistikleri az şey atlatır."),
+                sc(7, "View'lar ve partition'lar engine'in araçlarıdır. 3 puan kırıldı: row bazında kural engine'de değil Lake Formation'ın veri filtresindedir; materialized view yoktur."),
+                sc(9, "Iceberg table'larında her commit bir snapshot'tır ve okuyan commit edilmiş tutarlı bir ân görür. 1 puan kırıldı: düz Parquet table'larında transaction yoktur; paylaşım Iceberg biçimini gerektirir. Verinin bugün Redshift'te durması ve aktarım gecikmesi R4'te sayıldı."),
+                sc(9, "Her hesap kendi workgroup'unda sorgular; kapasite servisindir. 1 puan kırıldı: hesap başına eşzamanlı sorgu kotası vardır."),
+                sc(10, "Veri S3'te birden fazla Availability Zone'da durur. Puan kırılmadı."),
+                sc(5, "Lake Formation hesaplar arası yetkiyi tek yerden verir. 5 puan kırıldı: satış verisi Redshift'tedir; S3'e Iceberg olarak düzenli aktarım yeni bir boru hattıdır, CSV işinin yerine başka bir aktarım gelir ve tüketiciler satışın commit anını değil aktarımın son hâlini görür."),
+                sc(8, "Her hesap taradığı TB başına öder (yaklaşık 5 USD/TB); boş saatler sıfırdır. 2 puan kırıldı: birim sorgu başına olduğu için fatura sorgu sayısıyla sınırsız büyür; kampanya akşamlarının yoğun sorgularında kapasite-saat modeli gibi bir tavan yoktur.")],
+    },
+    h2h={
+        "rsp": "Data warehouse, provisioned cluster (Redshift provisioned) ile kafa kafaya. Aynı engine, aynı data sharing: R1 puanları birebir aynıdır. Fark tüketici tarafındaki compute'un servis tasarımındadır. "
+               "Provisioned cluster ile her ekip bir cluster seçer, boyutlandırır ve 7/24 öder; tedarikçi portalı gibi seyrek bir tüketici için de düğümler bütün ay çalışır. Serverless'ta her tüketici bir workgroup'tur, kapasitesi yüküyle gelir ve sorgu yokken compute ödenmez. "
+               "Provisioned'ın dürüst üstünlüğü yoğun ve düz bir tüketicide görünür: rezervasyonla saat fiyatı düşer ve kapasite her an hazırdır. "
+               "Hangi koşul değişseydi Redshift provisioned seçilirdi: tüketicilerden biri 7/24 düz ve yoğun çalışsaydı (örneğin bütün gün dolu bir operasyon ekranı); o tüketici bir rezervasyonlu cluster, diğerleri Serverless olurdu. Data sharing ikisini karıştırmaya izin verir.",
+        "ath": "S3 üzerinde sorgu motoru (Athena) ile kafa kafaya. Athena'nın gücü veri gölü paylaşımıdır: veri S3'te bir kez durur, Lake Formation hesaplar arası yetkiyi ve row filtresini verir, her hesap taradığı kadar öder. Veri zaten S3'te olsaydı bu güçlü bir tasarımdır. "
+               "Bu kartta satış geçmişi Redshift'tedir. Athena ile paylaşmak için önce düzenli bir S3 aktarımı gerekir (R4); tüketiciler satışın commit anını değil aktarımın son hâlini görür (R4); row kuralı engine'de değil ayrı bir serviste durur (R1.3). Data sharing ise aynı veriyi kopyasız ve commit anında açar. "
+               "Veri zaten S3'te Iceberg olarak dursaydı fark kabaca 95'e 86'ya inerdi; Redshift yine önde kalırdı, çünkü kolon blokları, view'lar ve kopyasız commit anı R1'de kalır. "
+               "Hangi koşul değişseydi Athena seçilirdi: paylaşılan veri seyrek sorulan bir veri gölü olsaydı, yani veri S3'te Iceberg, tüketiciler haftada birkaç soru soruyor ve kampanya akşamı gibi bir yük yok (kart 10'daki gibi).",
+    },
+    verdict="Karar: Redshift {rs}, Athena {ath}, Redshift provisioned {rsp}. Kararı R4, R2 ve R1'in tutarlılık satırı verir: data sharing aynı veriyi kopyasız ve commit anında açar (Ö8) ve her tüketici kendi Serverless compute'unda çalışır. "
+            "Redshift seçtiğimizde artımız: gece CSV işi kalkar, üç ekip aynı rakamı görür, tedarikçi sadece kendi satışlarını görür, her ekip kendi faturasını öder. "
+            "Eksimiz: tedarikçi view'ları, role'ler ve datashare izinleri doğru tasarlanmalıdır; yeni bir tedarikçi eklenince uygulama onun role eşleşmesini de eklemelidir ve tedarikçiye ana table değil sadece view açılmalıdır; üretici workgroup'u bir arızada kapanırsa tüketiciler de veriyi göremez. "
+            "Bir koşul değişseydi: veri zaten S3'te Iceberg table'ları olarak dursa bile Redshift önde kalırdı (kabaca 95'e 86); Athena ancak paylaşılan veri seyrek sorulan bir veri gölü olduğunda öne geçer (kart 10)."))
+
+# ------------------------------------------------------------------ 6. ML feature preparation (both together with SageMaker)
+REDSHIFT_W.append(wusecase("mlfeatures", 6,
+    title="Machine learning için feature hazırlığı: churn modeli",
+    key="Feature table: customer_features (customer_id, 140 kolon), her gece CREATE TABLE AS ile; kaynak üç yıllık satış ve tıklama table'ları.",
+    story="İki veri bilimci müşterinin ayrılma (churn) olasılığını tahmin eden bir model kuruyor. Her gece 2 milyon müşteri için 140 feature hesaplanmalı: son 30, 90 ve 365 günün harcaması, sipariş aralıklarının ortalaması, iade oranı, kategori dağılımı, son tıklamadan bu yana geçen gün. "
+          "Kaynak üç yıllık satış geçmişi (iki milyar row) ve tıklamalar; ikisi de Redshift'te. İş 02:00–04:00 arasında bitmeli; sabah CRM her müşterinin skorunu okur. "
+          "Model haftada bir yeniden eğitilir. Veri bilimciler SQL ve Python biliyor; özel modellerini Python'da yazmak istiyorlar. Feature'lar kaynaktan yeniden hesaplanabilir.",
+    wnote="R1 toplam 44: feature'ların kendisi müşteri başına window ve aggregate sorularıdır (EY 14) ve üç yılı tarar (DA 14); gece sonucu toplu yazılır (OY 8) ve tekrar eden ara sonuçlar saklanır (AO 8). "
+          "R4 20 ile en ağır ikinci satır: iki kişilik ekip hem SQL hem Python ile çalışıyor ve modeli bir yerde eğitmesi gerekiyor.",
+    rows=[
+        row("EY", 14, "Her feature müşteri başına bir pencere ya da toplam sorusudur.",
+            "Müşteri başına 30/90/365 günlük toplamlar, sipariş aralıklarının ortalaması (LAG), kategori payları: hepsi SQL'de window function ve GROUP BY ile yazılabilmeli.",
+            "Feature'lar SQL'de yazılamazsa veri bilimciler iki milyar row'u Python'a çeker ve iş gece penceresine sığmaz."),
+        row("DA", 14, "Her gece üç yılın birkaç kolonu taranır.",
+            "İki milyar row'un customer_id, order_date, amount ve category kolonları okunmalı; tarama gece penceresinin küçük bir kısmını almalı.",
+            "Tam row'ları okuyan bir tarama gece penceresini doldurur ve sabah skorları eksik kalır."),
+        row("OY", 8, "Sonuç her gece bir kez, toplu olarak yazılır.",
+            "2 milyon row × 140 kolonluk feature table'ı her gece tek bir toplu yazmayla yeniden oluşturulmalı.",
+            "Feature'lar row row yazılırsa yazma saatler sürer."),
+        row("AO", 8, "Tekrar eden ara sonuçlar ve modelin kendisi engine'in araçlarıyla tutulabilmeli.",
+            "Tekrar eden ara sonuçlar (müşteri başına aylık toplam) engine'in kendi aracıyla saklanabilmeli ve yeni satışlarla artımlı yenilenebilmeli.",
+            "Her gece aynı aylık toplamlar baştan hesaplanırsa iş iki katı sürer."),
+        row("R2", 14, "İki saatlik gece penceresi; gündüz yük yok.",
+            "02:00–04:00 arasında ağır bir iş; gündüz neredeyse hiç sorgu yok. Checkout bunu hissetmemeli.",
+            "İş 04:00'ü geçerse CRM sabah eski skorlarla çalışır."),
+        row("R3", 6, "Feature'lar kaynaktan yeniden hesaplanır.",
+            "Feature table'ı kaybolursa bir gece işiyle geri gelir; günlük yedek yeterlidir.",
+            "Kayıp bir günlük eski skordur."),
+        row("R4", 20, "İki kişilik ekip hem SQL hem Python ile çalışıyor.",
+            "Feature'lar SQL'de; özel modeller Python'da. Veri bilimciler veriyi dışa aktarma işi yazmadan notebook'tan okuyabilmeli; model eğitimi ve skorların CRM'e dönüşü kurulabilmeli.",
+            "Her adım için ayrı bir aktarım işi yazılırsa iki kişilik ekip model yerine boru hattıyla uğraşır."),
+        row("R5", 16, "Günde iki saatlik iş: ödeme modeli bu şekle uymalı.",
+            "Günde iki saat ödeme; gündüz sıfıra yakın. Model eğitiminin maliyeti ayrıca görünmeli.",
+            "7/24 çalışan kapasite günün 22 saati boş durur."),
+    ],
+    cands=["rs", "ath", "aur"],
+    scores={
+        "rs": [sc(10, "Analitik SQL (Ö5): SUM() OVER, LAG ve GROUP BY ile 140 feature tek bir CREATE TABLE AS cümlesinde yazılır. Puan kırılmadı."),
+               sc(10, "Kolon bazlı saklama ve sort key (Ö1, Ö3): tarama dört kolonu okur; MPP (Ö4) işi slice'lara böler. Puan kırılmadı."),
+               sc(10, "CREATE TABLE AS feature table'ını bütün slice'larda paralel ve toplu yazar (Ö7). Puan kırılmadı."),
+               sc(9, "Müşteri başına aylık toplamlar materialized view olarak artımlı yenilenir (Ö6). 1 puan kırıldı: artımlı yenileme SELECT, JOIN, GROUP BY ve aggregate'li tanımlar içindir; window function'lı bir ara sonuç tam yenilenir, bu yüzden ara sonuçlar aggregate olarak tasarlanır."),
+               sc(10, "Serverless gece işi için kapasiteyi artırır ve MPP işi böler (Ö4, Ö8); checkout ayrı database'tedir. Puan kırılmadı."),
+               sc(9, "Recovery point'ler 30 dakikada bir. 1 puan kırıldı: kopya kaybolursa yeniden yükleme sürer."),
+               sc(8, "Veri bilimciler Data API ile notebook'tan SQL çalıştırır; feature table'ı UNLOAD ile S3'e Parquet olarak yazılır; Redshift ML basit modelleri CREATE MODEL ile SQL'den eğitir. 2 puan kırıldı: Redshift ML'in eğitimi SageMaker AI'da çalışır; Python'daki özel modeller için SageMaker ayrıca kurulur ve işletilir."),
+               sc(8, "Gece iki saat RPU-saat; gündüz compute ödenmez (Ö8). 2 puan kırıldı: model eğitimi SageMaker'da ayrıca ödenir ve feature table'ı managed storage'da ikinci bir kopya olarak durur.")],
+        "ath": [sc(10, "Athena'nın SQL engine'i (Trino) window function'ları ve GROUP BY'ı tam olarak destekler. Puan kırılmadı."),
+                sc(8, "Parquet kolon bazlıdır ve partition'lar taramayı daraltır. 2 puan kırıldı: dosyalar müşteriye göre bir arada durmaz; büyük join'lerde eşleşen row'lar her sorguda ağ üzerinden yeniden dağıtılır."),
+                sc(8, "CTAS sonucu S3'e Parquet olarak yazar. 2 puan kırıldı: her gece feature table'ının dosyaları baştan yazılır; eski dosyaların temizliği ayrıca yapılır."),
+                sc(7, "Partition ve bucketing engine'in araçlarıdır. 3 puan kırıldı: materialized view yoktur; ara sonuç her gece bir CTAS ile baştan yazılır."),
+                sc(8, "Serverless. 2 puan kırıldı: büyük join'ler hesap başına eşzamanlı sorgu kotasına ve sorgu kaynak sınırlarına takılabilir."),
+                sc(10, "Sonuç S3'te birden fazla Availability Zone'da durur. Puan kırılmadı."),
+                sc(5, "SageMaker notebook'ları S3'teki Parquet'i doğrudan okur. 5 puan kırıldı: satış ve tıklamalar Redshift'tedir; S3'e düzenli aktarım yeni bir boru hattıdır."),
+                sc(9, "Taranan TB başına ödenir (yaklaşık 5 USD/TB); gündüz sıfırdır. 1 puan kırıldı: model eğitimi yine SageMaker'da ayrıca ödenir.")],
+        "aur": [sc(10, "PostgreSQL SQL'i window function'ları ve GROUP BY'ı tam olarak destekler. Puan kırılmadı."),
+                sc(3, "Index dar aralıkları hızlandırır. 7 puan kırıldı: PostgreSQL row'ları tam saklar; üç yılı tarayan sorgu her row'un tamamını okur."),
+                sc(8, "INSERT INTO ... SELECT tek bir cümledir. 2 puan kırıldı: her gece 2 milyon row'un yeniden yazılması eski row sürümleri bırakır ve VACUUM işi artar."),
+                sc(6, "Materialized view ve partition kullanılabilir. 4 puan kırıldı: kolon bazlı sıkıştırma yoktur ve materialized view'lar elle yenilenir."),
+                sc(4, "Taramalar bir reader'da çalışabilir. 6 puan kırıldı: feature table'ının yazılması writer'da olur; tek writer gece işini ve checkout'u birlikte taşır, büyük okuma da storage'ı checkout ile paylaşır."),
+                sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                sc(6, "Aurora'nın SageMaker entegrasyonu SQL'den tahmin çağırır. 4 puan kırıldı: satış geçmişini Redshift'ten Aurora'ya getirmek, partition ve materialized view bakımı ekibin işidir."),
+                sc(4, "Instance saat başına ödenir. 6 puan kırıldı: gece işini iki saatte bitirecek büyük bir instance 7/24 çalışır.")],
+    },
+    h2h={
+        "ath": "S3 üzerinde sorgu motoru (Athena) ile kafa kafaya. İki servis de feature SQL'ini yazar (R1.1 eşit) ve ikisi de sonucu Parquet olarak bırakabilir. Athena'nın dürüst üstünlüğü veri S3'teyken görünür: SageMaker notebook'ları aynı dosyaları okur, aktarım yoktur ve sadece taranan veri ödenir. "
+               "Bu kartta satış ve tıklamalar Redshift'tedir. Athena için önce düzenli bir S3 aktarımı gerekir (R4), dosyalar müşteriye göre bir arada durmaz (R1.2) ve tekrar eden aylık toplamlar için materialized view yoktur (R1.4). "
+               "Redshift aynı işi verinin durduğu yerde, kolon bloklarından ve paralel bir CREATE TABLE AS ile yapar; sonucu UNLOAD ile S3'e bırakır. "
+               "Kaynak veri S3'te olsaydı ve iş haftada bir çalışsaydı fark kabaca 3 puana inerdi. Hangi koşul değişseydi Athena seçilirdi: kaynak veri S3'te bir veri gölünde dursaydı, feature işi haftada bir çalışsaydı ve ekipte hiç warehouse olmasaydı; o zaman Redshift için yeni bir sistem kurmak R4'ü düşürürdü.",
+        "aur": "İlişkisel (Aurora PostgreSQL) ile kafa kafaya. Aurora SQL'i aynı biçimde yazar ve SageMaker'dan SQL içinde tahmin çağırabilir. Ama feature işi her gece üç yılı tarar: PostgreSQL row'ları tam okur (R1.2) ve 2 milyon row'luk sonucu tek writer'a yazar; checkout aynı writer'dadır (R2). "
+               "Büyük bir instance'ı iki saatlik bir gece işi için 7/24 ödemek de R5'te kaybettirir. Aurora'nın dürüst yeri burada skorların kendisidir: sabah CRM'in okuyacağı 2 milyon skor küçük bir table'dır ve Aurora'ya ya da DynamoDB'ye yazılabilir. "
+               "Hangi koşul değişseydi Aurora seçilirdi: feature'lar son 90 günden hesaplansaydı, müşteri sayısı 50.000 olsaydı ve ayrı bir analiz servisi istenmeseydi.",
+    },
+    verdict="Karar: Redshift {rs}, Athena {ath}, Aurora {aur}. Kararı R1 verir: 140 feature müşteri başına window ve aggregate sorularıdır, üç yılı tarar ve sonuç toplu yazılır; bunların hepsi columnar ve MPP bir engine'in doğal işidir (Ö1, Ö4, Ö5, Ö7). "
+            "Doğru mimari ikisi birliktedir: feature'lar Redshift'te hesaplanır, özel Python modelleri SageMaker AI'da eğitilir; basit modeller için Redshift ML aynı SageMaker'ı SQL'den çağırır. "
+            "Redshift seçtiğimizde artımız: veri yerinden çıkmaz, gece işi tek bir SQL'dir, gündüz compute ödenmez. "
+            "Eksimiz: model eğitimi ayrı bir serviste ve ayrı bir faturadadır; uygulama UNLOAD ile S3'e yazılan feature dosyalarının tarihini kontrol etmeli ve eski dosyayla eğitim yapmamalıdır. "
+            "Bir koşul değişseydi: kaynak veri S3'te olsaydı, iş haftada bir çalışsaydı ve ekipte hiç warehouse olmasaydı Athena öne geçerdi; bu koşullardan yalnız biri farkı kapatmaz."))
+
+# ------------------------------------------------------------------ 7. log analytics (OpenSearch wins on its engine)
+REDSHIFT_W.append(wusecase("logs", 7, sim="w_logs",
+    title="Log toplama ve arama: olay anında bir hata mesajını bulmak",
+    key="Her log satırı bir JSON: time, service, level, request_id, message ve değişen alanlar. Son 30 gün sıcak, 13 ay arşiv.",
+    story="Lale Market'in on Engine App'i ve load balancer'ı günde 600 GB log üretiyor: normalde saniyede 7.000 satır, bir olay anında beş katı. Üç kişilik SRE ekibinin üç sorusu var. "
+          "Birincisi, olay anında son yedi günde bir hata mesajını ya da bir request id'yi saniyeler içinde bulmak: \"payment\" yakınında \"timeout\" geçen satırlar. İkincisi, servis başına dakikalık 5xx oranını gösteren canlı bir pano; en fazla bir dakika gecikmeyle. "
+          "Üçüncüsü, ayda bir 13 aylık kapasite raporu. Log'ların alanları servisten servise değişiyor ve her sürümde yeni alan geliyor. Log'lar 30 gün sıcak tutulur, sonra 13 ay arşivde kalır; tek tek log satırları değerli değildir.",
+    wnote="R1 toplam 44: işin merkezi metin içinde aramadır (EY 16); değişen JSON alanları (VM 8), 30 günlük ömür (YD 10) ve panonun toplamları (DA 10). "
+          "R2 18 ve R4 18 ile ikinci: sürekli bir yazma akışı, olay anında beş kat; SRE ekibi hazır bir arama ve pano aracı istiyor.",
+    rows=[
+        row("EY", 16, "Olay anındaki ilk soru metin içinde bir aramadır.",
+            "Son yedi günün log'larında bir kelimeyi, bir kelime yakınındaki başka bir kelimeyi ya da bir request id'yi saniyeler içinde bulmak; sonuçlar zamana göre sıralı.",
+            "Arama dakikalar sürerse olay süresi uzar ve müşteri ödeme ekranında bekler."),
+        row("VM", 8, "Her servisin log'u farklı alanlar taşır ve her sürümde yeni alan gelir.",
+            "Yarı yapılandırılmış JSON satırları alan listesi önceden tanımlanmadan kabul edilmeli; yeni bir alan hemen sorgulanabilmeli.",
+            "Her yeni alan için bir schema değişikliği gerekirse ekip o alanı olay anında sorgulayamaz."),
+        row("YD", 10, "Sıcak log'lar 30 gün sonra gitmeli.",
+            "30 günden eski log'lar sıcak katmandan kendiliğinden silinmeli ya da arşive geçmeli; silme bir iş yazmadan olmalı.",
+            "Silme işi unutulursa disk dolar ve yeni log'lar yazılamaz."),
+        row("DA", 10, "Canlı pano ve aylık rapor toplamlardır.",
+            "Servis başına dakikalık 5xx oranı ve 13 aylık kapasite raporu: zaman pencereli toplamlar hızlı dönmeli.",
+            "Pano yavaşsa olay geç fark edilir."),
+        row("R2", 18, "Saniyede 7.000 satır, olay anında beş katı; pano en fazla bir dakika geride.",
+            "Saniyede 7.000, olay anında 35.000 satır yazma; yeni satır bir dakika içinde aranabilir ve panoda görünür olmalı.",
+            "Olay anında log'lar geride kalırsa ekip tam o anda kör kalır."),
+        row("R3", 6, "Tek tek log satırları değerli değildir.",
+            "Birkaç dakikalık log kaybı kabul edilir; bir AZ arızası 30 günlük sıcak log'u silmemeli.",
+            "Bütün sıcak log'lar kaybolursa son bir ayın olayları incelenemez."),
+        row("R4", 18, "Üç kişilik SRE ekibi hazır bir arama ve pano aracı istiyor.",
+            "Log'ları toplayan bir boru hattı, bir arama ekranı ve panolar hazır gelmeli; ekip yeni bir sorgu dili öğrenmeye razı ama araç yazmaya değil.",
+            "Arama ekranını ve panoları ekip kendisi yazarsa üç kişinin bir çeyreği gider."),
+        row("R5", 14, "Günde 600 GB yazılır ve sürekli sorgulanır.",
+            "Sürekli yazma ve dakikada bir pano yenilemesi; 30 günlük sıcak veri için storage ve compute öngörülebilir olmalı.",
+            "Her pano yenilemesi ya da her arama veriyi baştan tarayıp ödenirse fatura olay sayısıyla büyür."),
+    ],
+    cands=["os", "ath", "rs"],
+    scores={
+        "os": [sc(10, "Inverted index her kelimenin hangi satırlarda geçtiğini tutar; kelime, yakınlık ve request id araması doğrudan bir index okumasıdır. Puan kırılmadı."),
+               sc(9, "Dynamic mapping yeni JSON alanını yazma anında tanır ve index'ler. 1 puan kırıldı: alan sayısı sınırlanmazsa mapping büyür; index şablonu bir tasarım işidir."),
+               sc(10, "Index State Management zamana göre index'leri 30 gün sonra siler ya da taşır. Puan kırılmadı."),
+               sc(9, "Aggregation'lar kolon bazlı doc values üzerinde çalışır; dakikalık 5xx oranı hızlıdır. 1 puan kırıldı: 13 aylık rapor için eski index'ler sıcak katmanda değildir."),
+               sc(8, "Shard'lar ve node'lar yazmayı paylaşır; yeni satır refresh ile yaklaşık bir saniyede aranır. 2 puan kırıldı: günde 600 GB için shard sayısı ve node'lar önceden boyutlanır."),
+               sc(8, "Replica shard'lar ve snapshot'lar. 2 puan kırıldı: bir node kaybında replica'sı olmayan index'ler yeniden yüklenir."),
+               sc(8, "OpenSearch Dashboards arama ekranını ve panoları hazır verir; OpenSearch Ingestion log'ları toplar. 2 puan kırıldı: index şablonları ve shard planı ekibin işidir."),
+               sc(7, "Node saat başına ödenir; eski veri daha ucuz katmanlara taşınır. 3 puan kırıldı: domain 30 günlük sıcak veriye göre boyutlanır ve 7/24 çalışır.")],
+        "ath": [sc(4, "LIKE ve regexp ile arama yapılır. 6 puan kırıldı: inverted index yoktur; her arama yedi günün message kolonunu baştan okur."),
+                sc(7, "Schema okurken uygulanır: JSON SerDe (satırı kolonlara çeviren okuyucu) değişen alanları okur. 3 puan kırıldı: yeni alanlar table tanımına eklenmeden sorgulanamaz ve her yeni alan bir tanım güncellemesidir."),
+                sc(8, "Tarihe göre partition'lar düşürülür; dosyaların silinmesi S3 lifecycle kuralıyla olur. 2 puan kırıldı: süre sonu engine'de değil S3'tedir ve table tanımı ayrıca güncellenir."),
+                sc(7, "Parquet'e çevrilen log'lar kolon kolon okunur. 3 puan kırıldı: ham JSON satırlar row bazlı dosyalardır; Parquet'e çevirme ayrı bir iştir ve çevrilmeyen her sorgu bütün satırları okur."),
+                sc(6, "Firehose dosyaları birkaç dakikada bir S3'e yazar. 4 puan kırıldı: yeni satır dosya yazılana kadar görünmez ve dakikada bir pano yenilemesi hesap başına eşzamanlı sorgu kotasına dayanır."),
+                sc(10, "Log'lar S3'te birden fazla Availability Zone'da durur. Puan kırılmadı."),
+                sc(6, "Firehose, Glue table'ları ve Athena hazır servislerdir. 4 puan kırıldı: arama ekranı ve canlı pano hazır gelmez; Parquet çevirme ve partition düzeni ekibin işidir."),
+                sc(7, "Taranan TB başına ödenir; boş saatler sıfırdır. 3 puan kırıldı: birim sorgu başınadır ve bu iş yükü sürekli sorgudur: dakikalık pano günde 1.440 sorgu; fatura sorgu sayısıyla büyür ve bir tavanı yoktur. Aramanın her seferinde bütün veriyi okuması R1.1'de sayıldı.")],
+        "rs": [sc(4, "LIKE ve SIMILAR TO ile metin araması yapılır (Ö5). 6 puan kırıldı: inverted index yoktur; her arama message kolonunun bütün bloklarını okur ve zone map metin içindeki bir kelimeyi atlatamaz."),
+               sc(8, "SUPER tipi şemasız JSON'u bir kolonda tutar ve yeni bir alan schema değişikliği olmadan hemen sorgulanır (PartiQL, Ö5). 2 puan kırıldı: alanlar her sorguda yol ifadesiyle açılır; sık filtrelenen bir alanın blok atlaması için ayrı bir kolon ve ALTER TABLE gerekir."),
+               sc(6, "Eski log'lar tarih aralığıyla silinir. 4 puan kırıldı: süre sonu yoktur; silme zamanlanmış bir DELETE işidir ve silinen row'lar arka plandaki VACUUM'a kadar yer tutar."),
+               sc(10, "Kolon bazlı saklama, sort key ve MPP (Ö1, Ö3, Ö4) zaman pencereli toplamların kendisidir: dakikalık 5xx ve 13 aylık rapor hızlı döner. Puan kırılmadı."),
+               sc(5, "Streaming ingestion log'ları Kinesis'ten bir materialized view'a mikro-batch'lerle alır (Ö7) ve olay anındaki 35.000 satır/sn tepeyi akış katmanı karşılar. 5 puan kırıldı: yeni satır aramada ve panoda ancak materialized view yenilendiğinde görünür; bir dakikalık sınır yenileme sıklığına bağlıdır ve tepe Redshift'e değil akış katmanına düşer (kart 4 ile aynı kırılım)."),
+               sc(9, "Recovery point'ler ve akış katmanındaki saklama. 1 puan kırıldı: akış katmanındaki son saniyeler bir arızada yeniden oynatılır."),
+               sc(6, "SQL panoları (örneğin QuickSight) çalışır (Ö5). 4 puan kırıldı: log arama ekranı yoktur ve bir akış katmanı işletilir."),
+               sc(6, "RPU-saat ve akış katmanı ödenir. 4 puan kırıldı: dakikada bir yenilenen pano ve sürekli yazma yüzünden Serverless kapasite gün boyu açık kalır.")],
+    },
+    h2h={
+        "ath": "S3 üzerinde sorgu motoru (Athena) ile kafa kafaya. Athena log'ların arşivi için iyi bir yerdir: 13 aylık log S3'te durur, schema okurken uygulanır ve aylık rapor sadece taradığı kadar ödenir. "
+               "Ama bu kartın ilk sorusu olay anında metin içinde aramadır ve Athena'da inverted index yoktur: her arama yedi günün message kolonunu baştan okur ve her seferinde ödenir (R1.1, R5). Yeni satırlar da dosya yazılana kadar görünmez (R2). "
+               "OpenSearch kelimeyi index'ten bulur ve yeni satırı yaklaşık bir saniyede aranabilir yapar. "
+               "Doğru mimari ikisi birliktedir: 30 günlük sıcak log OpenSearch'te, 13 aylık arşiv S3'te ve aylık rapor Athena ile. Hangi koşul değişseydi Athena seçilirdi: canlı arama ve pano istenmeseydi ve iş yalnız aylık rapor olsaydı.",
+        "rs": "Data warehouse (Redshift) ile kafa kafaya. Redshift bu kartın toplam sorularında güçlüdür: dakikalık 5xx oranı ve 13 aylık kapasite raporu kolon bloklarından saniyeler içinde döner (R1.4). "
+              "Ama işin merkezi metin aramasıdır ve columnar bir engine'de inverted index yoktur: \"timeout\" kelimesini bulmak message kolonunun bütün bloklarını okumaktır; zone map metin içindeki bir kelimeyi atlatamaz (R1.1). Değişen JSON alanları SUPER tipinde kalır (R1.2), 30 günlük silme bir DELETE işidir (R1.3) ve log'lar bir akış katmanından mikro-batch'lerle gelir (R2). "
+              "Hangi koşul değişseydi Redshift seçilirdi: log'lar metin araması için değil sadece toplamlar ve raporlar için toplansaydı (örneğin istek sayıları ve süreleri) ve analistler bunları satış verisiyle SQL'de birleştirmek isteseydi.",
+    },
+    verdict="Karar: OpenSearch {os}, Athena {ath}, Redshift {rs}. Bu iş yüküne en uygun servis OpenSearch'tür ve kararı R1'in erişim yolu verir: olay anındaki soru metin içinde aramadır ve bunu inverted index yapar. Redshift üçüncüdür; toplam sorularında güçlüdür ama metin aramasında her bloğu okur. "
+            "Yine de Redshift seçersek artımız: 13 aylık kapasite raporu ve dakikalık 5xx oranı tek bir SQL'dir ve log'lar satış verisiyle aynı yerde birleşir (Ö1, Ö5). "
+            "Eksimiz: arama ekranı yoktur ve her arama bütün message bloklarını okur; uygulama aramayı request id ve zaman aralığıyla daraltmalı, 30 günlük silmeyi zamanlanmış bir DELETE ile yapmalı ve bir akış katmanı işletmelidir. "
+            "Doğru mimari ikisi birliktedir: sıcak log OpenSearch'te, arşiv S3'te; aylık rapor Athena ile ya da Redshift Spectrum ile. Bir koşul değişseydi: metin araması istenmeseydi ve iş yalnız toplamlar olsaydı Redshift öne geçerdi."))
+
+# ------------------------------------------------------------------ 8. inventory forecasting inputs, flat 24/7 (the provisioned twin wins)
+REDSHIFT_W.append(wusecase("forecast", 8, sim="w_forecast",
+    title="Stok tahmini girdileri: 7/24 düz bir yük",
+    key="Fact table'lar: daily_sales (product_id, warehouse_id, day) ve stock (zero-ETL ile Aurora'dan). Materialized view: ürün ve depo başına 90 günlük hareketli ortalama.",
+    story="Lale Market'in otomatik stok yenileme servisi 6 depo ve 4.000 ürün için her beş dakikada bir aynı soruları soruyor: son 90 günün günlük satışları, hareketli ortalama, Aurora'daki anlık stok ve tedarikçi teslim süresi. "
+          "Servis gece gündüz çalışıyor; depo planlamacıları da gün boyunca aynı ekranlara bakıyor. Yük yıllardır düz: haftada 7 gün, günde 24 saat, kabaca aynı sorgu sayısı. "
+          "Veri 1,5 TB. Ekipte daha önce Redshift cluster'ı işletmiş iki DBA var. Finans müdürü üç yıllık bir bütçe planı yaptı ve öngörülebilir, en düşük aylık faturayı istiyor.",
+    wnote="R1 toplam 46: 90 günlük pencerelerin taranması (DA 14) ve sorguların kendisi (EY 14), her beş dakikada yenilenen ara sonuçlar (AO 10) ve Aurora'dan gelen sürekli değişiklikler (OY 8). "
+          "R5 22 ile hemen arkasında: yük düz ve bütçe üç yıllık; bu kartı fiyat modeli ayırır.",
+    rows=[
+        row("EY", 14, "Her beş dakikada aynı pencere ve join soruları sorulur.",
+            "Ürün ve depo başına 90 günlük hareketli ortalama (AVG() OVER), anlık stok ile JOIN ve teslim süresine göre filtre SQL ile yazılmalı.",
+            "Sorgu yazılamazsa yenileme servisi veriyi kendi belleğine çeker ve her beş dakikada baştan hesaplar."),
+        row("DA", 14, "Her sorgu 90 günlük bir pencereyi tarar.",
+            "90 günlük satışların birkaç kolonu okunmalı; sorgu beş dakikalık döngünün küçük bir kısmını almalı.",
+            "Sorgu döngüden uzun sürerse siparişler eski tahminle verilir."),
+        row("AO", 10, "Aynı ara sonuç her beş dakikada lazım.",
+            "Hareketli ortalama gibi ara sonuçlar saklanmalı ve yeni satışlarla artımlı yenilenmeli.",
+            "Her döngüde 90 gün baştan hesaplanırsa kapasite boşa harcanır."),
+        row("OY", 8, "Stok Aurora'da sürekli değişir ve kopyaya akar.",
+            "Aurora'daki stok değişiklikleri kopyaya sürekli eklenmeli ve güncellenmeli; güncellemeler taramayı bozmamalı.",
+            "Stok kopyası geride kalırsa servis olmayan stoğa göre sipariş verir."),
+        row("R2", 14, "Yük yıllardır düz; tepe yok.",
+            "Gece gündüz aynı yük; her beş dakikalık döngü aynı kapasiteyle zamanında bitmeli.",
+            "Bir döngü gecikirse o döngünün siparişleri bir sonrakine kayar."),
+        row("R3", 6, "Satışlar ve stok kaynaktan yeniden yüklenebilir.",
+            "Kopya kaybolursa kaynaktan yeniden yüklenir; günlük yedek yeterlidir.",
+            "Kayıp birkaç saatlik bir tahmin kesintisidir; siparişler elle verilir."),
+        row("R4", 12, "Ekipte cluster işletmiş iki DBA var.",
+            "Kapasite bir kez seçilebilir; bakım penceresi ve resize planlanabilir. Ekip bunu biliyor.",
+            "Ekip bilmediği bir aracı işletirse ilk arıza uzun sürer."),
+        row("R5", 22, "Yük düz ve bütçe üç yıllık: en düşük öngörülebilir fatura bu kartın kararıdır.",
+            "Üç yıl boyunca 7/24 düz yük için en düşük ve öngörülebilir aylık fatura; uzun dönemli taahhüt kabul edilir.",
+            "Düz bir yükte saniye başına ödeme bir avantaj getirmez; taahhütsüz fiyat üç yılda belirgin bir fark yapar."),
+    ],
+    cands=["rsp", "rs", "aur"],
+    scores={
+        "rsp": [sc(10, "Aynı engine: analitik SQL (Ö5) ile AVG() OVER ve JOIN tek cümlededir. Puan kırılmadı."),
+                sc(10, "Kolon bazlı saklama ve day sort key'i (Ö1, Ö3) sorguyu 90 günün bloklarıyla sınırlar. Puan kırılmadı."),
+                sc(9, "Materialized view artımlı yenilenir (Ö6). 1 puan kırıldı: sort key ve distribution seçimi bir tasarım işidir."),
+                sc(9, "Zero-ETL stok değişikliklerini sürekli getirir (Ö7). 1 puan kırıldı: güncellenen row eskisini silinmiş işaretler ve arka plandaki VACUUM işi artar."),
+                sc(10, "Düz yük sabit düğümlere tam oturur; kapasite her an hazırdır. Puan kırılmadı."),
+                sc(9, "Otomatik ve elle snapshot'lar. 1 puan kırıldı: veri bir kopyadır; kaybolursa yeniden yükleme sürer."),
+                sc(8, "Düğüm tipi ve sayısı bir kez seçilir; iki DBA bunu biliyor. 2 puan kırıldı: resize ve bakım penceresi ekibin işidir."),
+                sc(9, "Aynı bellek (384 GB) varsayımıyla kaba bir karşılaştırma: dört ra3.4xlarge düğümü (her biri 96 GiB) üç yıllık peşinatsız rezervasyonla düğüm başına 1,6939 USD/saat, ayda yaklaşık 4.946 USD (eu-central-1, Price List API, 2026-10-31). Price List API'da Serverless rezervasyonu yalnız bir yıllıktır; bir yıllık vadede düğümler (peşinatsız 2,7258 USD/saat, ayda yaklaşık 7.959 USD) Serverless'tan pahalıdır. 1 puan kırıldı: fiyat avantajı üç yıllık taahhüde bağlıdır.")],
+        "rs": [sc(10, "Analitik SQL (Ö5): AVG() OVER ve JOIN tek cümlededir. Puan kırılmadı."),
+               sc(10, "Kolon bazlı saklama ve day sort key'i (Ö1, Ö3). Puan kırılmadı."),
+               sc(9, "Materialized view artımlı yenilenir (Ö6). 1 puan kırıldı: sort key ve distribution seçimi bir tasarım işidir."),
+               sc(9, "Zero-ETL stok değişikliklerini sürekli getirir (Ö7). 1 puan kırıldı: güncellenen row eskisini silinmiş işaretler ve arka plandaki VACUUM işi artar."),
+               sc(10, "Serverless düz yükte aynı kapasiteyi tutar (Ö8). Puan kırılmadı."),
+               sc(9, "Recovery point'ler 30 dakikada bir. 1 puan kırıldı: veri bir kopyadır."),
+               sc(9, "Düğüm planı yoktur (Ö8). 1 puan kırıldı: base RPU ve en fazla RPU sınırı ekibin işidir; tablo tasarımı R1'de sayıldı."),
+               sc(7, "Aynı bellek için 24 RPU (24 × 16 GB) 7/24: on demand ayda yaklaşık 7.902 USD (0,451 USD/RPU-saat), bir yıllık rezervasyonla yaklaşık 6.167 USD (0,352 USD/RPU-saat). 3 puan kırıldı: düz yükte saniye başına ödeme bir avantaj getirmez; Serverless'ın en uzun rezervasyonu bir yıldır ve bu fiyat, provisioned düğümlerin üç yıllık rezervasyonundan yaklaşık yüzde 25 pahalıdır (6.167'ye karşı 4.946 USD).")],
+        "aur": [sc(10, "PostgreSQL SQL'i window function'ları ve JOIN'i tam olarak destekler. Puan kırılmadı."),
+                sc(3, "Index dar aralıkları hızlandırır. 7 puan kırıldı: PostgreSQL row'ları tam saklar; 90 günlük pencereyi tarayan her sorgu her row'un tamamını okur."),
+                sc(6, "Materialized view ve partition kullanılabilir. 4 puan kırıldı: kolon bazlı sıkıştırma yoktur ve materialized view'lar elle yenilenir."),
+                sc(10, "Stok zaten Aurora'dadır; row store tek row'luk güncellemeyi doğrudan yapar. Puan kırılmadı."),
+                sc(5, "Sorgular reader'larda çalışır. 5 puan kırıldı: reader'lar checkout ile aynı storage'ı okur ve her beş dakikadaki tarama storage I/O'sunu checkout ile paylaşır; tarama süresinin kendisi R1 · DA'da sayıldı."),
+                sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                sc(8, "Boru hattı yoktur, stok zaten oradadır. 2 puan kırıldı: partition ve materialized view bakımı ekibin işidir."),
+                sc(6, "Reader instance'lar rezervasyonla ucuzlar. 4 puan kırıldı: 1,5 TB'ı her beş dakikada tarayacak büyük reader'lar gerekir ve Standard yapılandırmada her taramanın I/O'su ayrıca ödenir.")],
+    },
+    h2h={
+        "rs": "Data warehouse (Redshift Serverless) ile kafa kafaya. Bu kart bu sayfanın servisinin ikizine kaybettiği karttır: iki servis aynı engine'i çalıştırır ve R1 puanları birebir aynıdır (44,2). Kararı R5 verir. "
+              "Serverless'ın gücü boş saatlerde compute ödememesidir; bu kartta boş saat yoktur. Yük 7/24 düzdür, bu yüzden saniye başına ödeme bir avantaj getirmez. Aynı bellek varsayımıyla provisioned cluster üç yıllık rezervasyonla ayda yaklaşık 4.946 USD, Serverless kendi en uzun vadesi olan bir yıllık rezervasyonla yaklaşık 6.167 USD'dir; bir yıllık vadeyle düğümler 7.959 USD tutar, yani avantaj sadece üç yıllık taahhütten gelir. "
+              "Serverless'ın dürüst üstünlükleri yine de vardır: düğüm planı ve resize yoktur (R4) ve yük bir gün değişirse kapasite kendisi gelir. Fark 3,2 puandır, yani yakın bir yarış. "
+              "Hangi koşul değişseydi Redshift Serverless seçilirdi: yük gece düşseydi ya da hafta sonları dursaydı, ekipte cluster işletecek kimse olmasaydı ya da taahhüt bir yılla sınırlı olsaydı.",
+        "aur": "İlişkisel (Aurora PostgreSQL) ile kafa kafaya. Aurora'nın gücü stoğun kendisidir: anlık stok zaten oradadır, kopyalanmaz ve bir güncelleme hemen görünür (R1.4). "
+               "Ama her beş dakikalık döngü 90 günlük satışları tarar ve PostgreSQL row'ları tam olarak okur (R1.2); bu tarama checkout ile aynı storage'ı paylaşan reader'larda çalışır (R2). Hareketli ortalamayı tutan materialized view'lar da elle yenilenir (R1.3). "
+               "Hangi koşul değişseydi Aurora seçilirdi: ürün sayısı 400, pencere 14 gün olsaydı; o zaman tarama küçük kalır ve stoğun yanında çalışmak en sade tasarım olurdu. Bu kartta da doğru mimari ikisi birliktedir: stok Aurora'da kalır, zero-ETL onu warehouse'a taşır.",
+    },
+    verdict="Karar: Redshift provisioned {rsp}, Redshift {rs}, Aurora {aur}. Yakın bir yarış ve R1'de tam eşitlik: iki servis aynı engine'i çalıştırır. Kararı R5 verir: 7/24 düz bir yükte üç yıllık rezervasyonlu düğümler, bir yıllık rezervasyonlu Serverless'tan yaklaşık yüzde 20 ucuzdur; Serverless'ın üç yıllık rezervasyonu yoktur, bir yıllık vadelerde ise Serverless daha ucuzdur. "
+            "Yine de Redshift Serverless seçersek artımız: düğüm planı, resize ve bakım penceresi yoktur; yük değişirse kapasite kendisi gelir. "
+            "Eksimiz: ayda yaklaşık 1.200 USD daha yüksek bir fatura; base RPU'yu düz yüke göre ayarlamak ve bir yıllık rezervasyonu satın almak ekibin işidir. "
+            "Bir koşul değişseydi: yük gece ya da hafta sonu düşseydi ya da finans üç yıl yerine bir yıllık taahhüt isteseydi Serverless öne geçerdi. Bu kart \"aynı engine, farklı servis\" kararının bir örneğidir: provisioned cluster'dan Serverless'a ya da tersine geçiş bir snapshot geri yüklemesidir."))
+
+# ------------------------------------------------------------------ 9. executive dashboards (materialized views and result cache)
+REDSHIFT_W.append(wusecase("dashboards", 9,
+    title="Yönetim panosu: 12 KPI kutusu, dakikada bir yenileme",
+    key="Materialized view'lar: bugünün geliri ve dönüşümü (zero-ETL kopyası üzerinde), geçen yılın aynı günü ve 13 aylık eğilim (satış geçmişi üzerinde).",
+    story="Lale Market'in 25 yöneticisi telefonlarında bir pano açıyor: 12 KPI kutusu. Bugünün geliri ve geçen yılın aynı günü, saatlik dönüşüm oranı, en çok satan 10 kategori, 13 aylık gelir eğilimi. "
+          "Pano mesai saatinde dakikada bir yenileniyor ve her kutu iki saniyenin altında açılmalı. Pazartesi 09:00'da herkes aynı anda açıyor: bir dakikada yaklaşık 300 kutu sorgusu. "
+          "Bugünün verisi Aurora'dan zero-ETL ile gelir, geçmiş Redshift'teki satış table'ındadır. Ekipte bir BI geliştiricisi var; pano için ayrı bir sistem işletmek istemiyor. Pano verisi bir kopyadır.",
+    wnote="R1 toplam 44: kutuların hızı en çok ön hesaplamaya bağlıdır (AO 14); sorguların kendisi (EY 12) ve 13 aylık tarama (DA 12), sürekli gelen değişiklikler (OY 6). "
+          "R2 18 ve R5 18 ile ikinci: pazartesi 09:00 dalgası ve mesai boyunca dakikalık yenileme.",
+    rows=[
+        row("EY", 12, "Her kutu bugünü geçmişle karşılaştıran bir SQL'dir.",
+            "Bugünün geliri ile geçen yılın aynı günü, kategoriye göre ilk 10 ve 13 aylık eğilim SQL ile yazılmalı: JOIN, GROUP BY, window function.",
+            "Bir kutu SQL ile yazılamazsa BI geliştiricisi onu uygulamada hesaplar ve panonun rakamları raporlarla tutmaz."),
+        row("DA", 12, "Eğilim kutusu 13 ayı tarar.",
+            "13 aylık eğilim ve geçen yılın aynı günü birkaç kolonu okuyan taramalarla saniyeler içinde hesaplanmalı.",
+            "Eğilim kutusu yavaşsa pano iki saniye sınırını aşar."),
+        row("AO", 14, "Aynı 12 sorgu dakikada bir tekrar eder; ön hesaplama hızı belirler.",
+            "Kutuların ara sonuçları saklanmalı ve yeni veriyle artımlı yenilenmeli; aynı sorgu tekrar gelince sonuç yeniden hesaplanmadan dönmeli.",
+            "Her yenileme 13 ayı baştan tararsa 25 yöneticinin panosu kapasitenin çoğunu alır."),
+        row("OY", 6, "Bugünün siparişleri sürekli gelir.",
+            "Aurora'daki yeni siparişler ve iadeler kopyaya sürekli eklenmeli; güncellemeler kutuları bozmamalı.",
+            "Bugünün kutusu geride kalırsa yönetim yanlış rakamla karar verir."),
+        row("R2", 18, "Pazartesi 09:00'da bir dakikada 300 kutu sorgusu.",
+            "Pazartesi 09:00 dalgasında da her kutu iki saniyenin altında açılmalı.",
+            "Dalga anında kutular yavaşlarsa yöneticiler panoyu bırakır ve analiste telefon eder."),
+        row("R3", 5, "Pano verisi bir kopyadır.",
+            "Kopya kaybolursa kaynaktan yeniden yüklenir; pano birkaç saat kapanabilir.",
+            "Kayıp bir pano kesintisidir; para kaybı değildir."),
+        row("R4", 15, "Tek bir BI geliştiricisi var; pano için ayrı bir sistem istemiyor.",
+            "Pano var olan warehouse'ta çalışmalı; ayrı bir cache ya da yeni bir veri boru hattı istenmiyor.",
+            "Ayrı bir sistem tek geliştiricinin işletme yükünü ikiye katlar."),
+        row("R5", 18, "Mesai boyunca dakikada bir yenileme: ödeme modeli belirgin bir kalemdir.",
+            "Mesai saatinde dakikada bir yenileme; gece ve hafta sonu neredeyse sıfır. Fatura kullanımla orantılı olmalı.",
+            "Panoya göre boyutlanan kapasite gece ve hafta sonu boş durur ve ödenir."),
+    ],
+    cands=["rs", "os", "aur"],
+    scores={
+        "rs": [sc(10, "Analitik SQL (Ö5): bugün ile geçen yıl tek bir JOIN, ilk 10 bir window function. Puan kırılmadı."),
+               sc(10, "Kolon bazlı saklama ve order_date sort key'i (Ö1, Ö3): eğilim kutusu sadece gereken kolonları okur. Puan kırılmadı."),
+               sc(9, "Materialized view'lar artımlı yenilenir ve aynı sorgu tekrar gelince result cache sonucu planlamadan döndürür (Ö6). 1 puan kırıldı: sort key ve materialized view tasarımı bir tasarım işidir."),
+               sc(9, "Zero-ETL bugünün siparişlerini sürekli getirir (Ö7). 1 puan kırıldı: güncellenen row eskisini silinmiş işaretler ve arka plandaki VACUUM işi artar."),
+               sc(8, "Serverless dalgada kapasiteyi artırır (Ö8); geçmiş kutuları result cache'ten milisaniyede döner. 2 puan kırıldı: zero-ETL'in her değişikliği bugünün table'larının cache girişlerini geçersiz kılar; bugünün kutuları her dalgada yeniden hesaplanır. Hafta sonu boş duran workgroup'un pazartesi ilk sorgusu compute'un başlamasını da bekler (AWS başlama süresini ücretlendirmez)."),
+               sc(9, "Recovery point'ler 30 dakikada bir. 1 puan kırıldı: kopya kaybolursa zero-ETL yeniden kurulur."),
+               sc(9, "Pano var olan workgroup'ta çalışır; yeni sistem yoktur. 1 puan kırıldı: base RPU ve en fazla RPU sınırı ekibin işidir; materialized view tasarımı R1.3'te sayıldı."),
+               sc(8, "RPU-saat; gece ve hafta sonu compute ödenmez (Ö8). 2 puan kırıldı: dakikalık yenileme yüzünden mesai boyunca kapasite çalışır.")],
+        "os": [sc(6, "Aggregation'lar ve tarih histogramı kutuların çoğunu hesaplar. 4 puan kırıldı: bugün ile geçmişin JOIN'i ve serbest SQL sınırlıdır; karşılaştırma iki ayrı sorgu ve uygulamada birleştirmedir."),
+               sc(8, "Aggregation'lar kolon bazlı doc values üzerinde çalışır. 2 puan kırıldı: 13 aylık sipariş satırları düzleştirilmiş document'lar olarak büyür."),
+               sc(7, "Rollup ve transform job'ları özet index'ler üretir. 3 puan kırıldı: özetlerin yenilenmesi zamanlanmış job'lardır, artımlı bir view değildir."),
+               sc(7, "Document ekleme hızlıdır. 3 puan kırıldı: bir güncelleme document'ın yeni bir sürümünü yazar ve sipariş satırları düzleştirildiği için bir iade birçok document'ı değiştirir."),
+               sc(8, "Shard'lar ve node'lar okumayı paylaşır. 2 puan kırıldı: dalga için node sayısı önceden boyutlanır."),
+               sc(8, "Replica shard'lar ve snapshot'lar. 2 puan kırıldı: kopya kaybolursa pipeline baştan yükler."),
+               sc(4, "OpenSearch Ingestion Aurora'nın değişikliklerini akıtabilir ve Dashboards hazırdır. 6 puan kırıldı: dört table'ı document'lara düzleştiren pipeline, mapping ve shard planı tek geliştirici için ayrı bir sistemdir."),
+               sc(6, "Node saat başına ödenir. 4 puan kırıldı: domain gece ve hafta sonu da çalışır.")],
+        "aur": [sc(10, "PostgreSQL SQL'i JOIN, GROUP BY ve window function'ları tam olarak destekler. Puan kırılmadı."),
+                sc(4, "Bugünün kutuları index ile birkaç bin row okur. 6 puan kırıldı: 13 aylık eğilim her row'un tamamını okur; diğer kartlardaki üç yıllık taramadan küçüktür, bu yüzden 7 değil 6 puan."),
+                sc(6, "Materialized view ve partition kullanılabilir. 4 puan kırıldı: kolon bazlı sıkıştırma yoktur ve materialized view'lar elle yenilenir."),
+                sc(10, "Siparişler zaten oradadır; row store ekleme ve güncellemeyi doğrudan yapar. Puan kırılmadı."),
+                sc(5, "Kutular reader'larda çalışır. 5 puan kırıldı: reader'lar checkout ile aynı storage'ı okur ve dalga anındaki taramalar storage I/O'sunu checkout ile paylaşır; tarama süresinin kendisi R1 · DA'da sayıldı."),
+                sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                sc(8, "Boru hattı yoktur. 2 puan kırıldı: partition ve materialized view bakımı tek geliştiricinin işidir."),
+                sc(4, "Reader instance saat başına ödenir. 6 puan kırıldı: dalgaya göre seçilen reader 7/24 çalışır ve Standard yapılandırmada her taramanın I/O'su ayrıca ödenir.")],
+    },
+    h2h={
+        "os": "Search engine (OpenSearch) ile kafa kafaya. OpenSearch'ün gücü hazır panolar ve hızlı aggregation'lardır; log ve olay verisi üzerinde canlı bir pano için çok iyi bir araçtır. "
+              "Bu panonun kutuları ise ilişkiseldir: bugünün geliri geçen yılın aynı günüyle karşılaştırılır, kategoriler ürün table'ından gelir. OpenSearch'te bu veri önce document'lara düzleştirilir (R4) ve karşılaştırma iki sorgu ile uygulamada birleştirmedir (R1.1). "
+              "Redshift aynı veriyi zero-ETL ile table'ları değiştirmeden alır, ara sonuçları materialized view'larda tutar ve tekrar eden sorguyu result cache'ten döndürür. "
+              "Hangi koşul değişseydi OpenSearch seçilirdi: pano satış değil uygulama olayları (tıklama, hata, gecikme) üzerinde olsaydı ve kutuların yanında metin araması da istenseydi.",
+        "aur": "İlişkisel (Aurora PostgreSQL) ile kafa kafaya. Aurora'nın gücü tazeliktir: bugünün siparişleri kopyasız ve gecikmesiz oradadır, bugünün kutuları index ile birkaç bin row okur. "
+               "Ama 13 aylık eğilim ve geçen yılın günleri row store'da her row'un tamamını okur (R1.2), materialized view'lar elle yenilenir (R1.3) ve pazartesi dalgası checkout ile aynı storage'ı paylaşan reader'larda çalışır (R2). Dalgaya göre seçilen reader 7/24 ödenir (R5). "
+               "Aurora'nın dürüst yeri bu panonun canlı yarısıdır: bir kutu saniyesinde doğru olmak zorundaysa, örneğin ödeme hatalarının sayısı, onu Aurora'nın reader'ından okumak zero-ETL'in yaklaşık 30 saniyelik gecikmesini ortadan kaldırır. "
+               "Hangi koşul değişseydi Aurora seçilirdi: pano sadece bugünün ve son yedi günün kutularından oluşsaydı ve 30 saniyelik zero-ETL gecikmesi kabul edilmeseydi.",
+    },
+    verdict="Karar: Redshift {rs}, OpenSearch {os}, Aurora {aur}. Kararı R1'in ön hesaplama satırı ve R5 verir: aynı 12 sorgu dakikada bir tekrar eder; materialized view'lar ve result cache (Ö6) bunu ucuz yapar ve gece compute ödenmez. "
+            "Redshift seçtiğimizde artımız: pano var olan warehouse'ta çalışır, geçmiş kutuları cache'ten milisaniyede döner, rakamlar raporlarla aynı SQL'den gelir. "
+            "Eksimiz: bugünün kutuları zero-ETL'in yaklaşık 30 saniyelik gecikmesiyle gelir ve her değişiklik cache'i geçersiz kılar; uygulama kutunun altında \"veri şu saate kadar\" bilgisini göstermeli ve yenilemeyi dakikada birden sık yapmamalıdır. "
+            "Bir koşul değişseydi: pano uygulama olayları üzerinde olsaydı OpenSearch, sadece bugünün kutuları olsaydı Aurora öne geçerdi."))
+
+# ------------------------------------------------------------------ 10. ad-hoc analyst queries on S3 data (Athena wins, R1 equal)
+REDSHIFT_W.append(wusecase("adhoc", 10,
+    title="S3'teki veri gölünde ara sıra sorulan analist soruları",
+    key="Veri gölü: 40 TB Parquet, dt=YYYY-MM-DD partition'ları, table tanımları Glue Data Catalog'da. Kopya yok; sorgu dosyaların durduğu yerde.",
+    story="Lale Market'in veri gölünde 40 TB ham veri var: partner dosyaları, web olayları ve dışa aktarılmış sistem table'ları; hepsi S3'te Parquet ve tarihe göre partition'lı. "
+          "Altı analist haftada yaklaşık 30 farklı soru soruyor ve her soru farklı: \"geçen salı Hamburg'daki partner iadeleri\", \"kampanya haftasında mobil oturum süresi\". Soruların çoğu bir ile üç günlük veriye bakıyor; ayda bir de bir çeyreği tarayan ağır bir soru var. "
+          "Pano yok, cevabın bir dakikada gelmesi yeterli. Partnerler dosyalarına ara sıra yeni alan ekliyor. Veri ekibi 40 TB'ın ikinci bir kopyasını istemiyor ve bütçe küçük.",
+    wnote="R1 toplam 42: serbest SQL (EY 14), dosyaların kolon kolon ve sadece gereken partition'larının okunması (DA 12), okurken uygulanan şema (ŞE 8) ve partition budama (AO 8). "
+          "R5 22 ve R4 20 ile hemen arkasında: haftada 30 sorgu için kapasite tutulmamalı ve veri yerinden çıkmamalı.",
+    rows=[
+        row("EY", 14, "Her soru farklıdır ve önceden bilinmez.",
+            "Her soru bir mühendis beklemeden SQL ile yazılabilmeli: JOIN, GROUP BY, window function, tarih aralığı.",
+            "Soru yazılamazsa analist dosyaları indirir ve kendi makinesinde işler."),
+        row("DA", 12, "Soruların çoğu birkaç günün birkaç kolonunu okur.",
+            "Sorgu sadece ilgili tarih partition'larını ve sadece gereken kolonları okumalı; 40 TB'ın tamamına dokunmamalı.",
+            "Her soru bütün dosyaları okursa bir sorgu saatler sürer ve TB'larca veri taranır."),
+        row("ŞE", 8, "Partnerler dosyalarına ara sıra yeni alan ekliyor.",
+            "Schema okurken uygulanmalı; yeni bir alan eski dosyaları bozmadan table tanımına eklenebilmeli.",
+            "Her yeni alan bir yükleme işinin değişmesi demekse partner verisi haftalarca eksik kalır."),
+        row("AO", 8, "Hız en çok partition budamasına bağlıdır.",
+            "Partition'lar ve dosya istatistikleri ile taranacak dosyalar sorgudan önce elenmeli.",
+            "Budama yoksa en küçük soru bile bütün veri gölünü tarar."),
+        row("R2", 10, "Haftada 30 soru, ayda bir ağır soru.",
+            "Ara sıra gelen sorular ve ayda bir çeyreği tarayan sorgu bir dakika içinde dönmeli; eşzamanlı yük çok küçüktür.",
+            "Ağır soru saatler sürerse çeyrek raporu gecikir."),
+        row("R3", 6, "Veri S3'te kalır; sonuçlar yeniden hesaplanır.",
+            "Kaynak S3'tedir ve sorgu sonucu yeniden üretilebilir.",
+            "Kayıp bir sorgu sonucudur; yeniden çalıştırılır."),
+        row("R4", 20, "Veri yerinden çıkmamalı; ekip ikinci bir sistem işletmek istemiyor.",
+            "40 TB S3'te kalmalı; yükleme işi, kopya ve ayrı bir sistem olmadan sorgulanmalı; table tanımları ortak bir katalogda durmalı.",
+            "Kopya ve yükleme işi küçük ekibin bütün zamanını alır ve iki versiyon doğar."),
+        row("R5", 22, "Haftada 30 sorgu: boş zaman neredeyse bütün haftadır.",
+            "Sadece çalışan sorgular ödenmeli; boş saatler sıfır olmalı; sorgu başına minimum ücret küçük kalmalı.",
+            "Kapasite için ödenen her saat neredeyse hiç kullanılmaz."),
+    ],
+    cands=["ath", "rs", "rsp"],
+    scores={
+        "ath": [sc(10, "Athena'nın SQL engine'i (Trino) JOIN, GROUP BY ve window function'ları tam olarak destekler. Puan kırılmadı."),
+                sc(9, "Parquet kolon bazlıdır; sorgu sadece gereken kolonları ve tarih partition'larını okur. 1 puan kırıldı: dosyaların içi sıralı değilse row group istatistikleri az şey atlatır."),
+                sc(9, "Schema okurken uygulanır: table tanımı Glue Data Catalog'dadır ve yeni alan tanıma eklenir. 1 puan kırıldı: yeni alan table tanımına eklenmeden sorgulanamaz."),
+                sc(8, "Partition budama ve partition projection. 2 puan kırıldı: index ve materialized view yoktur."),
+                sc(9, "Serverless; ara sıra gelen sorgu için kapasite servisindir. 1 puan kırıldı: ayda bir ağır sorgu hesap başına kaynak sınırlarına takılabilir."),
+                sc(10, "Veri S3'te birden fazla Availability Zone'da durur. Puan kırılmadı."),
+                sc(10, "Veri yerinde sorgulanır; partition düzeni ve Glue table'ları veri gölünde zaten vardır; kurulacak bir sistem yoktur, sadece bir Athena workgroup'u. Puan kırılmadı."),
+                sc(10, "Taranan TB başına ödenir (yaklaşık 5 USD/TB), sorgu başına en az 10 MB; boş saatler sıfırdır. Puan kırılmadı.")],
+        "rs": [sc(10, "Analitik SQL (Ö5) external table'lar üzerinde de aynıdır. Puan kırılmadı."),
+               sc(9, "Spectrum (Ö8) Parquet'in kolonlarını ve tarih partition'larını okur. 1 puan kırıldı: dosyalar S3'tedir; yerel table'ların zone map'leri (Ö3) burada yoktur ve row group istatistikleri az şey atlatır."),
+               sc(9, "External table'ların tanımı aynı Glue Data Catalog'dan gelir. 1 puan kırıldı: yeni alan table tanımına eklenmeden sorgulanamaz."),
+               sc(8, "Partition budama. 2 puan kırıldı: external table'larda index yoktur ve materialized view S3 verisini yerel bir kopyaya çevirir."),
+               sc(10, "Serverless kapasiteyi ağır sorguya göre artırır ve Spectrum katmanı taramayı paylaşır (Ö8). Puan kırılmadı."),
+               sc(10, "Veri S3'te kalır. Puan kırılmadı."),
+               sc(8, "Veri yerinde kalır; Glue kataloğundan bir external schema yeter (Ö8). 2 puan kırıldı: bu ekip için yeni bir Redshift workgroup'u, ağı ve IAM role'ü kurulur ve işletilir."),
+               sc(9, "Sorgu yokken compute ödenmez; Spectrum Serverless'a dahildir (Ö8). 1 puan kırıldı: her sorgu base RPU ile en az 60 saniye ödenir.")],
+        "rsp": [sc(10, "Aynı engine: analitik SQL (Ö5). Puan kırılmadı."),
+                sc(9, "Aynı Spectrum katmanı (Ö8). 1 puan kırıldı: dosyalar S3'tedir; zone map'ler burada yoktur."),
+                sc(9, "Aynı Glue kataloğu. 1 puan kırıldı: yeni alan table tanımına eklenmeden sorgulanamaz."),
+                sc(8, "Partition budama. 2 puan kırıldı: external table'larda index yoktur."),
+                sc(8, "Sabit düğümler ağır sorguyu taşır. 2 puan kırıldı: düğüm sayısı sabittir; ayda bir ağır sorgu kendi cluster'ının sınırına çarpar."),
+                sc(10, "Veri S3'te kalır. Puan kırılmadı."),
+                sc(6, "Yönetilen cluster. 4 puan kırıldı: düğüm tipi ve sayısı seçilir, resize ve pause/resume zamanlaması ekibin işidir."),
+                sc(3, "Düğüm saat başına ödenir ve Spectrum taranan TB başına ayrıca ödenir. 7 puan kırıldı: haftada 30 sorgu için düğümler bütün hafta çalışır.")],
+    },
+    h2h={
+        "rs": "Data warehouse (Redshift Serverless) ile kafa kafaya. Bu kartta iki servis S3'teki aynı Parquet dosyalarını aynı biçimde okur: Redshift'in Spectrum katmanı ve Athena kolonları ve partition'ları okur, table tanımları aynı Glue kataloğundadır. R1 puanları eşittir (38,4). "
+              "Farkı servis tasarımı verir: Athena'da kurulacak bir sistem yoktur ve sorgu taradığı TB kadar ödenir; Redshift Serverless'ta bir workgroup kurulur ve her sorgu base RPU ile en az 60 saniye ödenir (R4, R5). "
+              "Redshift'in dürüst üstünlüğü ağır sorgu ve yerel veriyle birleştirmededir: Serverless kapasiteyi artırır (R2) ve aynı sorgu S3 dosyalarını warehouse'taki table'larla JOIN'ler. "
+              "Hangi koşul değişseydi Redshift seçilirdi: sorular günde yüzlerce olsaydı, aynı sorular panolara dönüşseydi ya da veri gölündeki dosyalar warehouse'taki satış table'larıyla sık sık birleştirilseydi.",
+        "rsp": "Data warehouse, provisioned cluster (Redshift provisioned) ile kafa kafaya. Aynı engine ve aynı Spectrum katmanı: R1 puanları Athena ve Serverless ile eşittir. "
+               "Ama haftada 30 sorgu için düğümler bütün hafta çalışır (R5) ve düğüm planı ekibin işidir (R4). Pause/resume ile cluster sorgu olmayan saatlerde durdurulabilir; bu fatura farkını azaltır ama analistlerin ne zaman soru soracağı önceden bilinmez. "
+               "Provisioned cluster'ın dürüst üstünlüğü düz ve sürekli yüktedir (kart 8). "
+               "Hangi koşul değişseydi Redshift provisioned seçilirdi: aynı cluster zaten 7/24 başka bir iş için çalışıyor olsaydı; o zaman ara sıra gelen Spectrum sorguları sadece taranan TB kadar ek fatura doğururdu.",
+    },
+    verdict="Karar: Athena {ath}, Redshift {rs}, Redshift provisioned {rsp}. R1'de üç aday eşittir; kararı R4 ve R5 verir: ara sıra gelen sorular için veri yerinde kalmalı ve sadece çalışan sorgu ödenmelidir. "
+            "Yine de Redshift seçersek artımız: aynı SQL, ağır sorguda daha fazla kapasite ve veri gölünü warehouse'taki satış table'larıyla tek sorguda birleştirme (Ö8). "
+            "Eksimiz: bir workgroup kurulur ve işletilir, her sorgu en az 60 saniye ödenir; uygulama ya da analist sorguları partition filtresiyle yazmalı ve sık sorulan soruları bir yerel table'a almalıdır. "
+            "Doğru mimari çoğu zaman ikisi birliktedir: ham veri gölü Athena ile, düzenli raporlar Redshift'te. Bir koşul değişseydi: sorular günde yüzlerce olsaydı ya da panolara dönüşseydi Redshift öne geçerdi."))
+
+USECASES_W["redshift"] = REDSHIFT_W
+PAGE_SVC["redshift"] = "rs"
