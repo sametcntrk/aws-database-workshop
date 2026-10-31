@@ -1,223 +1,1024 @@
 {% extends "e2e/_base.html" %}
 {% import "e2e/_macros.html" as k with context %}
-{# Turkish version of influxdb.html. Terms stay in English; the explanations are Turkish. Keep both files in step. #}
+{# Timestream for InfluxDB, Turkish, model 2 (weighted cards from e2e_usecases_w.INFLUXDB_W). The English influxdb.html is the older model 1 page and stays untouched. #}
 {% block body %}
 
-<h2 id="goal" data-short="Ne öğreneceksin"><span class="sec">00</span>Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
-<p>Bölüm 01 mimarın kararını verir: Amazon Timestream for InfluxDB nereye oturur, nereye oturmaz. Sonra tutorial iki bölümden oluşur.
-   Bölüm 1, açık kaynak time-series database'i InfluxDB'yi öğretir: point'ler, series'ler, tag'ler ve field'lar, query dili Flux, zaman pencereleri ve retention. Bölüm 2, AWS servisini ve Lale Market'in onu nasıl kullandığını gösterir.</p>
-<p>Örnekler Lale Market'in operasyon sayfasından gelir: depo sensörleri ve dakika başına siparişler. Bazen başka bir örnek bir fikri daha kolay gösterir. O zaman tutorial onu kullanır: bir hava istasyonu, bir kalp monitörü, bir evin elektrik sayacı.</p>
+<h2 id="goal" data-short="Ne öğreneceksin" data-group="Başlarken">Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
+<p>Bu sayfa genel fikirden AWS servisine dört adımda gider:</p>
+<ol>
+  <li><b>Bölüm A, Temel.</b> Zamanla gelen ölçümleri saklayan bir database nedir; bir ölçümün parçaları, aynı şeyi ölçen ölçümlerin bir çizgi olarak bir arada saklanması, zamana göre saklama ve sıkıştırma, okuma ve yazma yolları, zaman pencereleri, eski verinin kendiliğinden gitmesi ve zamanlanmış kontroller. Her kavram bütün durumlarıyla bir tabloda verilir ve bölüm sekiz özelliğin (Ö1–Ö8) listesi ve Prometheus / TimescaleDB / InfluxDB matrisiyle biter. Fikirler bu türdeki bütün database'lerde aynıdır.</li>
+  <li><b>Mimar gözüyle.</b> Böyle bir database ne zaman doğru seçimdir, ne zaman değildir: on use case, her birinde bu iş yüküne en uygun servis, iki alternatifin aynı gereksinimlere cevabı ve yine de Timestream for InfluxDB seçersek artı ve eksilerimiz. Sonra AWS'teki seçenekler ve InfluxDB 2 ile InfluxDB 3 arasındaki seçim. Kartlardan kurulmuş beş karar simülasyonu.</li>
+  <li><b>Bölüm B, İleri.</b> Pratikte InfluxDB 2: canlı Lale Market verisi, yazma biçimi ve sorgu dili, pencereler, eski verinin silinmesi ve zamanlanmış işler, boyutlandırma ve maliyet.</li>
+  <li><b>Bölüm C, AWS servisi.</b> InfluxDB'yi kendin çalıştırdığında ne yapman gerekir, Timestream for InfluxDB senin için neyi yapar ve Lale Market'te nasıl kurulu.</li>
+</ol>
+<p>Örnekler Lale Market'in operasyon ekranından gelir: depoların sıcaklık ve nemi, dakika başına siparişler. Başka bir örnek bir fikri daha kolay gösteriyorsa tutorial onu kullanır: bir evin elektrik sayacı, bir hastanedeki kalp monitörü, bir gazetenin arşivi.</p>
 <p>Bu tutorial'ın sonunda şunları yapabilirsin:</p>
 <ol>
-  <li>Bir time-series database'in hangi iş yükleri için doğru seçim olduğunu ve hangileri için olmadığını söylemek.</li>
-  <li>Line protocol'de bir point okuyup yazmak; onun measurement'ını, tag'lerini, field'larını ve timestamp'ini adlandırmak.</li>
-  <li>Bir series'i ve onun cardinality'sini açıklamak, hangi değerlerin tag'lere gideceğini seçmek.</li>
-  <li>range, filter ve aggregateWindow içeren bir Flux query'sini okumak.</li>
-  <li>Bir retention period'un, senin yazdığın bir silme job'u olmadan eski veriyi nasıl sildiğini açıklamak.</li>
-  <li>Timestream for InfluxDB'nin senin için neyi çalıştırdığını açıklamak.</li>
+  <li>Bir iş yükünün zamanla gelen ölçümler mi, yoksa değişen kayıtlar mı olduğunu ayırt etmek ve doğru database'e göndermek.</li>
+  <li>Bir ölçümün hangi değerlerinin etiket, hangilerinin ölçülen sayı olacağını seçmek ve bu seçimin saklama maliyetine etkisini tahmin etmek.</li>
+  <li>Bir grafiğin sorusunu zaman aralığı, filtre ve pencere olarak yazmak ve kaç ham ölçüm okunacağını tahmin etmek.</li>
+  <li>Eski verinin ne zaman ve nasıl gideceğine ve hangi özetin kalacağına karar vermek.</li>
+  <li>Bir iş yükü için Timestream for InfluxDB, InfluxDB 3, CloudWatch, Keyspaces, DynamoDB ve Redshift arasında seçim yapmak ve seçimi satır satır savunmak.</li>
+  <li>Timestream for InfluxDB'nin senin için neyi işlettiğini ve neyi senin seçtiğini söylemek.</li>
 </ol>
 <p>Dört tür kutu sana yardım eder. <b>Simülasyon</b>: Oynat'a ya da Sonraki adım'a bas. <b>Önce tahmin et</b>: cevabı açmadan önce kendi cevabını yaz.
    <b>Checkpoint</b>: tek doğru cevabı olan bir soru. <b>Analoji</b>: günlük hayattan bir resim.</p>
 
-<h2 id="architect" data-short="Mimar gözüyle: ne zaman"><span class="sec">01</span>Mimar gözüyle: Timestream for InfluxDB nereye oturur</h2>
-<p><b>Önce bu bölümü oku.</b> Kararı bu bölüm verir. Sonraki bölümler bir time-series database'in nasıl çalıştığını öğretir.</p>
-<p><b>Kısaca:</b> Amazon Timestream for InfluxDB, açık kaynak InfluxDB'yi senin için çalıştırır. Bir time-series database ölçümleri bir timestamp ile saklar. Örnekler: 5 dakikada bir sıcaklık, dakikada bir sipariş sayısı, 10 saniyede bir CPU yükü.
-   Küçük point'lerden oluşan sürekli bir akışı yazar. Zaman pencereleri hakkındaki soruları cevaplar, örneğin "son 6 saat için 15 dakika başına ortalama". Eski veriyi de otomatik olarak siler.</p>
-<p>Anahtar fikir {{ k.term("series") }}'tir: ölçtüğün tek bir şeyin bütün point'leri, zaman sırasıyla. Bir query bir zaman aralığında birkaç series okur ve eski point'leri nadiren değiştirir.</p>
+<div class="part"><b>Bölüm A</b><h2 id="partA" data-short="Bölüm A: Temel">Temel: zaman serisi fikri, bütün durumlarıyla</h2>
+<p>Birkaç saniyede bir gelen milyonlarca küçük ölçümün nasıl ucuza saklandığı, zaman pencereleriyle nasıl hızlı sorulduğu ve bunun karşılığında nelerden vazgeçildiği. Bu bölüm her kavramı önce tanımlar, sonra o kavramın <b>bütün durumlarını</b> bir tabloda gösterir. Böylece "ya şöyle olursa?" sorusunun cevabı tabloda vardır. Fikirler bütün time series database'lerinde aynıdır; isimler standarttır ve sayfanın sonuna kadar değişmez.</p></div>
 
-<h3>Bir iş yükünde Timestream for InfluxDB'yi işaret eden sinyaller</h3>
+<h2 id="why" data-short="Neden time series?"><span class="sec">A1</span>Neden bir time series database? Elektrik sayacı</h2>
+<p>Bir evin elektrik sayacı tek bir sayı gösterir: bugüne kadarki toplam tüketim. Elektrik şirketinin faturası ise bir tablo gösterir: ayın her 15 dakikasının tüketimi, yani ayda 2.976 satır.
+   Sayacın sayısı her an değişir ve eski hâli kaybolur. Faturadaki tablonun satırları ise hiç değişmez: yeni satırlar sona eklenir, eski faturalar birkaç yıl sonra atılır.
+   Kimse faturaya "14 Mart 10:15'teki satırı düzelt" diye bakmaz; herkes "bu ay gündüz saatlerinde ne kadar harcadım?" diye bakar.</p>
+{% call k.callout("analogy", "Analoji") %}
+<p>Sayaç bir iş database'idir: güncel durumu tutar ve onu yerinde değiştirir. Fatura tablosu bir zaman serisidir: her ölçümü zamanıyla birlikte saklar, hiç değiştirmez ve soruları zaman aralıklarıyla sorar ("bu ay", "gündüz saatleri"). Bir time series database fatura tablosunu milyonlarca sayaç için, saniyeler içinde ve ucuza tutan bir database'tir.</p>
+{% endcall %}
+{{ k.concept("Time series database",
+   "Zamanla gelen ölçümleri saklamak ve zaman aralıklarıyla sormak için kurulmuş bir database. Her kayıt bir zaman ve bir ya da birkaç sayıdır; kayıtlar çoğunlukla sona eklenir ve hiç değişmez. Engine aynı şeyi ölçen kayıtları, yani bir <dfn>series</dfn>'i (bir grafikteki tek çizgi, A3), zamana göre bir arada ve sıkıştırılmış saklar, soruları \"son 6 saat, 15 dakikalık ortalama\" gibi pencerelerle cevaplar ve eski veriyi kendiliğinden siler.",
+   "Lale Market'in dört deposundan (IST-1, ANK-1, BER-1, FRA-1) her 5 dakikada bir sıcaklık ve nem gelir; operasyon ekranı \"son 6 saat, depo başına 15 dakikalık ortalama\" sorusunu sorar. Bu veri Timestream for InfluxDB'de durur.",
+   "Elektrik faturasının 15 dakikalık tüketim tablosu; bir hastanede kalp monitörünün kâğıda çizdiği şerit.") }}
+<p>Bir iş database'i (bkz. <a href="/e2etutorial/aurora?lang=tr">Aurora tutorial'ı</a>) her kaydı yerinde değiştirebilir ve kuralları korur. Bunun bedeli, her kaydın tek tek index'lenmesi ve her UPDATE'in bir kilit ve yeni bir row sürümü olmasıdır. Bir time series database farklı bir takas yapar. Kayıtları değiştirmeyi neredeyse bırakır; karşılığında saniyede on binlerce kaydı sona ekler, aynı şeyin kayıtlarını birkaç kat sıkıştırır ve bir zaman penceresini sadece o pencerenin dosyalarından okur.</p>
+<div class="flow">
+  <div class="box">sayaç<small>tek sayı: 4.812 kWh · her an değişir, eski hâli kaybolur</small></div><span class="arrow">→</span>
+  <div class="box pk">fatura tablosu<small>14 Mart 10:00 · 0,38 kWh</small></div><span class="arrow">→</span>
+  <div class="box pk">fatura tablosu<small>14 Mart 10:15 · 0,42 kWh</small></div><span class="arrow">→</span>
+  <div class="box hit">soru<small>"bu ay gündüz ne kadar?" · aralık ve toplam</small></div>
+</div>
+<p class="flow-cap">Aynı elektrik iki biçimde. Sayaç güncel durumu yerinde değiştirir; fatura tablosu her 15 dakikayı yeni bir satır olarak ekler ve soruyu bir zaman aralığıyla cevaplar. Bu sayfanın konusu sağdaki biçimdir.</p>
 <table class="data">
-  <thead><tr><th>Sinyal</th><th>Gerçek bir projede nasıl görünür</th><th>Onu cevaplayan özellik</th></tr></thead>
+  <caption>takas: time series database neyi verir, neyi alır</caption>
+  <thead><tr><th>Time series database'in verdiği</th><th>Karşılığında aldığı</th><th>Bu sayfada nerede</th></tr></thead>
   <tbody>
-    <tr><td>Her kaydın bir timestamp'i ve bir sayısı var</td><td>Sensör okumaları, metrikler, fiyatlar, sayaçlar.</td><td>Line protocol'de point'ler (bölüm 03)</td></tr>
-    <tr><td>Yazmalar sürekli gelir, okumalar zaman aralıklarına bakar</td><td>Binlerce cihaz birkaç saniyede bir değer gönderir.</td><td>Zaman sırasıyla saklanan series'ler (bölüm 03)</td></tr>
-    <tr><td>Zaman penceresine göre grafikler</td><td>"15 dakika başına ortalama sıcaklık."</td><td>Flux'ta aggregateWindow (bölüm 05)</td></tr>
-    <tr><td>Eski veri değer kaybeder</td><td>Ham point'leri sadece 30 gün tut.</td><td>Bir bucket'ın retention period'u (bölüm 06)</td></tr>
-    <tr><td>Eşik değerlerde alarmlar</td><td>"Bir soğuk oda 10 dakika boyunca 8 °C'nin üstündeyse uyar."</td><td>InfluxDB'de task'lar ve check'ler</td></tr>
-    <tr><td>Metrik toplayan agent'lar</td><td>Telegraf'lı sunucular ve cihazlar.</td><td>Açık kaynak API'lar ve Telegraf plugin'leri</td></tr>
+    <tr><td>Saniyede on binlerce küçük kayıt, sona ekleme olarak</td><td>Bir kaydı yerinde güncellemek yoktur; aynı zamanlı kayıt eskisinin yerine geçer</td><td>A2, A6</td></tr>
+    <tr><td>Aynı şeyin kayıtları birkaç kat sıkışır</td><td>Etiketlerin değer sayısı sınırlı kalmalıdır; sınırsız bir id saklamayı ve belleği patlatır</td><td>A3, A4</td></tr>
+    <tr><td>Zaman penceresi soruları tek sorguda ve hızlı</td><td>JOIN, foreign key ve transaction yoktur ya da zayıftır</td><td>A5, A7</td></tr>
+    <tr><td>Eski veri bir ayarla kendiliğinden gider ve özet kalır</td><td>Silme tek kayıt için değil zaman aralığı için tasarlanmıştır</td><td>A8</td></tr>
+  </tbody>
+</table>
+<table class="data">
+  <caption>bütün durumlar: bir verinin biçimi ve doğru yeri</caption>
+  <thead><tr><th>Verinin biçimi</th><th>Örnek</th><th>Doğru yer</th></tr></thead>
+  <tbody>
+    <tr><td>Zamanla gelen sayılar, soru zaman aralığı</td><td>Depo sıcaklığı 5 dakikada bir; "son 6 saatin ortalaması"</td><td>Time series database</td></tr>
+    <tr><td>Bir şeyin sadece son durumu</td><td>Bir sayacın son değeri, eskisi gerekmez</td><td>Key-value (DynamoDB); zaman serisi database'i de tutar ama her mesaj bir kayıt daha ekler (M2 kart 9)</td></tr>
+    <tr><td>Kayıt kurallarla değişir</td><td>Siparişin durumu, stok</td><td><b>Bu database'in işi değil:</b> transaction ve kural yoktur; ilişkisel database (Aurora)</td></tr>
+    <tr><td>Bir olayın kendisi aranır</td><td>"timeout geçen log satırları"</td><td><b>Bu database'in işi değil:</b> metin index'i yoktur; search engine (OpenSearch)</td></tr>
+    <tr><td>Yılların verisi başka table'larla join'lenir</td><td>Sayaç okumaları × tarife × müşteri</td><td>Data warehouse (Redshift) (M2 kart 7)</td></tr>
+    <tr><td>Bir sayaç saniyede binlerce kez artar</td><td>Ürün görüntüleme sayısı</td><td>Bellek içi key-value (ElastiCache); time series her olayı ayrı saklar (M2 kart 10)</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Aurora'ya bir zaman kolonu ekleyip aynı veriyi oraya yazamaz mıyım?") %}
+<p>Yazabilirsin ve birkaç bin kayıt için çoğu zaman yeter. Sorun ölçekte başlar: PostgreSQL her kaydı bütün kolonlarıyla bir row olarak saklar, sıkıştırmaz ve eski veriyi silmek bir DELETE ve VACUUM işidir. Bir time series database aynı veriyi birkaç kat küçük tutar ve eski günü tek seferde düşürür. M2'nin ilk kartı Aurora'yı Lale Market'in kendi verisinde puanlar.</p>
+{% endcall %}
+{% call k.ask("Time series database'te bir kayıt hiç değişmez mi?") %}
+<p>Neredeyse hiç. Aynı ölçümü aynı zamanla bir kez daha yazarsan yeni sayı eskisinin yerine geçer; bu bir düzeltmedir. Ama "bu depodaki bütün sıcaklıkları 1 derece artır" gibi bir güncelleme yoktur. A6 yazma yollarının bütün durumlarını listeler.</p>
+{% endcall %}
+{{ k.quiz("ix-q0", "Hangi veri bir time series database'e en iyi uyar?",
+   ["Bir siparişin durumu ve satırları", "Her 10 saniyede gelen sunucu CPU yükü", "Bir müşterinin adresi", "Ürün açıklamalarının metni"],
+   1, "CPU yükü zamanla gelen bir sayıdır, sona eklenir ve zaman aralığıyla sorulur. Sipariş ve adres değişen kayıtlardır; metin bir search engine'in işidir.") }}
+
+<h2 id="points" data-short="Point, tag, field"><span class="sec">A2</span>Bir ölçümün parçaları: point, timestamp, tag ve field</h2>
+<p>Bir time series database'teki her kayıt aynı dört parçadan oluşur: ne ölçüldüğünün adı, ölçümü tanımlayan etiketler, ölçülen sayılar ve zaman. Bu sayfanın ürünü InfluxDB'dir; InfluxDB 2'de bu kayıtları soran dilin adı <dfn>Flux</dfn>'tır (B3).</p>
+{{ k.concept("Point",
+   "Time series database'teki tek bir kayıt: bir ölçümün bir anı. Dört parçası vardır: <dfn>measurement</dfn>, ölçülen şeyin türünün adı (bir table adı gibi); <dfn>tag</dfn>'ler, ölçümü tanımlayan metin etiketleri (bir point'in bütün tag'lerine <dfn>tag set</dfn> denir); <dfn>field</dfn>'lar, ölçülen değerler; ve <dfn>timestamp</dfn>, ölçümün zamanı. Bir point en az bir field ve bir timestamp taşır; tag'ler isteğe bağlıdır. Bir point'i tek satır metin olarak yazan biçimin adı <dfn>line protocol</dfn>'dür (B2).",
+   "<code>warehouse_env,sensor=temperature,warehouse=IST-1 value=26.12 1793354591</code>: IST-1 deposunun sıcaklığı, 30 Ekim 2026 10:03:11 UTC'de 26,12 derece. Bu satır canlı sistemden gelir (B1).",
+   "Faturadaki tek bir satır: \"daire 3, gündüz tarifesi, 0,42 kWh, 14 Mart 10:15\".") }}
+{{ k.concept("Timestamp",
+   "Point'in zamanı: 1 Ocak 1970 UTC'den beri geçen süre. Hassasiyeti saniye, milisaniye, mikrosaniye ya da nanosaniye olabilir; yazma isteği hangisini kullandığını söyler. Timestamp verilmezse engine yazmanın geldiği anı kullanır.",
+   "<code>1793354591</code> saniye cinsindendir: 2026-10-30T10:03:11Z. Lale Market saniye hassasiyetiyle yazar.",
+   "Faturadaki satırın saati; bir fotoğrafın altındaki tarih.") }}
+{{ k.concept("Field",
+   "Ölçülen değer: bir isim ve bir sayı, metin ya da true/false. Bir point'in birkaç field'ı olabilir. Field'lar index'lenmez: engine onları sadece okur, onlara göre aramaz.",
+   "<code>value=26.12</code> sıcaklıktır. Sipariş point'inde <code>count=65</code> bir dakikadaki web siparişi sayısıdır.",
+   "Faturadaki kWh sayısı: her satırda farklıdır ve faturayı onunla ararsın değil, onu toplarsın.") }}
+<p>Aynı point dört parçasına ayrıldığında renkler şöyledir ve sayfanın sonuna kadar değişmez: measurement ve tag'ler <span class="c-pk">sarı</span>, timestamp <span class="c-sk">mavi</span>, field'lar gri.</p>
+{{ k.anatomy([
+   {"pk": "warehouse_env · sensor=temperature · warehouse=IST-1", "sk": "1793354591", "attrs": [["value", "26.12"]]},
+   {"pk": "warehouse_env · sensor=humidity · warehouse=IST-1", "sk": "1793354591", "attrs": [["value", "41.7"]]},
+   {"pk": "orders · channel=web", "sk": "1793354411", "attrs": [["count", "65"]]},
+   {"pk": "truck · truck_id=T0042 · region=Marmara", "sk": "1793354600", "attrs": [["speed", "82.5"], ["fuel", "61"], ["engine_temp", "91.2"]]}],
+   "Dört point. İlk ikisi aynı depodan aynı anda gelir ama farklı sensörlerdir. Üçüncüsü sipariş sayısıdır. Dördüncüsü M2'nin filo kartından bir kamyondur: tek point'te üç field. Sarı kısım ölçülen şeyin kimliğidir, mavi kısım zamanı, gri kısım ölçülen sayılardır.",
+   pk_name="measurement + tag'ler", sk_name="timestamp",
+   labels={"primary": "Point'in kimliği", "pk": "Measurement ve tag'ler", "sk": "Timestamp", "attrs": "Field'lar", "note": "bir ya da birkaç ölçülen değer", "items": "Point'ler"}) }}
+<p>Şemayı satır satır oku:</p>
+<ul>
+  <li>1. ve 2. satır aynı depodan, aynı saniyede gelir; tag'leri <code>sensor</code> değerinde ayrışır. İkisi iki ayrı ölçümdür.</li>
+  <li>3. satırın measurement'ı farklıdır: <code>orders</code>. Aynı database'te farklı türden ölçümler yan yana durur.</li>
+  <li>4. satırın üç field'ı vardır: hız, yakıt ve motor sıcaklığı aynı anda ölçülür ve tek point'te yazılır.</li>
+  <li>Hiçbir satırın kendine ait bir id'si yoktur. Bir point'i sarı kısım ile mavi kısım birlikte tanımlar (A6).</li>
+</ul>
+<table class="data">
+  <caption>bütün durumlar: bir point'in şekli</caption>
+  <thead><tr><th>Durum</th><th>Engine ne yapar</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Bir field, birkaç tag</td><td>Kabul eder; en yaygın biçim</td><td><code>warehouse_env,sensor=temperature,warehouse=IST-1 value=26.12</code></td></tr>
+    <tr><td>Birkaç field</td><td>Kabul eder; aynı anda ölçülen değerler tek point'te durur</td><td><code>truck,truck_id=T0042 speed=82.5,fuel=61</code></td></tr>
+    <tr><td>Hiç tag yok</td><td>Kabul eder; o measurement'ın tek bir çizgisi olur</td><td><code>cpu value=0.42</code></td></tr>
+    <tr><td>Field tipi: kayan sayı, tam sayı, metin, true/false</td><td>Kabul eder; tam sayı <code>i</code> ile biter (<code>count=65i</code>)</td><td><code>door_open=true</code></td></tr>
+    <tr><td>Aynı field önce sayı, sonra metin</td><td><b>Reddeder:</b> bir field'ın tipi aynı zaman parçası içinde (A4) sabittir; ikinci yazma hata alır</td><td><code>value=26.1</code> sonra <code>value="sıcak"</code></td></tr>
+    <tr><td>Hiç field yok</td><td><b>Yapamaz:</b> bir point en az bir field taşır; sadece tag'li bir satır geçersizdir</td><td><code>warehouse_env,warehouse=IST-1 1793354591</code></td></tr>
+    <tr><td>Timestamp verilmez</td><td>Engine yazmanın geldiği anı kullanır</td><td>Bir sensörün saati yoksa</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Tag de field de metin tutabiliyor. Fark nedir?") %}
+<p>Tag'ler index'lenir ve point'in kimliğinin parçasıdır; "IST-1 deposu" diye filtre tag ile hızlıdır. Field'lar index'lenmez ve kimliğin parçası değildir; "değeri 30'dan büyük olanlar" filtresi her point'i okur. Kural: üzerine filtre koyacağın, değer sayısı sınırlı etiket tag olur; ölçtüğün sayı field olur. A3 bu seçimin neden önemli olduğunu gösterir.</p>
+{% endcall %}
+{% call k.ask("Measurement bir table mı?") %}
+<p>Benzer bir rolü vardır: aynı türden ölçümleri bir isim altında toplar. Ama önceden tanımlanmaz ve kolon listesi yoktur. İlk point yazıldığında oluşur; iki point'in tag'leri ve field'ları farklı olabilir.</p>
+{% endcall %}
+{{ k.quiz("ix-q1", "Bir point'in hangi parçası index'lenmez?",
+   ["Measurement", "Tag'ler", "Field'lar", "Tag key'leri"],
+   2, "Field'lar ölçülen değerlerdir ve index'lenmez. Bir field değerine göre filtre, aralıktaki her point'i okur.") }}
+
+<h2 id="series" data-short="Series ve cardinality"><span class="sec">A3</span>Series ve cardinality: aynı şeyin ölçümleri bir çizgidir</h2>
+<p>IST-1 deposunun sıcaklığı her 5 dakikada bir yeni bir point'tir. Bir günde 288 point. Bu point'ler ayrı ayrı kayıtlar değildir; hepsi aynı çizginin noktalarıdır. Engine bu çizgiyi bir arada saklar.</p>
+{{ k.concept("Series",
+   "Aynı measurement'a, aynı tag set'e ve aynı field adına sahip point'lerin zaman sırasıyla grubu: bir grafikteki tek bir çizgi. Measurement, tag set ve field adı birlikte <dfn>series key</dfn>'dir. Bir point'i ise measurement, tag set ve timestamp birlikte tanımlar: aynı anda yazılan birkaç field (kamyonun hızı, yakıtı) tek point'in field'larıdır ve her biri kendi series'ine düşer.",
+   "<code>warehouse_env,sensor=temperature,warehouse=IST-1 value</code> bir series'tir. Lale Market'in canlı verisinde 10 series vardır: dört deponun sıcaklığı, dört deponun nemi, web siparişleri ve workshop siparişleri (B1).",
+   "Elektrik faturasında tek bir dairenin bütün satırları. Apartmanın her dairesi ayrı bir çizgidir.") }}
+{{ k.concept("Cardinality",
+   "Bir database'teki farklı series sayısı. Her yeni tag değeri yeni bir series doğurabilir. Engine her series için bellekte ve index'te bir kayıt tutar; bu yüzden cardinality belleği ve sorgu süresini belirler.",
+   "Depo tag'inin 4 değeri × sensor tag'inin 2 değeri = 8 series. Bir sipariş id'si tag yapılsaydı her sipariş yeni bir series olurdu.",
+   "Bir apartmanın daire sayısı. 12 daire için 12 sayaç sorun değildir; her ziyaretçiye ayrı bir sayaç takmak ise duvara yer bırakmaz.") }}
+<p>Bu sayfanın simülasyonları aşağıdaki altı satırı kullanır. Satırların biçimi canlı sistemle aynıdır; değerler kısa örneklerdir.</p>
+{{ k.sample("ix_lines", "line protocol'de altı point (öğretici veri)") }}
+{% call k.predict("Altı satır kaç farklı series oluşturur?") %}
+<p>Dört: IST-1 temperature (iki point), IST-1 humidity, ANK-1 temperature ve channel=web'li orders (iki point). B2'deki simülasyon aynı sayımı satır satır yapar.</p>
+{% endcall %}
+<table class="data">
+  <caption>bütün durumlar: bir değer tag mi, field mı olmalı</caption>
+  <thead><tr><th>Değer</th><th>Kaç farklı değeri var</th><th>Doğru yer</th><th>Neden</th></tr></thead>
+  <tbody>
+    <tr><td>Depo kodu (<code>IST-1</code>)</td><td>Birkaç ya da birkaç yüz</td><td class="y">Tag</td><td>Üzerine filtre konur; değer sayısı sınırlıdır</td></tr>
+    <tr><td>Sensör türü (<code>temperature</code>)</td><td>Birkaç</td><td class="y">Tag</td><td>Grafikler türe göre ayrılır</td></tr>
+    <tr><td>Ölçülen sayı (<code>26.12</code>)</td><td>Sınırsız</td><td class="y">Field</td><td>Toplanır ve ortalaması alınır; üzerine filtre nadirdir</td></tr>
+    <tr><td>Kamyon id'si (5.000 kamyon)</td><td>Binlerce, yavaş büyür</td><td class="p">Tag, ama say</td><td>5.000 series sorun değildir; milyonlara çıkacaksa sayıyı ve belleği planla</td></tr>
+    <tr><td>Sipariş id'si, istek id'si, kullanıcı id'si</td><td>Sınırsız büyür</td><td class="n"><b>Tag yapma</b></td><td>Her değer yeni bir series doğurur; cardinality sınırsız büyür (B2'deki simülasyon)</td></tr>
+    <tr><td>Serbest metin (log mesajı)</td><td>Her satır farklı</td><td class="n"><b>Ne tag ne iyi bir field</b></td><td>Metin araması yoktur; search engine'e gider</td></tr>
+  </tbody>
+</table>
+{{ k.fig("influxdb-raw-series.png", "tek bir series, yani tek bir çizgi: dört dakika boyunca bellek kullanımı. Her köşe bir point'tir; görselde dakikada bir point var. Bu sayfanın diliyle: bir measurement, onu tanımlayan tag'ler, tek bir field ve beş timestamp.") }}
+{% call k.ask("Tag değeri sonradan değişirse ne olur? Örneğin bir sensör başka depoya taşınırsa?") %}
+<p>Yeni tag değeriyle yazılan point'ler yeni bir series'e gider; eski point'ler eski series'te kalır. Engine eski point'lerin tag'ini değiştirmez. Grafikte iki çizgi görürsün: biri taşınmadan önce, biri sonra.</p>
+{% endcall %}
+{% call k.ask("Cardinality'nin bir sınırı var mı?") %}
+<p>Kesin bir sayı yoktur, bir maliyet eğrisi vardır. InfluxData belgelerine göre yüksek series cardinality, birçok iş yükünde yüksek bellek kullanımının ana nedenidir. AWS'in boyutlandırma tablosu InfluxDB 2 için series sayısına göre instance önerir: 100.000'in altı için orta boy bir instance sınıfı (db.influx.large), 1–10 milyon için çok daha büyük sınıflar (B5). InfluxDB 3 farklı bir saklama biçimiyle yüksek cardinality'de daha iyi çalışır (M5).</p>
+{% endcall %}
+{{ k.quiz("ix-q2", "Bir geliştirici her siparişin order id'sini bir tag'e koymak istiyor. Sorun nedir?",
+   ["Tag'ler metin tutamaz", "Her order id yeni bir series doğurur, bu yüzden cardinality sınırsız büyür", "Tag'ler diske yazılmaz", "Engine tag'li point'leri siler"],
+   1, "Bir tag değeri series key'in parçasıdır. Milyonlarca değeri olan bir id milyonlarca series ve büyük bir index doğurur. Order id field olmalıdır.") }}
+
+<h2 id="storage" data-short="Saklama ve sıkıştırma"><span class="sec">A4</span>Saklama: zamana göre parçalar, series'e göre sıkıştırma</h2>
+<p>Bir time series engine'i iki şeyi aynı anda ister: saniyede on binlerce point'i hemen kabul etmek ve bir ay sonra "son 6 saat" sorusunu sadece o 6 saatin verisini okuyarak cevaplamak. Bunu iki fikirle yapar: veriyi zaman aralıklarına böler ve her aralığın içinde series'e göre sıkıştırır.</p>
+{{ k.concept("Shard group",
+   "Bir zaman aralığının (örneğin bir günün) bütün point'lerini tutan saklama parçası. Engine her yeni aralık için yeni bir shard group açar. Bir sorgu sadece kendi zaman aralığıyla çakışan shard group'ları okur; eski veri silinirken bütün bir shard group tek seferde düşer (A8).",
+   "Lale Market'in verisi <dfn>bucket</dfn> denen, kendi saklama süresi olan adlandırılmış bir depodadır (B1): <code>metrics</code>. Bu bucket günlük shard group'lar kullanır: 30 Ekim'in point'leri bir dosya grubunda, 31 Ekim'inkiler başka birinde.",
+   "Bir gazetenin arşivinde her günün sayısı ayrı bir klasördür. \"Geçen salı\" sorusu tek klasörü açar; on yıl öncesini atmak bir klasörü atmaktır.") }}
+{{ k.concept("Storage engine (WAL, cache, TSM)",
+   "Bir point'in diske yolculuğu: önce bir <dfn>WAL</dfn>'a (write-ahead log, yazma günlüğü) sona eklenir ve bellekteki bir önbelleğe girer; böylece yazma hemen onaylanır ve bir arızada kaybolmaz. Sonra arka planda sıkıştırılmış dosyalara yazılır; series'leri bulmak için ayrıca bir index tutulur, InfluxDB 2'de adı <dfn>TSI</dfn>'dir (time series index). InfluxDB 2'de bu dosyaların adı TSM'dir (Time-Structured Merge tree): değerleri series key'e göre gruplar, zamana göre sıralar ve ardışık değerler arasındaki farkları saklar.",
+   "IST-1 sıcaklığı 26,12, 25,73, 24,83, 25,38 diye gider. Engine her sayıyı tam yazmaz; zamanlar arasındaki 300 saniyelik sabit farkı ve küçük değer farklarını yazar.",
+   "Bir muhasebecinin önce defterin sonuna not alması (WAL), akşam da notları hesap hesap ve tarih sırasıyla temize çekip özetlemesi (TSM).") }}
+<div class="flow">
+  <div class="box pk">yazma<small>warehouse_env,…,warehouse=IST-1 value=26.12 1793354591</small></div><span class="arrow">→</span>
+  <div class="box">WAL + bellek<small>sona eklenir, hemen onaylanır</small></div><span class="arrow">→</span>
+  <div class="box">sıkıştırılmış dosya<small>series key'e göre grup, zamana göre sıra, farklar</small></div><span class="arrow">→</span>
+  <div class="box hit">shard group 30 Ekim<small>bir günün bütün series'leri</small></div>
+</div>
+<p class="flow-cap">Bir point'in yolu. Okuma ters yönden gelir: sorgunun zaman aralığı shard group'u, series key ise o grubun içindeki dosya parçasını seçer.</p>
+<div class="parts">
+  <div><h4>SG 28 Ekim</h4><span class="chip">IST-1 temperature</span><span class="chip">IST-1 humidity</span><span class="chip">orders web</span></div>
+  <div><h4>SG 29 Ekim</h4><span class="chip">IST-1 temperature</span><span class="chip">IST-1 humidity</span><span class="chip">orders web</span></div>
+  <div class="on"><h4>SG 30 Ekim · okunur</h4><span class="chip">IST-1 temperature</span><span class="chip">IST-1 humidity</span><span class="chip">orders web</span></div>
+</div>
+<p class="flow-cap">Günlük shard group'lar ve içlerindeki series'ler. "30 Ekim, IST-1 sıcaklığı" sorusu sadece yeşil grubun içindeki tek bir series'i okur; 28 ve 29 Ekim açılmaz. B4'teki simülasyon aynı gruplarla retention'ı oynatır.</p>
+<table class="data">
+  <caption>bütün durumlar: saklama biçimi ne yapar</caption>
+  <thead><tr><th>Durum</th><th>Engine ne yapar</th><th>Bedeli</th></tr></thead>
+  <tbody>
+    <tr><td>Point'ler zaman sırasıyla gelir</td><td>Sona eklenir; en ucuz yol</td><td>Düşük</td></tr>
+    <tr><td>Geç gelen point (dünün bir okuması bugün gelir)</td><td>Kabul eder; dünün shard group'una yazılır</td><td>Eski bir grubun dosyaları yeniden sıkıştırılır</td></tr>
+    <tr><td>Yavaş değişen sayılar (sıcaklık)</td><td>Farklar küçüktür; birkaç kat sıkışır</td><td>Düşük storage</td></tr>
+    <tr><td>Rastgele sayılar, her seferinde farklı metin</td><td><b>Neredeyse sıkışmaz:</b> farklar büyüktür, tekrar yoktur</td><td>Storage ham boyuta yakın</td></tr>
+    <tr><td>Çok sayıda series (yüksek cardinality)</td><td>Her series için index kaydı tutar; index büyür</td><td>Bellek ve sorgu süresi artar (A3)</td></tr>
+    <tr><td>Bir point'i yerinde değiştirmek</td><td><b>Yapamaz:</b> dosyalar değişmez; aynı series ve timestamp ile yeni bir yazma eskisinin yerine geçer (A6)</td><td>Bir sonraki sıkıştırma birleştirir</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Sıkıştırma ne kadar kazandırır?") %}
+<p>Veriye bağlıdır ve belgeler tek bir oran vermez. Kazanç iki şeyden gelir: zamanlar düzenli aralıklıysa (her 300 saniye) zaman neredeyse bedavaya saklanır; değerler yavaş değişiyorsa farklar küçük sayılardır. Rastgele değerler ve her seferinde farklı metinler kazandırmaz.</p>
+{% endcall %}
+{% call k.ask("WAL bir kopya mı? Arızada veri kaybolur mu?") %}
+<p>WAL aynı makinedeki bir günlüktür: InfluxData belgelerine göre beklenmeyen bir arızada veriyi korur, yani makine yeniden başlarsa yazılan point kaybolmaz. Makinenin ya da diskin kaybına karşı ise ikinci bir kopya gerekir; bunu servis sağlar (C2: Multi-AZ standby).</p>
+{% endcall %}
+{{ k.quiz("ix-q3", "Bir sorgu \"son 6 saat\" istiyor ve bucket günlük shard group kullanıyor. Engine kaç shard group'u açar?",
+   ["Bütün shard group'ları", "Sadece son 6 saatle çakışan bir ya da iki shard group'u", "Her series için bir shard group", "Hiçbirini; sadece index'i okur"],
+   1, "Shard group'lar zaman aralıklarıdır. Son 6 saat bugünün grubuyla, gece yarısını geçiyorsa dünün grubuyla da çakışır. Diğerleri açılmaz.") }}
+
+<h2 id="reads" data-short="Okuma yolları"><span class="sec">A5</span>Okuma yolları: önce zaman, sonra etiket</h2>
+<p>Okuma yollarının InfluxDB 2'deki adları aşağıdaki tablonun son sütunundadır; onları yazan sorgu dili A2'de adı geçen Flux'tır, ikinci dili SQL'e benzeyen <dfn>InfluxQL</dfn>'dir (B3). Bir time series database'te bir okumanın maliyetini iki soru belirler: istek bir zaman aralığı veriyor mu ve tag ile hangi series'leri seçiyor? Zaman aralığı shard group'ları, tag'ler series'leri seçer. Field'a göre filtre ise seçilen her point'i okur.</p>
+{{ k.concept("Selector",
+   "Bir series'ten tek bir point'i seçen fonksiyon: en sonuncusu (<code>last</code>), ilki (<code>first</code>), en büyüğü (<code>max</code>), en küçüğü (<code>min</code>). Bir ortalamadan farkı, sonucun gerçek bir point olması ve kendi timestamp'ini taşımasıdır.",
+   "\"Her deponun şu anki sıcaklığı\" dört series'e <code>last()</code> uygular ve dört gerçek point döndürür.",
+   "Bir defterin son satırına bakmak; bir sınav listesinde en yüksek notu bulmak.") }}
+<div class="flow">
+  <div class="box">soru<small>son 6 saat · warehouse=IST-1 · sensor=temperature</small></div><span class="arrow">→</span>
+  <div class="box">zaman aralığı<small>bugünün shard group'u (A4)</small></div><span class="arrow">→</span>
+  <div class="box pk">tag'ler<small>index 10 series'ten 1'ini seçer</small></div><span class="arrow">→</span>
+  <div class="box hit">okunan<small>bir series'in 72 point'i</small></div>
+</div>
+<p class="flow-cap">Bir okumanın iki daraltması. Önce zaman aralığı shard group'ları, sonra tag'ler series'leri seçer; engine sadece kalan point'leri okur. Field'a göre bir filtre bu akışa bir daraltma eklemez: seçilen point'leri okuduktan sonra eler.</p>
+<table class="data">
+  <caption>bütün durumlar: okuma yolları</caption>
+  <thead><tr><th>İstek ne verir</th><th>Engine ne yapar</th><th>Maliyet</th><th>InfluxDB 2'deki adı (B3)</th></tr></thead>
+  <tbody>
+    <tr><td><span class="c-sk">zaman aralığı</span> + <span class="c-pk">tag filtresi</span></td><td>Aralıktaki shard group'ları açar, index ile seçilen series'leri okur</td><td>En düşük: sadece seçilen series'lerin o aralığı</td><td><code>range()</code> + <code>filter()</code> tag üzerinde</td></tr>
+    <tr><td><span class="c-sk">zaman aralığı</span>, tag yok</td><td>Aralıktaki her series'i okur</td><td>Series sayısı kadar</td><td><code>range()</code> + measurement filtresi</td></tr>
+    <tr><td>Zaman aralığı + field değerine filtre</td><td>Seçilen series'lerin her point'ini okur, sonra eler</td><td>Okunan point kadar; filtre okumayı azaltmaz</td><td><code>filter(fn: (r) =&gt; r._value &gt; 30)</code></td></tr>
+    <tr><td>Son değer</td><td>Her series'in en yeni point'ini seçer</td><td>Series sayısı kadar; InfluxDB 2'de bir önbellek yoktur, her seferinde sorgudur</td><td><code>last()</code></td></tr>
+    <tr><td>Zaman aralığı yok</td><td><b>Flux'ta yapamaz:</b> bir bucket'tan her sorgu <code>range()</code> ister</td><td>—</td><td>Hata</td></tr>
+    <tr><td>Metin içinde kelime</td><td><b>Yapamaz:</b> metin index'i yoktur</td><td>—</td><td>Search engine (M3)</td></tr>
+    <tr><td>Başka bir table'la join</td><td>Flux'ta <code>join()</code> vardır ama yavaştır; InfluxQL'de join yoktur</td><td>Yüksek</td><td>SQL gerekiyorsa InfluxDB 3 ya da warehouse (M2 kart 6, 7)</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Neden her sorgu bir zaman aralığı istiyor?") %}
+<p>Çünkü engine veriyi önce zamana göre bulur (A4). Aralık olmadan hangi shard group'ları açacağını bilemez ve bütün geçmişi açar. Flux bu yüzden <code>range()</code>'i zorunlu tutar; bu bir kural değil, engine'in yapısının sonucudur.</p>
+{% endcall %}
+{% call k.ask("\"Değeri 30'dan büyük olan anlar\" sorusu neden pahalı?") %}
+<p>Field'lar index'lenmez (A2). Engine aralıktaki her point'i okur ve 30 ile karşılaştırır. Bu soru sık soruluyorsa önce aralığı ve tag'leri daralt; eşik kontrolü sürekli isteniyorsa zamanlanmış bir kontrol onu her dakika küçük bir aralıkta sorar (A9).</p>
+{% endcall %}
+{{ k.quiz("ix-q4", "Hangi sorgu en az veri okur?",
+   ["Son 1 gün, bütün series'ler", "Son 1 gün, warehouse = IST-1 ve sensor = temperature", "Son 30 gün, value > 30", "Bütün geçmiş, warehouse = IST-1"],
+   1, "Kısa bir aralık bir shard group'u, iki tag tek bir series'i seçer. Field filtresi okumayı azaltmaz; bütün geçmiş bütün grupları açar.") }}
+
+<h2 id="writes" data-short="Yazma yolları"><span class="sec">A6</span>Yazma yolları: sona ekle, aynı anı düzelt</h2>
+<p>Bir time series database'te neredeyse bütün yazmalar tek bir biçimdedir: sona yeni bir point eklemek. Diğer biçimler vardır ama pahalıdır ya da yoktur.</p>
+<table class="data">
+  <caption>bütün durumlar: yazma yolları</caption>
+  <thead><tr><th>Durum</th><th>Ne verirsin</th><th>Engine ne yapar</th><th>InfluxDB 2'deki adı (B2)</th></tr></thead>
+  <tbody>
+    <tr><td>Yeni point, şimdiki zaman</td><td>Series key + field'lar + timestamp</td><td>Sona ekler</td><td>Line protocol ile write API</td></tr>
+    <tr><td>Toplu yazma</td><td>Binlerce satır tek istekte</td><td>Aynı yol, istek başına daha ucuz; önerilen biçim</td><td>Batch (AWS örneği: istek başına 5.000 satır)</td></tr>
+    <tr><td>Geç gelen point</td><td>Eski bir timestamp</td><td>Kabul eder, eski shard group'a yazar</td><td>Aynı write API</td></tr>
+    <tr><td>Aynı measurement, tag set ve timestamp, aynı field</td><td>Yeni değer</td><td>Yeni değer eskisinin yerine geçer: InfluxData'ya göre "uses the field value of the new point"</td><td>Aynı write API</td></tr>
+    <tr><td>Aynı measurement, tag set ve timestamp, başka bir field</td><td>Yeni field</td><td>İki field kümesini birleştirir: eski field kalır, yeni eklenir</td><td>Aynı write API</td></tr>
+    <tr><td>Bir aralığı silme</td><td>Zaman aralığı + tag koşulu</td><td>Silme işareti bırakır, sonra sıkıştırma kaldırır; pahalı ve seyrek</td><td>Delete API (<code>start</code>, <code>stop</code>, predicate)</td></tr>
+    <tr><td>Field değerine göre silme ya da güncelleme</td><td>"value &gt; 30 olanları sil"</td><td><b>Yapamaz:</b> silme koşulu sadece measurement ve tag'lerdir</td><td>—</td></tr>
+    <tr><td>Sayaç artırma</td><td>"+1"</td><td><b>Yapamaz:</b> engine okumadan artırmaz; her olay bir point'tir, sayı okumada toplanır</td><td>— (M2 kart 10)</td></tr>
+    <tr><td>Birkaç point'e ya hep ya hiç yazma</td><td>—</td><td><b>Yoktur:</b> transaction yoktur; bir batch'in yarısı yazılabilir</td><td>—</td></tr>
+  </tbody>
+</table>
+<div class="flow">
+  <div class="box pk">yazma 1<small>orders,channel=web count=65i 1793354411</small></div><span class="arrow">→</span>
+  <div class="box">yeni point<small>series'te 10:00:11'de 65</small></div>
+</div>
+<div class="flow">
+  <div class="box pk">yazma 2, aynı an<small>orders,channel=web count=66i 1793354411</small></div><span class="arrow">→</span>
+  <div class="box">aynı measurement + tag set, aynı timestamp<small>yeni point değil</small></div><span class="arrow">→</span>
+  <div class="box hit">yerine geçer<small>10:00:11'de artık 66</small></div>
+</div>
+<p class="flow-cap">Aynı anın iki yazması. İkinci yazma yeni bir point eklemez; aynı measurement, tag set ve timestamp'i taşıdığı için eskisinin yerine geçer. Düzeltme bu yolla yapılır. Bir sayacı artırmak ise bu değildir: 65'i 66 yapmak için önce 65'i okuman gerekirdi.</p>
+{% call k.ask("Bir point'i \"değiştirmek\" ile \"aynı anı yeniden yazmak\" aynı şey mi?") %}
+<p>Sonuç aynıdır ama yol farklıdır. Engine dosyayı yerinde değiştirmez; yeni yazmayı WAL'a ekler ve okumada en yenisini döndürür, arka planda sıkıştırma eskisini atar. Bu yüzden düzeltme ucuzdur ama "bütün değerleri 1 artır" gibi bir toplu güncelleme her point'i yeniden yazmak demektir.</p>
+{% endcall %}
+{% call k.ask("İki sensör aynı saniyede aynı series'e yazarsa ne olur?") %}
+<p>Aynı measurement, tag set ve timestamp ise sonuncusu kalır ve biri kaybolur. Bu yüzden iki kaynak aynı series'e yazıyorsa ya bir tag ile ayrılır (<code>sensor_id</code>) ya da timestamp daha ince bir hassasiyetle yazılır.</p>
+{% endcall %}
+{{ k.quiz("ix-q5", "Bir sensör 10:00:00'da 21,2 yazdı. Aynı series'e aynı timestamp ile 21,4 yazılırsa ne olur?",
+   ["İki point olur", "21,4 eskisinin yerine geçer", "İkinci yazma reddedilir", "Engine ortalamayı saklar"],
+   1, "Measurement, tag set ve timestamp bir point'i tanımlar. Aynı field için yeni değer eskisinin yerine geçer.") }}
+
+<h2 id="windows" data-short="Zaman pencereleri"><span class="sec">A7</span>Zaman pencereleri: ham point'lerden bir grafiğe</h2>
+<p>6 saatlik bir grafik 5 dakikalık point'lerle çizgi başına 72 point çizer. Çoğu zaman bu kadarına gerek yoktur: pencere başına tek bir değer yeter. Engine bu hesabı kendisi yapar, böylece uygulama sadece çizdiği değerleri alır.</p>
+{{ k.concept("Pencere toplamı (window aggregation)",
+   "Bir series'i eşit zaman pencerelerine bölüp her pencere için tek bir değer hesaplamak: ortalama, toplam, en büyük, en küçük, sayı ya da son değer. Sonuç yine bir series'tir, ama daha az point'li.",
+   "Lale Market'in operasyon ekranı \"son 6 saat, 15 dakikalık ortalama\" ister: depo başına 72 ham point yerine 24 değer. Siparişlerde aynı pencere toplamı kullanır: 15 dakikanın sipariş sayısı.",
+   "Elektrik faturasının 15 dakikalık satırlarından \"günlük tüketim\" satırı çıkarmak.") }}
+{{ k.fig("influxdb-windows.png", "aynı türden bir series, bu kez daha sık point'lerle (her pencerede yaklaşık altı point), bir dakikalık pencerelere bölünmüş; her renk bir penceredir. Pencere toplamı her renkli bölümden tek bir değer üretir (görselde çizilmemiştir): beş pencere, beş değer.") }}
+<table class="data">
+  <caption>bütün durumlar: pencerenin fonksiyonu ve sonucu</caption>
+  <thead><tr><th>Fonksiyon</th><th>Ne verir</th><th>Ne zaman</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Ortalama (mean)</td><td>Penceredeki değerlerin ortalaması</td><td>Sıcaklık, CPU yükü gibi seviyeler</td><td>15 dakikalık ortalama sıcaklık</td></tr>
+    <tr><td>Toplam (sum)</td><td>Penceredeki değerlerin toplamı</td><td>Her point bir miktarsa</td><td>15 dakikadaki sipariş sayısı</td></tr>
+    <tr><td>En büyük, en küçük (max, min)</td><td>Penceredeki uç değer</td><td>Tepeler ve alarmlar</td><td>5 dakikalık en yüksek motor sıcaklığı</td></tr>
+    <tr><td>Son değer (last)</td><td>Pencerenin son point'i</td><td>Durum değerleri</td><td>Her dakikanın son yakıt seviyesi</td></tr>
+    <tr><td>Yüzdelik (quantile)</td><td>Örneğin p95</td><td>Gecikme</td><td>İsteklerin 95. yüzdeliği</td></tr>
+    <tr><td>Değişim hızı (derivative)</td><td>Ardışık point'ler arasındaki fark ÷ süre</td><td>Sürekli artan sayaçlar</td><td>Ağ arayüzünün saniyedeki byte'ı</td></tr>
+    <tr><td>Boş pencere</td><td>Point'i olmayan pencere için ya değer döner ya hiç döner</td><td>Grafikte boşluk görünmeli mi</td><td><code>createEmpty: false</code> ile boş pencere atlanır</td></tr>
+    <tr><td>Pencere, aralıktan büyük</td><td>Tek bir değer</td><td>"Bugünün ortalaması"</td><td>range 24 saat, pencere 1 gün</td></tr>
+    <tr><td>Birkaç series'i birleştirmek</td><td>Önce gruplama, sonra pencere</td><td>"Bütün depoların ortalaması"</td><td><code>group()</code> sonra pencere</td></tr>
+    <tr><td>"Normal"i öğrenip sapmayı bulmak</td><td><b>Engine'de yoktur:</b> pencere toplamı bir sayıdır, bir model değildir</td><td>Anomali tespiti</td><td>Search engine'in anomaly detection'ı (M2 kart 8)</td></tr>
+  </tbody>
+</table>
+{{ k.fig("influxdb-derived-series.png", "yıllık bir series (ABD'de yıllık tüberküloz ölüm sayısı) ve ondan türetilen iki series. Ortadaki grafik ardışık iki yılın farkıdır: değişim hızı satırının yıllık hâli. Alttaki grafik farkı önceki değere böler (yüzde değişim); bu tabloda olmayan ama aynı fikirle hesaplanan bir dönüşümdür.") }}
+{% call k.ask("Pencereyi büyütmek veriyi siler mi?") %}
+<p>Hayır. Pencere sadece sorgunun sonucunu değiştirir; ham point'ler diskte kalır. 15 dakikalık pencereyle 24, 1 saatlikle 6 değer dönen aynı sorgu aynı ham point'leri okur. Ham point'leri gerçekten azaltmak A8'deki özetlemedir.</p>
+{% endcall %}
+{% call k.ask("Pencere değerinin zamanı pencerenin başı mı, sonu mu?") %}
+<p>Ürüne bağlıdır. InfluxDB 2'nin <code>aggregateWindow()</code> fonksiyonu varsayılan olarak pencerenin sonunu kullanır: 10:00–10:15 penceresinin değeri 10:15'te görünür. B3'teki simülasyon bunu adım adım gösterir.</p>
+{% endcall %}
+{% call k.predict("Siparişler dakikada bir point. Hangi fonksiyon 15 dakika başına sipariş sayısını verir: mean mi, sum mı?") %}
+<p>sum. Her point bir dakikanın sayısıdır; 15 dakikanın toplamı 15 point'in toplamıdır. mean dakika başına ortalama sipariş sayısını verirdi. Canlı veride 10:00–10:15 penceresinin toplamı 1.135, ortalaması 75,67'dir (B1).</p>
+{% endcall %}
+
+<h2 id="retention" data-short="Retention ve downsampling"><span class="sec">A8</span>Retention ve downsampling: eski veri gider, özet kalır</h2>
+<p>Bir deponun 5 dakikalık sıcaklığı bir ay boyunca değerlidir; iki yıl sonra kimse 10:15'teki değere bakmaz, ama "geçen yaz ağustosun saatlik ortalaması" hâlâ sorulur. Time series database'leri bu yaşam döngüsünü iki araçla verir.</p>
+{{ k.concept("Retention period",
+   "Bir verinin ne kadar süre tutulacağı. Süre dolan veriyi engine kendisi siler; uygulama silme isteği göndermez. Engine tek tek point'leri değil, bütün point'leri süreden eski olan shard group'ları siler: InfluxData belgelerine göre retention servisi süreyi geçen shard group'u ve dosyalarını birlikte siler.",
+   "Ham bucket'ın retention period'u 30 gün olursa 31. günün başında en eski günün shard group'u tek seferde gider.",
+   "Gazete arşivinin \"30 günden eski sayılar atılır\" kuralı: görevli tek tek sayfa değil, bütün günün klasörünü atar.") }}
+{{ k.concept("Downsampling",
+   "Ham veriden pencere toplamıyla (A7) daha seyrek bir series üretip ayrı bir yerde, daha uzun süre saklamak. Ham veri kısa, özet uzun yaşar.",
+   "5 dakikalık sıcaklıklardan saatlik ortalama: günde 288 point yerine 24. Ham veri 30 gün, saatlik özet 2 yıl.",
+   "Faturanın 15 dakikalık satırları bir yıl sonra atılır ama aylık toplam tablosu yıllarca saklanır.") }}
+<div class="flow">
+  <div class="box pk">ham bucket<small>5 dakikada bir, retention 30 gün</small></div><span class="arrow">→</span>
+  <div class="box">her saat bir iş<small>son 2 saati okur, saatlik ortalama hesaplar</small></div><span class="arrow">→</span>
+  <div class="box hit">özet bucket<small>saatte bir, retention 2 yıl</small></div>
+</div>
+<p class="flow-cap">İki kademeli saklama. Ham bucket'ın retention'ı eski günleri düşürür; iş, düşmeden önce onların özetini ikinci bucket'a yazmış olur. İşin adı InfluxDB 2'de <dfn>task</dfn>'tır (A9, B4).</p>
+<table class="data">
+  <caption>bütün durumlar: verinin sonu</caption>
+  <thead><tr><th>Durum</th><th>Ne olur</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Retention yok (sonsuz)</td><td>Veri biri silene kadar kalır; storage her gün büyür</td><td>Varsayılan bucket ayarı</td></tr>
+    <tr><td>Retention var, süre dolmadı</td><td>Point normal okunur</td><td>Dünün sıcaklığı</td></tr>
+    <tr><td>Süre doldu</td><td>Bütün point'leri süreden eski olan shard group bir sonraki kontrolde düşer; sınırdaki grup bir süre daha kalabilir</td><td>31. günün en eski günü</td></tr>
+    <tr><td>Retention süresinden eski bir point geç yazılır</td><td>Engine kabul edebilir ama bir sonraki kontrolde gider</td><td>Geç gelen eski bir okuma</td></tr>
+    <tr><td>Downsampling</td><td>Bir iş ham veriyi özetler ve ikinci bir yere yazar</td><td>Saatlik ortalama 2 yıl</td></tr>
+    <tr><td>Tek bir point'e kendi süresini vermek</td><td><b>Yapamaz:</b> süre point başına değil, bucket ya da database başınadır</td><td>"Bu sensörün verisi 7 gün, diğerleri 30 gün" için iki bucket</td></tr>
+    <tr><td>Özetten ham veriyi geri almak</td><td><b>Yapamaz:</b> ortalama ham değerleri taşımaz</td><td>Ağustosun 10:15 değeri iki yıl sonra yoktur</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Retention'ın silmesi ile benim yazacağım bir DELETE arasında ne fark var?") %}
+<p>Bir DELETE point'leri tek tek işaretler ve sonradan temizlik ister; bir ilişkisel database'te bu VACUUM'dur. Retention ise bütün bir günün dosyalarını tek seferde atar: maliyeti point sayısına değil gün sayısına bağlıdır. Günde 345 milyon point düşen bir iş yükünde bu fark faturada görünür (M2 kart 3).</p>
+{% endcall %}
+{% call k.ask("Downsampling işi geç çalışırsa veri kaybolur mu?") %}
+<p>Olabilir. İş ham veri düşmeden önce o veriyi özetlemiş olmalıdır. InfluxData belgeleri downsampling task'larını bucket'ın retention süresi bitmeden çalışacak şekilde zamanlamayı önerir; pratikte iş her saat çalışır ve son iki saati okur, böylece bir kez kaçırılan saat bir sonraki çalışmada yakalanır.</p>
+{% endcall %}
+{{ k.quiz("ix-q6", "Ham bucket'ın retention'ı 14 gün. Ekip bir yıllık trend istiyor. En doğru tasarım hangisi?",
+   ["Ham bucket'ın retention'ını bir yıla çıkarmak", "Saatlik özetleri bir yıl tutan ikinci bir bucket ve onu dolduran bir iş", "Her gece ham veriyi CSV olarak indirmek", "Retention'ı kapatmak"],
+   1, "Downsampling ham veriyi kısa, özeti uzun tutar. Ham veriyi bir yıl tutmak 26 kat daha fazla storage demektir.") }}
+
+<h2 id="tasks" data-short="Task'lar ve check'ler"><span class="sec">A9</span>Zamanlanmış işler ve eşik kontrolleri</h2>
+<p>Bir time series database'te verinin üzerinde düzenli çalışan iki tür iş vardır: veriyi dönüştüren işler (downsampling) ve veriyi izleyen işler (alarm). İkisi de aynı fikirdir: belirli aralıklarla çalışan bir sorgu.</p>
+{{ k.concept("Task",
+   "Engine'in içinde, belirli bir aralıkla (örneğin her saat) çalışan bir sorgu. Sonucunu başka bir bucket'a yazabilir ya da bir kontrolün durumunu güncelleyebilir. Değişikliğe değil, zamana göre çalışır.",
+   "Her saat son 2 saatin sıcaklığını okuyup saatlik ortalamayı <code>metrics_1h</code> bucket'ına yazan iş (B4).",
+   "Her sabah 9'da kasayı sayan muhasebeci: kasa her açıldığında değil, saat gelince sayar.") }}
+{{ k.concept("Check",
+   "Bir eşiği ya da \"veri gelmiyor\" durumunu izleyen özel bir task. Her çalışmada son pencereyi sorar, sonucu ok, info, warn ya da crit gibi bir duruma çevirir ve durum değişince bir bildirim kanalına haber verir.",
+   "\"Nem 30 dakika boyunca yüzde 70'in üstünde\" kuralı her dakika son 30 dakikayı sorar ve crit olursa nöbetçiye mesaj gönderir (M2 kart 1).",
+   "Bir hastanenin kalp monitörü: her saniye son birkaç saniyeye bakar ve ritim bozulunca öter.") }}
+<div class="flow">
+  <div class="box">her dakika<small>check çalışır</small></div><span class="arrow">→</span>
+  <div class="box">son 30 dakika<small>mağaza başına en düşük nem</small></div><span class="arrow">→</span>
+  <div class="box">eşik: 70<small>ANK-1: 73 ≥ 70</small></div><span class="arrow">→</span>
+  <div class="box miss">crit<small>nöbetçiye bildirim</small></div>
+</div>
+<p class="flow-cap">Bir check'in bir çalışması. Nem 30 dakika boyunca 70'in üstündeyse o 30 dakikanın en düşük değeri de 70'in üstündedir; check bu yüzden min ile sorar. Haber en fazla bir check aralığı (burada bir dakika) gecikir.</p>
+<table class="data">
+  <caption>bütün durumlar: zamanlanmış işin türü</caption>
+  <thead><tr><th>İş</th><th>Engine ne yapar</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Downsampling</td><td>Sorgunun sonucunu ikinci bir bucket'a yazar</td><td>Saatlik ortalama</td></tr>
+    <tr><td>Eşik kontrolü</td><td>Son pencereyi bir eşikle karşılaştırır, durumu değişince haber verir</td><td>Nem 30 dakika 70'in üstünde</td></tr>
+    <tr><td>"Veri gelmiyor" kontrolü (deadman)</td><td>Bir series belirli süre point almazsa haber verir</td><td>Bir sensör 10 dakikadır sessiz</td></tr>
+    <tr><td>Dışarıya veri göndermek</td><td>Bir task HTTP ile dış sisteme yazabilir</td><td>Günlük özet bir API'ye</td></tr>
+    <tr><td>Her yazmaya anında tepki</td><td><b>Yoktur:</b> değişiklik akışı yoktur; tepki bir sonraki çalışmaya kadar bekler</td><td>Her mesajda bir Lambda: key-value'nun değişiklik akışı (M2 kart 9)</td></tr>
+    <tr><td>Normal davranışı öğrenip sapmayı bulmak</td><td><b>Yoktur:</b> task bir sorgudur; öğrenen bir model değildir</td><td>Search engine'in anomaly detection'ı (M2 kart 8)</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Check bir alarm servisinin yerini tutar mı?") %}
+<p>Veri zaten bu database'teyse çoğu zaman tutar: eşik, süre ve bildirim kanalı tek yerde tanımlanır. Ama check zamana göre çalışır; bir dakikalık aralık bir dakikaya kadar gecikme demektir. Bildirim kanalları da sınırlıdır (HTTP, Slack, PagerDuty gibi); karmaşık yönlendirme için bir alarm servisi daha uygundur.</p>
+{% endcall %}
+{% call k.ask("InfluxDB 3'te task ve check var mı?") %}
+<p>InfluxDB 3 Flux'ı desteklemez, bu yüzden Flux task'ları ve check'leri yoktur. Onun yerine bir Processing Engine vardır: zamanlanmış ya da yazmaya bağlı Python plugin'leri. Kural ve bildirim plugin kodu olarak yazılır (M2 kart 5, M5).</p>
+{% endcall %}
+
+{{ k.quiz("ix-q11", "Bir check her dakika çalışıyor ve \"nem 30 dakika boyunca 70'in üstünde\" kuralını izliyor. Nem 10:00:30'da kuralı sağlamaya başladı. Haber en geç ne zaman gelir?",
+   ["10:00:30'da, yazma anında", "10:30:30'dan sonraki ilk check çalışmasında, en geç bir dakika içinde", "Ertesi gün", "Hiç; check'ler sadece downsampling yapar"],
+   1, "Kural 30 dakikalık süre ister ve check zamana göre çalışır: koşul 10:30:30'da tamamlanır, haber bir sonraki dakikalık çalışmada gelir. Değişiklik akışı olmadığı için yazma anında tepki yoktur.") }}
+
+<h2 id="summary" data-short="Ö1–Ö8 özeti ve matris"><span class="sec">A10</span>Özet: time series database'in sekiz özelliği ve hangi üründe olduğu</h2>
+<p>Bölüm A'nın her kavramı bir özelliğe karşılık gelir. Bu sekiz özellik sayfanın geri kalanının ortak dilidir: Mimar gözüyle bölümü her use case'i bu numaralarla anlatır ve M1 bu listeyi sinyaller ve sınırlarıyla genişletir.</p>
+<table class="data">
+  <caption>Ö1–Ö8: time series database'in özellikleri</caption>
+  <thead><tr><th>No</th><th>Özellik</th><th>Tek cümleyle</th><th>Tanım</th></tr></thead>
+  <tbody>
+    <tr><td><b>Ö1</b></td><td>Zaman damgalı point'leri sona ekleme</td><td>Her ölçüm bir point'tir ve sona eklenir; aynı an yeniden yazılırsa yeni değer eskisinin yerine geçer.</td><td>A2, A6</td></tr>
+    <tr><td><b>Ö2</b></td><td>Measurement, tag ve series</td><td>Etiketler series'i tanımlar; aynı şeyin ölçümleri bir çizgidir ve cardinality bedeli belirler.</td><td>A3</td></tr>
+    <tr><td><b>Ö3</b></td><td>Zamana göre parçalar, series'e göre sıkıştırma</td><td>Veri zaman aralıklarına bölünür ve series series sıkıştırılır.</td><td>A4</td></tr>
+    <tr><td><b>Ö4</b></td><td>Zaman aralığı ve tag ile okuma</td><td>Aralık parçaları, tag'ler series'leri seçer; sadece gereken okunur.</td><td>A5</td></tr>
+    <tr><td><b>Ö5</b></td><td>Pencere toplamı</td><td>Bir series pencerelere bölünür, her pencereden tek değer çıkar.</td><td>A7</td></tr>
+    <tr><td><b>Ö6</b></td><td>Son değer ve selector'lar</td><td>Her series'in son, ilk, en büyük ya da en küçük gerçek point'i seçilir.</td><td>A5</td></tr>
+    <tr><td><b>Ö7</b></td><td>Retention ve downsampling</td><td>Eski veri bir ayarla gider; özet ayrı ve uzun yaşar.</td><td>A8</td></tr>
+    <tr><td><b>Ö8</b></td><td>Zamanlanmış task'lar ve check'ler</td><td>Engine'in içinde aralıkla çalışan sorgular dönüştürür ve izler.</td><td>A9</td></tr>
+  </tbody>
+</table>
+<p>Bu sekiz özellik her time series ürününde aynı biçimde yoktur. Prometheus metrikleri sunuculardan kendisi toplar ve kısa süre saklar; TimescaleDB PostgreSQL'in bir eklentisidir ve SQL konuşur; InfluxDB bu sayfanın engine'idir (sütun InfluxDB 2'yi anlatır).</p>
+<table class="data fmatrix">
+  <caption>özellik × ürün matrisi: ✓ var · ½ kısmen ya da farklı biçimde · ✗ yok</caption>
+  <thead><tr><th>Özellik</th><th>Prometheus</th><th>TimescaleDB</th><th>InfluxDB 2</th></tr></thead>
+  <tbody>
+    <tr><td><b>Ö1</b> Sona ekleme</td><td class="p">½ Değerleri sunuculardan kendisi çeker (scrape); dışarıdan yazma ikincil bir yoldur</td><td class="y">✓ INSERT; yerinde UPDATE de vardır</td><td class="y">✓ Line protocol, toplu yazma</td></tr>
+    <tr><td><b>Ö2</b> Etiket ve series</td><td class="y">✓ Metric adı + label'lar bir series'tir</td><td class="p">½ Series kavramı yoktur; etiketler kolon, bir row bir ölçümdür</td><td class="y">✓ Measurement + tag set + field</td></tr>
+    <tr><td><b>Ö3</b> Zaman parçaları, sıkıştırma</td><td class="y">✓ Zaman blokları, series başına sıkıştırma</td><td class="y">✓ Hypertable'ın zaman chunk'ları; eski chunk'larda kolon bazlı sıkıştırma</td><td class="y">✓ Shard group'lar, TSM dosyaları</td></tr>
+    <tr><td><b>Ö4</b> Aralık ve etiketle okuma</td><td class="y">✓ PromQL label seçicileri ve aralık</td><td class="y">✓ WHERE time ve kolon filtresi, index'lerle</td><td class="y">✓ range() + filter()</td></tr>
+    <tr><td><b>Ö5</b> Pencere toplamı</td><td class="y">✓ rate(), avg_over_time()</td><td class="y">✓ time_bucket() ve GROUP BY; SQL join'leri de vardır</td><td class="y">✓ aggregateWindow()</td></tr>
+    <tr><td><b>Ö6</b> Son değer</td><td class="y">✓ Bir sorgunun anlık değeri son point'tir</td><td class="p">½ ORDER BY time DESC LIMIT 1 ya da last(); index'le hızlı</td><td class="p">½ last(); önbellek yok, her seferinde sorgu</td></tr>
+    <tr><td><b>Ö7</b> Retention ve downsampling</td><td class="p">½ Tek bir yerel retention süresi; downsampling çekirdekte yok</td><td class="y">✓ Retention policy ve continuous aggregate</td><td class="y">✓ Bucket retention'ı ve downsampling task'ı</td></tr>
+    <tr><td><b>Ö8</b> Task ve check</td><td class="y">✓ Recording rule ve alerting rule; bildirimi ayrı bir bileşen yapar</td><td class="p">½ Zamanlanmış job'lar; alarm ve bildirim yok</td><td class="y">✓ Task, check ve notification endpoint</td></tr>
+  </tbody>
+</table>
+<p>Matris bir ürünün "iyi" ya da "kötü" olduğunu söylemez. TimescaleDB'nin series kavramı olmaması, onun SQL ve join konuşmasının bedelidir. Prometheus'un kısa saklaması onu basit bir izleme aracı yapar. InfluxDB 2'nin son değerde ½ alması, onu bir son durum deposu olarak zayıf yapar (M2 kart 9). Aynı veri modelinin yeni engine'i InfluxDB 3 son değeri önbellekte tutar ve SQL konuşur; M5 onu ayrı bir aday olarak anlatır.</p>
+{{ k.quiz("ix-q7", "Bir ekip sensör verisini SQL ile müşteri table'larıyla join'lemek istiyor ve son değer önemli değil. Matrise göre hangi özellik ve hangi ürün bu isteğe en doğrudan uyar?",
+   ["Ö5; TimescaleDB", "Ö8; Prometheus", "Ö6; InfluxDB 2", "Ö1; Prometheus"],
+   0, "Pencere toplamı her üçünde vardır ama SQL join'i TimescaleDB'de vardır (PostgreSQL). InfluxDB 2'nin SQL'i yoktur; AWS'te SQL konuşan time series seçeneği InfluxDB 3'tür (M5).") }}
+
+<div class="part"><b>Mimar gözüyle</b><h2 id="architect" data-short="Mimar gözüyle">Mimar gözüyle: ne zaman time series, ne zaman Timestream for InfluxDB</h2>
+<p>Önce kategori: bir time series database ne zaman doğru seçimdir, alternatifleri neyi daha iyi yapar ve yine de time series seçersek ne kazanıp ne kaybederiz. Sonra AWS'teki seçenekler ve InfluxDB 2 ile InfluxDB 3 arasındaki seçim.</p></div>
+
+<p><b>Kısaca:</b> bir time series database zamanla gelen sayıları sona ekler, aynı şeyin ölçümlerini bir series olarak sıkıştırır, soruları zaman aralığı ve pencereyle cevaplar ve eski veriyi kendiliğinden siler. Son durumu tutmak, kayıtları kurallarla değiştirmek, metin aramak ve yılların verisini başka table'larla join'lemek onun işi değildir.</p>
+<p>Önemli kelime yine {{ k.term("access pattern") }}'dir: uygulamanın sorduğu bir soru, o anda bildiği değerlerle birlikte. Bir time series iş yükünde access pattern'in biçimi bellidir: "şu series'ler, şu zaman aralığı, şu pencere" (Ö4, Ö5). "Bu cihazın son durumunu her mesajla değiştir" bu biçime uymaz.</p>
+<p>Bu bölümdeki her karar aynı beş gereksinimle anlatılır. M2'deki kartlar ve M7'deki simülasyonlar aynı beş başlığı kullanır. Son sütun her gereksinimin cevabının nereden geldiğini söyler:</p>
+<table class="data">
+  <caption>R1–R5: her iş yükünün beş gereksinimi</caption>
+  <thead><tr><th>No</th><th>Gereksinim</th><th>Sorusu</th><th>Kaynağı</th></tr></thead>
+  <tbody>
+    <tr><td><b>R1</b></td><td>Engine uyumu: veri, erişim ve garanti modeli</td><td>İş yükünün verisi, soruları ve kuralları engine'in çalışma prensibine, algoritmasına ve sunduğu araçlara ne kadar uyuyor? Access pattern bu gereksinimin bir parçasıdır (R1 · EY).</td><td>engine'in doğası</td></tr>
+    <tr><td><b>R2</b></td><td>Ölçek ve trafik şekli</td><td>Saniyede kaç point, kaç series, yük düz mü dalgalı mı, tepe anında yazma ve sorgu yarışıyor mu?</td><td>ikisi birlikte: engine'in ölçeklenme modeli ve servisin kapasite yönetimi</td></tr>
+    <tr><td><b>R3</b></td><td>Dayanıklılık</td><td>Bir arızada bu verinin kaybı ne demek: grafikte bir boşluk mu, bir denetimde eksik kanıt mı? Kaynaklar tampon tutuyor mu?</td><td>üreticinin servis tasarımı</td></tr>
+    <tr><td><b>R4</b></td><td>Operasyon ve ekip</td><td>Kim işletecek, instance boyutlandırmak isteniyor mu, ekip hangi sorgu dilini biliyor, taşınacak bir sistem var mı?</td><td>üreticinin servis tasarımı</td></tr>
+    <tr><td><b>R5</b></td><td>Maliyet modeli</td><td>Instance-saat mi, series başına mı, GB başına mı ödenir ve bu yükün şekline uyar mı?</td><td>üreticinin servis tasarımı</td></tr>
+  </tbody>
+</table>
+{% call k.callout("why", "Neden R1 en ağır, R3–R5 neden daha hafif ama silinmez?") %}
+<p>R1'in cevabı platformdan bağımsızdır. R1 satırları yalnız engine'in kendisini puanlar; bir kırılım servisin paketlemesinden geliyorsa (Multi-AZ standby'ın failover süresi, instance boyutlandırma, lisans, fiyat) R2–R5'e yazılır ve R1'de sayılmaz. InfluxDB 2'nin bir point'i sona eklemesi, series'i TSM dosyalarında sıkıştırması ve eski shard group'u tek seferde düşürmesi, engine kendi sunucunda da AWS'te de çalışsa aynıdır. Bu yüzden bir iş yüküne hangi engine'in uyduğu en çok R1'de görünür.</p>
+<p>R3–R5'in cevabı ise büyük ölçüde üreticinin tasarım kararıdır. AWS InfluxDB'yi bugün iki engine ile sunar: InfluxDB 2 (bir DB instance, istenirse Multi-AZ standby ya da read replica cluster) ve InfluxDB 3 (S3'te saklayan bir cluster). CloudWatch metrikleri hiç instance olmadan saklar ama saklama kuralı sabittir. Bu yüzden R3–R5'in ağırlığı R1 kadar yüksek olamaz. Ama silinmez: aynı ölçümü saklayabilen servisler arasındaki seçim çoğu zaman bu satırlarda yapılır.</p>
+{% endcall %}
+<p><b>InfluxDB 2 ve InfluxDB 3 ikiz değildir.</b> İkisi aynı veri modelini (measurement, tag, field, timestamp) ve aynı line protocol'ü kullanır. Ama AWS'e göre InfluxDB 3 "a complete architectural redesign"dır: TSM yerine Apache Arrow (bellek içi kolon biçimi), DataFusion (SQL sorgu motoru) ve S3'te Parquet (kolon bazlı dosya) kullanır; sorgu dili Flux değil SQL ve InfluxQL'dir. Saklama algoritması ve sorgu motoru farklı olduğu için kartlarda R1'leri ayrı puanlanır. Kartlarda "Timestream for InfluxDB" bu sayfanın servisi olan InfluxDB 2 DB instance'ını, "Timestream for InfluxDB 3" InfluxDB 3 Enterprise cluster'ını anlatır. InfluxDB 2'nin Single-AZ, Multi-AZ ve read replica cluster biçimleri aynı engine'in deployment seçenekleridir; ayrı adaylar değildir, kart hikâyeye uyanı seçer.</p>
+<p>R1 tek bir puan değildir. Bir iş yükünde engine'e sorulan birkaç soru vardır ve her kart bu soruları aşağıdaki sabit katalogdan seçer: kimisinde dört alt madde, kimisinde beş. Kartta alt maddeler sırayla numaralanır ve katalog kodunu taşır, örneğin "R1.3 · DA Depolama algoritması". Katalog bütün database sayfalarında aynıdır.</p>
+<table class="data">
+  <caption>R1 kataloğu: Engine uyumunun sekiz alt maddesi (database'ler için)</caption>
+  <thead><tr><th>Kod</th><th>Alt madde</th><th>Ne sorar</th><th>Timestream for InfluxDB'de örnek</th></tr></thead>
+  <tbody>
+    <tr><td><b>VM</b></td><td>Veri modeli ve value tipi</td><td>Value'nun yapısı ne: structured, semi-structured, iç içe, blob, graph, zaman serisi? Bir value ne kadar büyük?</td><td>Point = measurement + tag'ler + field'lar + timestamp; field'lar sayı, metin ya da true/false (Ö1, Ö2)</td></tr>
+    <tr><td><b>ŞE</b></td><td>Şema elverişliliği</td><td>Şema yazarken mi okurken mi uygulanır? Alanlar kayıttan kayda değişebilir mi, şema nasıl evrilir?</td><td>Şema yoktur; yeni tag ya da field ilk yazmada oluşur; bir field'ın tipi bir shard group içinde sabittir (A2)</td></tr>
+    <tr><td><b>EY</b></td><td>Erişim yolu</td><td>Soru hangi değerle sorulur: key, aralık, ikincil alan, join ve toplam, metin, coğrafya, ilişki, zaman penceresi?</td><td>Zaman aralığı + tag, pencere toplamı, son değer (Ö4, Ö5, Ö6); SQL yok, join zayıf, metin yok</td></tr>
+    <tr><td><b>OY</b></td><td>Okuma/yazma şekli</td><td>Hacim değil, işlemin biçimi: yerinde güncelleme mi, ekleme mi, oku-değiştir-yaz mı, sayaç mı, toplu yazma mı?</td><td>Sona ekleme ve toplu yazma çok iyi; aynı an yeniden yazılırsa yerine geçer; sayaç artırma ve yerinde güncelleme yok (A6)</td></tr>
+    <tr><td><b>TA</b></td><td>Tutarlılık ve atomiklik</td><td>Engine hangi garantileri verir: okuma tutarlılığı, koşullu yazma, transaction kapsamı, izolasyon?</td><td>Transaction ve koşullu yazma yoktur; aynı an için son yazan kazanır (A6)</td></tr>
+    <tr><td><b>DA</b></td><td>Depolama algoritması</td><td>Engine'in çalışma algoritması bu erişime uyuyor mu: bellek içi hash, B-tree, LSM, columnar, inverted index?</td><td>WAL + TSM dosyaları, zamana göre shard group'lar, series'e göre sıkıştırma; series index'i (TSI) cardinality ile büyür (Ö3)</td></tr>
+    <tr><td><b>YD</b></td><td>Veri yaşam döngüsü</td><td>Veri nasıl sona erer, değişikliği nasıl dışarı yayılır: TTL, sürüm, değişiklik akışı?</td><td>Bucket retention'ı ve downsampling task'ı (Ö7); değişiklik akışı yok</td></tr>
+    <tr><td><b>AO</b></td><td>Ayar ve optimizasyon araçları</td><td>Engine geliştiriciye hangi sıkılaştırma araçlarını verir: index tipleri, projection, sparse index, sıkıştırma, script?</td><td>Task, check, notification endpoint (Ö8); öğrenen bir anomali aracı yok</td></tr>
+  </tbody>
+</table>
+<p>Her kartta her satırın bir <b>ağırlığı</b> vardır ve ağırlıkların toplamı 100'dür. Ağırlık puanlardan önce, iş yükünün önceliğinden belirlenir ve kartta tek cümlelik nedeniyle yazılır. Çoğu kartta R1 en ağır gereksinimdir; R2–R5'in her biri en az 5 alır. Bir aday her satırda 0–10 puan alır ve katkısı puan × ağırlık / 10'dur. Zorunlu satır ve eleme yoktur: bir iş yükünün önceliği olan satırda zayıf kalan aday, toplamda kendiliğinden geride kalır. Puan ile ağırlığın işi ayrıdır: <b>puan</b> satırdaki "ne istiyoruz" cümlesinin ne kadar karşılandığını ölçer, <b>ağırlık</b> o satırın bu iş yükü için ne kadar önemli olduğunu. Bir eksik yalnız bir satırda sayılır: bir sorgunun yavaşlığı engine'in saklama biçiminden geliyorsa R1 · DA'da, tek instance'ın yazma ve sorguyu birlikte taşımasından geliyorsa R2'de.</p>
+
+<h2 id="signals" data-short="Ö1–Ö8: sinyal ve sınır"><span class="sec">M1</span>Time series database'in sekiz özelliği: hangi sinyal çağırır, sınırı nedir</h2>
+<p>Bu tablo M2'deki kartların referansıdır. Bir kart "Ö5 ile çözer" dediğinde buraya dönersin. Her satır A10'daki özelliği iş yükündeki sinyaliyle ve sınırıyla, yani yapamadığı şeyle birleştirir.</p>
+<table class="data">
+  <thead><tr><th>Özellik</th><th>Ne sağlar</th><th>İş yükünde onu çağıran sinyal</th><th>Sınırı: ne yapamaz</th><th>Tanım</th></tr></thead>
+  <tbody>
+    <tr><td><b>Ö1</b> Sona ekleme</td><td>Saniyede on binlerce point, kilit olmadan</td><td>Sensörler, sunucular, araçlar birkaç saniyede bir değer gönderiyor</td><td>Yerinde güncelleme, sayaç artırma ve transaction yok</td><td>A2, A6</td></tr>
+    <tr><td><b>Ö2</b> Tag ve series</td><td>Ölçümün kimliği bir kez saklanır; tag ile seçilir</td><td>Ölçümler sınırlı sayıda etiketle tanımlanıyor: depo, host, kamyon</td><td>Sınırsız büyüyen bir id tag olamaz; cardinality bellek ister</td><td>A3</td></tr>
+    <tr><td><b>Ö3</b> Zaman parçaları, sıkıştırma</td><td>Az storage; bir pencere sadece kendi parçasını okur</td><td>Aylarca ham veri, yavaş değişen sayılar</td><td>Rastgele değerler sıkışmaz; çok uzun geçmiş instance'ın diskine sığmalı</td><td>A4</td></tr>
+    <tr><td><b>Ö4</b> Aralık ve tag ile okuma</td><td>"Son 6 saat, IST-1" tek series'in bir dilimidir</td><td>Her soru bir zaman aralığıyla başlıyor</td><td>Aralıksız soru, field'a göre arama, metin araması</td><td>A5</td></tr>
+    <tr><td><b>Ö5</b> Pencere toplamı</td><td>Grafik başına tek sorgu, az değer</td><td>Panolar, 1/5/15 dakikalık ortalamalar ve tepeler</td><td>Başka table'larla join zayıf; öğrenen model değil</td><td>A7</td></tr>
+    <tr><td><b>Ö6</b> Son değer</td><td>Her series'in en yeni gerçek point'i</td><td>"Her kamyonun şu anki hızı"</td><td>InfluxDB 2'de önbellek yok; son durum deposu değildir</td><td>A5</td></tr>
+    <tr><td><b>Ö7</b> Retention ve downsampling</td><td>Eski veri bir ayarla gider, özet kalır</td><td>"Ham 30 gün, saatlik 2 yıl"</td><td>Süre bucket başınadır; özetten ham veri geri gelmez</td><td>A8</td></tr>
+    <tr><td><b>Ö8</b> Task ve check</td><td>Dönüştürme ve eşik alarmı engine'in içinde</td><td>"Nem 30 dakika 70'in üstünde ise haber ver"</td><td>Zamana göre çalışır; değişiklik akışı ve öğrenen tespit yok</td><td>A9</td></tr>
+  </tbody>
+</table>
+<p>Tablo özettir. Aşağıdaki sekiz blok her özelliği dört başlıkla açar: ne sağlar, hangi sinyal çağırır, sınırı nedir ve alternatif ne zaman daha iyidir.</p>
+
+<table class="data feat"><caption>Ö1 · Zaman damgalı point'leri sona ekleme</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Her ölçüm bir point olarak WAL'a sona eklenir ve hemen onaylanır; kilit, okuma ya da index güncellemesi beklemez. Toplu yazma (binlerce satır tek istekte) aynı yolu daha ucuza kullanır. Bir düzeltme aynı series key ve timestamp ile yeniden yazmaktır; yeni değer eskisinin yerine geçer.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"1.000 sensör 10 saniyede bir yazıyor", "60 sunucu her 10 saniyede 40 ölçüm gönderiyor", "fabrikada saniyede 1.200 point gece gündüz". Değerler bir kez yazılıyor ve sonra sadece okunuyorsa sinyal buradadır.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Yerinde güncelleme, okumadan artırma ve birkaç point'i birlikte yazan transaction yoktur. "Son durumu her mesajla değiştir" bir ekleme değil, bir üzerine yazmadır; engine onu her seferinde yeni bir point olarak tutar (M2 kart 9).</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Son durum ya da sayaç isteniyorsa key-value (DynamoDB) ya da bellek içi key-value (ElastiCache). Kayıtlar kurallarla değişiyorsa ilişkisel database (Aurora).</td></tr>
   </tbody>
 </table>
 
-<h3>Use case'ler, nedeni ve özelliğiyle</h3>
-<table class="data">
-  <thead><tr><th>Use case</th><th>Veri</th><th>Neden bir time-series database</th><th>İşi yapan özellik</th></tr></thead>
+<table class="data feat"><caption>Ö2 · Measurement, tag ve series</caption>
   <tbody>
-    <tr><td>Depo sensörleri (Lale Market)</td><td>4 deponun sıcaklık ve nemi, 5 dakikada bir.</td><td>Depoya göre, pencere başına grafikler.</td><td>warehouse ve sensor tag'leri, aggregateWindow</td></tr>
-    <tr><td>Dakika başına siparişler (Lale Market)</td><td>Kanal başına bir sayaç, dakikada bir.</td><td>Mağaza yükünün canlı bir grafiği.</td><td>fn: sum ile aggregateWindow</td></tr>
-    <tr><td>Uygulama ve sunucu izleme</td><td>CPU, bellek, gecikme, hata oranları.</td><td>Yeni veri üzerinde dashboard'lar ve alarmlar.</td><td>Telegraf, retention, check'ler</td></tr>
-    <tr><td>Endüstriyel IoT</td><td>Makine titreşimi, basınç, güç.</td><td>Yüksek yazma hızı, uzun dönem trendler için downsampling.</td><td>Pencereler, downsample edilmiş veriyi yazan task'lar</td></tr>
-    <tr><td>Enerji ve akıllı sayaçlar</td><td>Hane başına 15 dakikada bir tüketim.</td><td>Saat ve gün başına toplamlar.</td><td>aggregateWindow, bucket başına retention</td></tr>
-    <tr><td>Finansal piyasa verisi</td><td>Enstrümanların fiyatları ve hacimleri.</td><td>Son değer, zaman içinde hareketli ortalamalar.</td><td>Zaman sıralı series'ler, window function'lar</td></tr>
-    <tr><td>Filo ve araç telemetrisi</td><td>Araç başına hız, yakıt, konum.</td><td>Araç başına güncel durum ve geçmiş.</td><td>Araç başına tag (sınırlı sayıda)</td></tr>
-    <tr><td>Ağ izleme</td><td>Arayüz başına trafik, 10 saniyede bir.</td><td>Pencere başına oranlar ve tepeler.</td><td>fn: max ile pencereler, derivative</td></tr>
-  </tbody>
-</table>
-{{ k.fig("influxdb-raw-series.png", "dört dakika boyunca bellek kullanımının bir time series'i, tek bir çizgi olarak.") }}
-
-<h3>Timestream for InfluxDB'den uzaklaştıran sinyaller</h3>
-<table class="data">
-  <thead><tr><th>İş yükündeki sinyal</th><th>Neden zayıf bir seçim</th><th>Daha iyi seçim</th></tr></thead>
-  <tbody>
-    <tr><td>Kayıtlar iş kurallarıyla değişir</td><td>InfluxDB point'leri bir series'in sonuna ekler. Transaction ya da foreign key yok.</td><td><a href="/e2etutorial/aurora">Aurora</a></td></tr>
-    <tr><td>Bir kaydı key ile okuma</td><td>Model zamanı öne koyar, tek bir kaydı değil.</td><td><a href="/e2etutorial/dynamodb">DynamoDB</a></td></tr>
-    <tr><td>Her kullanıcının her event'i, aylarca saklanır</td><td>Bir tag'deki kullanıcı id'si milyonlarca series oluşturur.</td><td><a href="/e2etutorial/keyspaces">Keyspaces</a></td></tr>
-    <tr><td>Yıllarca iş verisi üzerinde SQL join'leri</td><td>Bir data warehouse değil.</td><td><a href="/e2etutorial/redshift">Redshift</a></td></tr>
-    <tr><td>Log mesajlarında serbest metin arama</td><td>Analyzer ya da relevance score yok.</td><td><a href="/e2etutorial/opensearch">OpenSearch</a></td></tr>
+    <tr><td><b>Ne sağlar</b></td><td>Ölçümün kimliği (measurement + tag'ler) series key'de bir kez saklanır; her point sadece zamanını ve sayısını taşır. Tag'ler index'lenir; "IST-1 deposu" ya da "Marmara bölgesi" filtresi doğrudan series'leri seçer.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Ölçümler az ve sınırlı etiketle tanımlanıyor: depo ve sensör türü, host ve metrik adı, hat ve makine. Etiketlerin değer sayısı yavaş büyüyor ve sayılabiliyor.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Sınırsız büyüyen bir değer (sipariş id'si, kullanıcı id'si) tag olamaz; her değer yeni bir series doğurur ve InfluxData'ya göre yüksek cardinality yüksek bellek kullanımının ana nedenidir. 2 milyon sayaç gibi büyük ama sınırlı bir küme bile büyük bir instance ister (M2 kart 7).</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Milyonlarca series ve SQL gerekiyorsa InfluxDB 3 (farklı saklama biçimi). Her kullanıcının olayları gerekiyorsa wide-column (Keyspaces): kullanıcı orada partition key'dir, bir series değil.</td></tr>
   </tbody>
 </table>
 
-<h3>Bir mimarın sorduğu sorular, bu sırayla</h3>
+<table class="data feat"><caption>Ö3 · Zamana göre parçalar, series'e göre sıkıştırma</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Point'ler zaman aralıklarına (shard group) bölünür; her aralığın içinde series key'e göre gruplanır, zamana göre sıralanır ve ardışık farklar saklanır. Yavaş değişen sayılar birkaç kat küçülür; bir pencere sadece kendi aralığının dosyalarını açar.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Aylarca ham veri: "90 gün, 31 milyar okuma", "30 gün, 260 milyon okuma". Storage faturası ya da diskin dolması bir endişeyse sinyal buradadır.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Veri instance'ın diskindedir (Timestream for InfluxDB 2'de en fazla 16 TiB) ve SSD fiyatıyla ödenir. Yıllar süren geçmiş üzerinde tarama binlerce shard group açar. Series index'i cardinality ile büyür.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Yıllarca ham geçmiş ve SQL taraması gerekiyorsa InfluxDB 3 (S3'te Parquet) ya da data warehouse (Redshift). Geçmiş ara sıra soruluyorsa S3 ve Athena.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö4 · Zaman aralığı ve tag ile okuma</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Her soru önce zaman aralığını, sonra tag'leri verir; engine sadece çakışan shard group'ları ve seçilen series'leri okur. "Son 6 saat, IST-1, sıcaklık" milyonlarca point'in arasından birkaç yüzünü okur.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"Bu sensörün şu saati", "bu türbinin son 10 dakikası", "bu hattın son 8 saati". Soru her zaman bir zaman aralığıyla başlıyorsa sinyal buradadır.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Aralıksız soru (Flux range ister), field değerine göre arama (her point okunur), metin araması (index yok) ve başka table'larla join (zayıf).</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Olayın kendisi aranıyorsa search engine (OpenSearch). Soru bir key ile tek kayıtsa key-value (DynamoDB).</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö5 · Pencere toplamı</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Bir series'i eşit pencerelere bölüp her pencereden tek değer üretmek engine'in içinde, tek sorguda olur: ortalama, toplam, en büyük, yüzdelik, değişim hızı. Uygulama ham point'leri çekmez; sadece çizdiği değerleri alır.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Panolar ve grafikler: "15 dakikalık ortalama sıcaklık", "dakika başına p95 gecikme", "5 dakikalık en yüksek motor sıcaklığı".</td></tr>
+    <tr><td><b>Sınırı</b></td><td>InfluxDB 2'de SQL yoktur; başka table'larla join'li toplamlar Flux'ta uzun zincirlerdir ve InfluxQL'de join yoktur. Pencere bir sayıdır; normal davranışı öğrenen bir model değildir.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Toplam başka table'larla join'leniyorsa data warehouse (Redshift) ya da SQL konuşan InfluxDB 3. Normalden sapma aranıyorsa OpenSearch'ün anomaly detection'ı.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö6 · Son değer ve selector'lar</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td><code>last()</code>, <code>max()</code>, <code>first()</code> her series'ten gerçek bir point döndürür, kendi timestamp'iyle. "Her deponun şu anki sıcaklığı" bir sorgudur.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Bir pano geçmişin yanında son değeri de gösteriyor: "sevk ekranında her kamyonun son hızı", "her sunucunun şu anki CPU'su".</td></tr>
+    <tr><td><b>Sınırı</b></td><td>InfluxDB 2'de son değer için bir önbellek yoktur; her seferinde bir sorgudur ve series sayısıyla büyür. Son durum asıl iş ise ve geçmiş gerekmiyorsa her mesaj gereksiz bir point bırakır.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Sadece son durum gerekiyorsa key-value (DynamoDB). Son değer ve geçmiş birlikte gerekiyor ve çok sayıda series varsa InfluxDB 3'ün Last Value Cache'i (M2 kart 4).</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö7 · Retention ve downsampling</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Bucket'ın retention period'u süresi dolan shard group'u tek seferde düşürür; maliyeti point sayısına değil gün sayısına bağlıdır. Downsampling task'ı özetleri ikinci bir bucket'a yazar ve uzun süre tutar.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"Ham veri 14 gün, dakikalık 1 yıl, saatlik 5 yıl", "90 gün sonra her gün 345 milyon okuma düşmeli". Verinin ömrü baştan biliniyorsa sinyal buradadır.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Süre bucket başınadır; tek bir point'e süre verilmez. Downsampling task'ını ekip yazar ve retention bitmeden çalışacak şekilde zamanlar. Özetten ham veri geri gelmez.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Süre kayıt başına olmalıysa wide-column ya da key-value TTL'i (Keyspaces, DynamoDB). Saklama kuralı sabit ve yeterliyse işletmesiz CloudWatch.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö8 · Zamanlanmış task'lar ve check'ler</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Engine'in içinde aralıkla çalışan sorgular: downsampling, eşik kontrolleri, "veri gelmiyor" kontrolleri ve bildirim kanalları. Kural verinin yanında tanımlanır; uygulama kodu değişmez.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"Titreşim 2 dakika boyunca eşiğin üstünde ise haber ver", "bir sensör 10 dakikadır sessizse haber ver". Var olan bir InfluxDB'nin task'ları ve check'leri taşınacaksa sinyal çok güçlüdür (M2 kart 5).</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Zamana göre çalışır: haber en fazla bir aralık gecikir ve her yazmaya tepki veren bir değişiklik akışı yoktur. Normal davranışı öğrenen bir araç değildir. InfluxDB 3'te Flux olmadığı için task'lar yeniden yazılır.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Her yazmaya anında tepki gerekiyorsa key-value'nun değişiklik akışı (DynamoDB Streams). Normalden sapma aranıyorsa OpenSearch'ün anomaly detection'ı. Alarm ayar olmalı ve az series varsa CloudWatch alarmları.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="usecases" data-short="Use case'ler, alternatifleriyle"><span class="sec">M2</span>Use case'ler: hangi servis en uygun, Timestream for InfluxDB nerede kazanır, nerede kaybeder</h2>
+<p>Her kart bir iş yükünü anlatır ve altı parçadan oluşur. (1) <b>Bu iş yüküne en uygun servis:</b> kartın en üstünde, ağırlıklı toplamı en yüksek olan aday durur. Bu aday Timestream for InfluxDB olmayabilir; Timestream for InfluxDB her kartta tabloda kalır ve "bu sayfanın servisi" işaretini taşır. (2) <b>Gerçek projede:</b> iş yükü kim için, hangi ekranda, hangi sayılarla. (3) <b>Gereksinimler ve ağırlıklar:</b> R1'in alt maddeleri (R1.1, R1.2, …) ve R2–R5; her satırda ağırlık ve nedeni, "ne istiyoruz" ve "neden önemli, karşılanmazsa ne olur". (4) <b>Puan tablosu:</b> bu iş yüküne gerçekten uyan üç servis; her hücrede 10 üzerinden puan ve ağırlıklı katkı, R1'in toplamı ve 100 üzerinden toplam. (5) <b>Her adayın gerekçesi:</b> satır satır nasıl karşıladığı (Timestream for InfluxDB için A10'daki Ö-numarasıyla), kaç puan aldığı ve puanın neden kırıldığı; en uygun servisin dışındaki her aday için uzun bir <b>kafa kafaya</b> paragrafı. (6) <b>Karar:</b> toplamların okunuşu ve "Timestream for InfluxDB seçersek" artı ve eksilerimiz. Simülasyonu olan beş kart M7'de aynı puanlarla adım adım oynar. Başlığa tıklayarak kartı aç.</p>
+<p>Beş kart başka sayfaların kabul edilmiş kartlarıyla aynı iş yüküdür ve aynı satırları, ağırlıkları ve puanları taşır: kart 2 OpenSearch sayfasının 7. kartı, kart 3 Keyspaces sayfasının 2. kartı, kart 8 OpenSearch sayfasının 10. kartı, kart 9 DynamoDB sayfasının 5. kartı, kart 10 ElastiCache sayfasının 5. kartıdır. Bu kartlarda puanlar kaynak karttan okunur; bir puan değişirse iki sayfada birlikte değişir. Timestream for InfluxDB'nin gerekçeleri bu sayfanın Ö-numaralarıyla yeniden yazıldı.</p>
+<table class="data">
+  <caption>puan ölçeği: her satırda ve her kartta aynı</caption>
+  <thead><tr><th>Puan</th><th>Anlamı</th></tr></thead>
+  <tbody>
+    <tr><td class="y">10</td><td>Satırı doğrudan, ek iş olmadan ve sayıları aşarak karşılar.</td></tr>
+    <tr><td class="y">8–9</td><td>Karşılar; küçük bir ek iş ya da küçük bir maliyet vardır.</td></tr>
+    <tr><td class="p">4–7</td><td>Karşılar, ama uygulama tarafında belirgin ek iş, boyutlandırma ya da bir sınırla.</td></tr>
+    <tr><td class="n">0–3</td><td>Kısmen ya da hiç: satırın bir parçası karşılanmaz ya da ciddi bir bedelle karşılanır.</td></tr>
+  </tbody>
+</table>
+<p>Kartlar Timestream for InfluxDB'nin servis terimlerini ve alternatiflerin terimlerini Bölüm B ve C'den önce kullanır. Kısa anlamları bu tablodadır; alternatiflerin ayrıntısı kendi tutorial'larındadır.</p>
+<table class="data">
+  <caption>kartlarda geçen servis terimleri (ayrıntısı Bölüm B, Bölüm C ve M5'te)</caption>
+  <thead><tr><th>Terim</th><th>Ne demek</th></tr></thead>
+  <tbody>
+    <tr><td>DB instance, instance sınıfı (db.influx.medium …), Influx IO Included storage</td><td>Timestream for InfluxDB 2'nin birimi: tek bir InfluxDB sunucusu. Sınıf CPU ve belleği belirler; storage önceden ayrılır ve 3K, 12K ya da 16K IOPS'lu üç tipi vardır (B5).</td></tr>
+    <tr><td>Multi-AZ standby, failover</td><td>İkinci bir AZ'de senkron replike edilen bekleyen bir kopya. Birincil instance arızalanınca servis ona geçer; AWS'e göre bu "typically 60–120 seconds" sürer. Standby okuma almaz (C2).</td></tr>
+    <tr><td>Read replica cluster</td><td>InfluxDB 2'nin bir writer ve okuma kopyalarından oluşan biçimi; lisansı AWS Marketplace'ten ödenir (C2).</td></tr>
+    <tr><td>Bucket, organization</td><td>InfluxDB 2'de retention period'u olan adlandırılmış depo ve bucket'ların sahibi olan birim (B1).</td></tr>
+    <tr><td>Flux, InfluxQL</td><td>InfluxDB 2'nin iki sorgu dili: boru işaretli fonksiyon zinciri ve SQL'e benzeyen eski dil. InfluxData'ya göre Flux "maintenance mode"dadır ve InfluxDB 3'te desteklenmez (B3).</td></tr>
+    <tr><td>Telegraf</td><td>Açık kaynak ajan: sunuculardan ve cihazlardan ölçüm toplar, tamponlar ve InfluxDB'ye yazar.</td></tr>
+    <tr><td>InfluxDB 3 Core ve Enterprise, Last Value Cache, Processing Engine, compactor</td><td>InfluxDB 3'ün tek node'lu ücretsiz sürümü ve çok node'lu, sıkıştırma (compaction) yapan sürümü; her series'in son değerini bellekte tutan önbellek; zamanlanmış ya da yazmaya bağlı Python plugin'leri; küçük Parquet dosyalarını birleştiren bileşen (M5).</td></tr>
+    <tr><td>CloudWatch: custom metric, dimension, high-resolution metric, alarm</td><td>Uygulamanın yayınladığı metrik (metric başına aylık ücret); metriği tanımlayan etiket; 60 saniyeden kısa periyotlu metrik; bir metrik bir eşiği belirli periyotlar boyunca geçince çalan kural.</td></tr>
+    <tr><td>Keyspaces, DynamoDB, ElastiCache, OpenSearch, Redshift, Aurora</td><td>Kartlarda karşılaştırılan diğer servisler. Terimleri (partition key, clustering column, TTL, Streams, HyperLogLog, Random Cut Forest, COPY, RPU, ACU) kendi tutorial'larında ve o kartların gerekçelerinde açıklanır: <a href="/e2etutorial/keyspaces?lang=tr">Keyspaces</a>, <a href="/e2etutorial/dynamodb?lang=tr">DynamoDB</a>, <a href="/e2etutorial/elasticache?lang=tr">ElastiCache</a>, <a href="/e2etutorial/opensearch?lang=tr">OpenSearch</a>, <a href="/e2etutorial/redshift?lang=tr">Redshift</a>, <a href="/e2etutorial/aurora?lang=tr">Aurora</a>.</td></tr>
+  </tbody>
+</table>
+<p>Toplam 100 üzerindendir: her hücrenin katkısı puan × ağırlık / 10'dur. İlk iki aday arasındaki fark 5 puan ya da daha azsa kart "yakın yarış" işaretini taşır; bu bir bilgidir, karar yine toplamdır.</p>
+{% for uc in usecases %}{{ k.wusecase(uc) }}
+{% endfor %}
+<table class="data">
+  <caption>on kartın özeti: en uygun servis, ikinciyle farkı ve Timestream for InfluxDB'nin yeri</caption>
+  <thead><tr><th>Kart</th><th>En uygun servis</th><th class="num">Fark</th><th>Timestream for InfluxDB</th></tr></thead>
+  <tbody>{% for uc in usecases %}
+    <tr><td><a href="#uc-{{ uc.id }}">{{ uc.no }}. {{ uc.title }}</a></td><td>{{ uc.best.name }} ({{ uc.best.total }}){% if uc.race %} · yakın yarış{% endif %}</td><td class="num">{{ uc.gap }}</td>
+      <td>{% for c in uc.cands %}{% if c.page %}{{ loop.index }}. sıra, {{ c.total }}{% endif %}{% endfor %}</td></tr>{% endfor %}
+  </tbody>
+</table>
+<p>Özetin okunuşu: Timestream for InfluxDB, sınırlı sayıda series'in zamanla gelen sayılarını pencerelerle soran, eski veriyi bir ayarla silen ve eşik kontrollerini verinin yanında isteyen iş yüklerinde öndedir: Lale Market'in depo ve mağaza izlemesi (kart 1), uygulama metrikleri (kart 2) ve var olan bir InfluxDB'nin taşınması (kart 5). Kart 1 ve 2'de CloudWatch yakın ikincidir; onu geride bırakan sabit saklama kuralı ve series başına fiyattır. Kart 3'te Timestream for InfluxDB engine uyumunu kazanır (50'ye 42) ama toplamı Keyspaces alır: tampon tutmayan sensörler ve ekibin Cassandra bilgisi. Aynı veri modelinin yeni engine'i InfluxDB 3 iki kartı kazanır: son değer önbelleği ve SQL (kart 4, fark 6,4) ve yıllarca geçmiş ile join'li SQL (kart 6). Timestream for InfluxDB beş kartta net kaybeder ve her birinde kaybın kaynağı R1'dir: join'li aylık faturalama bir warehouse işidir (kart 7, Redshift), normali öğrenmek bir anomaly detection aracı ister (kart 8, OpenSearch), son durum bir üzerine yazmadır (kart 9, DynamoDB), sayaç bir artırmadır (kart 10, ElastiCache) ve 3 yıllık tick geçmişi SQL ve S3 ister (kart 6).</p>
+<p>Aynı mekanizma her kartta aynı kırılımı alır ve bazıları kademelidir. Failover (R3): kaynaklar tampon tutuyorsa 1 puan (kart 1, 4, 5), birkaç dakikalık boşluk kabul ediliyorsa 2 (kart 2, 6, 8), kaynaklar tampon tutmuyor ya da kesinti doğrudan görünüyorsa 3 (kart 3, 9). Ekip ve işletme (R4): instance boyutlandırma ve ekip için yeni bir sorgu dili 5 puan (kart 1, 3, 4, 8, 9, 10), dil yeni değil ama ajanlar ve taşıma işi varsa 4 (kart 2), var olan Flux işleri değişmeden taşınıyorsa 2 (kart 5), analistler SQL bekliyor ve büyük bir instance boyutlandırılıyorsa 6 (kart 7). Fiyat (R5): Multi-AZ standby ikinci bir instance ücretidir ve 2 puan kırar (kart 1, 2, 3, 5, 8); instance tepeye göre seçiliyorsa ya da storage gereksiz büyüyorsa 4–5; yıllarca geçmiş SSD fiyatıyla ödeniyorsa 6–7 (kart 6, 7). Tek instance (R2): yük instance'ın çok altında ve büyümüyorsa kırılım yok (kart 3, 5), büyüme bekleniyorsa 1 (önceden eklenen sabit kapasite her serviste 1 puandır; planlama işi R4'tedir), tepe yazma ve sorgu aynı instance'ta yarışıyorsa 2–5. Tazelik gecikmesi (en yeni yazmanın ne zaman görüneceği) sadece R1 · EY'de sayılır, R2'de değil (kart 6'da Redshift). Başka bir servisin mekanizması o servisin sayfasındaki kademeyle puanlanır: Redshift'in süre sonu olmaması 4 puan (kart 6), Aurora'nın retention'ı olmaması 6 puan (kart 1), CloudWatch'un saklama kuralı isteğin bir parçasını karşılamıyorsa ölçeğin 0–3 bandındadır: kart 1'de 7, kart 5'te 8 puan kırılır. Kart 2'nin 2 puanlık kırılımı OpenSearch sayfasından gelir; bu kural ile çeliştiği için iki sayfada birlikte gözden geçirilmek üzere listelendi (docs/influxdb.reader-report.md, R5). Kart 3 Keyspaces sayfasının kartıdır ve üç adayı oradan gelir; InfluxDB 3 aday değildir. Kabaca puanlansaydı R1'de 50'nin hepsini, R3'te S3 dayanıklılığıyla 9 alırdı, ama R4'te (ekip CQL biliyor, servis yeni) ve R5'te (iki node ve lisans) geride kalırdı ve toplamı 89 civarında, Keyspaces'in altında olurdu.</p>
+<p>Var olan sistemler: kart 1'de Aurora Lale Market'in var olan cluster'ıdır ve R4–R5'te eklenmiş bir table olarak puanlanır; kart 8'de olaylar zaten OpenSearch domain'ine akar; kart 5'te fabrikanın kendi InfluxDB'si taşınır. Diğer kartlar sıfırdan başlar. "İkisi birlikte" cevabı beş kartta en dürüst cevaptır: ham kanıt Keyspaces'te ve canlı pencereler InfluxDB'de (kart 3), canlı ekran bir time series engine'inde ve geçmiş ile VWAP Redshift'te (kart 6), şebeke ekranı time series'te ve faturalama Redshift'te (kart 7), son durum DynamoDB'de ve geçmiş InfluxDB'de (kart 9), canlı saat ElastiCache'te ve saatlik geçmiş Redshift'te (kart 10). Bakılıp aday yapılmayan servisler: Timestream for LiveAnalytics (AWS'e göre Haziran 2025'ten beri yeni müşterilere açık değildir), Amazon Managed Service for Prometheus (bu workshop'un servisi değil; kart 2'de CloudWatch aynı rolü oynar), Athena (kart 6 ve 7'de canlı yazma ve ayda birkaç günlük yük için Redshift daha yakındır).</p>
+
+<h2 id="away" data-short="Uzaklaştıran sinyaller"><span class="sec">M3</span>Time series database'ten uzaklaştıran sinyaller</h2>
+<table class="data">
+  <thead><tr><th>İş yükündeki sinyal</th><th>Time series neden zayıf bir seçim</th><th>Daha iyi seçim</th></tr></thead>
+  <tbody>
+    <tr><td>Sadece son durum, her mesaj öncekinin üzerine yazar</td><td>Her mesaj yeni bir point'tir; son değer bir sorgudur, değişiklik akışı yoktur (Ö1, Ö6'nın sınırı).</td><td><a href="/e2etutorial/dynamodb?lang=tr">Key-value (DynamoDB)</a></td></tr>
+    <tr><td>Kayıtlar kurallarla değişir (sipariş, stok, ödeme)</td><td>Transaction, koşullu yazma ve foreign key yoktur (Ö1'in sınırı).</td><td><a href="/e2etutorial/aurora?lang=tr">İlişkisel database (Aurora)</a></td></tr>
+    <tr><td>Saniyede binlerce artırma, tekil sayım</td><td>Engine artırmaz; her olay ayrı saklanır ve sayı okumada toplanır (Ö1'in sınırı).</td><td><a href="/e2etutorial/elasticache?lang=tr">Bellek içi key-value (ElastiCache)</a></td></tr>
+    <tr><td>Her kullanıcının olayları, kullanıcı id'si ile</td><td>Kullanıcı id'si tag olursa cardinality sınırsız büyür (Ö2'nin sınırı).</td><td><a href="/e2etutorial/keyspaces?lang=tr">Wide-column (Keyspaces)</a></td></tr>
+    <tr><td>Yılların verisi başka table'larla join'lenip raporlanır</td><td>InfluxDB 2'de SQL yoktur ve geçmiş instance'ın diskindedir (Ö3, Ö5'in sınırı).</td><td><a href="/e2etutorial/redshift?lang=tr">Data warehouse (Redshift)</a></td></tr>
+    <tr><td>Log mesajında kelime arama, normalden sapma</td><td>Metin index'i ve öğrenen bir tespit aracı yoktur (Ö4, Ö8'in sınırı).</td><td><a href="/e2etutorial/opensearch?lang=tr">Search engine (OpenSearch)</a></td></tr>
+    <tr><td>Birkaç yüz AWS metriği, kısa geçmiş yeterli</td><td>Ayrı bir instance işletmek gereksizdir.</td><td>CloudWatch (M2 kart 1, 2)</td></tr>
+  </tbody>
+</table>
+
+<h2 id="questions" data-short="Mimarın soruları"><span class="sec">M4</span>Bir mimarın sorduğu sorular, bu sırayla</h2>
 <ol>
-  <li><b>Zaman her sorunun ana ekseni mi?</b> Çoğu query "son bir saatte" diye başlıyorsa bir time-series database yardım eder.</li>
-  <li><b>Neyi ölçüyorsun ve onu hangi etiketler tanımlıyor?</b> Etiketler tag olur. Önce olası değerlerini say.</li>
-  <li><b>Ham veri ne kadar süre işe yarar?</b> Bu retention period'dur. Uzun dönem trendler ikinci bir bucket'ta downsample edilmiş veri kullanabilir.</li>
-  <li><b>Saniyede kaç point?</b> Instance boyutuna bu karar verir.</li>
-  <li><b>InfluxDB 2 mi, InfluxDB 3 mü?</b> Yeni iş yükleri InfluxDB 3 kullanabilir. Var olan database'ler ve Flux query'leri InfluxDB 2 kullanır.</li>
-  <li><b>Bir Availability Zone'un kaybına dayanmalı mı?</b> O zaman Multi-AZ bir deployment kullan.</li>
+  <li><b>Veri zamanla gelen ölçümler mi, değişen kayıtlar mı?</b> Ölçümler sona eklenir (Ö1); kayıtlar kurallarla değişiyorsa ilişkisel ya da key-value.</li>
+  <li><b>Soru bir zaman aralığı mı, son durum mu?</b> Aralık ve pencere time series'tir (Ö4, Ö5); sadece son durum key-value'dur (Ö6'nın sınırı).</li>
+  <li><b>Hangi değerler tag, hangileri field?</b> Tag'lerin değer sayısını çarp: bu cardinality'dir (Ö2). Sınırsız bir id varsa field'a koy.</li>
+  <li><b>Ham veri ne kadar, özet ne kadar yaşar?</b> Retention ve downsampling bucket'ları buradan çıkar (Ö7).</li>
+  <li><b>Hangi kural izlenmeli ve ne kadar gecikme kabul edilir?</b> Bir dakikalık gecikme kabulse check (Ö8); her yazmaya tepki gerekiyorsa değişiklik akışı olan bir database.</li>
+  <li><b>Saniyede kaç point ve kaç series?</b> AWS'in boyutlandırma tablosu instance sınıfını ve storage tipini buradan önerir (B5).</li>
+  <li><b>SQL ve join gerekiyor mu, geçmiş yıllar mı?</b> Evet ise InfluxDB 3 ya da warehouse (Ö3, Ö5'in sınırı).</li>
+  <li><b>Var olan bir InfluxDB ya da Flux kodu var mı?</b> Varsa InfluxDB 2 aynı API ile taşınır; InfluxDB 3 Flux'ı desteklemez (M2 kart 5).</li>
+  <li><b>Kaynaklar tampon tutuyor mu?</b> Tutmuyorsa failover'ın 60–120 saniyesi veri kaybıdır; Multi-AZ ve bir tampon (Telegraf) birlikte düşünülür.</li>
 </ol>
 
-<h3>AWS'te Timestream for InfluxDB ve akrabaları</h3>
+<h2 id="aws" data-short="AWS'te time series"><span class="sec">M5</span>AWS'te time series seçenekleri ve ne zaman Timestream for InfluxDB</h2>
+<p>AWS'te zamanla gelen ölçümleri saklayan birkaç seçenek vardır. Engine'de, saklama yerinde ve ödeme biriminde farklılaşırlar:</p>
 <table class="data">
   <thead><tr><th>Seçenek</th><th>Nedir</th><th>Ne zaman seç</th></tr></thead>
   <tbody>
-    <tr><td>Timestream for InfluxDB 2</td><td>Yönetilen bir InfluxDB 2 instance'ı, istersen ikinci bir Availability Zone'da bir standby ile.</td><td>Var olan InfluxDB 2 database'leri, Flux query'leri. Lale Market bunu kullanır.</td></tr>
-    <tr><td>Timestream for InfluxDB 3</td><td>Yönetilen InfluxDB 3 Core (tek node) ya da Enterprise (çok node'lu bir cluster).</td><td>Yeni iş yükleri, SQL query'leri, yüksek cardinality.</td></tr>
-    <tr><td>Amazon CloudWatch</td><td>AWS kaynaklarının metrikleri ve alarmları.</td><td>Kendi database'in olmadan AWS servislerinin izlenmesi.</td></tr>
-    <tr><td>Aurora'da time-series table'ları</td><td>Timestamp kolonlu ve index'li bir table.</td><td>Az sayıda point ve veri iş table'larıyla join'lenmeli.</td></tr>
+    <tr><td><b>Timestream for InfluxDB 2</b> (DB instance)</td><td>Yönetilen InfluxDB 2: TSM storage engine, Flux ve InfluxQL, task ve check. Single-AZ ya da Multi-AZ standby; read replica cluster seçeneği. Instance-saat ve ayrılmış GB ödenir; Frankfurt'ta db.influx.medium Single-AZ 0,145, Multi-AZ 0,289 USD/saat (Price List API, 2026-10-31). Storage "can grow to a maximum size of 16 tebibytes" (<a href="https://docs.aws.amazon.com/prescriptive-guidance/latest/timestream-for-influxdb-well-architected-framework/reliability.html">Reliability pillar</a>).</td><td>Sınırlı series, pencere soruları, retention ve check'ler; var olan InfluxDB ve Flux kodu (kart 1, 2, 5). Lale Market bunu kullanır.</td></tr>
+    <tr><td><b>Timestream for InfluxDB 3</b> (Core ya da Enterprise)</td><td>AWS'e göre "a complete architectural redesign": Arrow (bellek içi kolon biçimi), DataFusion (SQL sorgu motoru), S3'te Parquet (kolon bazlı dosya); SQL ve InfluxQL; Last Value Cache; Python Processing Engine. Core tek node'ludur, compaction yapmaz ve "typically around 3 days" gibi yakın veri için önerilir; Enterprise çok node'lu, compactor'lı ve uzun geçmiş içindir (<a href="https://docs.aws.amazon.com/timestream/latest/developerguide/faq-general.html">InfluxDB 3 FAQ</a>). Object storage 0,0245 USD/GB-ay, en az 200 GB; Enterprise'a vCPU başına InfluxData lisansı eklenir (<a href="https://docs.aws.amazon.com/timestream/latest/developerguide/influxdb3.html">InfluxDB 3</a>).</td><td>Yüksek cardinality, SQL ve join, yıllarca geçmiş, son değer önbelleği (kart 4, 6). Flux kodu yoksa yeni iş yükleri için.</td></tr>
+    <tr><td>Amazon CloudWatch</td><td>AWS kaynaklarının ve uygulamaların metrikleri ve alarmları; sunucu yok. Saklama sabittir: 60 saniyeden kısa periyotlu veri 3 saat, dakikalık 15 gün, 5 dakikalık 63 gün, saatlik 455 gün. Custom metric başına ödenir.</td><td>AWS metrikleri, az series, kısa geçmiş yeterli ve ekip ikinci bir sistem istemiyor (kart 1, 2 yakın ikinci).</td></tr>
+    <tr><td>Timestream for LiveAnalytics</td><td>Timestream'in serverless engine'i. AWS'e göre Haziran 2025'ten beri yeni müşterilere açık değildir; dokümantasyon benzer yetenekler için Timestream for InfluxDB'yi önerir.</td><td>Sadece onu zaten kullanan hesaplar.</td></tr>
+    <tr><td><a href="/e2etutorial/keyspaces?lang=tr">Amazon Keyspaces</a>, <a href="/e2etutorial/dynamodb?lang=tr">DynamoDB</a></td><td>Partition key + zaman sıralı ikinci parça ile time series tutabilen serverless database'ler; TTL var, pencere toplamı yok.</td><td>Ekip Cassandra ya da DynamoDB biliyor, sensör tampon tutmuyor, soru bir aralık okumasıdır (kart 3).</td></tr>
+  </tbody>
+</table>
+<p>Timestream for InfluxDB 2'nin içinde birkaç seçenek bir tasarımı değiştirir:</p>
+<table class="data">
+  <thead><tr><th>Seçenek</th><th>Ne yapar</th><th>Ne zaman seç</th></tr></thead>
+  <tbody>
+    <tr><td>Instance sınıfı ve storage tipi</td><td>AWS'in örnek iş yüküne göre: 100.000 series'in altı ve saniyede yaklaşık 50.000 satır için db.influx.large ve Influx IO Included 3K; 1–5 milyon series için 4xlarge ve 12K (<a href="https://docs.aws.amazon.com/timestream/latest/developerguide/timestream-for-influxdb.html">InfluxDB instance sizing</a>).</td><td>Series sayısı ve yazma hızı bilindiğinde; sonra izlenir ve değiştirilir.</td></tr>
+    <tr><td>Multi-AZ standby</td><td>"a synchronous standby replica in a different Availability Zone"; failover "typically 60–120 seconds"; standby okuma almaz (<a href="https://aws.amazon.com/timestream/faqs/">Timestream FAQ</a>).</td><td>Bir AZ'nin kaybı veri ya da uzun kesinti olmamalı. Lale Market bunu kullanır.</td></tr>
+    <tr><td>Read replica cluster</td><td>Bir writer ve ayrı AZ'lerde reader'lar; failover'da writer'a geçer ya da "tip data" kaybını önlemek için geçmez; lisansı AWS Marketplace'tendir (<a href="https://docs.aws.amazon.com/timestream/latest/developerguide/timestream-for-influx-working-read-replica.html">Read replica clusters</a>).</td><td>Panolar çok ve okuma yükü yazmadan ayrılmalı.</td></tr>
+    <tr><td>Parameter group</td><td>Engine ayarları (örneğin sorgu bellek sınırları) bir parametre grubunda tutulur.</td><td>Ağır sorgular instance'ı zorlarken.</td></tr>
   </tbody>
 </table>
 
-<h3>Lale Market'te Timestream for InfluxDB'nin yeri</h3>
-<p><code>metrics</code> bucket'ında iki measurement vardır. <code>warehouse_env</code>, 4 deponun her biri için 5 dakikada bir bir sıcaklık ve bir nem point'i tutar. <code>orders</code>, dakika başına web siparişi sayısını tutar.
-   Admin sayfası "Operations" onları Flux query'leriyle çizer. Bir ziyaretçi bir checkout'u tamamladığında InfluxDB Engine App <code>channel=workshop</code> tag'li bir point daha yazar.</p>
+<h2 id="lalemarket-arch" data-short="Lale Market'teki yeri"><span class="sec">M6</span>Lale Market'te Timestream for InfluxDB'nin yeri</h2>
+<p>Lale Market on engine kullanır ve her engine tek bir iş yapar. Timestream for InfluxDB operasyon ekranının yeridir: Admin sayfası "Operations" depo sıcaklığını, nemi ve dakika başına siparişleri sadece buradan okur. Siparişin kendisi Aurora'dadır; bir ziyaretçi checkout'u tamamladığında InfluxDB Engine App ayrıca <code>orders,channel=workshop count=1i</code> point'ini yazar. Bu bir kopya değil, bir ölçümdür: siparişin satırları ve tutarı burada yoktur, sadece "o dakikada bir sipariş" vardır. Bugünkü veri küçüktür (10 series); production'da aynı düzen M2 kart 1'deki gibi 40 mağaza ve 1.000 sensöre büyür ve bir downsampling task'ı ile bir nem check'i eklenir.</p>
 
-<h3>Simülasyon: gereksinimler seçsin</h3>
-{{ k.sim("decide_metrics", "İş yükü 1: depo sensörleri") }}
-{{ k.sim("decide_orders", "İş yükü 2: sipariş kayıtları") }}
+<h2 id="decide" data-short="Karar simülasyonları"><span class="sec">M7</span>Karar simülasyonları: M2'nin beş kartı adım adım</h2>
+<p>Her simülasyon M2'deki bir kartın verisini birebir kullanır: aynı iş yükü, aynı satırlar ve ağırlıklar, aynı üç aday, aynı puanlar ve aynı gerekçeler. Fark şudur: simülasyon her adımda bir satır açar. Önce satırın ağırlığını ve nedenini, sonra her adayın puanını ve ağırlıklı katkısını görürsün; puan tablosu ve toplamlar adım adım dolar. Oynat'a basmadan önce kartı okuyup sonucu tahmin et.</p>
+<p>Beş simülasyon öğrettikleri şeye göre seçildi. Lale Market'te Timestream for InfluxDB'nin engine özellikleri iş yükünün kendisidir (R1'de 48'in 46,2'si) ama CloudWatch 2,2 puan geridedir: kararı saklama kuralı ve fiyat verir (yakın yarış). Uygulama metriklerinde aynı yarış başka bir sayfadan gelir ve aynı sonucu verir (yakın yarış). Rüzgâr santralinde Timestream for InfluxDB engine uyumunu kazanır ama toplamda Keyspaces'e kaybeder (yakın yarış). Tick verisinde aynı veri modelinin yeni engine'i InfluxDB 3 kazanır ve bu sayfanın servisi üçüncüdür. Son durumda Timestream for InfluxDB net kaybeder: engine ekler, üzerine yazmaz. Simülasyonun puan tablosunda "R1 ara toplam" sütunu R1 alt maddelerinin katkılarının toplamını gösterir.</p>
+{{ k.sim("w_warehouse", "Kart 1: Lale Market depo ve mağaza izleme, Timestream for InfluxDB mi CloudWatch mı? (yakın yarış)") }}
+{{ k.sim("w_metrics", "Kart 2: uygulama metrikleri (Timestream for InfluxDB en uygun, yakın yarış)") }}
+{{ k.sim("w_sensor", "Kart 3: rüzgâr santrali sensörleri (engine uyumu Timestream for InfluxDB'de, toplam Keyspaces'te)") }}
+{{ k.sim("w_ticks", "Kart 6: borsa tick verisi (InfluxDB 3 en uygun, bu sayfanın servisi üçüncü)") }}
+{{ k.sim("w_laststate", "Kart 9: IoT son durum (DynamoDB en uygun, Timestream for InfluxDB net kaybeder)") }}
+<p>Her kararın son cümlesine bak: "Bir koşul değişseydi". İyi bir mimar bu cümleyi karar kaydına yazar. Koşul daha sonra değişirse ekip kararın yeniden kontrol edilmesi gerektiğini bilir.</p>
+{{ k.quiz("ix-a1", "Bir fabrika 1.500 makinenin titreşimini 10 saniyede bir ölçüyor, ham veriyi 14 gün tutuyor ve kendi sunucusundaki InfluxDB 2'nin Flux check'lerini değiştirmeden taşımak istiyor. En iyi ne oturur?",
+   ["Timestream for InfluxDB (InfluxDB 2)", "Timestream for InfluxDB 3", "CloudWatch", "DynamoDB"],
+   0, "Aynı açık kaynak API, Flux task'ları ve check'ler değişmeden taşınır (kart 5). InfluxDB 3 Flux'ı desteklemez; CloudWatch'un saklama kuralı 14 günlük 10 saniyelik veriyi tutmaz.") }}
+{{ k.quiz("ix-a2", "Bir analist ekibi 3 yıllık sensör verisini SQL ile müşteri table'larıyla join'lemek istiyor ve canlı bir ekran yok; veri gece dosya olarak geliyor. Hangi servis ve hangi koşul cevabı değiştirir?",
+   ["Redshift. Veri canlı bir ekrana saniyeler içinde gitseydi bir time series engine'i öne geçerdi.", "Timestream for InfluxDB. Veri daha küçük olsaydı Redshift kazanırdı.", "ElastiCache. Join olmasaydı DynamoDB kazanırdı.", "Neptune. Sensörler birbirine bağlı olsaydı Aurora kazanırdı."],
+   0, "Gecelik dosya, join'li aylık toplam ve ara sıra yük bir warehouse işidir (kart 7). Canlı pencereler istenseydi time series engine'i kartın ikinci parçası olurdu.") }}
+{{ k.quiz("ix-a3", "İki milyon akıllı sayacın sadece son değeri bir panelde gösteriliyor; geçmiş başka bir sisteme gidiyor ve 80 derece üstü için anında alarm isteniyor. Hangi servis kazanır ve hangi koşul cevabı değiştirir?",
+   ["DynamoDB. Panel son bir saatin eğrisini de isteseydi Timestream for InfluxDB ile birlikte çalışmak doğru olurdu.", "Timestream for InfluxDB. Alarm bir saat gecikebilseydi DynamoDB kazanırdı.", "Redshift. Sayaçlar daha az olsaydı Aurora kazanırdı.", "OpenSearch. Değerler metin olsaydı CloudWatch kazanırdı."],
+   0, "Son durum bir üzerine yazmadır ve alarm her değişikliğe tepki ister: key-value ve değişiklik akışı (kart 9). Time series engine'i ekler, son değeri sorar ve check'i zamanla çalıştırır.") }}
 
-{{ k.quiz("ix-a1", "Bir fabrikanın 2.000 makinesi var. Her biri 10 saniyede bir sıcaklığını gönderiyor. Ekip son gün için 1 dakikalık ortalamalar istiyor ve ham veriyi 14 gün sonra siliyor. En iyi ne oturur?",
-   ["Makine başına bir tag ve 14 günlük retention ile Timestream for InfluxDB", "Makine başına yerinde güncellenen bir row ile Aurora", "Okuma başına bir vertex ile Neptune", "Okumalar üzerinde serbest metin aramalı OpenSearch"],
-   0, "Zaman damgalı sayılar, zaman üzerinde pencereler ve otomatik sona erme bir time-series database'in temel özellikleridir. 2.000 makine sınırlı sayıda tag değeridir.") }}
-{{ k.quiz("ix-a2", "Bir geliştirici her siparişin order id'sini bir tag'e koymak istiyor. Sorun nedir?",
-   ["Tag'ler metin tutamaz", "Her order id yeni bir series oluşturur, bu yüzden cardinality sınırsız büyür", "Tag'ler diske yazılmaz", "InfluxDB tag'li point'leri siler"],
-   1, "Bir tag değeri series key'in parçasıdır. Milyonlarca değeri olan bir id milyonlarca series ve büyük bir index oluşturur.") }}
+<div class="part"><b>Bölüm B</b><h2 id="partB" data-short="Bölüm B: İleri">İleri: pratikte Timestream for InfluxDB 2</h2>
+<p>Bölüm A'daki fikirlerin InfluxDB 2'deki isimleri, canlı Lale Market verisi, yazma ve okuma, retention ve task'lar, boyutlandırma ve maliyet.</p></div>
 
-<div class="part"><b>Bölüm 1</b><h2 id="part1" data-short="BÖLÜM 1: InfluxDB">InfluxDB: point'ler, series'ler ve Flux</h2>
-<p>Line protocol, series'ler ve cardinality, zaman pencereleri ve retention.</p></div>
+<h2 id="names" data-short="İsimler ve canlı veri"><span class="sec">B1</span>InfluxDB 2'de isimler, canlı bir series ve gerçek tanımı</h2>
+<p>Bölüm A'nın terimleri InfluxDB 2'de aynen geçerlidir: point, measurement, tag, field, timestamp, series ve cardinality InfluxDB'nin kendi isimleridir. Yeni olan isimler veriyi taşıyan kaplardır: <b>organization</b> ve <b>bucket</b>. Diğer ürünlerdeki karşılıklar:</p>
+<table class="data">
+  <thead><tr><th>Genel fikir</th><th>Prometheus</th><th>TimescaleDB</th><th>InfluxDB 2</th></tr></thead>
+  <tbody>
+    <tr><td>Measurement (A2)</td><td>metric adı</td><td>hypertable</td><td>measurement</td></tr>
+    <tr><td class="c-pk">Tag (A2)</td><td>label</td><td>kolon (çoğunlukla index'li)</td><td>tag</td></tr>
+    <tr><td>Field (A2)</td><td>sample değeri (tek sayı)</td><td>kolon</td><td>field</td></tr>
+    <tr><td class="c-sk">Timestamp (A2)</td><td>timestamp</td><td>time kolonu</td><td>_time</td></tr>
+    <tr><td>Series (A3)</td><td>series</td><td>— (row'lar)</td><td>series</td></tr>
+    <tr><td>Shard group (A4)</td><td>block</td><td>chunk</td><td>shard group</td></tr>
+    <tr><td>Retention'ı olan kap (A8)</td><td>bütün yerel database</td><td>hypertable + retention policy</td><td>bucket</td></tr>
+  </tbody>
+</table>
+{{ k.concept("Bucket",
+   "InfluxDB 2'de point'lerin yazıldığı adlandırılmış depo. Her bucket'ın bir retention period'u vardır ve bir organization'a aittir. Bir sorgu her zaman bir bucket'tan okur.",
+   "<code>metrics</code>: Lale Market'in tek bucket'ı. <code>warehouse_env</code> ve <code>orders</code> measurement'ları bu bucket'tadır.",
+   "Arşivde bir dolap: içindeki her klasör aynı saklama kuralına uyar.") }}
+{{ k.concept("Organization",
+   "Bucket'ların, kullanıcıların, task'ların ve panoların sahibi olan çalışma alanı. Bir InfluxDB 2 instance'ında birkaç organization olabilir.",
+   "<code>dbws</code>: Lale Market'in organization'ı.",
+   "Bir şirketin arşiv departmanı: dolapların ve görevlilerin sahibi.") }}
+<p>Aşağıdaki iki artifact canlı sistemden gelir. Workshop canlı mağazanın InfluxDB Engine App'ine bir okuma isteği gönderdi; uygulama aynı Flux sorgusunu çalıştırdı ve sonucu ve sorgunun kendisini döndürdü (2026-10-31, sadece okuma).</p>
+{% call k.live("metrics bucket'ının series'leri, son 24 saatte 1 saatlik pencerede ham point sayısı (GET /influxdb/api/learn/overview)") %}
+<pre><code>from(bucket: "metrics")
+  |&gt; range(start: -24h)
+  |&gt; filter(fn: (r) =&gt; r._measurement == "warehouse_env" or r._measurement == "orders")
+  |&gt; aggregateWindow(every: 1h, fn: count, createEmpty: false)
 
-<h2 id="why" data-short="Neden time series?"><span class="sec">02</span>Neden bir time-series database? Elektrik sayacı</h2>
-<p>Bir iş database'i güncel durumu tutar: bir ürünün stoğu, bir siparişin durumu. Durum değiştiğinde row'u günceller.
-   Bir time-series database ise her ölçümü tutar ve onu hiç güncellemez. Soru "değer ne?" değil, "değer nasıl değişti?"dir.</p>
-{% call k.callout("analogy", "Analoji") %}
-<p>Bir evin elektrik sayacı tek bir sayı gösterir. Elektrik şirketinin faturası ise bir tablo gösterir: bütün ay boyunca her 15 dakikanın tüketimi.
-   Sayaç bir iş database'idir. Faturadaki tablo bir time series'tir. Kimse faturanın bir satırını sonradan değiştirmez. Yeni satırlar sona eklenir ve birkaç yıl sonra eski faturalar gider.</p>
+10 series, 2278 ham point (sorgu anından geriye 24 saat; Seed verisi yükleme anında biter, bu yüzden pencere tam dolu değildir), 260 ms
+warehouse_env sensor=temperature warehouse=ANK-1   value
+warehouse_env sensor=temperature warehouse=BER-1   value
+warehouse_env sensor=temperature warehouse=FRA-1   value
+warehouse_env sensor=temperature warehouse=IST-1   value
+warehouse_env sensor=humidity    warehouse=ANK-1   value   (… BER-1, FRA-1, IST-1)
+orders        channel=web                          count
+orders        channel=workshop                     count</code></pre>
 {% endcall %}
+<p>Cevabı satır satır oku. Sekiz <code>warehouse_env</code> series'i dört depo × iki sensördür: cardinality'nin çarpımı (A3). İki <code>orders</code> series'i iki kanaldır: Seed'in (workshop'un örnek veriyi yükleyen işlemi) yazdığı web siparişleri ve workshop'taki checkout'ların yazdığı siparişler. Sorgu <code>fn: count</code> ile her penceredeki ham point sayısını sayar: 24 saatte 2.278 point.</p>
+{% call k.live("bir series'in bir saati: IST-1 sıcaklığı, 10:00–11:00 UTC, 30 Ekim 2026 (GET /influxdb/api/learn/item)") %}
+<pre><code>from(bucket: "metrics")
+  |&gt; range(start: 2026-10-30T10:00:00Z, stop: 2026-10-30T11:00:00Z)
+  |&gt; filter(fn: (r) =&gt; r._measurement == "warehouse_env" and r._field == "value"
+                     and r.sensor == "temperature" and r.warehouse == "IST-1")
 
-<h2 id="points" data-short="Point'ler ve series'ler"><span class="sec">03</span>Point'ler, tag'ler, field'lar ve series'ler</h2>
-<p>InfluxDB veriyi {{ k.term("line protocol") }} ile yazar: her {{ k.term("point") }} için bir satır metin. Format budur
-   (<a href="https://docs.influxdata.com/influxdb/v2/reference/syntax/line-protocol/">InfluxDB line protocol reference</a>):</p>
-{% call k.sql("W1", "Bir depo sensörünün bir point'i") %}
-<pre><code>warehouse_env,warehouse=IST-1,sensor=temperature value=21.2 1793433600</code></pre>
+12 ham point, 95 ms
+_time                  _value
+2026-10-30T10:03:11Z   26.12
+2026-10-30T10:08:11Z   25.73
+2026-10-30T10:13:11Z   24.83
+2026-10-30T10:18:11Z   25.38
+2026-10-30T10:23:11Z   26.32
+2026-10-30T10:28:11Z   26.23
+2026-10-30T10:33:11Z   26.28
+2026-10-30T10:38:11Z   25.68   (… 4 point daha)
+mean 25.63 · min 23.58 · max 26.32
+
+diskteki satır (line protocol):
+warehouse_env,sensor=temperature,warehouse=IST-1 value=26.12 1793354591</code></pre>
+{% endcall %}
+<p>Aynı point bu sayfanın renkleriyle ve InfluxDB'nin isimleriyle:</p>
+{{ k.anatomy([
+   {"pk": "warehouse_env · sensor=temperature · warehouse=IST-1", "sk": "1793354591 (10:03:11)", "attrs": [["value", "26.12"]]},
+   {"pk": "warehouse_env · sensor=temperature · warehouse=IST-1", "sk": "1793354891 (10:08:11)", "attrs": [["value", "25.73"]]},
+   {"pk": "orders · channel=web", "sk": "1793354411 (10:00:11)", "attrs": [["count", "65"]]}],
+   "Canlı bucket'ın üç point'i. İlk ikisi aynı series'tir: series key aynı, timestamp'ler 300 saniye arayla. Üçüncüsü başka bir measurement'ın series'idir; field adı count. Sarı series key'i, mavi _time'ı, gri _field ve _value'yu gösterir.",
+   pk_name="_measurement + tag'ler", sk_name="_time",
+   labels={"primary": "Point'in kimliği", "pk": "Measurement ve tag set", "sk": "Timestamp", "attrs": "Field ve değeri", "note": "Flux'ta _field ve _value kolonları", "items": "Canlı point'ler"}) }}
+<p>Her ismi oku:</p>
+<ul>
+  <li><b>Measurement</b> <code>warehouse_env</code>'dir; Flux sonucunda <code>_measurement</code> kolonunda görünür.</li>
+  <li><b>Tag</b>'ler <code>sensor=temperature</code> ve <code>warehouse=IST-1</code>'dir; Flux sonucunda kendi adlarıyla kolon olurlar.</li>
+  <li><b>Field</b> <code>value</code>'dur; Flux her field'ı ayrı bir row'a koyar: adı <code>_field</code>, değeri <code>_value</code> kolonundadır.</li>
+  <li><b>Timestamp</b> <code>1793354591</code>'dir; Flux onu <code>_time</code> kolonunda UTC zamanı olarak gösterir.</li>
+  <li><b>Series</b> ilk iki satırın paylaştığı kimliktir: <code>warehouse_env,sensor=temperature,warehouse=IST-1 value</code>.</li>
+</ul>
+<table class="data">
+  <caption>field tipleri ve line protocol'deki yazılışları</caption>
+  <thead><tr><th>Tip</th><th>Yazılış</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Float (varsayılan)</td><td>Sayı</td><td><code>value=26.12</code></td></tr>
+    <tr><td>Integer</td><td>Sonda <code>i</code></td><td><code>count=65i</code></td></tr>
+    <tr><td>Unsigned integer</td><td>Sonda <code>u</code></td><td><code>bytes=1024u</code></td></tr>
+    <tr><td>String</td><td>Çift tırnak</td><td><code>status="ok"</code></td></tr>
+    <tr><td>Boolean</td><td><code>true</code> / <code>false</code></td><td><code>door_open=false</code></td></tr>
+  </tbody>
+</table>
+{% call k.ask("Canlı satırda count=65 yazıyor, 65i değil. Neden?") %}
+<p>Line protocol'ü yazdıran program değeri Flux sonucundan okudu ve tip işaretini eklemedi. Engine App ise yazarken Python client'ını kullanır ve tam sayıyı <code>count=1i</code> olarak gönderir. Kendi line protocol'ünü elle yazarken tam sayılara <code>i</code> eklemeyi unutma: aksi hâlde field float olur ve sonra gelen bir integer reddedilir (A2).</p>
+{% endcall %}
+{% call k.ask("Timestamp neden saniyenin 11'inde? Sensörler tam dakikada okumuyor mu?") %}
+<p>Seed point'leri yükleme anından geriye doğru 5 dakika aralıkla yazdı; yükleme saniyenin 11'inde başladığı için bütün zamanlar :11'de biter. Gerçek sensörler de nadiren tam saniyede okur. Pencere toplamı bu yüzden önemlidir: 10:00–10:15 penceresi 10:03:11, 10:08:11 ve 10:13:11'i birlikte toplar.</p>
+{% endcall %}
+<p>Lale Market'in InfluxDB'sinin gerçek tanımı budur (<code>cloudformation/workshop.yaml</code> içinden):</p>
+{% call k.sql("T1", "Timestream for InfluxDB DB instance") %}
+<pre><code>InfluxDb:
+  Type: AWS::Timestream::InfluxDBInstance
+  Properties:
+    Name: dbws-influxdb
+    DbInstanceType: db.influx.medium
+    DbStorageType: InfluxIOIncludedT1
+    AllocatedStorage: 20
+    DeploymentType: WITH_MULTIAZ_STANDBY
+    Username: dbwsadmin
+    Password: '{{ "{{" }}resolve:secretsmanager:…}}'
+    Organization: dbws
+    Bucket: metrics
+    PubliclyAccessible: false
+    VpcSubnetIds: [DataSubnetA, DataSubnetB, DataSubnetC]</code></pre>
 <table class="clause">
-  <tr><td>warehouse_env</td><td>Measurement: verinin türünün adı, bir table adı gibi.</td></tr>
-  <tr><td>,warehouse=IST-1,sensor=temperature</td><td>Tag set: point'i tanımlayan key-value çiftleri. InfluxDB tag'leri index'ler, bu yüzden tag'ler üzerindeki filtreler hızlıdır. Tag değerleri her zaman metindir.</td></tr>
-  <tr><td>value=21.2</td><td>Field set: ölçülen değerler. Field'lar index'lenmez. Bir point'in en az bir field'ı olmalıdır. Bir integer field <code>i</code> ile biter, örneğin <code>count=14i</code>.</td></tr>
-  <tr><td>1793433600</td><td>Timestamp, burada 1 Ocak 1970'ten (UTC) beri saniye cinsinden. Precision'ı yazma isteği söyler. Lale Market <code>s</code> precision'ı ile yazar.</td></tr>
+  <tr><td>DbInstanceType: db.influx.medium</td><td>Instance sınıfı: CPU ve bellek. Workshop'un 10 series'i için en küçük sınıflardan biri yeter.</td></tr>
+  <tr><td>DbStorageType: InfluxIOIncludedT1, AllocatedStorage: 20</td><td>Influx IO Included 3K storage tipi, 20 GiB: bu tipin en küçük boyutu. Storage önceden ayrılır ve ayrılan GB ödenir.</td></tr>
+  <tr><td>DeploymentType: WITH_MULTIAZ_STANDBY</td><td>İkinci bir AZ'de senkron standby. Canlı instance'ın birincili eu-central-1c'de, standby'ı eu-central-1b'dedir (C3).</td></tr>
+  <tr><td>Username, Password</td><td>İlk kullanıcı; şifre Secrets Manager'dan gelir. Engine App de şifreyi oradan okur.</td></tr>
+  <tr><td>Organization: dbws, Bucket: metrics</td><td>Instance oluşurken açılan ilk organization ve bucket. Bucket'ın retention'ı burada verilmez; varsayılanı sonsuzdur. Sonsuz retention ile 20 GiB bir gün dolar: ayrılan storage UpdateDbInstance'ın allocatedStorage parametresiyle büyütülür (en fazla 15.360 GiB), ama doğru çözüm bir retention period'dur (A8). Dokümantasyon storage'ın kendiliğinden büyüdüğünü söylemez.</td></tr>
+  <tr><td>PubliclyAccessible: false, VpcSubnetIds</td><td>Instance sadece VPC'nin data subnet'lerinden erişilir.</td></tr>
 </table>
 {% endcall %}
-<p>Bir {{ k.term("series") }}, aynı measurement'a, aynı tag set'e ve aynı field key'e sahip point'lerin grubudur. InfluxDB bir series'in point'lerini zamana göre sıralı olarak bir arada saklar.
-   Farklı series'lerin sayısı {{ k.term("cardinality") }}'dir. Bu altı satır simülasyonun girdisidir:</p>
-{{ k.sample("ix_lines", "line protocol'de altı point") }}
-{% call k.predict("Altı satır kaç farklı series oluşturur?") %}
-<p>Dört: IST-1 temperature (iki point), IST-1 humidity, ANK-1 temperature ve channel=web'li orders (iki point).</p>
+
+<h2 id="write" data-short="Line protocol ile yazma"><span class="sec">B2</span>Yazma: line protocol, series ve cardinality pratikte</h2>
+<p>A6'daki yazma yollarının InfluxDB 2'deki adı write API'dir ve biçimi {{ k.term("line protocol") }}'dür: her point için bir satır metin. Format budur (<a href="https://docs.influxdata.com/influxdb/v2/reference/syntax/line-protocol/">InfluxDB line protocol reference</a>):</p>
+{% call k.sql("W1", "Bir depo sensörünün bir point'i") %}
+<pre><code>warehouse_env,sensor=temperature,warehouse=IST-1 value=26.12 1793354591</code></pre>
+<table class="clause">
+  <tr><td>warehouse_env</td><td>Measurement. İlk virgüle kadar.</td></tr>
+  <tr><td>,sensor=temperature,warehouse=IST-1</td><td>Tag set: virgülle ayrılmış key=value çiftleri. Tag değerleri her zaman metindir ve tırnak almaz. Engine tag'leri index'ler.</td></tr>
+  <tr><td>(boşluk) value=26.12</td><td>Field set: ilk boşluktan sonra. En az bir field olmalıdır. Birden fazla field virgülle ayrılır: <code>value=26.12,battery=87i</code>.</td></tr>
+  <tr><td>(boşluk) 1793354591</td><td>Timestamp. Hassasiyeti yazma isteği söyler; Lale Market <code>precision=s</code> ile yazar.</td></tr>
+</table>
+{% endcall %}
+<p>Engine App'in checkout'tan sonra yazdığı gerçek istek budur (<code>engines/influxdb.py</code> içinden):</p>
+{% call k.sql("W2", "Bir checkout'tan sonra sipariş point'i") %}
+<pre><code>p = Point("orders").tag("channel", "workshop").field("count", 1).time(now, WritePrecision.S)
+client.write_api(write_options=SYNCHRONOUS).write(bucket="metrics", org="dbws", record=p)
+
+# ağdaki istek:
+POST /api/v2/write?org=dbws&amp;bucket=metrics&amp;precision=s
+orders,channel=workshop count=1i 1793404800</code></pre>
+<table class="clause">
+  <tr><td>Point("orders").tag(…).field(…)</td><td>Python client'ı line protocol satırını kurar. Tam sayı <code>1</code>, <code>1i</code> olarak yazılır.</td></tr>
+  <tr><td>SYNCHRONOUS</td><td>İstek InfluxDB onaylayana kadar bekler; onay WAL'a yazıldıktan sonra gelir (A4).</td></tr>
+  <tr><td>bucket="metrics", org="dbws"</td><td>Point'in gideceği bucket ve onun organization'ı.</td></tr>
+</table>
+{% endcall %}
+{% call k.predict("Altı satırlık öğretici veride kaç series var? Bir satır daha eklesen ve onun tag'i warehouse=FRA-1 olsa ne olur?") %}
+<p>Dört series. FRA-1'li bir sıcaklık satırı beşinci series'i doğurur, çünkü tag set'i yenidir. Simülasyon dört series'i satır satır sayar.</p>
 {% endcall %}
 {{ k.sim("series", "Satırlardan series'lere") }}
-<p>Identifier'lar: bir point'in kendine ait bir id'si yoktur. Onu series key ve timestamp tanımlar. Aynı series key ve aynı timestamp ile ikinci bir point yazarsan InfluxDB yeni bir point eklemez. Yeni field değeri eskisinin yerine geçer.
-   IST-1 ve ANK-1 depo kodları Lale Market'in depo listesine aittir. Tag'ler bu kodları ödünç alır, böylece bir grafik deponun adını gösterebilir.</p>
-{{ k.quiz("ix-q1", "Bir point'in hangi kısmı index'lenmez?",
-   ["Measurement", "Tag'ler", "Field'lar", "Tag key'leri"],
-   2, "Field'lar ölçülen değerleri tutar ve index'lenmez. Bir field değeri üzerindeki filtre point'leri okumak zorundadır.") }}
+<p>A3'teki "order id'yi tag yapma" kuralının nedeni sayıyla görünür. Aşağıdaki altı sipariş iki tasarımla yazılır: A'da <code>order_id</code> bir tag'dir, B'de bir field'dır.</p>
+{{ k.sample("ix_orders", "altı sipariş (öğretici veri; id'ler Lale Market biçiminde)", key=["order_id"]) }}
+{{ k.sim("cardinality", "order_id tag mi field mı? Series sayısı") }}
+{% call k.ask("Toplu yazma ne kadar büyük olmalı?") %}
+<p>AWS'in boyutlandırma örneği istek başına 5.000 satır kullanır. Çok küçük istekler (her point ayrı) ağ ve istek maliyetini artırır; çok büyük istekler belleği zorlar. Telegraf ve client kütüphaneleri point'leri kendileri toplar ve batch'ler hâlinde gönderir.</p>
+{% endcall %}
+{{ k.quiz("ix-q8", "Hangi line protocol satırı geçersizdir?",
+   ["orders,channel=web count=65i 1793354411", "cpu value=0.42", "warehouse_env,warehouse=IST-1 1793354591", "truck,truck_id=T0042 speed=82.5,fuel=61i"],
+   2, "Üçüncü satırda field yoktur. Bir point en az bir field taşır; tag'ler ve timestamp isteğe bağlıdır.") }}
 
-<h2 id="flux" data-short="Flux query'leri"><span class="sec">04</span>Flux: bir query bir pipeline'dır</h2>
-<p>InfluxDB 2, {{ k.term("Flux") }} query dilini kullanır. Bir Flux query'si bir fonksiyon zinciridir. <code>|&gt;</code> operatörü bir fonksiyonun çıktısını bir sonrakine gönderir, bir shell'deki pipe gibi.
-   Lale Market operasyon sayfasının gerçek query'si budur (<code>engines/influxdb.py</code> içinden):</p>
-{% call k.sql("Q1", "Son 6 saat için 15 dakika başına ortalama sıcaklık") %}
+<h2 id="flux" data-short="Flux ile okuma"><span class="sec">B3</span>Okuma: Flux, pencereler ve son değer</h2>
+<p>A5'teki okuma yolları ve A7'deki pencere toplamı InfluxDB 2'de {{ k.term("Flux") }} ile yazılır. Bir Flux sorgusu bir fonksiyon zinciridir; <code>|&gt;</code> işareti bir fonksiyonun çıktısını bir sonrakine verir. InfluxQL de vardır ve SQL'e benzer, ama join ve task yoktur. InfluxData'ya göre Flux "maintenance mode"dadır: desteklenir ama yeni özellik almaz ve InfluxDB 3'te yoktur. Lale Market operasyon ekranının gerçek sorgusu budur (<code>engines/influxdb.py</code> içinden):</p>
+{% call k.sql("Q1", "Son 6 saat, depo başına 15 dakikalık ortalama sıcaklık") %}
 <pre><code>from(bucket: "metrics")
   |&gt; range(start: -6h)
   |&gt; filter(fn: (r) =&gt; r._measurement == "warehouse_env" and r.sensor == "temperature")
   |&gt; aggregateWindow(every: 15m, fn: mean, createEmpty: false)</code></pre>
 <table class="clause">
-  <tr><td>from(bucket: "metrics")</td><td><code>metrics</code> bucket'ından oku. Bir bucket, kendi retention period'u olan adlandırılmış bir depodur.</td></tr>
-  <tr><td>|&gt; range(start: -6h)</td><td>Sadece son 6 saatin point'lerini tut. Bir bucket üzerindeki her Flux query'si bir range ister, çünkü InfluxDB veriyi önce zamana göre bulur.</td></tr>
-  <tr><td>|&gt; filter(fn: (r) =&gt; ...)</td><td>Sadece warehouse_env measurement'ının sensor = temperature tag'li <code>r</code> row'larını tut. Sonuçta her depo için bir series vardır.</td></tr>
-  <tr><td>|&gt; aggregateWindow(every: 15m, fn: mean, ...)</td><td>Her series'i 15 dakikalık pencerelere kes ve her pencerenin ortalamasını hesapla.</td></tr>
-  <tr><td>createEmpty: false</td><td>Point'i olmayan bir pencere için row döndürme.</td></tr>
+  <tr><td>from(bucket: "metrics")</td><td><code>metrics</code> bucket'ından oku.</td></tr>
+  <tr><td>|&gt; range(start: -6h)</td><td>Sadece son 6 saatin shard group'larını aç (Ö4). Bir bucket'tan her Flux sorgusu bir range ister.</td></tr>
+  <tr><td>|&gt; filter(fn: (r) =&gt; …)</td><td>Measurement ve <code>sensor</code> tag'i ile series'leri seç; sonuçta her depo için bir series kalır.</td></tr>
+  <tr><td>|&gt; aggregateWindow(every: 15m, fn: mean, …)</td><td>Her series'i 15 dakikalık pencerelere böl, her pencerenin ortalamasını hesapla (Ö5). Pencere değeri pencerenin sonunun zamanını taşır.</td></tr>
+  <tr><td>createEmpty: false</td><td>Point'i olmayan pencere için row döndürme.</td></tr>
 </table>
 {% endcall %}
-<p><code>_value</code> kolonu field değerini, <code>_time</code> kolonu timestamp'i tutar. Tag'ler de kolon olur, örneğin <code>warehouse</code>.</p>
-
-<h2 id="windows" data-short="Zaman pencereleri"><span class="sec">05</span>Zaman pencereleri: ham point'lerden bir grafiğe</h2>
-<p>6 saatlik bir grafiğin çizgi başına 72 point'e ihtiyacı yoktur. Pencere başına bir point'e ihtiyacı vardır. aggregateWindow bu hesabı database'de yapar, böylece uygulama sadece çizdiği point'leri alır.
-   Bunlar IST-1 sıcaklığının 5 dakikada bir gelen dokuz ham point'idir (örnek değerler):</p>
-{{ k.sample("ix_raw", "ham point'ler: IST-1, temperature") }}
-{{ k.fig("influxdb-windows.png", "aynı time series bir dakikalık pencerelere bölünmüş. Her pencerenin kendi rengi var.") }}
+{% call k.live("Q1'in canlı cevabından bir dilim: son 24 saat, 15 dakikalık pencere (GET /influxdb/api/series?measure=temperature&window=15m&range=-24h)") %}
+<pre><code>{"series": {"ANK-1": [{"t": "2026-10-30T08:00:00+00:00", "v": 24.12},
+                      {"t": "2026-10-30T08:15:00+00:00", "v": 24.72},
+                      {"t": "2026-10-30T08:30:00+00:00", "v": 24.36}, …],
+            "BER-1": […], "FRA-1": […], "IST-1": […]},
+ "window": "15m", "range": "-24h"}</code></pre>
+{% endcall %}
+<p>Cevap depo başına bir dizidir: Flux her series'i ayrı bir table olarak döndürür ve Engine App onları <code>warehouse</code> tag'ine göre gruplar. <code>t</code> pencerenin sonudur; <code>v</code> o penceredeki ham point'lerin ortalamasıdır, iki haneye yuvarlanmış.</p>
+{{ k.sample("ix_raw", "ham point'ler: bir sıcaklık series'inin dokuz point'i (öğretici veri)") }}
 {{ k.sim("window", "aggregateWindow(every: 15m, fn: mean)") }}
-{{ k.quiz("ix-q2", "Siparişler sayfası dakikada bir point'li orders measurement'ını kullanıyor. Hangi fonksiyon 15 dakika başına sipariş sayısını verir?",
+{% call k.sql("Q2", "Her deponun son sıcaklığı (Ö6)") %}
+<pre><code>from(bucket: "metrics")
+  |&gt; range(start: -1h)
+  |&gt; filter(fn: (r) =&gt; r._measurement == "warehouse_env" and r.sensor == "temperature")
+  |&gt; last()</code></pre>
+<table class="clause">
+  <tr><td>|&gt; range(start: -1h)</td><td>Son değer bu aralıkta aranır. Bir sensör bir saattir yazmıyorsa sonuçta görünmez; bu yüzden aralık en uzun sessizlikten büyük seçilir.</td></tr>
+  <tr><td>|&gt; last()</td><td>Her series'in en yeni point'i: dört depo, dört gerçek point, kendi timestamp'leriyle. InfluxDB 2'de bunun önbelleği yoktur; her çağrı bu sorguyu çalıştırır.</td></tr>
+</table>
+{% endcall %}
+{% call k.ask("Flux mu, InfluxQL mi kullanmalıyım?") %}
+<p>Var olan Flux task'ların ve panoların varsa Flux; InfluxDB 2'de task ve check sadece Flux ile yazılır. Yeni panolar için InfluxQL daha tanıdıktır ve InfluxDB 3'e taşınır. InfluxData da geleceğe hazır olmak için InfluxQL ya da SQL'i önerir.</p>
+{% endcall %}
+{{ k.quiz("ix-q9", "Siparişler dakikada bir point. Hangi fonksiyon 15 dakika başına sipariş sayısını verir?",
    ["aggregateWindow(every: 15m, fn: mean)", "aggregateWindow(every: 15m, fn: sum)", "aggregateWindow(every: 1m, fn: max)", "range(start: -15m)"],
-   1, "Her point bir dakikanın sayısıdır. 15 dakikanın toplamı 15 point'in toplamıdır. Lale Market siparişler için fn: sum kullanır.") }}
+   1, "Her point bir dakikanın sayısıdır; 15 dakikanın toplamı 15 point'in toplamıdır. Lale Market siparişler için fn: sum kullanır.") }}
 
-<h2 id="retention" data-short="Retention"><span class="sec">06</span>Retention: eski veri kendiliğinden gider</h2>
-<p>Her bucket'ın bir {{ k.term("retention period") }}'u vardır. InfluxDB bir zaman aralığının point'lerini bir shard group'ta bir arada saklar. Bir shard group'un bütün point'leri retention period'dan eskiyse InfluxDB bütün shard group'u düşürür
-   (<a href="https://docs.influxdata.com/influxdb/v2/reference/internals/data-retention/">InfluxDB data retention</a>). Bu ucuzdur, çünkü tek tek point'leri değil, bütün dosyaları siler.</p>
-{{ k.sim("retention", "Retention period'u 3 gün olan bir bucket") }}
-<p>Uzun dönem trendler için yaygın bir pattern iki bucket kullanır. Bir task her saat ham bucket'ı okur, aggregateWindow ile saatlik ortalamaları hesaplar ve onları uzun retention period'lu ikinci bir bucket'a yazar.</p>
-{{ k.fig("influxdb-derived-series.png", "yıllık bir time series'in üç grafiği: değerler, yıllık değişim ve yıllık yüzde değişim.") }}
-
-<div class="part"><b>Bölüm 2</b><h2 id="part2" data-short="BÖLÜM 2: Timestream for InfluxDB">Amazon Timestream for InfluxDB: AWS servisi</h2>
-<p>VPC'nde yönetilen InfluxDB instance'ları ve cluster'ları.</p></div>
-
-<h2 id="service" data-short="Yönetilen servis"><span class="sec">07</span>AWS'in senin için çalıştırdıkları</h2>
-<p>AWS servisi şöyle tanımlar: Timestream for InfluxDB, yeni iş yükleri için InfluxDB 3 Core ve Enterprise'ı, var olan database'ler için InfluxDB 2'yi çalıştırır. Provisioning'i, patch'lemeyi, yedekleri ve failover'ı yapar
-   (<a href="https://aws.amazon.com/influxdb/">Amazon Timestream for InfluxDB</a>).
-   Bir InfluxDB 2 deployment'ı Multi-AZ olabilir. O zaman veriyi ikinci bir Availability Zone'daki bir standby'a senkron olarak replike eder ve otomatik olarak failover yapar
-   (<a href="https://aws.amazon.com/blogs/aws/run-and-manage-open-source-influxdb-databases-with-amazon-timestream/">AWS News Blog</a>).
-   Uygulamaların açık kaynak API'ları, client kütüphanelerini ve Telegraf plugin'lerini kullanmaya devam eder.</p>
+<h2 id="lifecycle" data-short="Retention ve task'lar"><span class="sec">B4</span>Retention, downsampling task'ı ve check pratikte</h2>
+<p>A8'deki retention ve A9'daki task'lar InfluxDB 2'de bucket ayarı ve Flux task'ı olarak yazılır. Retention period bucket'ın bir özelliğidir; shard group süresi ondan gelir. InfluxData belgelerine göre varsayılan shard group süresi şöyledir:</p>
 <table class="data">
-  <thead><tr><th>Görev</th><th>Kendi InfluxDB'n</th><th>Timestream for InfluxDB</th></tr></thead>
+  <thead><tr><th>Bucket'ın retention period'u</th><th>Varsayılan shard group süresi</th></tr></thead>
   <tbody>
-    <tr><td>Sunucular</td><td>Sen kurar, patch'ler ve boyutlandırırsın.</td><td>AWS provision eder ve patch'ler. Instance class'ı ve storage'ı sen seçersin.</td></tr>
-    <tr><td>Erişilebilirlik</td><td>Replikasyonu ve failover'ı sen kurarsın.</td><td>Multi-AZ standby (InfluxDB 2) ya da çok node'lu bir cluster (InfluxDB 3 Enterprise).</td></tr>
-    <tr><td>Yedekler</td><td>Sen zamanlar ve test edersin.</td><td>Yönetilen yedekler.</td></tr>
-    <tr><td>Ağ ve secret'lar</td><td>TLS'i ve şifreleri sen ayarlarsın.</td><td>VPC'nde çalışır. Kimlik bilgileri AWS Secrets Manager'da. Hem diskte hem aktarımda şifreleme.</td></tr>
-    <tr><td>API'lar ve araçlar</td><td>Açık kaynak InfluxDB.</td><td>Aynı açık kaynak API'lar, client'lar ve Telegraf.</td></tr>
+    <tr><td>2 günden kısa</td><td>1 saat</td></tr>
+    <tr><td>2 gün ile 6 ay arası</td><td>1 gün</td></tr>
+    <tr><td>6 aydan uzun</td><td>7 gün</td></tr>
+  </tbody>
+</table>
+<p>Bu yüzden 30 günlük bir bucket'ta en eski gün tek seferde, 2 yıllık bir bucket'ta en eski hafta tek seferde düşer (<a href="https://docs.influxdata.com/influxdb/v2/reference/internals/shards/">InfluxDB shards and shard groups</a>).</p>
+{{ k.sim("retention", "Retention period'u 3 gün olan bir bucket") }}
+{% call k.sql("T2", "Saatlik ortalamaları ikinci bucket'a yazan downsampling task'ı") %}
+<pre><code>option task = {name: "env-1h", every: 1h}
+
+from(bucket: "metrics")
+  |&gt; range(start: -2h)
+  |&gt; filter(fn: (r) =&gt; r._measurement == "warehouse_env")
+  |&gt; aggregateWindow(every: 1h, fn: mean)
+  |&gt; to(bucket: "metrics_1h", org: "dbws")</code></pre>
+<table class="clause">
+  <tr><td>option task = {name, every: 1h}</td><td>Task'ın adı ve aralığı: her saat çalışır (Ö8).</td></tr>
+  <tr><td>range(start: -2h)</td><td>Son iki saati okur; bir çalışma kaçarsa bir sonraki o saati yakalar.</td></tr>
+  <tr><td>aggregateWindow(every: 1h, fn: mean)</td><td>Saatlik ortalama (Ö5).</td></tr>
+  <tr><td>to(bucket: "metrics_1h")</td><td>Sonucu uzun retention'lı ikinci bucket'a yazar (Ö7). Aynı saat iki kez yazılırsa aynı measurement, tag set ve timestamp olduğu için yerine geçer (A6).</td></tr>
+</table>
+{% endcall %}
+<p>Örnek InfluxData'nın downsampling örneğinin kısaltılmış hâlidir (<a href="https://docs.influxdata.com/influxdb/v2/process-data/common-tasks/downsample-data/">Downsample data</a>). Lale Market bugün bu task'ı çalıştırmaz; M2 kart 1'in production düzeni onu ekler.</p>
+{% call k.ask("Task bir saati özetledikten sonra o saate geç bir point gelirse ne olur? Yarım kalan bir batch'i yeniden göndermek güvenli mi?") %}
+<p>Task her saat son iki saati okuduğu için bir saat içinde gelen geç point bir sonraki çalışmada özete girer: aynı saatin özeti aynı measurement, tag set ve timestamp ile yeniden yazılır ve eskisinin yerine geçer (A6). Daha geç gelen point'ler için aralık büyütülür (örneğin gateway bir saat tamponluyorsa <code>-3h</code>). Aynı nedenle yarım kalan bir batch'i olduğu gibi yeniden göndermek güvenlidir: zaten yazılmış point'ler kendi yerlerine yeniden yazılır, çift olmaz.</p>
+<p>Pencereler varsayılan olarak UTC'ye göre hizalanır; "gündüz saatleri" gibi yerel saat soruları için pencerenin saat dilimi sorguda verilir. Bir bucket'ın bugünkü cardinality'si Flux'taki <code>influxdb.cardinality()</code> fonksiyonuyla ölçülür.</p>
+{% endcall %}
+{% call k.ask("Retention'ı sonradan kısaltırsam ne olur?") %}
+<p>Bir sonraki retention kontrolünde yeni süreden eski shard group'lar düşer. Geri alınamaz. Önce özetleri yazan task'ın çalıştığından emin ol.</p>
+{% endcall %}
+
+<h2 id="cost" data-short="Boyutlandırma ve maliyet"><span class="sec">B5</span>Performans ve maliyet: instance, storage, series</h2>
+<p>A3'teki cardinality ve A4'teki storage InfluxDB 2'de iki seçime dönüşür: instance sınıfı ve storage tipi. AWS'in örnek iş yükü (Telegraf ajanları, istek başına 5.000 satır, orta karmaşıklıkta sorgular) için önerisi şudur (<a href="https://docs.aws.amazon.com/timestream/latest/developerguide/timestream-for-influxdb.html">InfluxDB instance sizing</a>):</p>
+<table class="data">
+  <caption>AWS'in boyutlandırma örneği (kendi iş yükünle test et)</caption>
+  <thead><tr><th>En fazla series</th><th>Yazma (satır/saniye)</th><th>Okuma (sorgu/saniye)</th><th>Instance sınıfı</th><th>Storage tipi</th></tr></thead>
+  <tbody>
+    <tr><td>&lt; 100.000</td><td>~50.000</td><td>&lt; 10</td><td>db.influx.large</td><td>Influx IO Included 3K</td></tr>
+    <tr><td>&lt; 1 milyon</td><td>~150.000</td><td>&lt; 25</td><td>db.influx.2xlarge</td><td>Influx IO Included 3K</td></tr>
+    <tr><td>~1 milyon</td><td>~200.000</td><td>~25</td><td>db.influx.4xlarge</td><td>Influx IO Included 3K</td></tr>
+    <tr><td>&lt; 5 milyon</td><td>~250.000</td><td>~35</td><td>db.influx.4xlarge</td><td>Influx IO Included 12K</td></tr>
+    <tr><td>&lt; 10 milyon</td><td>~500.000</td><td>~50</td><td>db.influx.8xlarge</td><td>Influx IO Included 12K</td></tr>
+  </tbody>
+</table>
+<p>Fatura üç parçadır: instance-saat (saniye başına, en az 10 dakika), ayrılan storage (GB-ay) ve bölge dışına veri transferi. Multi-AZ'de standby da ödenir. Frankfurt fiyatları (Price List API, 2026-10-31):</p>
+<table class="data">
+  <caption>eu-central-1 fiyatları, USD</caption>
+  <thead><tr><th>Kalem</th><th>Single-AZ</th><th>Multi-AZ</th><th>Ayda (730 saat, Multi-AZ)</th></tr></thead>
+  <tbody>
+    <tr><td>db.influx.medium</td><td>0,145 / saat</td><td>0,289 / saat</td><td>~211</td></tr>
+    <tr><td>db.influx.large</td><td>0,289 / saat</td><td>0,577 / saat</td><td>~421</td></tr>
+    <tr><td>db.influx.2xlarge</td><td>1,155 / saat</td><td>2,311 / saat</td><td>~1.687</td></tr>
+    <tr><td>Influx IO Included 3K storage</td><td>0,119 / GB-ay</td><td>0,238 / GB-ay</td><td>20 GiB: ~4,8</td></tr>
+    <tr><td>Influx IO Included 12K storage (en az 400 GiB)</td><td>0,417 / GB-ay</td><td>0,834 / GB-ay</td><td>400 GiB: ~334</td></tr>
+    <tr><td>InfluxDB 3 object storage (karşılaştırma için)</td><td colspan="2">0,0245 / GB-ay, en az 200 GB</td><td>200 GB: ~4,9</td></tr>
+  </tbody>
+</table>
+{% call k.predict("Lale Market'in canlı instance'ı ayda yaklaşık ne tutar?") %}
+<p>Multi-AZ db.influx.medium yaklaşık 211 USD, 20 GiB Multi-AZ 3K storage yaklaşık 4,8 USD: ayda yaklaşık 216 USD. Faturanın neredeyse tamamı instance'tır; 10 series için de 1.000 series için de aynıdır. M2 kart 1'de CloudWatch'a karşı R5 bu yüzden InfluxDB'dedir.</p>
+{% endcall %}
+{{ k.quiz("ix-q10", "Bir iş yükü 3 milyon series ve saniyede 200.000 satır yazıyor. AWS'in örneğine göre hangi başlangıç noktası uygundur?",
+   ["db.influx.medium ve 3K storage", "db.influx.large ve 3K storage", "db.influx.4xlarge ve 12K storage", "db.influx.2xlarge ve 3K storage"],
+   2, "Tabloda 5 milyonun altı ve ~250.000 satır için db.influx.4xlarge ve 12K storage önerilir. Series sayısı instance seçiminin ilk girdisidir.") }}
+
+<div class="part"><b>Bölüm C</b><h2 id="partC" data-short="Bölüm C: AWS servisi">AWS servisi: Timestream for InfluxDB'nin senin için çalıştırdıkları</h2>
+<p>Bir InfluxDB'yi kendin çalıştırdığında ne yapman gerekir ve bunun yerine AWS ne yapar.</p></div>
+
+<h2 id="selfrun" data-short="Kendin çalıştırırsan"><span class="sec">C1</span>InfluxDB'yi kendin çalıştırdığında ne yapmalısın</h2>
+<p>Açık kaynak InfluxDB 2 tek bir sunucuda çalışır. M2 kart 5'teki fabrika bunu beş yıl yaptı. Kendin çalıştırdığında şu görevleri çözmelisin:</p>
+<ol>
+  <li><b>Sunucu ve disk.</b> Bir makine seç, InfluxDB'yi kur, diskin dolmasını izle. Cardinality büyüdükçe belleği büyüt.</li>
+  <li><b>İkinci kopya.</b> Açık kaynak InfluxDB 2'de yerleşik replikasyon ve otomatik failover yoktur; bir arızada ya yedekten dönersin ya da ikinci bir sunucuya kendi düzeninle yazarsın.</li>
+  <li><b>Yedekler.</b> Yedekleri zamanla, sakla ve geri yüklemeyi test et.</li>
+  <li><b>Güncellemeler ve güvenlik.</b> İşletim sistemini ve InfluxDB'yi yamala, TLS sertifikalarını ve şifreleri yönet.</li>
+  <li><b>Boyutlandırma.</b> Series ve yazma hızı büyüdükçe makineyi değiştir ve veriyi taşı.</li>
+</ol>
+
+<h2 id="service" data-short="Servis olarak"><span class="sec">C2</span>Timestream for InfluxDB senin için ne yapar</h2>
+<p>AWS servisi şöyle tanımlar: Timestream for InfluxDB, InfluxDB 3 Core ve Enterprise'ı InfluxDB 2 ile yan yana çalıştırır; "InfluxDB 3 accepts SQL and InfluxQL", "InfluxDB 2 continues to accept Flux and InfluxQL for existing databases" (<a href="https://aws.amazon.com/timestream/features/">Timestream features</a>). Provisioning, yama, yedek ve failover servisindir. Uygulamalar açık kaynak API'ları, client kütüphanelerini ve Telegraf'ı kullanmaya devam eder.</p>
+<table class="data">
+  <thead><tr><th>Görev</th><th>Kendi InfluxDB'n</th><th>Timestream for InfluxDB 2</th><th>Timestream for InfluxDB 3</th></tr></thead>
+  <tbody>
+    <tr><td>Sunucu</td><td>Sen kurar ve yamalarsın.</td><td>AWS provision eder ve yamalar; instance sınıfını sen seçersin.</td><td>AWS; node sınıfını ve (Enterprise'da) node rollerini sen seçersin.</td></tr>
+    <tr><td>Storage</td><td>Kendi diskin.</td><td>Ayrılmış SSD (3K, 12K, 16K IOPS), en fazla 16 TiB.</td><td>S3 üzerinde object storage; kullanılan GB ödenir.</td></tr>
+    <tr><td>Erişilebilirlik</td><td>Kendin kurarsın.</td><td>Multi-AZ standby (senkron, failover genellikle 60–120 saniye) ya da read replica cluster.</td><td>Enterprise'da çok node'lu cluster, node'lar AZ'lere dağılır.</td></tr>
+    <tr><td>Yedek</td><td>Kendin.</td><td>AWS'e göre servis iç yedekleri 24 saat tutar ve silmelerde snapshot alır; kullanmak için AWS Support'a başvurulur.</td><td>Veri S3'tedir (11 dokuz dayanıklılık).</td></tr>
+    <tr><td>Sorgu dili</td><td>Flux, InfluxQL.</td><td>Flux, InfluxQL; task ve check.</td><td>SQL, InfluxQL; Flux yok, Processing Engine (Python).</td></tr>
+    <tr><td>Ağ ve kimlik</td><td>TLS ve şifreler senin.</td><td>VPC'de çalışır; kimlik bilgileri Secrets Manager'da.</td><td>VPC'de; token tabanlı erişim.</td></tr>
   </tbody>
 </table>
 
-<h2 id="lalemarket" data-short="Lale Market'te InfluxDB"><span class="sec">08</span>Lale Market'te Timestream for InfluxDB</h2>
+<h2 id="lalemarket" data-short="Lale Market'te InfluxDB"><span class="sec">C3</span>Lale Market'te Timestream for InfluxDB</h2>
+{% call k.live("canlı instance (aws timestream-influxdb get-db-instance, 2026-10-31)") %}
+<pre><code>"name":                      "dbws-influxdb"
+"status":                    "AVAILABLE"
+"dbInstanceType":            "db.influx.medium"
+"dbStorageType":             "InfluxIOIncludedT1"
+"allocatedStorage":          20
+"deploymentType":            "WITH_MULTIAZ_STANDBY"
+"availabilityZone":          "eu-central-1c"
+"secondaryAvailabilityZone": "eu-central-1b"
+"port":                      8086
+"publiclyAccessible":        false</code></pre>
+{% endcall %}
 <ul>
-  <li>Data subnet'lerinde bir InfluxDB 2 instance'ı. InfluxDB Engine App, Secrets Manager'dan alınan bir kullanıcı adı ve şifreyle HTTPS port 8086 üzerinden bağlanır.</li>
-  <li>Organization <code>dbws</code>, bucket <code>metrics</code>'tir.</li>
-  <li>Seed warehouse_env ve orders measurement'larını siler, sensör point'lerini ve dakika başına sipariş point'lerini yeniden yazar.</li>
-  <li>Admin sayfası "Operations" Q1'i 1, 6 ya da 24 saat üzerinde 1, 5 ya da 15 dakikalık ya da 1 saatlik bir pencereyle çalıştırır.</li>
-  <li>Bir checkout <code>orders,channel=workshop count=1i</code> yazar. Reset sadece channel=workshop'lu point'leri siler.</li>
+  <li>Data subnet'lerinde bir InfluxDB 2 DB instance'ı: birincil eu-central-1c'de, senkron standby eu-central-1b'de. Bölgede InfluxDB 3 cluster'ı yoktur.</li>
+  <li>InfluxDB Engine App private bir subnet'teki EC2 instance'ında çalışır ve instance'a HTTPS port 8086 üzerinden, Secrets Manager'dan alınan kullanıcı adı ve şifreyle bağlanır.</li>
+  <li>Organization <code>dbws</code>, bucket <code>metrics</code>. Seed <code>warehouse_env</code> ve <code>orders</code> measurement'larını siler ve dört depo için 5 dakikalık sıcaklık ve nem, web kanalı için dakikalık sipariş point'leri yazar.</li>
+  <li>Admin sayfası "Operations" Q1'i 1, 6 ya da 24 saat üzerinde 1, 5, 15 dakikalık ya da 1 saatlik pencereyle çalıştırır. Bir checkout <code>orders,channel=workshop count=1i</code> yazar; Reset sadece <code>channel=workshop</code>'lu point'leri siler (Delete API, A6).</li>
 </ul>
 
-<h2 id="recall" data-short="Hatırlama testi"><span class="sec">09</span>Hatırlama testi</h2>
+<h2 id="recall" data-short="Hatırlama testi" data-group="Sonunda">Hatırlama testi</h2>
+<p>Bölümlere geri bakmadan cevapla.</p>
 {{ k.quiz("ix-r1", "Bir series'i ne tanımlar?",
-   ["Sadece timestamp", "Measurement, tag set ve field key", "Field değeri", "Sadece bucket"],
-   1, "Aynı measurement, tag set ve field key'e sahip point'ler bir series'e aittir.") }}
-{{ k.quiz("ix-r2", "Bir bucket üzerindeki her Flux query'si neden range() ile başlar?",
-   ["Flux'ta başka filtre yok", "InfluxDB veriyi önce zamana göre bulur ve range okuduğu shard group'ları sınırlar", "range() sonucu sıralar", "range() bucket'ı oluşturur"],
-   1, "InfluxDB veriyi zamana göre saklar. Range, InfluxDB'ye hangi zaman aralıklarını açması gerektiğini söyler.") }}
-{{ k.quiz("ix-r3", "InfluxDB retention period'dan eski veriyi nasıl siler?",
-   ["Her gece bir DELETE çalıştırman gerekir", "Bütün point'leri çok eski olan shard group'ları bütün olarak düşürür", "Eski değerleri sıfıra çevirir", "Onları Amazon S3'e taşır"],
-   1, "Retention kontrolü tam shard group'ları düşürür. Silme job'u gerekmez.") }}
+   ["Sadece timestamp", "Measurement, tag set ve field adı", "Field değeri", "Sadece bucket"],
+   1, "Aynı measurement, tag set ve field adına sahip point'ler bir series'tir. Timestamp series'in içindeki yeri verir.") }}
+{{ k.quiz("ix-r2", "Bir bucket üzerindeki her Flux sorgusu neden range() ile başlar?",
+   ["Flux'ta başka filtre yok", "Engine veriyi önce zamana göre bulur ve range açılacak shard group'ları sınırlar", "range() sonucu sıralar", "range() bucket'ı oluşturur"],
+   1, "Veri zamana göre shard group'lara bölünür. range olmadan engine bütün geçmişi açardı.") }}
+{{ k.quiz("ix-r3", "Retention period'dan eski veri nasıl gider?",
+   ["Her gece bir DELETE yazman gerekir", "Bütün point'leri çok eski olan shard group bütün olarak düşer", "Eski değerler sıfıra çevrilir", "Veri kendiliğinden S3'e taşınır"],
+   1, "Retention servisi süreyi geçen shard group'u ve dosyalarını birlikte siler. Silme işi yazılmaz.") }}
+{{ k.quiz("ix-r4", "Bir panel sadece iki milyon cihazın son durumunu gösteriyor ve geçmiş gerekmiyor. Neden Timestream for InfluxDB zayıf bir seçimdir?",
+   ["Line protocol sayı tutamaz", "Engine her mesajı yeni bir point olarak ekler ve son değer her seferinde bir sorgudur", "Timestream for InfluxDB tag desteklemez", "Multi-AZ seçeneği yoktur"],
+   1, "Son durum bir üzerine yazmadır; time series engine'i ekler (Ö1) ve son değeri sorar (Ö6). Key-value bunu tek bir yazma ve tek bir okuma ile yapar (kart 9).") }}
 
 <section class="lesson-foot">
   <h2>Daha derine in</h2>
-  <p><b>Ana kaynak:</b> <a href="https://docs.influxdata.com/influxdb/v2/reference/key-concepts/data-elements/">InfluxDB data elements</a>, sonra
-     <a href="https://docs.aws.amazon.com/timestream/latest/developerguide/timestream-for-influxdb.html">Amazon Timestream for InfluxDB developer guide</a>.</p>
-  <p><b>Mağazada kullan:</b> Guided görevin <a href="/guided-e-commerce-app/?adim=34">34. adımında</a> Operations ekranı Q1'i çalıştırır: pencereyi 15 dakikadan 1 saate büyütür ve gelen nokta sayısı azalır.</p>
+  <p><b>Ana kaynak:</b> <a href="https://docs.influxdata.com/influxdb/v2/reference/key-concepts/data-elements/">InfluxDB data elements</a>, <a href="https://docs.influxdata.com/influxdb/v2/reference/internals/storage-engine/">InfluxDB storage engine</a>, sonra
+     <a href="https://docs.aws.amazon.com/timestream/latest/developerguide/timestream-for-influxdb.html">Amazon Timestream for InfluxDB developer guide</a> ve <a href="https://docs.aws.amazon.com/timestream/latest/developerguide/faq-general.html">InfluxDB 3 FAQ</a>.</p>
+  <p><b>Mağazada kullan:</b> Guided görevin <a href="/guided-e-commerce-app/?adim=34">34. adımında</a> Operations ekranı Q1'i çalıştırır: pencereyi 15 dakikadan 1 saate büyütür ve gelen değer sayısı azalır.</p>
   <p><b>Soru sor.</b> Bir kısım net değilse eğitmenine ya da AI asistanına sor. Projenden bir ölçüm getir ve onun tag'lerini ve field'larını birlikte seçin.</p>
 </section>
 {% endblock %}

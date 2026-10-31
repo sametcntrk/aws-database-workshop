@@ -6042,3 +6042,583 @@ REDSHIFT_W.append(wusecase("adhoc", 10,
 
 USECASES_W["redshift"] = REDSHIFT_W
 PAGE_SVC["redshift"] = "rs"
+
+
+# ================================================================ Timestream for InfluxDB (time series), model 2, Turkish
+# Candidates: "ix" = Timestream for InfluxDB 2 DB instance (SVC "Timestream for InfluxDB", the page's service; Single-AZ, Multi-AZ
+# and the read replica cluster are deployment options of the same engine, not separate services). "ix3" = Timestream for
+# InfluxDB 3 (Enterprise edition in the cards). InfluxDB 2 and InfluxDB 3 share the data model (line protocol: measurement,
+# tags, fields, timestamp) but not the engine (TSM files with Flux against Arrow/DataFusion/Parquet on S3 with SQL): they are
+# NOT twins and their R1 is scored separately (decisions.md, "Same data model, different engine").
+# Five cards repeat a workload of an accepted page and keep its rows, weights and points (decisions.md, "The same workload on
+# two pages"): 2 = OpenSearch card 7, 3 = Keyspaces card 2, 8 = OpenSearch card 10, 9 = DynamoDB card 5, 10 = ElastiCache card 5.
+# Their points are read from the source card at import time (_same), so the two pages can never drift; the reasons of the
+# other candidates are the source reasons without the feature numbers of the other page; the reasons of "ix" are new.
+# Facts and prices: docs/influxdb.scope.md.
+CATEGORY.setdefault("ix3", ("columnar time series (InfluxDB 3)", "columnar time series (InfluxDB 3)"))
+LINK.setdefault("ix3", "influxdb")         # InfluxDB 3 has no page of its own; this page (A10, M5, C2) compares it
+
+
+def _src(page, uid):
+    return next(uc for uc in USECASES_W[page] if uc["id"] == uid)
+
+
+_OTHER_NO = re.compile(r"\s*\((?:[ÖF]\d(?:[^()]*)?)\)|\s*\([^()]*\b[ÖF]\d\b[^()]*\)")
+
+
+def _strip(t):
+    """A reason of another page without that page's feature numbers (Ö1 ... Ö8 belong to the other page)."""
+    return re.sub(r"\s{2,}", " ", _OTHER_NO.sub("", t)).replace(" .", ".").strip()
+
+
+def _same(src, c, reasons=None):
+    """The points of candidate c on the source card, with new reasons (or the source reasons without feature numbers)."""
+    pts = [p for p, _ in src["scores"][c]]
+    if reasons is None:
+        reasons = [_strip(w[1]) for _, w in src["scores"][c]]
+    assert len(reasons) == len(pts), (src["id"], c)
+    return [sc(p, r) for p, r in zip(pts, reasons)]
+
+
+def _rows(src):
+    return [row(r["code"], r["w"], r["wwhy"][1], r["want"][1], r["why"][1]) for r in src["rows"]]
+
+
+INFLUXDB_W = []
+
+# ------------------------------------------------------------------ 1. Lale Market warehouses and stores
+INFLUXDB_W.append(wusecase("warehouse", 1, sim="w_warehouse",
+    title="Depo ve mağaza ortam izleme (Lale Market)",
+    key="Measurement: env. Tag'ler: site (40 değer) ve sensor (25 değer). Field: value. 10 saniyede bir point; 1.000 series.",
+    story="Lale Market bugün 4 deposunun sıcaklık ve nemini 5 dakikada bir Operations sayfasında çizer. Franchise planıyla 40 depo ve mağazaya, "
+          "her birinde 25 sensöre çıkıyor: 1.000 sensör 10 saniyede bir okuma gönderir, yani saniyede 100 point; mağaza başına iki kanalın (web, mobil) dakikalık sipariş "
+          "sayıları da aynı ekrana gelir: 80 series daha. Operations sayfası ve Grafana \"son 6 saat, mağaza başına 1 dakikalık ortalama\" ve \"son 24 saat, 15 dakikalık\" "
+          "sorularını sorar. Nem 30 dakika boyunca yüzde 70'in üstünde kalırsa (kitap ve elektronik rafları) 5 dakika içinde nöbetçiye haber gitmelidir. "
+          "Ham okumalar 30 gün, saatlik ortalamalar 2 yıl tutulur. Sensörler bir mağaza gateway'ine bağlıdır ve gateway bir saatlik okumayı tampon tutar. "
+          "Ekip üç geliştiriciden oluşur ve SQL ile Grafana bilir. Siparişler zaten Aurora'dadır; EC2 metrikleri zaten CloudWatch'a gelir.",
+    wnote="R1 toplam 48: veri bir zaman serisidir (VM 10), her soru bir zaman penceresidir (EY 12), 30 günlük ham veri sıkıştırılarak saklanmalıdır (DA 8), "
+          "eski veri özetlenip silinir (YD 10) ve nem kuralı bir eşik kontrolüdür (AO 8). R4 15 ve R5 15 ile ikinci sıradadır: üç kişilik ekip "
+          "yeni bir sistemi işletecek ve 1.000 series'in aylık faturası franchise planıyla büyür.",
+    rows=[
+        row("VM", 10, "Her okuma bir zaman, iki etiket ve bir sayıdır; model bunu doğrudan taşımalı.",
+            "Okuma = zaman + etiketler (site, sensor) + sayı. Aynı etiketli okumalar bir series olarak saklanmalı; etiketler her okumada tekrar yazılmamalı.",
+            "Her okuma etiketleriyle ayrı bir kayıt olursa storage ve okuma bir series modeline göre katlanır."),
+        row("EY", 12, "Operations sayfası ve Grafana her yenilemede bu soruyu sorar.",
+            "\"Son 6 saat, mağaza başına 1 dakikalık ortalama\", \"son 24 saat, 15 dakikalık maksimum\": zaman aralığı + tag filtresi + pencere toplamı, birkaç yüz milisaniyede.",
+            "Pencere hesabı uygulamada yapılırsa her grafik bütün ham okumaları çeker; 1.000 series'te sayfa saniyelerce bekler."),
+        row("DA", 8, "30 günlük ham veri yaklaşık 260 milyon okumadır; engine'in saklama biçimi diski ve okuma hızını belirler.",
+            "30 günlük ham okumalar series ve zaman sırasıyla bitişik ve sıkıştırılmış saklanmalı; bir pencere sadece kendi zaman aralığını okumalı.",
+            "Okumalar sıkıştırılmadan ve zamana göre gruplanmadan saklanırsa 260 milyon row'luk bir table her grafikte büyük bir index taraması olur."),
+        row("YD", 10, "30 gün sonra her gün yaklaşık 8,6 milyon okuma düşmeli ve saatlik özet 2 yıl kalmalıdır.",
+            "Ham okumalar 30 gün sonra kendiliğinden silinmeli; saatlik ortalamalar ayrı tutulmalı ve 2 yıl kalmalı.",
+            "Silme ve özetleme elle yapılırsa unutulur; silinmeyen veri her ay büyür ve grafikler yavaşlar."),
+        row("AO", 8, "Nem kuralı rafları korur ve bu kartın tek otomatik tepkisidir.",
+            "\"Nem 30 dakika boyunca yüzde 70'in üstünde\" kuralı database'in yanında bir ayar ya da kısa bir tanım olmalı ve 5 dakika içinde haber vermeli.",
+            "Kural uygulama koduna gömülürse her yeni kural bir deploy'dur; kural yanlış çalışırsa ıslanan kitaplar satılamaz."),
+    ] + [
+        row("R2", 12, "Saniyede 100 okuma küçüktür ama franchise planıyla on kat büyüyebilir.",
+            "Saniyede 100 okuma yazma, düz; Operations sayfası ve Grafana'da 15 kullanıcı. Plan 3 yılda 400 mağazaya çıkmak.",
+            "Yazma geride kalırsa grafik son dakikayı göstermez ve nem alarmı geç çalışır."),
+        row("R3", 10, "Gateway bir saatlik tampon tuttuğu için kısa bir kesinti veri kaybettirmez.",
+            "Bir AZ arızasında okumalar kaybolmamalı; gateway bir saat tampon tuttuğu için birkaç dakikalık yazma kesintisi kabul edilir.",
+            "Okumalar kaybolursa nem olayının ne zaman başladığı bilinmez ve raf hasarı kanıtlanamaz."),
+        row("R4", 15, "Üç geliştirici yeni bir sistemi işletecek; zaman ayıracakları her iş satıştan gider.",
+            "Sunucu, yedek ve yama işi en az olmalı. Ekip SQL ve Grafana biliyor; yeni bir sorgu dili öğrenmek bir maliyettir.",
+            "Metrik sistemi bozulduğunda onu da aynı üç kişi düzeltir; bilinmeyen bir sistem gece arızasını uzatır."),
+        row("R5", 15, "Fatura series sayısıyla büyümemeli; franchise planı series sayısını on katına çıkarır.",
+            "1.080 series (1.000 sensör + 80 sipariş series'i), ayda yaklaşık 260 milyon okuma, birkaç GB. Series sayısı 3 yılda on katına çıkabilir; fatura buna göre öngörülebilir olmalı.",
+            "Series başına ödenen bir modelde her yeni mağaza faturayı doğrudan büyütür."),
+    ],
+    cands=["ix", "cw", "aur"],
+    scores={
+        "ix": [sc(10, "Point = measurement + tag set + field + timestamp (Ö1); aynı site ve sensor tag'li okumalar bir series'tir ve tag'ler series key'de bir kez durur (Ö2). Puan kırılmadı."),
+               sc(10, "range() + tag filtresi sadece istenen zaman aralığının shard'larını okur (Ö4); aggregateWindow mağaza başına 1 dakikalık ortalamayı tek sorguda verir (Ö5). Puan kırılmadı."),
+               sc(10, "Okumalar series key'e göre gruplanır, zamana göre sıralanır ve TSM dosyalarında delta kodlamasıyla sıkıştırılır; günlük shard group'lar sorgunun aralığını sınırlar (Ö3). Puan kırılmadı."),
+               sc(9, "Bucket'ın retention period'u 30 günü geçen shard group'u bütün olarak düşürür (Ö7). 1 puan kırıldı: saatlik ortalamaları ikinci bucket'a yazan downsampling task'ını ekip yazar."),
+               sc(9, "Bir check her dakika son 30 dakikayı sorar ve eşik aşılınca notification endpoint'e haber verir (Ö8). 1 puan kırıldı: \"30 dakika boyunca\" koşulu check'in Flux sorgusuna yazılır (stateDuration, bir durumun ne kadar sürdüğünü sayan fonksiyon); haber check aralığı kadar gecikir."),
+               sc(9, "Saniyede 100 point db.influx.medium için çok küçüktür. 1 puan kırıldı: bütün yazmalar tek instance'tan geçer; 400 mağazada instance sınıfı büyütülür."),
+               sc(9, "Multi-AZ standby senkron replikadır; AWS'e göre failover genellikle 60–120 saniye sürer. 1 puan kırıldı: o sürede yazmalar başarısız olur, gateway tamponu okumaları sonra gönderir."),
+               sc(5, "Yönetilen instance: yama, yedek ve failover AWS'tedir. 5 puan kırıldı: instance sınıfı ve storage tipi ekibin seçimidir ve Flux ekip için yeni bir dildir; Grafana'nın paneli Flux ya da InfluxQL ile yazılır."),
+               sc(8, "Instance-saat ve storage ödenir; series sayısı faturayı doğrudan büyütmez (Ö2). 2 puan kırıldı: Multi-AZ standby ikinci bir instance ücretidir; db.influx.medium Multi-AZ ayda yaklaşık 211 USD, 20 GiB storage yaklaşık 4,8 USD (Frankfurt, Price List API, 2026-10-31).")],
+        "cw": [sc(9, "Bir metric namespace, ad ve dimension'larla tanımlanır ve zamanlı sayılar tutar. 1 puan kırıldı: her dimension birleşimi ayrı bir metric'tir; site × sensor birleşimleri metric sayısını katlar."),
+               sc(9, "Her periyot için Average ve Maximum hesaplanır; math expression'lar serileri birleştirir. 1 puan kırıldı: 10 saniyelik çözünürlük için high-resolution metric yayınlanır."),
+               sc(10, "Metrik verisini servis saklar ve bir zaman aralığının istatistiklerini doğrudan okur; saklama biçimi ekibin işi değildir. Puan kırılmadı: ham verinin ne kadar tutulduğu R1.4'te sayılır."),
+               sc(3, "Özetleme ve silme kendiliğindendir. 7 puan kırıldı: AWS'e göre 60 saniyeden kısa periyotlu veri 3 saat, dakikalık veri 15 gün, saatlik veri 455 gün tutulur; isteğin iki parçası karşılanmaz (30 günlük ham verinin 3 saati kalır, 2 yıllık özet 15 ayda biter), bu yüzden ölçeğin 0–3 bandındadır."),
+               sc(10, "Bir alarm \"6 periyodun 6'sı\" gibi bir kuralla 30 dakikalık koşulu ayar olarak tanımlar ve SNS ile haber verir. Puan kırılmadı."),
+               sc(10, "Yazma ve okuma kapasitesi servisindir. Puan kırılmadı."),
+               sc(10, "Metrikler servis tarafından kalıcı saklanır. Puan kırılmadı."),
+               sc(9, "Sunucu yoktur; EC2 metrikleri zaten oradadır ve alarm aynı servistedir. 1 puan kırıldı: gateway'ler okumaları PutMetricData ya da gömülü metric formatı ile yayınlar."),
+               sc(6, "Custom metric başına ödenir. 4 puan kırıldı: 1.080 metric ayda yaklaşık 324 USD'dir (Frankfurt, ilk 10.000 metric için 0,30 USD) ve her yeni mağaza faturayı büyütür.")],
+        "aur": [sc(9, "Bir okuma bir row'dur: (ts, site, sensor, value). 1 puan kırıldı: engine'de series kavramı yoktur; site ve sensor her row'da tekrar yazılır."),
+                sc(9, "date_bin ile GROUP BY ve window function'lar her pencere sorusunu SQL ile cevaplar. 1 puan kırıldı: boş pencereler için generate_series ile ayrıca join yazılır."),
+                sc(5, "(site, sensor, ts) üzerinde B-tree index bir aralığı bulur. 5 puan kırıldı: PostgreSQL row'ları sıkıştırmaz ve zamana göre bitişik tutmaz; 260 milyon row ve index'i diskte birkaç kat yer tutar. Aurora sayfası bütün geçmişi tarayan sorgulara 6–7 puan kırar; burada pencere index ile bulunur ve kayıp sadece storage boyutundadır."),
+                sc(4, "PostgreSQL'de retention yoktur. 6 puan kırıldı: 30 günden eski row'lar için zamanlanmış bir DELETE işi (ya da günlük partition'ları düşüren bir iş) ve saatlik özet için ikinci bir iş gerekir; DELETE VACUUM yükü getirir."),
+                sc(5, "Engine'de eşik kontrolü ya da bildirim yoktur. 5 puan kırıldı: kural pg_cron ile zamanlanmış bir sorgu ve haber veren bir uygulama kodudur."),
+                sc(9, "Saniyede 100 küçük INSERT var olan writer için küçüktür. 1 puan kırıldı: yazmalar siparişlerle aynı writer'dan geçer; 400 mağazada ayrıca izlenir."),
+                sc(10, "Üç AZ'de altı kopya ve sürekli yedek. Puan kırılmadı."),
+                sc(9, "Aurora zaten işletiliyor ve ekip SQL biliyor; Grafana PostgreSQL'e doğrudan bağlanır. 1 puan kırıldı: sensör yükü sipariş cluster'ı ile paylaşılır ve ayrıca izlenir."),
+                sc(8, "Var olan cluster'da ayrı bir instance ödenmez. 2 puan kırıldı: sıkıştırılmamış row'lar ve index'leri storage ve I/O olarak ödenir ve 400 mağazada ACU üst sınırı yükselir.")],
+    },
+    h2h={
+        "cw": "İzleme servisi (CloudWatch) ile kafa kafaya. Bu yakın bir yarıştır. CloudWatch'un artısı sıfır işletmedir: EC2 metrikleri zaten oradadır, nem kuralı \"6 periyodun 6'sı\" gibi bir alarm ayarıdır, kapasite ve kalıcılık servisindir; R2, R3, R4 ve R1 · AO'da öndedir. "
+              "Timestream for InfluxDB'yi öne geçiren iki şeydir. Birincisi R1 · YD: CloudWatch'un saklama kuralı sabittir; AWS'e göre 60 saniyeden kısa periyotlu veri 3 saat, dakikalık veri 15 gün, saatlik veri 455 gün tutulur, yani 30 günlük ham veri ve 2 yıllık saatlik özet karşılanmaz. "
+              "İkincisi R5: CloudWatch series başına öder; 1.080 metric ayda yaklaşık 324 USD'dir ve 400 mağazada on katına çıkar, InfluxDB instance'ı ise yaklaşık 211 USD'dir ve büyük ölçüde sabit kalır. "
+              "Hangi koşul değişseydi CloudWatch seçilirdi: ham veri 3 saat, özet 15 ay yetseydi ve mağaza sayısı 40'ta kalsaydı; o zaman işletmesiz bir servis fark yaratırdı.",
+        "aur": "İlişkisel (Aurora) ile kafa kafaya. Aurora bu kartta var olan bir sistemdir: ayrı bir instance ödenmez, ekip SQL biliyor ve Grafana PostgreSQL'e doğrudan bağlanır; R3, R4 ve R5'te öndedir. "
+               "Ama R1'in üç alt maddesinde geride kalır. PostgreSQL okumaları sıkıştırmaz ve zamana göre bitişik tutmaz; 260 milyon row ve index'i diskte birkaç kat yer tutar (DA). Retention yoktur; 30 günden eski row'lar zamanlanmış bir DELETE ya da partition düşüren bir işle gider ve saatlik özet ikinci bir iştir (YD). "
+               "Nem kuralı için engine'de bir kontrol ve bildirim aracı yoktur (AO). Bu üç satırın ağırlığı 26'dır: Aurora 12 alır, Timestream for InfluxDB 24,2. "
+               "Hangi koşul değişseydi Aurora seçilirdi: sadece 4 deponun 8 sensörü kalsaydı (bugünkü workshop verisi), ham veri birkaç gün tutulsaydı ve sensör verisi siparişlerle aynı SQL'de join'lenmek istenseydi.",
+    },
+    verdict="Karar: Timestream for InfluxDB {ix}, CloudWatch {cw}, Aurora {aur}. Yakın bir yarış: bu iş yüküne en uygun servis Timestream for InfluxDB'dir, çünkü series modeli, pencere sorusu, sıkıştırılmış saklama ve retention engine'in kendisidir (R1'de 48'in 46,2'si). "
+            "CloudWatch işletmede ve alarmda öndedir; saklama kuralı ve series başına fiyat onu geride bırakır. "
+            "Timestream for InfluxDB seçtiğimizde artımız: 1.000 series tek bir instance'ta, grafik başına tek bir Flux sorgusu, ham veri 30 gün sonra kendiliğinden gider ve fatura mağaza sayısıyla patlamaz. "
+            "Eksimiz: instance sınıfını ve storage'ı biz seçeriz; ekip Flux öğrenir; downsampling task'ını ve nem check'ini biz yazarız. "
+            "Bir koşul değişseydi: ham veri 3 saat yetseydi ve mağaza sayısı büyümeseydi CloudWatch kazanırdı."))
+
+# ------------------------------------------------------------------ 2. application metrics (= OpenSearch card 7)
+_s = _src("opensearch", "metrics")
+INFLUXDB_W.append(wusecase("metrics", 2, sim="w_metrics",
+    title=_s["title"][1], key=_s["key"][1], story=_s["story"][1], wnote=_s["wnote"][1], rows=_rows(_s),
+    cands=["ix", "cw", "os"],
+    scores={
+        "ix": _same(_s, "ix", [
+            "Point = measurement + tag set + field + timestamp (Ö1); aynı host ve metric tag'li point'ler bir series'tir ve series olarak sıkıştırılır (Ö2, Ö3). Puan kırılmadı.",
+            "aggregateWindow (Flux) ya da GROUP BY time (InfluxQL) pencere başına ortalama, maksimum ve yüzdelik verir (Ö5). Puan kırılmadı.",
+            "Bucket'ın retention period'u eski veriyi siler; downsampling bir task'tır (Ö7). 1 puan kırıldı: dakikalık ve saatlik özetleri yazan task'ları ekip yazar.",
+            "Saniyede 240 point bir instance için küçüktür. 1 puan kırıldı: bütün yazmalar tek bir instance'tan geçer; series sayısı on kat büyürse instance büyütülür.",
+            "Multi-AZ seçeneği bir standby tutar. 2 puan kırıldı: failover sırasında (AWS'e göre genellikle 60–120 saniye) birkaç dakikalık yazma boşluğu olabilir.",
+            "Yönetilen instance; Grafana doğrudan bağlanır. 4 puan kırıldı: instance sınıfı ve storage ekibin seçimidir, ajanlar (Telegraf) kurulur ve EC2 ile load balancer metrikleri ayrıca taşınır.",
+            "Instance-saat ve storage ödenir; series sayısı faturayı doğrudan büyütmez (Ö2). 2 puan kırıldı: Multi-AZ standby ikinci bir instance ücretidir; db.influx.medium Multi-AZ ayda yaklaşık 211 USD (Frankfurt, Price List API, 2026-10-31)."]),
+        "cw": _same(_s, "cw"), "os": _same(_s, "os")},
+    h2h={"cw": "İzleme servisi (CloudWatch) ile kafa kafaya. Bu yakın bir yarıştır. CloudWatch'un artısı sıfır işletmedir: EC2 ve load balancer metrikleri zaten oradadır, özetleme ve silme kendiliğindendir, alarm aynı servistedir ve kapasite servisindir. R2, R3 ve R4'te birlikte 8,4 puan önde olur (1,4 + 1,6 + 5,4). Timestream for InfluxDB R1'in üç alt maddesinde 4,2 puan (her birinde 1,4) ve R5'te 5,4 puan önde olur; toplam fark 1,2'dir. Tek satırda en büyük fark R5'tedir: CloudWatch series başına öder; 2.400 series ayda yaklaşık 720 USD'dir ve series sayısıyla büyür, InfluxDB instance'ı ise yaklaşık 211 USD'dir. R1 · YD'de fark küçüktür ama isteğin bir parçası karşılanmaz: AWS'e göre 60 saniyeden kısa periyotlu veri 3 saat, dakikalık veri 15 gün tutulur. Hangi koşul değişseydi CloudWatch seçilirdi: series sayısı birkaç yüz olsaydı (yaklaşık 700 series'te iki fatura eşitlenir), 10 saniyelik çözünürlük 3 saat yetseydi ya da ekip ikinci bir sistem istemeseydi.", "os": _strip(_s["h2h"]["os"][1]).replace("(kart 5)", "(OpenSearch sayfasının 5. kartı)")},
+    verdict="Karar: Timestream for InfluxDB {ix}, CloudWatch {cw}, OpenSearch {os}. Yakın bir yarış: bu iş yüküne en uygun servis bir time series engine'idir, çünkü series modeli, pencere sorusu ve retention engine'in kendisidir. "
+            "CloudWatch işletmede öndedir; saklama kuralı ve series başına fiyat onu geride bırakır. Bu kart OpenSearch sayfasının 7. kartıyla aynı iş yüküdür ve aynı puanları taşır. "
+            "Timestream for InfluxDB seçtiğimizde artımız: 2.400 series tek bir instance'ta, pano başına tek bir sorgu, eski veri kendiliğinden gider ve fatura series sayısıyla büyümez. "
+            "Eksimiz: instance'ı ve storage'ı biz seçeriz, Telegraf ajanlarını kurarız, downsampling task'larını yazarız ve EC2 metriklerini ayrıca taşırız. "
+            "Bir koşul değişseydi: series sayısı birkaç yüz olsaydı ve 10 saniyelik çözünürlük 3 saat yetseydi CloudWatch kazanırdı."))
+
+# ------------------------------------------------------------------ 3. wind farm sensors (= Keyspaces card 2)
+_s = _src("keyspaces", "sensor")
+INFLUXDB_W.append(wusecase("sensor", 3, sim="w_sensor",
+    title=_s["title"][1], key=_s["key"][1], story=_s["story"][1], wnote=_s["wnote"][1], rows=_rows(_s),
+    cands=["ks", "ix", "ddb"],
+    scores={
+        "ks": _same(_s, "ks"),
+        "ix": _same(_s, "ix", [
+            "Bir sensörün bir saati range() ve tag filtresiyle sorulur (Ö4); türbin tag'i bütün sensörlerini tek sorguda verir. Puan kırılmadı.",
+            "Point'in kendisi: measurement, tag'ler, field'lar ve timestamp (Ö1). Etiketler series key'de bir kez durur (Ö2). Puan kırılmadı.",
+            "Engine okumaları series series ve zaman sırasıyla, delta kodlamasıyla sıkıştırarak saklar; yavaş değişen sayılar birkaç kat küçülür (Ö3). Puan kırılmadı.",
+            "Bucket'ın retention period'u 90 gün; süresi dolan shard group bütün olarak düşer (Ö7). Puan kırılmadı.",
+            "Saniyede 4.000 point, düz ve büyümeyen bir yük olarak, uygun boyutlu bir instance için olağandır; instance sınıfını seçmek R4'te sayıldı. Puan kırılmadı.",
+            "Multi-AZ standby seçeneği vardır. 3 puan kırıldı: standby'a geçişte (AWS'e göre genellikle 60–120 saniye) yazmalar başarısız olur ve tampon tutmayan sensörlerin o anki okumaları kaybolur.",
+            "Yönetilen instance. 5 puan kırıldı: instance ve storage boyutlandırma ekibin işidir ve Flux ya da InfluxQL ekip için yeni bir dildir; Cassandra bilgisi kullanılmaz.",
+            "Düz trafik saat başına ödenen instance'a uyar. 2 puan kırıldı: Multi-AZ standby ikinci bir instance ücretidir ve instance boşken de ödenir."]),
+        "ddb": _same(_s, "ddb")},
+    h2h={"ix": "Time series (Timestream for InfluxDB) ile kafa kafaya. Engine uyumunu Timestream for InfluxDB kazanır: R1'in 50 puanının hepsini alır. Okuma bir point'tir (Ö1), etiketler series key'de bir kez durur (Ö2), sayılar series series sıkıştırılır (Ö3) ve 90 günlük retention bucket'ın bir ayarıdır (Ö7); Keyspaces bu dört alt maddede 42 alır. "
+                "Toplamı servis tasarımı ve ekip kaybettirir. Sensörler tampon tutmaz; standby'a geçişin 60–120 saniyesinde gelen okumalar kaybolur (R3). Ekip Cassandra'yı ve CQL'i bilir; Flux ve instance boyutlandırma yenidir (R4). Standby ikinci bir instance ücretidir (R5). Fark 2,8 puandır. "
+                "Saatlik ortalamaları bu hikâyede gece bir Spark işi hesaplar; engine'in pencere hesabı kullanılmaz. "
+                "Hangi koşul değişseydi Timestream for InfluxDB seçilirdi: mühendis ekranı canlı pencereler isteseydi, sensörlerin bir tamponu olsaydı ve ekip CQL bilmeseydi. En dürüst cevap o zaman ikisinin birlikte çalışmasıdır: ham kanıt Keyspaces'te, canlı pencereler InfluxDB'de.",
+         "ddb": _strip(_s["h2h"]["ddb"][1])},
+    verdict="Karar: Keyspaces {ks}, Timestream for InfluxDB {ix}, DynamoDB {ddb}. Yakın bir yarış: engine uyumunu Timestream for InfluxDB kazanır (50'ye 42), toplamı Keyspaces alır; tampon tutmayan sensörlerin failover'da kaybolan okumaları (R3) ve ekibin Cassandra bilgisi (R4) bu kartta engine farkından ağır basar. "
+            "Bu kart Keyspaces sayfasının 2. kartıyla aynı iş yüküdür ve aynı puanları taşır. "
+            "Yine de Timestream for InfluxDB seçersek artımız: okumalar sıkıştırılır, 90 günlük retention bir ayardır ve saatlik ortalamalar gece işi olmadan bir task ile hesaplanır. "
+            "Eksimiz: sensörlerin önüne bir tampon (örneğin gateway'de Telegraf'ın buffer'ı) koymalıyız ki failover'da okuma kaybolmasın; ekip Flux öğrenir ve instance'ı boyutlandırır. "
+            "Bir koşul değişseydi: sensörlerin önünde bir tampon olsaydı (R3 7'den 9'a) ve ekip CQL bilmeseydi (Keyspaces R4'ü düşer) Timestream for InfluxDB öne geçerdi; tek başına tampon yetmez (90,4'e 91,2). Mühendisler canlı pencere isterse ikisinin birlikte çalışması en dürüst cevaptır."))
+
+# ------------------------------------------------------------------ 4. fleet telemetry
+INFLUXDB_W.append(wusecase("fleet", 4,
+    title="Filo telemetrisi: 5.000 kamyonun son değeri ve geçmişi",
+    key="Measurement: truck. Tag: truck_id (5.000 değer), region. Field'lar: speed, fuel, engine_temp, lat, lon. 10 saniyede bir point.",
+    story="Bir lojistik şirketinin 5.000 kamyonu her 10 saniyede bir telemetri gönderir: hız, yakıt, motor sıcaklığı ve konum. Bu saniyede 500 point ve 5.000 series demektir; "
+          "iki yılda filo 20.000 kamyona çıkacak. Sevk ekranı 10 saniyede bir her kamyonun son değerini gösterir; bir kamyona tıklanınca son 24 saatin 5 dakikalık motor sıcaklığı "
+          "maksimumu çizilir; haftalık rapor kamyon başına yakıt tüketimini toplar. Ham veri 90 gün tutulur, sonra silinir. Kamyonların cihazları bağlantı koptuğunda okumaları "
+          "tamponlar ve sonra gönderir. Dört kişilik ekip SQL biliyor; şirketin başka bir time series sistemi yok.",
+    wnote="R1 toplam 46: son değer ve pencere soruları (EY 14) bu iş yükünün ekranıdır; series modeli (VM 10), 90 günlük ham verinin saklanması (DA 12) ve retention (YD 10) onu tamamlar. "
+          "R4 15 ve R5 15: dört kişilik ekip yeni bir sistemi işletecek ve filo dört katına çıkarken fatura öngörülebilir kalmalı.",
+    rows=[
+        row("EY", 14, "Sevk ekranı 10 saniyede bir 5.000 son değeri ister; bu kartın en sık sorusu budur.",
+            "\"Her kamyonun son değeri\" (5.000 series, 10 saniyede bir) ve \"bu kamyonun son 24 saati, 5 dakikalık maksimum\"; ikisi de bir saniyenin altında dönmeli.",
+            "Son değer her seferinde ham veriden aranırsa sevk ekranı yavaşlar; dispeçer bir kamyonun durduğunu geç görür."),
+        row("VM", 10, "Bir okuma zaman, iki etiket ve beş sayıdır.",
+            "Okuma = zaman + etiketler (truck_id, region) + birkaç sayı. Aynı kamyonun okumaları bir series olmalı.",
+            "Okumalar etiketleriyle ayrı kayıtlar olursa storage katlanır ve kamyon başına okuma birçok kayda dağılır."),
+        row("DA", 12, "90 günlük ham veri yaklaşık 3,9 milyar point'tir; engine'in saklama biçimi diski ve sorgu süresini belirler.",
+            "90 günlük ham veri series ve zaman sırasıyla sıkıştırılmış saklanmalı; 20.000 series'e çıkınca da sorgu süresi aynı kalmalı.",
+            "Series sayısı büyüdükçe index belleğe sığmazsa sorgular yavaşlar ve instance büyütülmek zorunda kalır."),
+        row("YD", 10, "90 gün sonra her gün yaklaşık 43 milyon point düşmeli.",
+            "90 günden eski veri kendiliğinden silinmeli; silme bir iş olarak yazılmamalı.",
+            "Silme unutulursa storage her ay büyür ve fatura artar."),
+    ] + [
+        row("R2", 14, "Saniyede 500 point bugün küçüktür, iki yılda 2.000'e çıkar.",
+            "Saniyede 500, iki yılda 2.000 point; sevk ekranında 30 kullanıcı.",
+            "Yazma geride kalırsa sevk ekranı eski konum gösterir."),
+        row("R3", 10, "Cihazlar tampon tuttuğu için kısa bir kesinti veri kaybettirmez.",
+            "Bir AZ arızasında veri kaybolmamalı; cihazlar tamponladığı için birkaç dakikalık yazma kesintisi kabul edilir.",
+            "Kaybolan okumalar bir kaza ya da yakıt hırsızlığı incelemesinde eksik kalır."),
+        row("R4", 15, "Dört kişilik ekip ilk time series sistemini işletecek.",
+            "Sunucu ve yama işi en az olmalı; ekip SQL biliyor, yeni bir sorgu dili bir maliyettir.",
+            "Bilinmeyen bir dil ve elle boyutlandırılan bir sistem gece arızalarını uzatır."),
+        row("R5", 15, "Filo dört katına çıkarken fatura doğrusal ve öngörülebilir kalmalı.",
+            "Bugün 5.000, iki yılda 20.000 series; 90 günlük veri birkaç yüz GB. Fatura series sayısıyla patlamamalı.",
+            "Fatura series ya da storage ile hızlı büyürse filo büyümesi bir maliyet sorununa döner."),
+    ],
+    cands=["ix3", "ix", "ddb"],
+    scores={
+        "ix3": [sc(10, "Last Value Cache her series'in son değerini bellekte tutar; AWS'e göre last-value sorguları 10 ms'nin altındadır. Pencere sorusu SQL'de date_bin ile tek sorgudur. Puan kırılmadı."),
+                sc(10, "Aynı line protocol: measurement, tag'ler, field'lar ve timestamp; truck_id tag'i bir series tanımlar. Puan kırılmadı."),
+                sc(10, "Veri Parquet dosyalarında kolon kolon sıkıştırılır; Enterprise'ın compactor'ı eski dosyaları birleştirir ve AWS'e göre high-cardinality veride daha iyi performans verir. Puan kırılmadı."),
+                sc(10, "Enterprise database başına retention period verir; süresi dolan veri sorgulardan çıkar ve silinir. Puan kırılmadı."),
+                sc(10, "Enterprise'da yazma ve sorgu node'ları ayrıdır; filo büyüyünce node eklenir. Puan kırılmadı."),
+                sc(10, "Veri Amazon S3 üzerindeki object storage'dadır (AWS'e göre 11 dokuz dayanıklılık) ve çok node'lu cluster node'larını AZ'lere dağıtır. Puan kırılmadı."),
+                sc(7, "Yönetilen cluster ve SQL; ekip bildiği dili kullanır. 3 puan kırıldı: node sınıfı, node rolleri ve parameter group ekibin seçimidir ve servis ekip için yenidir."),
+                sc(6, "Node-saat, kullanılan GB (en az 200 GB) ve Enterprise lisansı ödenir. 4 puan kırıldı: iki node'luk bir cluster (db.influx.large node'u 0,289 USD/saat, ayda yaklaşık 422 USD) ve vCPU başına InfluxData lisansı (AWS Marketplace'ten ayrı bir kalem) Multi-AZ InfluxDB 2 instance'ından pahalıdır.")],
+        "ix": [sc(8, "Son değer tag'e göre last() ile, pencere aggregateWindow ile sorulur (Ö4, Ö5, Ö6). 2 puan kırıldı: son değer bir önbellek değil, 5.000 series üzerinde her 10 saniyede çalışan bir sorgudur."),
+               sc(10, "Point = measurement + tag set + field'lar + timestamp (Ö1); truck_id tag'i bir series'tir (Ö2). Puan kırılmadı."),
+               sc(9, "TSM dosyaları series'i zaman sırasıyla, delta kodlamasıyla sıkıştırır (Ö3). 1 puan kırıldı: series index'i (TSI) series sayısıyla büyür; 20.000 series engine için olağandır ama bellek izlenir (instance seçimi R4'te)."),
+               sc(10, "Bucket'ın retention period'u 90 günü geçen shard group'u düşürür (Ö7). Puan kırılmadı."),
+               sc(9, "Saniyede 2.000 point tek instance için küçüktür. 1 puan kırıldı: bütün yazmalar tek instance'tan geçer; filo büyüyünce instance sınıfı değişir (kısa bir kesintiyle)."),
+               sc(9, "Multi-AZ standby senkron replikadır. 1 puan kırıldı: failover genellikle 60–120 saniyedir; cihazlar tamponladığı için okuma kaybolmaz, sadece gecikir."),
+               sc(5, "Yönetilen instance. 5 puan kırıldı: instance ve storage boyutlandırma ekibin işidir ve ekip SQL biliyor; InfluxDB 2'nin dilleri Flux ve InfluxQL'dir, ikisi de ekip için yenidir."),
+               sc(8, "Instance-saat ve storage ödenir; series sayısı faturayı doğrudan büyütmez. 2 puan kırıldı: Multi-AZ db.influx.large ayda yaklaşık 421 USD ve SSD storage (0,238 USD/GB-ay, Multi-AZ) önceden ayrılır.")],
+        "ddb": [sc(6, "Kamyon başına son değer bir item'dır ve key ile okunur. 4 puan kırıldı: \"son 24 saat, 5 dakikalık maksimum\" engine'de hesaplanmaz; uygulama okumaları Query ile çeker ve pencereyi kendisi hesaplar."),
+                sc(8, "Bir okuma bir item'dır; partition key kamyon, sort key zaman. 2 puan kırıldı: etiketler her item'da tekrar yazılır ve son değer için ikinci bir item yazılır."),
+                sc(6, "Item collection zaman sırasıyla bitişiktir. 4 puan kırıldı: time series'e özgü sıkıştırma yoktur; 3,9 milyar item item boyutuyla saklanır."),
+                sc(9, "TTL attribute'u 90 gün sonra item'ı yazma kapasitesi harcamadan siler. 1 puan kırıldı: silme genellikle birkaç gün içinde olur; o zamana kadar eski okumalar görünür."),
+                sc(10, "Yazmalar kamyonların partition'larına dağılır. Puan kırılmadı."),
+                sc(10, "Her yazma birkaç AZ'de saklanır. Puan kırılmadı."),
+                sc(8, "Serverless. 2 puan kırıldı: ekip SQL biliyor; DynamoDB API'si yenidir ve pencere hesabını uygulama kodu taşır (hesabın kendisi R1.1'de sayıldı)."),
+                sc(6, "İstek ve GB başına ödenir. 4 puan kırıldı: saniyede 2.000 yazma ve son değer için ikinci yazma ayda yaklaşık 10 milyar yazma birimidir; sıkıştırılmamış storage da büyür.")],
+    },
+    h2h={"ix": "Time series (Timestream for InfluxDB) ile kafa kafaya. Fark 6,4 puandır; iki aday aynı veri modelini, aynı line protocol'ü kullanır, ama engine'leri farklıdır. "
+                "InfluxDB 2 son değeri her seferinde ham series'ten bir sorguyla bulur (last(), Ö6); InfluxDB 3'ün Last Value Cache'i onu bellekte hazır tutar. R1.1'de 2 puan kırılır (katkıda 2,8). Series sayısı 20.000'e çıkarken TSI index'i büyür (R1.3'te 1 puan, katkıda 1,2). "
+                "Ekip SQL biliyor; InfluxDB 3 SQL konuşur, InfluxDB 2 Flux ve InfluxQL konuşur (R4). InfluxDB 2'nin dürüst üstünlüğü fiyattır: Multi-AZ db.influx.large ayda yaklaşık 421 USD'dir; iki node'luk bir InfluxDB 3 cluster'ı (db.influx.large) yaklaşık 422 USD artı vCPU başına Enterprise lisansıdır (R5). "
+                "Hangi koşul değişseydi Timestream for InfluxDB seçilirdi: ekip Flux ya da InfluxQL bilseydi ve var olan Flux task'ları ve Grafana panoları taşınacak olsaydı; o zaman R4 InfluxDB 2'ye geçer (kabaca 4,5 puan) ve filo 5.000'de kalırsa R1.3 farkı da kapanır.",
+         "ddb": "Key-value (DynamoDB) ile kafa kafaya. DynamoDB son değerde güçlüdür: kamyon başına bir item key ile tek okumadır ve servis kapasite ve dayanıklılıkta (R2, R3) tam puan alır. "
+                "Ama bu kartın ikinci sorusu bir zaman penceresidir: \"son 24 saat, 5 dakikalık maksimum\" engine'de hesaplanmaz, uygulama okumaları çeker ve kendisi toplar. 3,9 milyar okuma sıkıştırılmadan item boyutuyla saklanır ve her okuma bir yazma birimidir; R1'de ve R5'te kayıp büyüktür. "
+                "Hangi koşul değişseydi DynamoDB seçilirdi: ekran sadece son değeri gösterseydi ve geçmiş başka bir sisteme gitseydi (DynamoDB sayfasının 5. kartı, bu sayfanın 9. kartı). Doğru mimari o zaman ikisinin birlikte çalışmasıdır: son değer DynamoDB'de, geçmiş bir time series engine'inde.",
+         },
+    verdict="Karar: Timestream for InfluxDB 3 {ix3}, Timestream for InfluxDB {ix}, DynamoDB {ddb}. Fark 6,4 puan: iki InfluxDB aynı veri modelini taşır, ama InfluxDB 3'ün son değer önbelleği, Parquet saklaması ve SQL'i bu ekrana ve bu ekibe daha iyi uyar; InfluxDB 2 fiyatta öndedir. "
+            "Yine de Timestream for InfluxDB seçersek artımız: lisanssız ve sabit bir fatura, olgun bir engine ve Grafana ile doğrudan bağlantı. "
+            "Eksimiz: sevk ekranının son değer sorgusunu 10 saniyede bir çalıştırırız ve sonucunu uygulamada önbellekleriz; ekip Flux öğrenir; filo büyüdükçe instance sınıfını değiştiririz. "
+            "Bir koşul değişseydi: ekip Flux ya da InfluxQL bilseydi ve var olan panolar taşınacak olsaydı Timestream for InfluxDB kazanırdı."))
+
+# ------------------------------------------------------------------ 5. factory monitoring with checks and downsampling
+INFLUXDB_W.append(wusecase("factory", 5,
+    title="Fabrika makine izleme: eşik alarmları ve downsampling (var olan InfluxDB'den taşıma)",
+    key="Measurement: machine. Tag'ler: line, machine_id (2.000 değer). Field'lar: vibration_rms, temp, current, … 10 saniyede bir. Bucket'lar: raw (14 gün), 1m (1 yıl), 1h (5 yıl).",
+    story="Bir otomotiv yan sanayi fabrikasının 2.000 makinesi var; her makine 10 saniyede bir altı ölçüm gönderir: saniyede 1.200 point, 12.000 series, gece gündüz düz. "
+          "Fabrika bunu beş yıldır kendi sunucusunda açık kaynak InfluxDB 2 ile işletiyor: üç bucket (ham 14 gün, dakikalık 1 yıl, saatlik 5 yıl), onları dolduran Flux downsampling task'ları "
+          "ve \"titreşim 2 dakika boyunca eşiğin üstünde\" gibi 40 check. Bakım panoları Grafana'dadır. Sunucunun diski doldu ve iki kişilik ekip yönetilen bir servise geçmek istiyor; "
+          "task'ları ve panoları yeniden yazmak istemiyor. Makineler hattaki bir Telegraf'a yazar ve Telegraf bağlantı koptuğunda okumaları tamponlar. Bir alarm 1 dakika içinde bakım ekibine düşmelidir.",
+    wnote="R1 toplam 46: series modeli (VM 10), pencere soruları (EY 10), üç kademeli retention ve downsampling (YD 13) ve eşik check'leri (AO 13) bu fabrikanın işidir. "
+          "R4 16 ile ikinci: iki kişilik ekip 40 check'i, task'ları ve panoları taşıyacak; yeniden yazmak aylar sürer.",
+    rows=[
+        row("VM", 10, "Her ölçüm bir zaman, iki etiket ve bir sayıdır.",
+            "Ölçüm = zaman + etiketler (line, machine_id) + sayılar; 12.000 series.",
+            "Model ölçüme uymazsa her okuma etiketleriyle ayrı bir kayıt olur ve storage katlanır."),
+        row("EY", 10, "Bakım panoları pencere sorusu sorar; ama bu kartı ayıran soru değil, alarm ve retention'dır.",
+            "\"Bu hattın son 8 saati, 1 dakikalık titreşim ortalaması\" ve \"bu makinenin son bir yılı, saatlik maksimum\".",
+            "Pencere hesabı uygulamaya kalırsa her pano bütün ham noktaları çeker."),
+        row("YD", 13, "Üç kademeli saklama fabrikanın beş yıllık geçmişinin tek yoludur.",
+            "Ham veri 14 gün, dakikalık özet 1 yıl, saatlik özet 5 yıl; özetleme ve silme kendiliğinden.",
+            "Özetleme bozulursa beş yıllık trend kaybolur; silme bozulursa disk yine dolar."),
+        row("AO", 13, "40 check fabrikanın güvenlik ağıdır; kırık bir rulman geç fark edilirse hat durur.",
+            "\"Titreşim 2 dakika boyunca eşiğin üstünde\" gibi 40 kural database'in yanında tanımlı olmalı ve 1 dakika içinde haber vermeli.",
+            "Kural geç çalışırsa bir rulman kırılır ve hat saatlerce durur."),
+    ] + [
+        row("R2", 12, "Saniyede 1.200 point gece gündüz düzdür; büyüme yok.",
+            "Saniyede 1.200 point, düz; 25 kullanıcının panosu dakikada bir yenilenir.",
+            "Yazma geride kalırsa alarm geç çalışır."),
+        row("R3", 10, "Telegraf tamponladığı için kısa bir kesinti veri kaybettirmez.",
+            "Bir AZ arızasında veri kaybolmamalı; Telegraf tamponladığı için birkaç dakikalık yazma kesintisi kabul edilir.",
+            "Ölçümler kaybolursa bir arızanın nedeni geriye dönük bulunamaz."),
+        row("R4", 16, "İki kişilik ekip 40 check'i, task'ları ve panoları taşıyacak.",
+            "Var olan Flux task'ları, check'ler ve Grafana panoları değişmeden çalışmalı; disk ve sunucu işi bitmeli.",
+            "Yeniden yazmak iki kişi için aylar demektir ve taşıma sırasında alarmlar eksik kalır."),
+        row("R5", 16, "Fabrika gece gündüz çalışır; yük düzdür ve fatura 5 yıllık bütçeye uymalı.",
+            "Düz bir yük; birkaç yüz GB veri. Fatura sabit ve öngörülebilir olmalı.",
+            "Series ya da alarm başına ödenen bir modelde 12.000 series faturayı patlatır."),
+    ],
+    cands=["ix", "ix3", "cw"],
+    scores={
+        "ix": [sc(10, "Point = measurement + tag set + field'lar + timestamp (Ö1); makine başına series (Ö2). Puan kırılmadı."),
+               sc(10, "range() + tag filtresi ve aggregateWindow her pano sorusunu tek sorguda verir (Ö4, Ö5). Puan kırılmadı."),
+               sc(10, "Üç bucket'ın üç retention period'u vardır ve var olan downsampling task'ları özetleri yazar (Ö7). Puan kırılmadı."),
+               sc(9, "40 check zamanlanmış Flux sorgularıdır ve notification endpoint'lere haber verir (Ö8). 1 puan kırıldı: check'ler değişikliğe değil zamana göre çalışır; haber check aralığı (örneğin 30 saniye) kadar gecikir."),
+               sc(10, "Saniyede 1.200 point, düz ve büyümeyen bir yük, AWS'in boyutlandırma tablosunda db.influx.large'ın çok altındadır. Puan kırılmadı."),
+               sc(9, "Multi-AZ standby senkron replikadır. 1 puan kırıldı: failover genellikle 60–120 saniyedir; Telegraf tamponladığı için okuma kaybolmaz, sadece gecikir."),
+               sc(8, "Aynı açık kaynak API: Flux task'ları, check'ler, Telegraf ve Grafana değişmeden bağlanır. 2 puan kırıldı: instance sınıfı ve storage seçilir ve beş yıllık veri bir kez taşınır."),
+               sc(8, "Instance-saat ve storage ödenir; düz yük instance-saat modeline uyar. 2 puan kırıldı: Multi-AZ standby ikinci bir instance ücretidir (kart 1, 2 ve 3 ile aynı kırılım).")],
+        "ix3": [sc(10, "Aynı line protocol; makine başına series. Puan kırılmadı."),
+                sc(10, "SQL'de date_bin ya da InfluxQL'de GROUP BY time pencere sorusunu tek sorguda verir. Puan kırılmadı."),
+                sc(9, "Enterprise database başına retention period verir. 1 puan kırıldı: dakikalık ve saatlik özetleri bir Processing Engine plugin'i (Python) yazar; Flux task'ı yoktur."),
+                sc(7, "Processing Engine zamanlanmış Python plugin'leri çalıştırır ve bir eşik hesabı yapabilir. 3 puan kırıldı: InfluxDB 2'deki gibi hazır check ve notification endpoint yoktur; \"2 dakika boyunca\" kuralı ve bildirim plugin kodudur."),
+                sc(10, "Yazma ve sorgu node'ları ayrı ölçeklenir. Puan kırılmadı."),
+                sc(10, "Veri S3 üzerindeki object storage'dadır ve node'lar AZ'lere dağılır. Puan kırılmadı."),
+                sc(3, "Yönetilen cluster. 7 puan kırıldı: Flux InfluxDB 3'te desteklenmez; InfluxData'ya göre Flux task'ları yeniden yazılmalıdır. 40 check, task'lar ve Grafana panoları SQL ya da InfluxQL ile yeniden yazılır."),
+                sc(6, "Node-saat, kullanılan GB (en az 200 GB) ve vCPU başına Enterprise lisansı ödenir. 4 puan kırıldı: iki node ve lisans tek bir Multi-AZ instance'tan pahalıdır; S3 storage'ının ucuzluğu birkaç yüz GB'ta fark yaratmaz.")],
+        "cw": [sc(9, "Bir metric namespace, ad ve dimension'larla tanımlanır. 1 puan kırıldı: her makine ve ölçüm birleşimi ayrı bir metric'tir."),
+               sc(9, "Her periyot için Average ve Maximum hesaplanır. 1 puan kırıldı: 10 saniyelik çözünürlük için high-resolution metric yayınlanır."),
+               sc(2, "Özetleme ve silme kendiliğindendir. 8 puan kırıldı: AWS'e göre 60 saniyeden kısa periyotlu veri 3 saat, dakikalık veri 15 gün, saatlik veri 455 gün tutulur; üç kademenin üçü de karşılanmaz (14 günlük ham veri, 1 yıllık dakikalık, 5 yıllık saatlik özet), kart 1'den bir kademe fazla."),
+               sc(10, "Bir alarm \"2 dakika boyunca\" kuralını periyot ve veri noktası sayısıyla ayar olarak tanımlar. Puan kırılmadı."),
+               sc(10, "Yazma ve alarm değerlendirme kapasitesi servisindir. Puan kırılmadı."),
+               sc(10, "Metrikler servis tarafından kalıcı saklanır. Puan kırılmadı."),
+               sc(4, "Sunucu yoktur. 6 puan kırıldı: Telegraf'ın çıkışı CloudWatch'a çevrilir, 40 check makine başına alarmlara (binlerce alarm) dönüşür ve Grafana panoları yeniden yazılır."),
+               sc(2, "Metric ve alarm başına ödenir. 8 puan kırıldı: 12.000 custom metric ayda yaklaşık 3.200 USD'dir (Frankfurt, ilk 10.000 için 0,30, sonrası 0,10 USD) ve buna binlerce alarm eklenir.")],
+    },
+    h2h={"ix3": "Columnar time series (Timestream for InfluxDB 3) ile kafa kafaya. InfluxDB 3 aynı veri modelini ve aynı line protocol'ü yazar, yazma ve sorgu node'larını ayırır ve veriyi S3'te tutar; R2 ve R3'te tam puan alır. "
+                 "Ama bu kartın iki engine sorusunda geride kalır: InfluxDB 2'deki hazır check'ler ve notification endpoint'ler yoktur, \"2 dakika boyunca\" kuralı bir Python plugin'idir (AO), downsampling de plugin kodudur (YD). "
+                 "Asıl kayıp R4'tedir: InfluxData'ya göre Flux InfluxDB 3'te desteklenmez; 40 check, task'lar ve panolar yeniden yazılır. Var olan kodu yeniden yazmak engine'in değil ekibin işidir, bu yüzden R4'te sayılır, R1'de değil. "
+                 "Hangi koşul değişseydi Timestream for InfluxDB 3 seçilirdi: fabrika sıfırdan kurulsaydı, ekip SQL bilseydi ve series sayısı milyonlara çıksaydı; o zaman hazır check'lerin yokluğu küçük bir bedel olurdu.",
+         "cw": "İzleme servisi (CloudWatch) ile kafa kafaya. CloudWatch'un alarmı bu kartın en temiz aracıdır: \"2 dakika boyunca\" bir ayardır ve kapasite ile kalıcılık servisindir (R1 · AO, R2, R3). "
+               "Ama bu fabrikanın geçmişi CloudWatch'un sabit saklama kuralına sığmaz: AWS'e göre 60 saniyeden kısa periyotlu veri 3 saat, dakikalık veri 15 gün, saatlik veri 455 gün tutulur; 14 günlük ham veri ve 5 yıllık trend kaybolur (YD). "
+               "Series başına fiyat 12.000 series'te ayda yaklaşık 3.200 USD'dir ve alarmlar makine başına çoğalır (R5); Telegraf çıkışı, check'ler ve panolar yeniden kurulur (R4). "
+               "Hangi koşul değişseydi CloudWatch seçilirdi: fabrikada birkaç yüz series olsaydı, ham veri 3 saat yetseydi ve var olan bir InfluxDB taşınmasaydı.",
+         },
+    verdict="Karar: Timestream for InfluxDB {ix}, Timestream for InfluxDB 3 {ix3}, CloudWatch {cw}. Bu iş yüküne en uygun servis Timestream for InfluxDB'dir: R1'de 46'nın 44,7'sini alır ve var olan Flux task'ları, check'ler ve panolar değişmeden taşınır. "
+            "Timestream for InfluxDB seçtiğimizde artımız: disk ve sunucu işi biter, beş yıllık üç kademeli saklama aynen çalışır, 40 check ilk gün çalışır. "
+            "Eksimiz: instance sınıfını ve storage'ı seçeriz, beş yıllık veriyi bir kez taşırız ve check'ler zaman aralığıyla çalıştığı için bir alarmın 30 saniyeye kadar gecikmesini kabul ederiz. "
+            "Bir koşul değişseydi: fabrika sıfırdan kurulsaydı ve ekip SQL bilseydi Timestream for InfluxDB 3 öne geçerdi."))
+
+# ------------------------------------------------------------------ 6. financial tick data
+INFLUXDB_W.append(wusecase("ticks", 6, sim="w_ticks",
+    title="Borsa tick verisi: 3.000 enstrüman, 3 yıllık geçmiş",
+    key="Measurement: trade. Tag: symbol (3.000 değer), venue. Field'lar: price, qty. Timestamp: nanosaniye. Referans table: instruments (sektör, lot).",
+    story="Bir aracı kurumun veri ekibi 3.000 enstrümanın her işlemini (tick) saklar. Gün içinde saniyede ortalama 3.000, açılışta 30.000 tick gelir; günde yaklaşık 80 milyon tick. "
+          "Trader ekranı son 5 dakikanın 1 dakikalık OHLC (açılış, en yüksek, en düşük, kapanış) değerlerini saniyede bir yeniler. Analistler sektöre göre VWAP (hacim ağırlıklı ortalama fiyat) "
+          "hesaplar; bunun için tick'ler enstrüman referans table'ıyla join'lenir. Model ekibi geriye dönük testlerde 3 yıllık tick'leri tarar. Mevzuat gereği tick'ler 3 yıl saklanır, kaybolmamalıdır. "
+          "Ekip SQL biliyor; borsa beslemesi bir saatlik tekrar oynatma sunar.",
+    wnote="R1 toplam 44: SQL ile join'li pencere soruları (EY 14) ve 3 yıllık, yaklaşık 60 milyar tick'in saklanması (DA 14) bu iş yükünün kendisidir; VM 8 ve YD 8 tamamlar. "
+          "R2 16 ve R5 16: açılışın 10 katlık sıçraması ve 3 yıllık storage'ın faturası; R3 12, çünkü mevzuat kaybı kabul etmez.",
+    rows=[
+        row("EY", 14, "Trader ekranı, VWAP raporu ve geriye dönük testler her gün bu soruları sorar.",
+            "\"Bu sembolün son 5 dakikası, 1 dakikalık OHLC\" (trader ekranı en yeni tick'i bir saniye içinde görmeli) ve \"sektöre göre günlük VWAP\" (instruments table'ı ile join); analistler soruyu SQL ile yazar.",
+            "Join ve pencere uygulamada yapılırsa her rapor milyonlarca tick'i çeker ve analist bekler."),
+        row("DA", 14, "3 yılda yaklaşık 60 milyar tick birikir; engine'in saklama biçimi faturanın ve tarama süresinin kaynağıdır.",
+            "3 yıllık tick'ler kolon kolon sıkıştırılmış ve zamana göre düzenli saklanmalı; geriye dönük test bir yılın price ve qty kolonlarını taramalı.",
+            "Geçmiş hızlı ve pahalı diskte durursa fatura her ay büyür; tarama bütün kolonları okursa testler saatler sürer."),
+        row("VM", 8, "Bir tick zaman, iki etiket ve iki sayıdır.",
+            "Tick = nanosaniye timestamp + etiketler (symbol, venue) + price ve qty.",
+            "Model tick'e uymazsa etiketler her tick'te tekrar saklanır."),
+        row("YD", 8, "3 yıldan eski tick'ler mevzuat süresinden sonra gider.",
+            "3 yıldan eski tick'ler kendiliğinden silinmeli.",
+            "Silme unutulursa storage her yıl yüzde 33 büyür."),
+    ] + [
+        row("R2", 16, "Açılışın ilk dakikalarında yük 10 katına çıkar.",
+            "Saniyede ortalama 3.000, açılışta 30.000 tick; trader ekranı saniyede bir yenilenir.",
+            "Açılışta yazma geride kalırsa trader ekranı eski fiyat gösterir."),
+        row("R3", 12, "Mevzuat tick'lerin kaybını kabul etmez.",
+            "Bir AZ arızasında tick kaybolmamalı; besleme bir saati tekrar oynatabilir ama 3 yıllık geçmiş geri gelmez.",
+            "Eksik tick bir denetimde ceza demektir."),
+        row("R4", 12, "Ekip SQL biliyor ve küçük; yeni bir dil bir maliyettir.",
+            "Analistler SQL kullanmalı; sunucu ve yama işi en az olmalı.",
+            "Yeni bir sorgu dili analistleri veri ekibine bağımlı yapar."),
+        row("R5", 16, "3 yıllık geçmişin storage faturası bu iş yükünün en büyük kalemidir.",
+            "3 yılda birkaç TB sıkıştırılmış veri; storage GB başına ucuz olmalı, compute gün içi yüke uymalı.",
+            "Geçmiş SSD fiyatıyla ödenirse fatura her ay büyür."),
+    ],
+    cands=["ix3", "rs", "ix"],
+    scores={
+        "ix3": [sc(10, "SQL (DataFusion) join, date_bin ve window function'larla OHLC ve VWAP'ı tek sorguda verir; InfluxQL de vardır. Puan kırılmadı."),
+                sc(10, "Parquet dosyaları kolon kolon sıkıştırılır ve S3'te durur; Enterprise'ın compactor'ı eski dosyaları birleştirir, sorgu sadece istediği kolonları okur. Puan kırılmadı."),
+                sc(10, "Aynı line protocol, nanosaniye timestamp. Puan kırılmadı."),
+                sc(10, "Enterprise database başına retention period verir. Puan kırılmadı."),
+                sc(9, "Yazma node'ları 4'e kadar çoğaltılır. 1 puan kırıldı: yazma node'larının sınıfı açılış tepesine göre seçilir ve gün içinde boşta durur."),
+                sc(10, "Veri S3 üzerindeki object storage'dadır (AWS'e göre 11 dokuz dayanıklılık); node'lar AZ'lere dağılır. Puan kırılmadı."),
+                sc(7, "Yönetilen cluster ve SQL. 3 puan kırıldı: node rolleri, node sınıfı ve parameter group ekibin seçimidir ve servis ekip için yenidir."),
+                sc(8, "Kullanılan GB ödenir (Frankfurt 0,0245 USD/GB-ay, en az 200 GB). 2 puan kırıldı: node'lar ve vCPU başına Enterprise lisansı gece de ödenir.")],
+        "ix": [sc(6, "aggregateWindow OHLC'yi verir (Ö5); join() ve pivot() ile referans table'ına bağlanır. 4 puan kırıldı: InfluxDB 2'nin SQL'i yoktur; sektöre göre VWAP Flux'ta join, map ve pivot zinciridir ve InfluxQL'de join yoktur."),
+               sc(5, "TSM dosyaları series'i zaman sırasıyla sıkıştırır (Ö3). 5 puan kırıldı: TSM dosyaları yerel diskte series series durur, kolon bazlı ve kolon seçen bir tarama yoktur; 3 yıllık geriye dönük test binlerce shard group'u açar ve uzun aralıklı sorgular belleğe yüklenir."),
+               sc(10, "Point = measurement + tag set + field'lar + timestamp, nanosaniye hassasiyetiyle (Ö1, Ö2). Puan kırılmadı."),
+               sc(10, "Bucket'ın 3 yıllık retention period'u eski shard group'ları düşürür (Ö7). Puan kırılmadı."),
+               sc(8, "Saniyede 30.000 point AWS'in boyutlandırma tablosunda db.influx.large'ın sınırları içindedir. 2 puan kırıldı: bütün yazmalar tek instance'tan geçer ve açılış tepesi aynı instance'ta sorgularla yarışır."),
+               sc(7, "Multi-AZ standby senkron replikadır; AWS bloguna göre failover veri kaybı olmadan yapılır. 3 puan kırıldı: failover'ın 60–120 saniyesinde yazmalar başarısız olur ve besleme tekrar oynatılır; mevzuat kaydı için kullanıcının kendi başlattığı bir geri yükleme yoktur (iç yedekler 24 saat, AWS Support üzerinden)."),
+               sc(5, "Yönetilen instance. 5 puan kırıldı: instance ve storage boyutlandırma ekibin işidir ve analistler için Flux yeni bir dildir."),
+               sc(4, "Instance-saat ve ayrılmış SSD storage ödenir. 6 puan kırıldı: 3 yıllık geçmiş Multi-AZ Influx IO Included storage'ında GB başına 0,238–0,834 USD/ay öder; S3 tabanlı storage 0,0245 USD'dir.")],
+        "rs": [sc(6, "SQL join, date_trunc ve window function'lar OHLC ve VWAP'ı verir. 4 puan kırıldı: tick'ler streaming ingestion ile bir materialized view'a gelir ve trader ekranı en yeni tick'i ancak bir sonraki yenilemeden sonra görür (tazelik gecikmesi, sadece bu satırda sayılır); boş dakikalar için ayrıca bir zaman table'ı join'lenir."),
+               sc(9, "Kolon bazlı, sıkıştırılmış bloklar ve zamana göre sort key; geriye dönük test sadece price ve qty kolonlarını okur. 1 puan kırıldı: akıştan gelen küçük yazmalar sıralanmamış bölge bırakır ve arka plan sıralaması bekler."),
+               sc(9, "Bir tick bir row'dur. 1 puan kırıldı: engine'de series kavramı yoktur; symbol ve venue her row'da tekrar durur (kolon sıkıştırması bunu küçültür)."),
+               sc(6, "Eski tick'ler tarih aralığıyla silinir. 4 puan kırıldı: süre sonu yoktur; silme zamanlanmış bir DELETE işidir ve silinen row'lar arka plandaki VACUUM'a kadar yer tutar (Redshift sayfasındaki kartlarla aynı kırılım)."),
+               sc(9, "Streaming ingestion Kinesis'ten saniyede 30.000 tick'i alır; Serverless kapasite yükle büyür. 1 puan kırıldı: açılış tepesi için base RPU önceden yükseltilir (önceden eklenen sabit kapasite her serviste 1 puandır); tazelik R1.1'de sayıldı."),
+               sc(10, "Managed storage ve recovery point'ler. Puan kırılmadı."),
+               sc(8, "Analistler bildiği SQL'i kullanır. 2 puan kırıldı: Kinesis akışı ayrıca işletilir (1) ve materialized view'ların yenileme planı ile workgroup kapasitesi ekibin işidir (1)."),
+               sc(7, "Managed storage GB başına ucuzdur. 3 puan kırıldı: saniyede bir yenilenen ekran Serverless compute'u gün boyunca açık tutar ve RPU-saat olarak ödenir.")],
+    },
+    h2h={"ix": "Time series (Timestream for InfluxDB) ile kafa kafaya. İki InfluxDB aynı tick'i aynı line protocol ile yazar ve ikisi de 3 yıllık retention'ı bir ayarla yapar; VM ve YD'de eşittir. "
+                "Fark engine'in kendisindedir. InfluxDB 2'nin SQL'i yoktur: sektöre göre VWAP Flux'ta join ve pivot zinciridir (EY). TSM dosyaları instance'ın SSD'sindedir; 3 yıllık geriye dönük test binlerce shard group'u açar (DA). "
+                "InfluxDB 3 aynı veriyi Parquet olarak S3'te tutar ve SQL ile sorar. Servis tasarımı farkı büyütür: 3 yıllık geçmiş SSD fiyatıyla ödenir (R5) ve analistler için Flux yeni bir dildir (R4). "
+                "Hangi koşul değişseydi Timestream for InfluxDB seçilirdi: tick'ler sadece 30 gün tutulsaydı, sorular join'siz pencere soruları olsaydı ve ekip zaten Flux kullansaydı; o zaman küçük bir instance ve lisanssız fiyat öne geçerdi.",
+         "rs": "Data warehouse (Redshift) ile kafa kafaya. Redshift analistin sorusunda güçlüdür: SQL join, window function, kolon bazlı sıkıştırma ve sort key 3 yıllık geriye dönük testi iyi karşılar (EY, DA). "
+               "Ama bu kartın iki şeyi ona uymaz. Trader ekranı en yeni tick'i bir saniye içinde ister; tick'ler Kinesis'ten streaming ingestion ile bir materialized view'a gelir ve ekran onları ancak bir sonraki yenilemeden sonra görür (EY). Yenileme gün boyunca çalıştığı için compute da gün boyunca ödenir (R5). Warehouse'ta retention yoktur; 3 yıldan eski tick'ler DELETE ve VACUUM ister (YD). "
+               "Hangi koşul değişseydi Redshift seçilirdi: canlı ekran olmasaydı ve tick'ler gün sonunda dosya olarak yüklenseydi; o zaman doğru mimari ikisinin birlikte çalışmasıdır: canlı pencere bir time series engine'inde, geçmiş ve VWAP raporu Redshift'te.",
+         },
+    verdict="Karar: Timestream for InfluxDB 3 {ix3}, Redshift {rs}, Timestream for InfluxDB {ix}. Bu iş yüküne en uygun servis Timestream for InfluxDB 3'tür: SQL ile join'li pencere soruları ve 3 yıllık geçmişin S3'te Parquet olarak saklanması engine'in kendisidir. "
+            "Timestream for InfluxDB bu kartta net kaybeder ve kaybı R1'den gelir: SQL'i yoktur ve uzun geçmiş instance'ın SSD'sinde durur. "
+            "Yine de Timestream for InfluxDB seçersek artımız: tek bir instance, lisans yok, açılış tepesi bir instance'ın sınırları içinde. "
+            "Eksimiz: VWAP'ı Flux'ta join ve pivot ile yazarız, geçmişi kısa tutup eski tick'leri S3'e aktarırız ve geriye dönük testleri başka bir engine'de (Athena ya da Redshift) çalıştırırız. "
+            "Bir koşul değişseydi: tick'ler 30 gün tutulsaydı ve sorular join'siz olsaydı Timestream for InfluxDB öne geçerdi."))
+
+# ------------------------------------------------------------------ 7. energy meter billing analytics
+INFLUXDB_W.append(wusecase("energy", 7,
+    title="Akıllı sayaç faturalama analitiği: 2 milyon sayaç",
+    key="Gecelik dosya: meter_id, ts (15 dakika), kwh. Tarife table'ı: zaman dilimi, birim fiyat. Rapor: hane ve ay başına tarife dilimine göre tüketim.",
+    story="Bir elektrik dağıtım şirketinin 2 milyon akıllı sayacı 15 dakikada bir tüketim ölçer; sayaç merkezi sistemi okumaları her gece S3'e bir CSV dosyası olarak bırakır: "
+          "günde 192 milyon okuma, 3 yılda yaklaşık 210 milyar. Faturalama ekibi her ay hane başına tüketimi tarife dilimlerine (gündüz, puant, gece) göre hesaplar; bunun için okumalar "
+          "tarife ve müşteri table'larıyla join'lenir. Bölge yöneticileri ilçe ve ay bazında raporlar ister, düzenleyici kurum 3 yıllık geçmişi denetler. Sayaç sistemi bazen bir günü düzeltilmiş "
+          "bir dosyayla yeniden gönderir. Canlı bir ekran yoktur; her soru en az bir günlük veriye bakar. Ekip altı analistten oluşur ve SQL ile bir BI aracı kullanır.",
+    wnote="R1 toplam 46: tarife ve müşteri table'larıyla join'li toplam (EY 16) ve 210 milyar okumanın taranması (DA 12) bu iş yükünün kendisidir; gecelik dosya ve düzeltme dosyası (OY 10) ile okumanın şekli (VM 8) tamamlar. "
+          "R5 16 ve R4 14: aylık fatura dönemi dışında yük düşüktür ve altı analist SQL ile çalışır.",
+    rows=[
+        row("EY", 16, "Her fatura dönemi ve her rapor bu sorudur.",
+            "\"Hane ve ay başına tarife dilimine göre kWh\" ve \"ilçe ve ay başına toplam\": okumalar tarife ve müşteri table'larıyla join'lenir ve gruplanır; yeni rapor yeni bir SQL cümlesidir.",
+            "Join ve gruplama uygulamaya kalırsa fatura dönemi günler sürer."),
+        row("DA", 12, "210 milyar okuma birkaç TB'tır; tarama birkaç kolon okur.",
+            "Okumalar kolon kolon sıkıştırılmış saklanmalı; bir aylık rapor sadece meter_id, ts ve kwh kolonlarını ve sadece o ayın bloklarını okumalı.",
+            "Tarama bütün kolonları ya da bütün geçmişi okursa ay sonu raporu saatler sürer."),
+        row("OY", 10, "Veri gece bir dosya olarak gelir ve bazen düzeltilmiş olarak yeniden gelir.",
+            "Gecelik CSV dosyası toplu yüklenmeli; düzeltilmiş bir günün dosyası o günün okumalarının yerine geçmeli.",
+            "Toplu yükleme yoksa 192 milyon okuma tek tek yazılır; düzeltme yerine geçmezse fatura yanlış çıkar."),
+        row("VM", 8, "Bir okuma sayaç, zaman ve bir sayıdır; 2 milyon sayaç vardır.",
+            "Okuma = meter_id + ts + kwh; 2 milyon farklı sayaç.",
+            "Sayaç id'si bir etiket olarak her series'i tanımlarsa 2 milyon series doğar."),
+    ] + [
+        row("R2", 14, "Yük ay sonunda birkaç gün yoğun, diğer günler düşüktür.",
+            "Gecelik yükleme 192 milyon okuma; ay sonunda birkaç gün altı analistin ağır sorguları.",
+            "Ay sonu sorguları geride kalırsa faturalar gecikir."),
+        row("R3", 10, "Ham dosyalar S3'te zaten durur; database bir kopyadır.",
+            "Database kaybolursa S3'teki dosyalardan yeniden yüklenebilir; fatura dönemi ise kaybolmamalı.",
+            "Fatura dönemi ortasında kayıp, yeniden yükleme süresi kadar gecikmedir."),
+        row("R4", 14, "Altı analist SQL ve BI aracıyla çalışır.",
+            "Analistler SQL ile yeni raporlar yazmalı; BI aracı doğrudan bağlanmalı; sunucu işi olmamalı.",
+            "Analistler yeni bir dil öğrenmek zorunda kalırsa her rapor veri ekibini bekler."),
+        row("R5", 16, "Yük ayda birkaç gün yoğun; geri kalan zamanda database boş durur.",
+            "Fatura dönemi dışında compute ödenmemeli; birkaç TB storage ucuz olmalı.",
+            "Ay boyunca çalışan bir cluster ayın çoğunda boşa ödenir."),
+    ],
+    cands=["rs", "ix3", "ix"],
+    scores={
+        "rs": [sc(10, "SQL join, GROUP BY ve window function'lar her raporu bir cümle olarak verir. Puan kırılmadı."),
+               sc(10, "Kolon bazlı sıkıştırılmış bloklar, ts sort key'i ve zone map'ler bir ayın sadece üç kolonunu okur. Puan kırılmadı."),
+               sc(9, "COPY gecelik dosyayı slice'lara paralel yükler. 1 puan kırıldı: düzeltilmiş bir gün, o günün row'larını DELETE edip yeniden yükleyerek yerine konur ve arkasından VACUUM çalışır."),
+               sc(10, "Bir okuma bir row'dur; 2 milyon sayaç bir kolonun değerleridir ve series sayısı diye bir sınır yoktur. Puan kırılmadı."),
+               sc(10, "Serverless kapasite ay sonu sorgularına göre artar ve boş günlerde düşer. Puan kırılmadı: base ve en fazla RPU ayarı R4'te sayıldı."),
+               sc(10, "Managed storage ve recovery point'ler; ham dosyalar S3'te de durur. Puan kırılmadı."),
+               sc(9, "Analistler SQL ve BI aracıyla doğrudan çalışır, sunucu yoktur. 1 puan kırıldı: workgroup'un base ve en fazla RPU ayarı ve COPY zamanlaması ekibin işidir."),
+               sc(9, "Sorgu çalıştığı saniye ödenir; boş günlerde compute ödenmez. 1 puan kırıldı: gecelik yükleme her gün compute kullanır.")],
+        "ix3": [sc(8, "SQL (DataFusion) join ve GROUP BY ile raporu verir. 2 puan kırıldı: engine bir time series engine'idir, MPP warehouse değildir; 2 milyon haneyi tarife table'ıyla join'leyen ay sonu sorgusu sorgu node'unun belleğine yüklenir."),
+                sc(8, "Parquet dosyaları kolon kolon sıkıştırılır ve sorgu sadece istediği kolonları okur. 2 puan kırıldı: dosyalar zamana göre düzenlidir; bir hane ya da ilçe filtresi bütün ayın dosyalarını okur."),
+                sc(6, "Line protocol ile toplu yazma; aynı series ve timestamp ile yazılan okuma eskisinin yerine geçer. 4 puan kırıldı: CSV dosyasını S3'ten doğrudan yükleyen bir komut yoktur; gecelik dosya line protocol'e çevrilip API ile yazılır."),
+                sc(9, "Aynı veri modeli; AWS'e göre InfluxDB 3 high-cardinality veride daha iyi performans verir. 1 puan kırıldı: meter_id bir tag olarak 2 milyon series tanımlar ve series başına metadata tutulur."),
+                sc(9, "Sorgu node'ları eklenebilir. 1 puan kırıldı: ay sonu için node'lar önceden eklenir (önceden eklenen sabit kapasite her serviste 1 puandır); node planı R4'te sayıldı."),
+                sc(10, "Veri S3 üzerindeki object storage'dadır. Puan kırılmadı."),
+                sc(7, "Analistler SQL kullanır; BI aracı Flight SQL (Arrow tabanlı SQL bağlantı protokolü) ya da InfluxQL ile bağlanır. 3 puan kırıldı: cluster ve node rolleri ekibin işidir ve gecelik dönüştürme işi ekip tarafından işletilir."),
+                sc(6, "Kullanılan GB ucuzdur (0,0245 USD/GB-ay). 4 puan kırıldı: node'lar ve vCPU başına Enterprise lisansı ay boyunca ödenir; yük ayda birkaç gündür.")],
+        "ix": [sc(4, "aggregateWindow aylık toplamı verir (Ö5); join() referans table'ına bağlar. 6 puan kırıldı: SQL yoktur; tarife dilimlerine göre join ve gruplama Flux'ta uzun bir zincirdir ve her yeni rapor bir Flux programıdır."),
+               sc(4, "TSM dosyaları series'i sıkıştırır (Ö3). 6 puan kırıldı: dosyalar series'e göre düzenlidir, bir ilçenin bir ayı her sayacın series'ini ayrı açar ve 3 yıllık tarama binlerce shard group'a dokunur (series sayısının kendisi R1.4'te sayıldı)."),
+               sc(5, "Point'ler toplu yazılır; aynı series ve timestamp ile yazılan point eskisinin yerine geçer (Ö1). 5 puan kırıldı: CSV dosyasını yükleyen bir komut yoktur; gecelik 192 milyon okuma line protocol'e çevrilip API ile batch'ler hâlinde yazılır."),
+               sc(6, "Point = measurement + tag set + field + timestamp (Ö2). 4 puan kırıldı: meter_id tag'i 2 milyon series doğurur ve engine her series için bellekte ve index'te bir kayıt tutar (cardinality, bu kartta sadece bu satırda sayılır)."),
+               sc(6, "Tek instance gecelik yüklemeyi alır. 4 puan kırıldı: ay sonu sorguları ve gecelik yazma aynı instance'ta yarışır; sorgular yükleme bitene kadar yavaşlar (instance seçimi R4'te sayıldı)."),
+               sc(8, "Multi-AZ standby; ham dosyalar S3'te durur. 2 puan kırıldı: failover sırasında yükleme durur ve yeniden başlatılır."),
+               sc(4, "Yönetilen instance. 6 puan kırıldı: analistler SQL biliyor, Flux yeni bir dildir; BI aracı doğrudan bağlanamaz ve büyük bir instance boyutlandırılır."),
+               sc(3, "Instance-saat ve ayrılmış storage ödenir. 7 puan kırıldı: ödeme birimi bu yüke uymaz: yük ayda birkaç gündür ama instance-saat gece gündüz ödenir (Multi-AZ db.influx.4xlarge ayda yaklaşık 3.370 USD) ve birkaç TB 12K IOPS storage GB başına 0,834 USD/ay ile önceden ayrılır.")],
+    },
+    h2h={"ix3": "Columnar time series (Timestream for InfluxDB 3) ile kafa kafaya. InfluxDB 3 bu kartın verisini taşıyabilir: SQL konuşur, Parquet ile kolon kolon sıkıştırır ve 2 milyon sayacı InfluxDB 2'den çok daha rahat taşır. "
+                 "Ama iş yükü bir time series işi değil, bir rapor işidir. Soru canlı bir pencere değil, tarife ve müşteri table'larıyla join'li aylık bir toplamdır; ay sonu sorgusu tek bir sorgu node'unun belleğine yüklenir, Redshift ise işi slice'lara böler (EY). "
+                 "Veri gece bir CSV dosyası olarak gelir; COPY'nin karşılığı yoktur, dosya line protocol'e çevrilir (OY). Yük ayda birkaç gündür; node'lar ve lisans ay boyunca ödenir (R5). "
+                 "Hangi koşul değişseydi Timestream for InfluxDB 3 seçilirdi: okumalar canlı bir ekrana saniyeler içinde gelseydi (şebeke izleme) ve raporlar join'siz olsaydı.",
+         "ix": "Time series (Timestream for InfluxDB) ile kafa kafaya. Bu kart Timestream for InfluxDB'nin net kaybettiği kartlardan biridir ve kayıp R1'dedir. "
+               "SQL yoktur; tarife dilimlerine göre join'li rapor Flux'ta uzun bir programdır (EY). meter_id tag'i 2 milyon series doğurur ve series index'i büyür; uzun aralıklı tarama binlerce shard group açar (VM, DA). "
+               "CSV dosyasını yükleyen bir komut yoktur (OY). Servis tasarımı da uymaz: ayda birkaç gün çalışan bir yük için büyük bir Multi-AZ instance ve 12K IOPS storage gece gündüz ödenir (R5); analistler Flux öğrenir (R4). "
+               "Hangi koşul değişseydi Timestream for InfluxDB seçilirdi: sayaç sayısı birkaç bin olsaydı, okumalar canlı gelseydi ve soru \"son 24 saatin 15 dakikalık tüketimi\" gibi join'siz bir pencere olsaydı. O zaman doğru mimari ikisinin birlikte çalışmasıdır: canlı şebeke ekranı bir time series engine'inde, faturalama Redshift'te.",
+         },
+    verdict="Karar: Redshift {rs}, Timestream for InfluxDB 3 {ix3}, Timestream for InfluxDB {ix}. Bu iş yüküne en uygun servis Redshift'tir: gecelik dosya, join'li aylık toplam ve ayda birkaç günlük yük bir data warehouse işidir. "
+            "Timestream for InfluxDB bu kartta net kaybeder; kaybın çoğu R1'dedir. "
+            "Yine de Timestream for InfluxDB seçersek artımız: okumaların kendisi kompakt bir series modelinde durur ve canlı bir pencere istenirse hazırdır. "
+            "Eksimiz: sayaç id'sini tag'e koyduğumuz için 2 milyon series taşırız; raporları Flux'ta yazarız; gecelik dosyayı line protocol'e çeviririz ve büyük bir instance'ı ay boyunca öderiz. "
+            "Bir koşul değişseydi: okumalar canlı bir şebeke ekranına gitseydi bir time series engine'i kartın ikinci parçası olurdu."))
+
+# ------------------------------------------------------------------ 8. anomaly detection (= OpenSearch card 10)
+_s = _src("opensearch", "anomaly")
+INFLUXDB_W.append(wusecase("anomaly", 8,
+    title=_s["title"][1], key=_s["key"][1], story=_s["story"][1], wnote=_s["wnote"][1], rows=_rows(_s),
+    cands=["os", "ix", "cw"],
+    scores={
+        "os": _same(_s, "os"),
+        "ix": _same(_s, "ix", [
+            "Task'lar ve check'ler zamanlanmış Flux sorgularıdır ve bir eşik hesabı yapabilir (Ö8). 6 puan kırıldı: engine'de normali öğrenen bir tespit aracı yoktur; mevsimsellik ve eşikler ekibin yazdığı istatistik koduyla hesaplanır.",
+            "Kategori ve şehir tag'leri ile 5 dakikalık aggregateWindow kırılım ve pencereyi tek bir sorguda verir (Ö2, Ö5). Puan kırılmadı.",
+            "Bir point tag'ler ve field'larla saklanır; sayılar series'lerden hesaplanır (Ö1). 3 puan kırıldı: olay bir sipariş kaydı olarak değil bir ölçüm olarak saklanır; analistin bir sapmanın siparişlerine inişi başka bir sistemdedir.",
+            "Saniyede 50 point bir instance için küçüktür. 1 puan kırıldı: bütün yazmalar tek bir instance'tan geçer.",
+            "Multi-AZ standby. 2 puan kırıldı: failover sırasında birkaç dakikalık boşluk olabilir ve veri Aurora'dan yeniden yüklenir.",
+            "Yönetilen instance. 5 puan kırıldı: yeni bir sistemdir; instance sınıfı, Aurora'dan akış ve bildirim kanalı ekibin işidir. Tespit kodu R1.1'de sayıldı.",
+            "Instance-saat ve storage ödenir; kırılım sayısı faturayı doğrudan büyütmez (Ö2). 2 puan kırıldı: Multi-AZ standby ikinci bir instance ücretidir; db.influx.medium Multi-AZ ayda yaklaşık 211 USD (Frankfurt, Price List API, 2026-10-31)."]),
+        "cw": _same(_s, "cw")},
+    h2h={"ix": "Time series (Timestream for InfluxDB) ile kafa kafaya. Timestream for InfluxDB'nin artısı pencere sorusudur: kategori ve şehir tag'leriyle 5 dakikalık toplam tek bir sorgudur (Ö5) ve series sayısı faturayı büyütmez (R5); 2. kartta bu yüzden kazanır. "
+                "Ama bu kartın işi \"normal\"i öğrenmektir ve engine'de bunu yapan bir araç yoktur: check'ler ve task'lar zamanlanmış sorgulardır (Ö8), gece düşüşünü ve öğle tepesini öğrenen istatistik ekibin yazacağı koddur (R1.1'de 4). "
+                "Yeni bir sistem olarak instance, Aurora'dan akış ve bildirim de ekibin işidir (R4'te 5). Olaylar bir ölçüm olarak saklandığı için analist sapmanın siparişlerine başka bir sistemde iner. "
+                "Hangi koşul değişseydi Timestream for InfluxDB seçilirdi: tek bir koşul yetmez. Kırılımlar sabit eşiklerle izlenebilseydi (\"saatte 10 siparişin altı\") R1.1 bir check olurdu (kabaca 9) ve olaylar zaten InfluxDB'ye akıyor olsaydı R4 yükselirdi; ikisi birlikte farkı birkaç puana indirir.",
+         "cw": _strip(_s["h2h"]["cw"][1])},
+    verdict="Karar: OpenSearch {os}, Timestream for InfluxDB {ix}, CloudWatch {cw}. Kararı R1 · AO verir: kırılım başına normali öğrenen bir detector (Random Cut Forest) ve Alerting OpenSearch engine'inin içindedir ve olaylar zaten domain'dedir. "
+            "Bu kart OpenSearch sayfasının 10. kartıyla aynı iş yüküdür ve aynı puanları taşır; Timestream for InfluxDB burada net kaybeder. "
+            "Yine de Timestream for InfluxDB seçersek artımız: 405 kırılımın 5 dakikalık toplamı tek bir sorgudur ve fatura kırılım sayısıyla büyümez. "
+            "Eksimiz: normali öğrenen istatistiği kendimiz yazarız (örneğin geçen haftanın aynı saatiyle karşılaştıran bir task), Aurora'dan akışı kurarız ve analistin olaylara inişi için ikinci bir sistem tutarız. "
+            "Bir koşul değişseydi: kırılımlar sabit eşiklerle izlenebilseydi Timestream for InfluxDB öne geçerdi."))
+
+# ------------------------------------------------------------------ 9. last state of IoT devices (= DynamoDB card 5)
+_s = _src("dynamodb", "iot")
+INFLUXDB_W.append(wusecase("laststate", 9, sim="w_laststate",
+    title=_s["title"][1], key=_s["key"][1], story=_s["story"][1], wnote=_s["wnote"][1], rows=_rows(_s),
+    cands=["ddb", "ks", "ix"],
+    scores={
+        "ddb": _same(_s, "ddb"), "ks": _same(_s, "ks"),
+        "ix": _same(_s, "ix", [
+            "Son durum, cihaz tag'ine göre last() ile sorgulanır (Ö6). 2 puan kırıldı: bu bir key okuması değil, cihazın series'i üzerinde bir sorgudur.",
+            "Engine her mesajı series'in sonuna yeni bir point olarak ekler (Ö1); \"son durum\" en yeni point'tir. 6 puan kırıldı: üzerine yazma yoktur (sadece aynı timestamp'li point'in yerine geçme), series sürekli büyür ve bir retention politikası gerekir.",
+            "Alarm bir check ile zamanlanmış sorgularla yapılır (Ö8). 5 puan kırıldı: değişiklik akışı yoktur; alarm sorgu aralığı kadar gecikir.",
+            "Güçlü bir instance saniyede 65.000 point'i alabilir. 5 puan kırıldı: bütün yazma tek instance'tan geçer; 2 milyon cihaz tag olursa 2 milyon series demektir (Ö2) ve AWS'in örneğine göre bu yük 4xlarge sınıfı ister (boyutlandırma R4'te).",
+            "Multi-AZ seçeneği bir standby tutar. 3 puan kırıldı: standby'a geçişte (genellikle 60–120 saniye) kısa bir kesinti olur.",
+            "Yönetilen instance. 5 puan kırıldı: instance ve storage boyutlandırma ekibin işidir ve Flux/InfluxQL yeni bir dildir.",
+            "Instance saat başına ve storage başına ödenir. 5 puan kırıldı: ödeme birimi yalnız son değer isteyen bir işe uymaz: büyük bir instance gece gündüz ve geçmiş için ayrılmış storage önceden ödenir (series'in büyümesi R1.2'de sayıldı)."])},
+    h2h={"ks": _strip(_s["h2h"]["ks"][1]),
+         "ix": "Time series (Timestream for InfluxDB) ile kafa kafaya. Bu kart Timestream for InfluxDB'nin en net kaybıdır ve nedeni engine'in doğasıdır. "
+               "\"Son durum\" bir üzerine yazma iş yüküdür; InfluxDB her mesajı series'in sonuna yeni bir point olarak ekler (Ö1). Son değer her seferinde bir sorgudur (Ö6), series sürekli büyür ve bir retention gerekir; değişiklik akışı olmadığı için alarm zamanlanmış bir check'tir ve gecikir (Ö8). "
+               "Saniyede 65.000 yazma tek bir instance'ın sınıfıyla sınırlıdır (R2) ve ekip boyutlandırır (R4). "
+               "Hikâyede geçmiş değerler zaten ayrı bir time series sistemine gider; InfluxDB orası için doğru adaydır. "
+               "Hangi koşul değişseydi Timestream for InfluxDB seçilirdi: panel son değerle birlikte son bir saatin eğrisini de gösterseydi ve iki iş tek bir sistemde birleştirilmek istenseydi; o zaman bile en dürüst cevap ikisinin birlikte çalışmasıdır.",
+         },
+    verdict="Karar: DynamoDB {ddb}, Keyspaces {ks}, Timestream for InfluxDB {ix}. Bu iş yüküne en uygun servis DynamoDB'dir; Timestream for InfluxDB üçüncüdür ve R1'in 45 puanının 23,5'ini alır. "
+            "Bu kart DynamoDB sayfasının 5. kartıyla aynı iş yüküdür ve aynı puanları taşır. "
+            "Yine de Timestream for InfluxDB seçersek artımız: son değer ve geçmiş aynı series'tedir; panel bir cihazın son bir saatini de çizebilir. "
+            "Eksimiz: son değeri her tıklamada last() ile sorarız, series'i bir retention ile sınırlarız, alarmı bir check aralığıyla geciktiririz ve saniyede 65.000 yazma için büyük bir instance seçer ve öderiz. "
+            "Bir koşul değişseydi: panel son bir saatin eğrisini de isteseydi doğru mimari ikisinin birlikte çalışmasıdır: son durum DynamoDB'de, geçmiş Timestream for InfluxDB'de."))
+
+# ------------------------------------------------------------------ 10. real-time counters (= ElastiCache card 5)
+_s = _src("elasticache", "counters")
+INFLUXDB_W.append(wusecase("counters", 10,
+    title=_s["title"][1], key=_s["key"][1], story=_s["story"][1], wnote=_s["wnote"][1], rows=_rows(_s),
+    cands=["ec", "ddb", "ix"],
+    scores={
+        "ec": _same(_s, "ec"), "ddb": _same(_s, "ddb"),
+        "ix": _same(_s, "ix", [
+            "Her olay bir point olarak yazılır (Ö1) ve sayı pencere toplamıyla hesaplanır (Ö5). 4 puan kırıldı: engine artırmaz, ekler; saniyede 50.000 point saklanır ve sayı her okumada yeniden toplanır.",
+            "Tekil ziyaretçi bir pencerede distinct sayımıdır. 6 puan kırıldı: ziyaretçi id'si tag olursa series sayısı (cardinality, Ö2) patlar, field olursa her okumada bütün point'ler taranır; yaklaşık sayım için hazır bir yapı yoktur.",
+            "Ürüne göre saatlik pencere toplamı engine'in doğal sorusudur (Ö5). 2 puan kırıldı: \"ilk 20\" her 2 saniyede bir gruplama ve sıralama sorgusudur.",
+            "Retention period eski point'leri kendisi siler; downsampling task'ları saatlik özetleri tutar (Ö7). Puan kırılmadı.",
+            "Engine saniyede on binlerce point yazmayı taşıyabilir. 4 puan kırıldı: kampanya tepesinde 50.000 point/saniye yazma ile her 2 saniyede bir saatlik toplam aynı makinede yarışır ve ekranın sorgu süresi uzar (boyutlandırma R4'te sayıldı).",
+            "Multi-AZ instance seçeneği vardır. 1 puan kırıldı: standby seçilmezse bir arıza son point'leri götürebilir; bu kartta kayıp kabul edilir.",
+            "Yönetilen instance. 5 puan kırıldı: ekip için yeni bir sistem, yeni bir sorgu dili (Flux ya da InfluxQL) ve instance boyutlandırma; analist yine Redshift'te çalışır.",
+            "Instance saat başına ödenir. 4 puan kırıldı: instance kampanya akşamı için boyutlanır ve gece de çalışır."])},
+    h2h={"ddb": _strip(_s["h2h"]["ddb"][1]),
+         "ix": "Time series (Timestream for InfluxDB) ile kafa kafaya. Timestream for InfluxDB zaman pencereleri ve retention'da güçlüdür: saatlik özet ve eski verinin silinmesi onun doğal işidir (R1.4'te 10, Ö7). "
+               "Ama bu kart bir sayaç iş yüküdür, bir ölçüm geçmişi değil: engine artırmaz, her olayı bir point olarak saklar (Ö1) ve sayıyı her okumada yeniden toplar (Ö5); tekil ziyaretçi ise yüksek cardinality tuzağına düşer (Ö2). "
+               "Kampanya tepesinde yazma ve her 2 saniyelik sorgu aynı instance'ta yarışır (R2). Ekip için yeni bir sistem ve yeni bir sorgu dili R4'te de puan kaybettirir. "
+               "Hangi koşul değişseydi Timestream for InfluxDB seçilirdi: ekran son saati değil son 30 günü dakika dakika gösterseydi ve sorgular zaman pencereleri üzerinde değişken olsaydı; o zaman bellek yerine bir time series engine'i doğru yer olurdu.",
+         },
+    verdict="Karar: ElastiCache {ec}, DynamoDB {ddb}, Timestream for InfluxDB {ix}. Bu iş yüküne en uygun servis ElastiCache'tir ve doğru mimari iki parçalıdır: canlı saat ElastiCache'te, saatlik geçmiş Redshift'te. "
+            "Bu kart ElastiCache sayfasının 5. kartıyla aynı iş yüküdür ve aynı puanları taşır; Timestream for InfluxDB üçüncüdür. "
+            "Yine de Timestream for InfluxDB seçersek artımız: saatlik özet ve eski verinin silinmesi bir ayardır ve son 30 günü dakika dakika gösteren bir ekran aynı sistemden çizilir. "
+            "Eksimiz: her olayı bir point olarak saklarız ve sayıyı her okumada toplarız; tekil ziyaretçiyi yaklaşık sayamayız; kampanya akşamına göre büyük bir instance seçer ve gece de öderiz. "
+            "Bir koşul değişseydi: ekran son 30 günü dakika dakika gösterseydi Timestream for InfluxDB öne geçerdi."))
+
+USECASES_W["influxdb"] = INFLUXDB_W
+PAGE_SVC["influxdb"] = "ix"
