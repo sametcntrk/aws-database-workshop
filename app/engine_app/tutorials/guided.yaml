@@ -904,59 +904,586 @@ steps:
           - [Hash, "Alanları olan bir değer: product_id, name, price… HGETALL hepsini bir kerede getirir."]
           - [Hash slot, "Anahtarın adından hesaplanan 0–16383 arası bir numara. Anahtarın hangi parçada (shard) durduğunu bu belirler."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde bellekteki fırsat verisi için hazırlık
+      t1:
+        title: Önceden ne vardı? Fırsat kutusunun verisi belleğe nasıl geldi?
         intro: >-
-          Ana sayfa hiç açılmadan, fırsat verisi belleğe yazılır ve nasıl okunacağı belirlenir. Aşağıdaki beş adım bu
-          hazırlığın sırasıdır.
-        text:
-          - title: Önce sayfanın sorusu yazılır
-            text: >-
-              Her sayfa aynı iki şeyi soruyor: "fırsat ne?" (ad, fiyat, ürün) ve "kaç tane kaldı?". İkisi de tek bir anahtarla
-              cevaplanır; arama ya da filtre yoktur.
-            code: |-
-              HGETALL lm:deal          → fırsat kartının alanları
-              GET     lm:deal:stock    → kalan adet
-          - title: Veriye uygun yapı seçilir
-            text: >-
-              Kartın birden fazla alanı olduğu için hash; kalan adet ise tek bir sayı olduğu için düz bir değer (string) olur.
-              Sayının ayrı bir anahtarda durmasının sebebi, satış sırasında DECR ile tek hamlede azaltılabilmesidir.
-            code: |-
-              HSET lm:deal product_id P0001 name "Alpen Kablosuz Kulaklık 1" price 2024.30 old_price 3373.84
-              SET  lm:deal:stock 50
-          - title: Bellekteki veri bir kopyadır
-            text: >-
-              Ürünün asıl kaydı katalogdadır. Kampanya başlarken kart katalogdan kopyalanır. Okumada anahtar bulunamazsa
-              uygulama asıl kayda gider ve belleği yeniden doldurur (cache-aside). Bu yüzden bellek kaybolsa da veri kaybolmaz.
-          - title: Kampanya bitince anahtar kendiliğinden silinir
-            text: >-
-              Anahtarlara bir son kullanma zamanı verilir; kampanya bitince fırsat kartı ve sayaç bellekten kendiliğinden düşer.
-              Silme işi için ayrı bir program gerekmez.
-            code: |-
-              EXPIREAT lm:deal <bitiş zamanı>
-              EXPIREAT lm:deal:stock <bitiş zamanı>
-          - title: Birlikte işlenecek anahtarlar aynı slota konur
-            text: >-
-              ElastiCache anahtarları adlarından hesaplanan slotlara, slotları da parçalara dağıtır. lm:deal ile lm:deal:stock
-              farklı slotlardadır; ayrı ayrı okumak sorun değildir ama ikisini tek bir transaction'da (MULTI) değiştirmek
-              istenirse CROSSSLOT hatası alınır. O zaman adlara aynı hash tag konur: süslü parantezin içi slotu belirler.
-            code: |-
-              lm:{deal}  ve  lm:{deal}:stock   → ikisi de aynı slotta
-      feed:
-        title: Veri nereden geliyor?
-        writes: >-
-          Kampanyayı başlatan bir iş: ürünü katalogdan kopyalar, fiyatı indirir ve sayacı stoktan kurar. Satış sırasında her
-          alım sayacı uygulama üzerinden DECR ile azaltır.
-        reads: Uygulama, fırsatın göründüğü her sayfa için (ana sayfa, fırsatlar sayfası).
-        kind: >-
-          Uygulama orkestrasyonu. ElastiCache başka bir veritabanından kendiliğinden veri çekmez; içine ne yazılırsa onu
-          tutar.
-        with: >-
-          Fırsat kartı tek başına durmaz: ürünün asıl bilgisi katalogda (DocumentDB), görseli nesne deposunda (S3, büyük
-          sistemlerde bir CDN ile), satın almanın asıl kaydı sipariş veritabanında (Aurora) durur.
-        best: >-
-          Bellekteki veri her zaman asıl kayıttan yeniden kurulabilir olmalıdır. Okumada anahtar yoksa uygulama asıl kayda
-          gider ve belleği doldurur (cache-aside); asıl kayıt değişince bellekteki kopya silinir ya da güncellenir.
+          Ana sayfa açılmadan önce bellekte (ElastiCache) iki fırsat anahtarı zaten duruyor: fırsat kartı lm:deal ve kalan adet
+          lm:deal:stock (45). Burada onları yazan, satışlarla azaltan, siparişlerle karşılaştıran ve kaybolursa yeniden kuran
+          gerçek zinciri görüyorsun: önce zincirin bileşenleri, sonra bir simülasyon, sonra dört aşama (tasarım, ilk yükleme,
+          sürekli besleme, tutarlılık ve onarım).
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1", "t0'daki sayfa açılışından önceki zaman. Bu bölüm, fırsat verisinin o ana kadar belleğe nasıl geldiğini anlatır."]
+          - ["Valkey ve ElastiCache Serverless", "Valkey: ElastiCache'in kullandığı, Redis ile aynı komutları anlayan bellek veritabanı motoru. Serverless: sunucu sayısını ve boyunu AWS'in kendisinin ayarladığı ElastiCache türü; mağazanın belleği bu türde."]
+          - ["lm: ön eki", "Mağazanın bellekteki bütün anahtar adları lm: ile başlar (ör. lm:deal). Aynı bellekte başka programların anahtarlarıyla karışmasın diye konan bir ön ek; dosya adının başındaki klasör adı gibi."]
+          - ["Kesit", "Simülasyonda gösterilen birkaç kayıt. Gerçek depoda daha çok kayıt var; kesit, bu sayfanın konusu olanları gösterir."]
+          - ["Ziyaretçi ve persona", "Ziyaretçi: bu tarayıcı (çerezdeki numara, ör. 7f3a…). Persona: görevin başında seçilen müşteri (ör. C00001, Ayşe Yılmaz); mağazada şifreyle giriş yok."]
+          - ["Ekip ve kampanya ekibi", "Ekip: sistemi kuran ve işleten mühendisler; alarmlara onlar bakar. Kampanya ekibi: fırsatları planlayan çalışanlar; kod yazmaz, arka ofis ekranını kullanır."]
+          - ["Koleksiyon ve doküman", "DocumentDB'de koleksiyon bir dosya dolabı, doküman içindeki tek bir kayıt (alanları olan bir kart). campaigns kampanyaların, products ürünlerin koleksiyonu."]
+          - ["Kampanya kaydı", "Fırsatın asıl kaydı: DocumentDB'deki shop.campaigns koleksiyonunda bir doküman (ürün, fırsat fiyatı, adet, başlangıç, bitiş). Bellekteki fırsat bunun kısa ömürlü bir kopyasıdır."]
+          - ["Hash ve sayaç", "Hash: tek anahtar altında birkaç alan (bir kartın satırları gibi). Sayaç: değeri tek bir tam sayı olan düz anahtar (string); DECR ile azaltılır."]
+          - ["TTL ve EXPIREAT", "TTL: anahtarın ömrü. EXPIREAT, anahtara \"şu saatte sil\" der; saat gelince bellek anahtarı kendisi siler, süt kutusunun son kullanma tarihi gibi."]
+          - ["SET … NX", "\"Bu anahtar yoksa yaz, varsa dokunma.\" Aynı komut iki kez gelse de ilk yazılan değer kalır."]
+          - ["DECR ve INCR", "DECR sayacı tek komutta 1 azaltır ve yeni değeri söyler; INCR 1 artırır. Okuma ve yazma aynı komutta olduğu için iki alıcı aynı son ürünü alamaz."]
+          - ["Sorted set (sıralı küme)", "Her üyesinin bir puanı olan ve üyeleri puana göre sıralı tutan yapı. Liderlik tablosu (lm:leaderboard) böyle durur; bu sayfanın konusu değil."]
+          - ["Hash slot ve CROSSSLOT", "Bellek her anahtarı adından hesaplanan 0–16383 arası bir numaraya (slot) koyar; CLUSTER KEYSLOT komutu bu numarayı söyler. Farklı slottaki anahtarları tek bir paket işlemde (MULTI) değiştirmek istersen CROSSSLOT hatası alırsın."]
+          - ["EventBridge Scheduler", "Bir işi belli bir saatte bir kez (at) ya da düzenli aralıkla (rate, ör. her dakika) başlatan AWS servisi; çalar saat gibi."]
+          - ["AWS Lambda", "Bir olay gelince kısa bir kodu çalıştıran AWS servisi; sunucuyu AWS yönetir."]
+          - ["En az bir kez teslim", "Zamanlayıcı bir çalıştırmayı kaybetmez ama nadiren iki kez teslim edebilir. Bu yüzden iş, iki kez çalışınca da aynı sonucu bırakacak şekilde yazılır."]
+          - ["Transaction (BEGIN … COMMIT / ROLLBACK)", "Birkaç yazmanın hepsi birden olur (COMMIT) ya da hiçbiri olmaz (ROLLBACK). Yarım sipariş kalmaz."]
+          - ["Aurora PostgreSQL", "Siparişlerin asıl kaydının durduğu ilişkisel (tablolu) veritabanı. Satılan adedin doğru değeri hep buradan sayılır."]
+          - ["Hata kuyruğu (SQS DLQ)", "Zamanlayıcının çalıştıramadığı görevin bırakıldığı kuyruk; kaybolmaz, ekip sonra bakar."]
+          - ["CloudWatch", "AWS'in ölçüm ve alarm servisi."]
+          - ["Availability Zone", "Aynı bölgedeki ayrı veri merkezlerinden biri; biri çökse diğerleri çalışır."]
+          - ["Görev adımları", "\"Adım 17\", \"Adım 33\" gibi adlar bu görevin (mağazadaki 37 adımın) adımlarıdır. Simülasyonun sayacındaki \"Adım 1 / 20\" ise simülasyonun karesidir."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra"
+          sütunu veriyi kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim kodumuz" etiketli
+          parçaları mağazanın ekibi yazar. Zincirin iki kolu var: fırsatı belleğe yazan kol (katalog yönetim servisi, zamanlayıcı,
+          kampanya işi) ve satışlarda sayacı azaltıp siparişi yazan kol (uygulama). Aynı parçalar aşağıdaki simülasyonda birer
+          kutu: üst sırada yazan parçalar, ortada depolar, altta yandaki işler.
+        inventory:
+          - id: admin
+            name: Katalog yönetim servisi
+            kind: code
+            what: arka ofis programı (ürün ve kampanya ekranlarının arka ucu)
+            does: >-
+              Kampanya ekibinin planladığı fırsatı kontrol eder ve DocumentDB'deki campaigns koleksiyonuna yazar. Zamanlayıcıya iki
+              görev kurar: başlama saatinde bir kez, kampanya boyunca her dakika.
+            box: Kampanyayı DocumentDB'ye yazar, zamanlayıcıya iki görev kurar.
+            phases: [2]
+            before: Kampanya ekibi (arka ofis ekranı)
+            after: [docdb, scheduler]
+          - id: scheduler
+            name: EventBridge Scheduler
+            kind: aws
+            what: AWS'in zamanlayıcı servisi
+            does: >-
+              Başlama saatinde kampanya işini bir kez çalıştırır (başlangıç). Kampanya süresince her dakika aynı işi kontrol için
+              çalıştırır. Çalıştıramazsa yeniden dener; olmazsa görevi hata kuyruğuna bırakır.
+            box: "Başlangıçta bir kez, sonra bitişe kadar her dakika kampanya işini çalıştırır."
+            phases: [2, 3, 4]
+            before: admin
+            after: [dealjob, dlq]
+          - id: dealjob
+            name: Kampanya işi (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod
+            does: >-
+              Başlangıçta kampanyayı ve ürünü DocumentDB'den okur, belleğe önce sayacı (lm:deal:stock, SET NX), sonra kartı
+              (lm:deal) yazar; ikisine bitiş saatini koyar. Her dakikalık kontrolde satılan adedi Aurora'dan sayar, sayaçla
+              karşılaştırır ve farkı CloudWatch'a yazar (farkı kendisi düzeltmez); kart ya da sayaç kaybolduysa ikisini yeniden kurar.
+            box: "Fırsatı belleğe yazar (önce sayaç, sonra kart); her dakika siparişlerle karşılaştırır, kaybolursa yeniden kurar."
+            phases: [2, 3, 4]
+            before: [scheduler, docdb, aurora]
+            after: [cache, monitor]
+          - id: web
+            name: Uygulama (mağaza sayfaları)
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucusunda)
+            does: >-
+              Her sayfa açılışında oturumu belleğe yazar (30 dakika). Fırsatlar sayfasındaki "Buy one now" (hemen bir tane al)
+              butonuna basılınca sayacı DECR ile 1 azaltır, sonra siparişi Aurora'ya transaction ile yazar; sipariş yazılamazsa
+              INCR ile ürünü sayaca geri verir.
+            box: "Oturumu yazar; satışta DECR, sonra siparişi Aurora'ya; olmazsa INCR."
+            phases: [3, 4]
+            before: Tarayıcı (sayfa açılışı, "Buy one now" butonu)
+            after: [cache, aurora]
+          - id: docdb
+            name: DocumentDB (shop.campaigns, shop.products)
+            kind: aws
+            what: katalog veritabanı
+            does: >-
+              Kampanyanın asıl kaydı (ürün, fırsat fiyatı, adet, bitiş) ve ürünün asıl kaydı (ad, normal fiyat). Bellekteki kart
+              hep buradan kurulur.
+            box: Kampanyanın ve ürünün asıl kaydı.
+            phases: [1, 2, 4]
+            before: [admin, "İçe aktarma işi (Adım 1)"]
+            after: dealjob
+          - id: cache
+            name: ElastiCache (Valkey)
+            kind: aws
+            what: bellekte çalışan veritabanı
+            does: >-
+              Fırsat kartı (lm:deal, hash) ve kalan adet (lm:deal:stock, sayaç), ikisi de bitiş saatine kadar. Aynı bellekte
+              oturumlar ve liderlik tablosunun anahtarları da durur. Veriyi birden fazla Availability Zone'da tutar.
+            box: "Fırsat kartı ve sayaç (bitişe kadar); yanında oturum ve liderlik anahtarları."
+            phases: [1, 2, 3, 4]
+            before: [dealjob, web]
+            after: Fırsat kutusu (t0)
+          - id: aurora
+            name: Aurora PostgreSQL (shop.orders, shop.order_items)
+            kind: aws
+            what: işlemsel (sipariş) veritabanı
+            does: >-
+              Siparişlerin asıl kaydı. Fırsattan alınan her sipariş satırı kampanya numarasını taşır (campaign_id); "kaç tane
+              satıldı?" sorusunun doğru cevabı buradadır.
+            box: Siparişlerin asıl kaydı; her fırsat satırında campaign_id.
+            phases: [1, 3, 4]
+            before: web
+            after: dealjob
+          - id: dlq
+            name: Hata kuyruğu (SQS DLQ)
+            kind: aws
+            what: Amazon SQS kuyruğu
+            does: >-
+              Zamanlayıcının bütün denemelere rağmen çalıştıramadığı görevi saklar; görev kaybolmaz, ekip sebebine bakar.
+            box: Çalıştırılamayan görevler; kaybolmaz.
+            phases: [4]
+            before: scheduler
+            after: [monitor, "Ekip (inceler)"]
+          - id: monitor
+            name: CloudWatch alarmları
+            kind: aws
+            what: AWS'in izleme servisi
+            does: >-
+              Kampanya işinin her çalıştırmadaki sayılarını (satılan, sayaç, fark, yeniden kurma) ve hata kuyruğundaki görev
+              sayısını izler. Fark iki kontrol üst üste sürerse ya da kuyruğa görev düşerse ekibe alarm gönderir.
+            box: "Satılan / sayaç / fark sayılarını ve hata kuyruğunu izler, alarm verir."
+            phases: [2, 3, 4]
+            before: [dealjob, dlq]
+            after: Ekip (alarm)
+        sim_title: "Simülasyon: fırsat kutusunun verisi belleğe nasıl geldi?"
+        sim:
+          kind: pipeline
+          title: Kampanya ekranı ve satışlar → yazan programlar → DocumentDB, ElastiCache, Aurora
+          caption: >-
+            ElastiCache'teki 5 anahtar, t0'daki simülasyonun 5 anahtarı (bellekteki bütün anahtarlardan bir kesit). Önce kampanya
+            başlarken fırsatın belleğe ilk yazılması, sonra bir satışın kutulardan geçişi ve 4 satış daha, en sonda aynı başlangıç
+            görevinin ikinci kez gelmesi, başarısız bir ödeme ve bellek kaybı oynuyor (4. aşamadaki aksilikler sistemin onlara
+            nasıl cevap verdiğini gösteren örnek durumlar; çalıştırılamayan görev ise "olsaydı" diye anlatılıyor). Saatler
+            (Türkiye saati), alıcılar, 5 satış ve sipariş numaraları örnek; ürün, fiyatlar, 50 adet ve anahtarlar canlı sistemden.
+            Sayaçtaki 45, t0 simülasyonunun başladığı değer; canlı sistemde sayaç satıldıkça değişir, gerçek değeri t0'daki canlı
+            sayılarda görürsün. Son karede bellek, ana sayfanın açıldığı andaki (t0) hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım}
+          rows:
+            - {id: writers, title: "Fırsatı yazanlar ve satışları işleyenler", side: true}
+            - {id: stores, title: "Depolar: asıl kayıtlar ve bellek"}
+            - {id: helpers, title: "Yandaki işler: hata kuyruğu ve izleme", side: true}
+          summary: >-
+            Fırsatı kampanya işi yazdı (önce sayaç, sonra kart, ikisine bitiş saati); her satışta uygulama sayacı DECR ile azalttı
+            ve siparişi Aurora'ya yazdı. İkinci kez gelen başlangıç görevi SET NX sayesinde sayacı 50'ye geri döndürmedi,
+            başarısız ödeme ayrılan ürünü sayaca geri verdi, kaybolan anahtarlar asıl kayıtlardan (50 − 5 satılan = 45) yeniden kuruldu. Son
+            durum: kesitte 5 anahtar, t0'daki simülasyonun başladığı durum.
+          boxes:
+            - id: admin
+              row: writers
+            - id: scheduler
+              row: writers
+            - id: dealjob
+              row: writers
+            - id: web
+              row: writers
+            - id: docdb
+              row: stores
+              tables:
+                - name: shop.campaigns
+                  cols: [_id, product_id, price, stock, starts_at, ends_at]
+                  money: [price]
+                  rows:
+                    - {_id: flash-1031, product_id: P0001, price: 2024.30, stock: 50, starts_at: "10:00", ends_at: "16:00", hidden: true}
+                - name: "shop.products (kesit: fırsatın ürünü; katalogda 200)"
+                  cols: [_id, name, price]
+                  money: [price]
+                  rows:
+                    - {_id: P0001, name: Alpen Kablosuz Kulaklık 1, price: 3373.84}
+            - id: cache
+              row: stores
+              tables:
+                - name: "anahtarlar (kesit: t0'daki 5 anahtar)"
+                  cols: [anahtar, tür, değer, ömür]
+                  rows:
+                    - {key: sess, anahtar: "lm:session:7f3a…", tür: hash, değer: "persona C00001, last_page /", ömür: 30 dk, hidden: true}
+                    - {key: stock, anahtar: "lm:deal:stock", tür: string, değer: "50", ömür: "16:00'ya kadar", hidden: true}
+                    - {key: lb, anahtar: "lm:leaderboard", tür: sorted set, değer: "C00002 → 1168114.91, C00001 → 465187.51, …", ömür: süresiz, hidden: true}
+                    - {key: deal, anahtar: "lm:deal", tür: hash, değer: "product_id P0001, name Alpen Kablosuz Kulaklık 1, price 2024.3, old_price 3373.84, ends_at …", ömür: "16:00'ya kadar", hidden: true}
+                    - {key: name, anahtar: "lm:name:C00001", tür: string, değer: "Ayşe Yılmaz", ömür: süresiz, hidden: true}
+            - id: aurora
+              row: stores
+              tables:
+                - name: "shop.order_items (kesit: campaign_id = flash-1031 olan satırlar)"
+                  cols: [order_id, product_id, qty, unit_price, campaign_id]
+                  money: [unit_price]
+                  rows:
+                    - {order_id: O-90411, product_id: P0001, qty: 1, unit_price: 2024.30, campaign_id: flash-1031, hidden: true}
+                    - {order_id: O-90418, product_id: P0001, qty: 1, unit_price: 2024.30, campaign_id: flash-1031, hidden: true}
+                    - {order_id: O-90423, product_id: P0001, qty: 1, unit_price: 2024.30, campaign_id: flash-1031, hidden: true}
+                    - {order_id: O-90430, product_id: P0001, qty: 1, unit_price: 2024.30, campaign_id: flash-1031, hidden: true}
+                    - {order_id: O-90436, product_id: P0001, qty: 1, unit_price: 2024.30, campaign_id: flash-1031, hidden: true}
+            - id: dlq
+              row: helpers
+            - id: monitor
+              row: helpers
+          frames:
+            - phase: 2
+              who: cache
+              lit: [cache, docdb]
+              show: {cache: [lb, name]}
+              fresh: {cache: [lb, name]}
+              note: {cache: "başka zincirden: 2 anahtar"}
+              say: >-
+                Kampanyadan önce: ürün P0001 (Alpen Kablosuz Kulaklık 1, 3.373,84 ₺) katalogda, DocumentDB'de duruyor (Adım 1'deki
+                içe aktarma işi yazdı). Bellekte fırsat yok. Kesitte sadece liderlik tablosunun anahtarları var: lm:leaderboard ve
+                lm:name:C00001. Onları başka bir zincir yazdı (görevin Adım 33'ünde göreceksin); bu sayfanın zinciri onlara dokunmaz.
+            - phase: 2
+              who: admin
+              lit: [admin, docdb]
+              packet: {at: admin, text: "insert shop.campaigns { _id: \"flash-1031\", product_id: \"P0001\", price: 2024.30, stock: 50, starts_at: 10:00, ends_at: 16:00 }"}
+              show: {docdb: [flash-1031]}
+              fresh: {docdb: [flash-1031]}
+              note: {cache: ""}
+              say: >-
+                Kampanya ekibi arka ofis ekranından bir fırsat planladı: Alpen Kablosuz Kulaklık 1, 3.373,84 yerine 2.024,30 ₺, 50
+                adet, 10:00'dan 16:00'ya. Katalog yönetim servisi alanları kontrol etti ve kampanyayı DocumentDB'deki campaigns
+                koleksiyonuna yazdı. Asıl kayıt bu doküman.
+            - phase: 2
+              who: admin
+              lit: [admin, scheduler]
+              packet: {at: scheduler, text: "CreateSchedule at(10:00) · CreateSchedule rate(1 minute) 10:01 → 16:00"}
+              note: {scheduler: "2 görev: başlangıç (bir kez) · kontrol (her dakika)"}
+              say: >-
+                Servis zamanlayıcıya iki görev kurdu. Birincisi 10:00'da bir kez çalışır ve sonra kendini siler. İkincisi 10:01'den
+                16:00'ya kadar her dakika çalışır: kontrol görevi.
+            - phase: 2
+              who: scheduler
+              lit: [scheduler, dealjob]
+              packet: {at: scheduler, text: "at(10:00) → kampanya işini çalıştır { campaign: \"flash-1031\", mode: \"start\" }"}
+              say: >-
+                Saat 10:00 oldu. EventBridge Scheduler kampanya işini çalıştırdı ve ona hangi kampanya olduğunu söyledi.
+            - phase: 2
+              who: dealjob
+              lit: [docdb, dealjob]
+              packet: {at: dealjob, text: "find_one(campaigns, flash-1031) · find_one(products, P0001)"}
+              note: {dealjob: "okunan: 1 kampanya + 1 ürün"}
+              say: >-
+                Kampanya işi DocumentDB'den iki doküman okudu: kampanyayı (fırsat fiyatı, adet, bitiş) ve ürünü (ad, normal fiyat).
+                Kartın bütün bilgisi bu iki asıl kayıttan geliyor.
+            - phase: 2
+              who: dealjob
+              lit: [dealjob, cache]
+              packet: {at: dealjob, text: "SET lm:deal:stock 50 NX · EXPIREAT lm:deal:stock <16:00>"}
+              show: {cache: [stock]}
+              fresh: {cache: [stock]}
+              say: >-
+                Önce sayacı yazdı: lm:deal:stock = 50. NX "anahtar yoksa yaz" demek; neden önemli olduğunu 4. aşamada göreceksin.
+                Sonra anahtara bitiş saatini (16:00) koydu.
+            - phase: 2
+              who: dealjob
+              lit: [dealjob, cache, monitor]
+              packet: {at: dealjob, text: "HSET lm:deal product_id P0001 name … price 2024.3 old_price 3373.84 ends_at … · EXPIREAT lm:deal <16:00>"}
+              show: {cache: [deal]}
+              fresh: {cache: [deal]}
+              note: {dealjob: "", monitor: "başlangıç: yazılan 2 anahtar · hata 0"}
+              say: >-
+                Sonra kartı yazdı: lm:deal hash'inin 5 alanı, aynı bitiş saatiyle. Sıra bilerek böyle: kart görünür olduğunda sayaç
+                hazırdır. Ters sırada, kart yazılıp sayaç henüz yokken GET boş döner, uygulama bunu 0 sayar ve kutu bir an "0 kaldı"
+                gösterirdi. İş sayılarını CloudWatch'a yazdı.
+            - phase: 3
+              who: web
+              lit: [web, cache]
+              packet: {at: web, text: "HSET lm:session:7f3a… persona C00001 last_page / · EXPIRE 1800"}
+              show: {cache: [sess]}
+              fresh: {cache: [sess]}
+              note: {monitor: "", scheduler: ""}
+              say: >-
+                Bir ziyaretçi (7f3a…; görevin başında persona olarak Ayşe Yılmaz'ı, C00001, seçmiş) ana sayfayı açtı. Uygulama oturum kaydını belleğe yazdı ve
+                ömrünü 30 dakika yaptı. Bu kayıt fırsata ait değil; sayfanın her açılışında yenilenir.
+            - phase: 3
+              who: web
+              lit: [web, cache]
+              packet: {at: web, text: "DECR lm:deal:stock → 49"}
+              set: {cache: {stock: {değer: "49"}}}
+              fresh: {cache: [stock]}
+              note: {web: "DECR → 49 (≥ 0): 1 ürün ayrıldı"}
+              say: >-
+                10:03'te bir müşteri fırsatlar sayfasında "Buy one now" (hemen bir tane al) butonuna bastı. Uygulama sayacı tek
+                komutla azalttı: DECR cevap olarak 49 verdi. Sonuç 0 ya da üstü, yani bu müşteriye bir ürün ayrıldı.
+            - phase: 3
+              who: web
+              lit: [web, aurora]
+              packet: {at: aurora, text: "BEGIN · INSERT orders … · INSERT order_items (…, campaign_id 'flash-1031') · COMMIT"}
+              show: {aurora: [O-90411]}
+              fresh: {aurora: [O-90411]}
+              note: {web: "sipariş: yazılan 1 · geri verilen 0"}
+              say: >-
+                Sonra siparişi Aurora'ya tek bir transaction ile yazdı: sipariş ve satırı birlikte, satırda kampanya numarası
+                (flash-1031). Sayaç kapıdaki hızlı elemeydi; satışın asıl kaydı bu satır.
+            - phase: 3
+              who: dealjob
+              lit: [scheduler, dealjob, aurora, cache, monitor]
+              packet: {at: dealjob, text: "SUM(qty) WHERE campaign_id = 'flash-1031' → 1 · GET lm:deal:stock → 49"}
+              note: {web: "", monitor: "kontrol 10:04 · satılan 1 · sayaç 49 · fark 0"}
+              say: >-
+                10:04'te zamanlayıcı kontrol görevini çalıştırdı. Kampanya işi Aurora'da bu kampanyanın satılan adedini saydı (1) ve
+                sayacı okudu (49): 50 − 1 = 49, fark yok.
+            - phase: 3
+              who: web
+              lit: [web, cache, aurora]
+              packet: {at: web, text: "4 alım: DECR → 48, 47, 46, 45 · her biri için sipariş transaction'ı → COMMIT"}
+              set: {cache: {stock: {değer: "45"}}}
+              show: {aurora: [O-90418, O-90423, O-90430, O-90436]}
+              fresh: {cache: [stock], aurora: [O-90418, O-90423, O-90430, O-90436]}
+              note: {web: "4 alım: yazılan 4 sipariş · geri verilen 0", monitor: ""}
+              say: >-
+                Sonraki dakikalarda 4 müşteri daha aldı. Her alımda aynı iki adım: DECR (48, 47, 46, 45), sonra siparişin
+                transaction'ı. Aurora'da bu kampanyanın 5 satırı var, sayaç 45.
+            - phase: 3
+              who: dealjob
+              lit: [scheduler, dealjob, aurora, cache, monitor]
+              packet: {at: dealjob, text: "SUM(qty) → 5 · GET lm:deal:stock → 45"}
+              note: {web: "", monitor: "kontrol 10:09 · satılan 5 · sayaç 45 · fark 0"}
+              say: >-
+                Kontrol görevi yine çalıştı: 50 − 5 = 45, sayaçla aynı. İş bu sayıları her dakika CloudWatch'a yazar.
+            - phase: 4
+              who: scheduler
+              lit: [scheduler, dealjob, cache]
+              packet: {at: dealjob, text: "başlangıç görevi ikinci kez geldi → SET lm:deal:stock 50 NX → yazılmadı (anahtar var)"}
+              mark: {cache: {stock: fix}}
+              note: {monitor: "başlangıç (2. kez): sayaç yazılmadı · kart 1 (aynı değerler) · hata 0"}
+              say: >-
+                Örnek durum: zamanlayıcı her görevi en az bir kez teslim eder; nadiren aynı görev iki kez gelir. Burada başlangıç görevi
+                5 satıştan sonra ikinci kez geldi. SET … NX anahtarı var gördü ve yazmadı; sayaç 45'te kaldı. Kart aynı değerlerle
+                yeniden yazıldı; hiçbir şey değişmedi. NX olmasaydı sayaç 50'ye döner ve satılmış 5 ürün yeniden satışa açılırdı.
+            - phase: 4
+              who: web
+              lit: [web, cache]
+              packet: {at: web, text: "DECR lm:deal:stock → 44"}
+              set: {cache: {stock: {değer: "44"}}}
+              mark: {cache: {stock: ""}}
+              fresh: {cache: [stock]}
+              note: {monitor: "", web: "DECR → 44: 1 ürün ayrıldı, sipariş yazılıyor"}
+              say: >-
+                Örnek durum: bir müşteri daha bastı. DECR 44 verdi; uygulama bu müşteriye bir ürün ayırdı ve siparişi yazmaya başladı.
+            - phase: 4
+              who: web
+              lit: [web, aurora, cache]
+              packet: {at: aurora, text: "BEGIN · INSERT … · ödeme reddedildi → ROLLBACK · INCR lm:deal:stock → 45"}
+              set: {cache: {stock: {değer: "45"}}}
+              mark: {cache: {stock: fix}}
+              note: {web: "sipariş: yazılan 0 · geri verilen 1"}
+              say: >-
+                Ödeme reddedildi. Transaction ROLLBACK ile geri alındı; Aurora'ya hiçbir satır yazılmadı (tablo bu yüzden değişmedi).
+                Uygulama ayrılan ürünü INCR ile sayaca geri verdi: sayaç yine 45. Satılan adet (5) ile sayaç (45) hâlâ uyuşuyor.
+            - phase: 4
+              who: scheduler
+              lit: [scheduler, dlq, monitor]
+              mark: {cache: {stock: ""}}
+              note: {web: "", dlq: "olsaydı: 1 görev · kampanya işi çalıştırılamadı", monitor: "hata kuyruğunda 1 görev → alarm"}
+              say: >-
+                Olsaydı: zamanlayıcı kampanya işini bir kez çalıştıramasaydı (ör. AWS tarafında kısa bir kesinti), görevi birkaç kez
+                yeniden dener, olmazsa hata kuyruğuna bırakır ve CloudWatch ekibe alarm gönderir. Hata geçiciyse bir sonraki dakikanın
+                kontrolü fırsatı kurar. Hata kalıcıysa (ör. işin izni silinmiş) kontrol görevi de çalışamaz; o zaman çare alarm ve
+                ekiptir.
+            - phase: 4
+              who: cache
+              lit: [cache, web]
+              hide: {cache: [deal, stock]}
+              note: {dlq: "", monitor: "", cache: "fırsat anahtarları silindi"}
+              say: >-
+                Örnek durum: ElastiCache veriyi birden fazla Availability Zone'da tutar, ama burada yanlış bir silme komutu fırsat
+                anahtarlarını sildi. Uygulama HGETALL'dan boş cevap alır, fırsat kutusunu göstermez ve satış denemez. Denese, DECR
+                olmayan sayacı 0 sayıp −1 yapar ve ömrü olmayan yanlış bir sayaç yaratırdı; bu yüzden kart yoksa satış da yok.
+            - phase: 4
+              who: dealjob
+              lit: [scheduler, dealjob, docdb, aurora, cache, monitor]
+              packet: {at: dealjob, text: "EXISTS lm:deal → 0 · EXISTS lm:deal:stock → 0 · SUM(qty) → 5 · SET lm:deal:stock 45 · HSET lm:deal … · EXPIREAT <16:00>"}
+              show: {cache: [stock, deal]}
+              set: {cache: {stock: {değer: "45"}}}
+              fresh: {cache: [stock, deal]}
+              note: {cache: "", monitor: "kontrol: yeniden kurma 1 · satılan 5 · sayaç 45"}
+              say: >-
+                Bir dakika içinde kontrol görevi çalıştı ve kartı da sayacı da bulamadı. Kampanya işi kampanyayı ve ürünü DocumentDB'den, satılan
+                adedi Aurora'dan okudu: 50 − 5 = 45. Önce sayacı (45), sonra kartı yazdı ve ikisine yine 16:00'yı koydu. Kaybolan
+                bellek, asıl kayıtlardan aynen geri geldi.
+            - phase: 4
+              who: cache
+              lit: [cache, docdb, aurora]
+              note: {monitor: "", cache: "16:00'da lm:deal ve lm:deal:stock kendiliğinden silinir"}
+              say: >-
+                Hazır: kesitte 5 anahtar, t0'daki simülasyon bu 5 anahtarla başlıyor. lm:deal ve lm:deal:stock (45) bu zincirden,
+                oturum uygulamadan, liderlik anahtarları kendi zincirinden geldi. Ana sayfa açılınca uygulama fırsat için iki komut
+                gönderecek: HGETALL lm:deal ve GET lm:deal:stock.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Önce fırsat kutusunun sorusu yazılır, sonra cevabın bellekte hangi anahtarda, hangi yapıda ve ne kadar süre duracağına
+              karar verilir. Kuralı baştan koyalım: bellekteki fırsat bir kopyadır; asıl kayıtlar DocumentDB (kampanya, ürün) ve
+              Aurora'dır (satılanlar).
+            cards:
+              - title: Fırsat kutusunun sorusu
+                text: >-
+                  Fırsatın göründüğü her sayfa iki şey sorar: "fırsat ne?" ve "kaç tane kaldı?". İkisi de adı bilinen bir anahtarla,
+                  arama yapmadan cevaplanmalı; ana sayfa açılırken DocumentDB'ye ya da Aurora'ya gidilmemeli.
+                code:
+                  - {code: "HGETALL lm:deal", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Kartın 5 alanı: ürün, ad, fırsat fiyatı, eski fiyat, bitiş."}
+                  - {code: "GET lm:deal:stock", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: Kalan adet.}
+              - title: Kaynaktan belleğe alan alan
+                text: >-
+                  Kartın her alanı bir asıl kayıttan gelir. Kalan adet ise bir yerde hazır durmaz: kampanyanın adedinden, Aurora'da
+                  satılanlar çıkarılarak bulunur.
+                map:
+                  cols: [Kaynak, Hedef, Kural]
+                  rows:
+                    - ["campaigns.product_id", "lm:deal → product_id", "Kutudaki görselin adresi de bu numaradan kurulur (görsel S3'te, AWS'in dosya deposunda)."]
+                    - ["products.name", "lm:deal → name", Ürünün adı katalogdan kopyalanır.]
+                    - ["campaigns.price", "lm:deal → price", "Fırsat fiyatı, 2.024,30 ₺ (bellekte metin olarak \"2024.3\" yazar)."]
+                    - ["products.price", "lm:deal → old_price", "Üstü çizili normal fiyat, 3.373,84 ₺ (bellekte \"3373.84\")."]
+                    - ["campaigns.ends_at", "lm:deal → ends_at + iki anahtarın EXPIREAT'i", "Bitiş saati hem kartta yazar hem anahtarların ömrüdür."]
+                    - ["campaigns.stock − satılan (Aurora: order_items, campaign_id)", "lm:deal:stock", "Başlangıçta 50 − 0. Her satışta DECR; yeniden kurmada yine 50 − satılan."]
+              - title: "İki anahtar, iki yapı, bir bitiş saati"
+                text: >-
+                  Kartın birden fazla alanı olduğu için hash; kalan adet tek bir sayı olduğu için ayrı bir sayaç. Sayaç ayrı durur,
+                  çünkü satışta DECR ile tek komutta azaltılır. İkisi de kampanyanın bitiş saatinde silinir. Valkey'in bir kuralı
+                  önemli: DECR ve HSET anahtarın ömrünü korur, ama SET yeni değerle birlikte ömrü siler. Bu yüzden kampanya işi her
+                  SET'ten sonra EXPIREAT'i yeniden gönderir. Anahtar adları sabit olduğu için aynı anda tek fırsat vardır; aynı anda
+                  ikinci bir fırsat, kampanya numarasını taşıyan ayrı anahtar adları isterdi.
+                code:
+                  - {code: "SET lm:deal:stock 50 NX", tag: Kampanya işi → ElastiCache, say: "Sayaç, sadece yoksa yazılır."}
+                  - {code: "HSET lm:deal product_id P0001 name \"Alpen Kablosuz Kulaklık 1\" price 2024.3 old_price 3373.84 ends_at <bitiş>", tag: Kampanya işi → ElastiCache, say: Kartın 5 alanı tek anahtarda.}
+                  - {code: "EXPIREAT lm:deal:stock <bitiş> · EXPIREAT lm:deal <bitiş>", tag: Kampanya işi → ElastiCache, say: Bitişte ikisi de kendiliğinden silinir.}
+                  - {code: "DECR lm:deal:stock", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Satışta azaltılır; ömrü değişmez."}
+              - title: Anahtarlar farklı slotlarda
+                text: >-
+                  ElastiCache Serverless her zaman küme (cluster) düzeninde çalışır: her anahtar adından hesaplanan bir slota düşer.
+                  lm:deal 3299'da, lm:deal:stock 1725'te. Bu yüzden ikisi tek bir MULTI paketinde birlikte değiştirilemez (CROSSSLOT
+                  hatası). Zincir buna göre kurulur: kampanya işi önce sayacı, sonra kartı yazar; kart görünür olduğunda sayaç hep
+                  hazırdır. İkisinin tek pakette değişmesi gerekseydi adlara aynı süslü parantezli etiket konurdu (lm:{deal} ve
+                  lm:{deal}:stock); o zaman slotu sadece parantezin içi belirler.
+                code:
+                  - {code: "CLUSTER KEYSLOT lm:deal → 3299 · CLUSTER KEYSLOT lm:deal:stock → 1725", tag: [Ekip → ElastiCache, ElastiCache → Ekip], say: "Ekip her anahtarın slotunu sorar: iki ayrı slot, ayrı ayrı yazılır ve okunur."}
+              - title: Sayaç ve sipariş kaydı
+                text: >-
+                  Sayaç hızlı bir karar içindir: "ürün kaldı mı?". Satışın asıl kaydı Aurora'daki sipariş satırıdır (order_items) ve
+                  her fırsat satırı kampanya numarasını taşır. Siparişin durumu (ör. iptal) orders tablosunun status alanında durur.
+                  Böylece "kaç tane satıldı?" her an Aurora'dan sayılabilir ve doğru sayaç hep hesaplanabilir: kampanyanın adedi −
+                  satılan. Kampanya sürerken iptal edilen bir sipariş, iptal akışında INCR ile sayaca geri verilir; sorgu da iptalleri
+                  saymaz, iki taraf yine eşit kalır. Sayaç 0'a inince DECR −1 verir, uygulama INCR ile geri alır ve "tükendi" der;
+                  kart bitişe kadar durur.
+                code:
+                  - {code: "SELECT COALESCE(SUM(i.qty), 0) FROM order_items i JOIN orders o USING (order_id)", tag: [Kampanya işi → Aurora, Aurora → Kampanya işi], say: "Sipariş satırlarını siparişleriyle eşleştirip adetleri topla (hiç yoksa 0)…"}
+                  - {code: "  WHERE i.campaign_id = 'flash-1031' AND o.status <> 'cancelled'", tag: Aurora'nın içinde, say: "…sadece bu kampanyanın satırları, iptaller hariç (<> \"eşit değil\"). Sayaç = 50 − bu sayı."}
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              Bu zincirde ilk yükleme büyük bir dosya değil: kampanyanın başladığı an fırsatın belleğe ilk yazılmasıdır. Kampanya
+              önce DocumentDB'ye kaydedilir, saat gelince kampanya işi belleği doldurur.
+            cards:
+              - title: Kampanya önce asıl kayda
+                text: >-
+                  Kampanya ekibi fırsatı arka ofis ekranından planlar. Katalog yönetim servisi alanları kontrol eder (ürün var mı,
+                  fırsat fiyatı normal fiyattan düşük mü, bitiş başlangıçtan sonra mı) ve kampanyayı campaigns koleksiyonuna yazar.
+                  Bellekte henüz hiçbir şey yok.
+                code:
+                  - {code: "db.campaigns.insert_one({ \"_id\": \"flash-1031\", \"product_id\": \"P0001\", \"price\": 2024.30, \"stock\": 50, \"starts_at\": …, \"ends_at\": … })", tag: Katalog yönetim servisi → DocumentDB, say: Kampanyanın asıl kaydı.}
+              - title: İki zamanlayıcı görevi
+                text: >-
+                  Servis EventBridge Scheduler'a iki görev kurar. Başlangıç görevi tek seferliktir (at) ve çalıştıktan sonra kendini
+                  siler. Kontrol görevi düzenlidir (rate): başlangıç ve bitiş tarihi arasında her dakika çalışır. Zamanlayıcı kampanya
+                  işini beklemeden (asenkron) çalıştırır; çalıştıramazsa yeniden dener ve sonunda görevi hata kuyruğuna bırakır.
+                code:
+                  - {code: "CreateSchedule(Name=\"flash-1031-start\", ScheduleExpression=\"at(2026-10-31T10:00:00)\", ScheduleExpressionTimezone=\"Europe/Istanbul\", ActionAfterCompletion=\"DELETE\", …)", tag: Katalog yönetim servisi → EventBridge Scheduler, say: "Türkiye saatiyle 10:00'da bir kez; sonra görev silinir."}
+                  - {code: "CreateSchedule(Name=\"flash-1031-check\", ScheduleExpression=\"rate(1 minute)\", StartDate=10:01, EndDate=16:00, …)", tag: Katalog yönetim servisi → EventBridge Scheduler, say: Kampanya boyunca her dakika.}
+                  - {code: "  Target={ Arn: <kampanya işi>, Input: {\"campaign\": \"flash-1031\"}, DeadLetterConfig: { Arn: <hata kuyruğu> } }", tag: EventBridge Scheduler'ın içinde, say: "Hangi iş, hangi kampanya, başarısız görev nereye."}
+              - title: Başlangıç çalışması
+                text: >-
+                  Kampanya işi kampanyayı ve ürünü DocumentDB'den okur. Belleğe önce sayacı, sonra kartı yazar ve ikisine bitiş
+                  saatini koyar. Sayaç NX ile yazılır: anahtar zaten varsa (ör. satışlar başlamışsa) dokunulmaz.
+                code:
+                  - {code: "c = db.campaigns.find_one({\"_id\": \"flash-1031\"}); p = db.products.find_one({\"_id\": c[\"product_id\"]})", tag: [Kampanya işi → DocumentDB, DocumentDB → Kampanya işi], say: Kampanya ve ürün okunur.}
+                  - {code: "r.set(\"lm:deal:stock\", c[\"stock\"], nx=True)", tag: Kampanya işi → ElastiCache, say: "Önce sayaç: yoksa 50."}
+                  - {code: "r.hset(\"lm:deal\", mapping={\"product_id\": p[\"_id\"], \"name\": p[\"name\"], \"price\": c[\"price\"], \"old_price\": p[\"price\"], \"ends_at\": bitis})", tag: Kampanya işi → ElastiCache, say: Sonra kart.}
+                  - {code: "r.expireat(\"lm:deal:stock\", bitis); r.expireat(\"lm:deal\", bitis)", tag: Kampanya işi → ElastiCache, say: İkisine aynı bitiş saati.}
+              - title: Yükleme kontrol edilir
+                text: >-
+                  İş yazdığı anahtar sayısını ve hatalarını CloudWatch'a yazar. Ekip ilk çalışmadan sonra kartı ve sayacı okur, kalan
+                  ömrünü de sorar: ömür bitişe kadar kalan saniye olmalı. Ömrü olmayan bir fırsat anahtarı (TTL −1) kampanya bitince
+                  silinmez ve yanlış bir fırsat günlerce görünür.
+                code:
+                  - {code: "HGETALL lm:deal · GET lm:deal:stock", tag: [Ekip → ElastiCache, ElastiCache → Ekip], say: "Kart ve sayaç doğru mu?"}
+                  - {code: "TTL lm:deal · TTL lm:deal:stock", tag: [Ekip → ElastiCache, ElastiCache → Ekip], say: "İkisinin kalan ömrü aynı ve bitişe kadar mı? (−1: ömür yok)"}
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              Kampanya başladıktan sonra bellekteki fırsatı iki şey değiştirir: her satışta uygulama sayacı azaltır, her dakika
+              kontrol görevi sayacı siparişlerle karşılaştırır. Kart kampanya boyunca değişmez; ekip fiyatı değiştirirse servis
+              kampanya kaydını günceller ve kampanya işini bir kez daha çalıştırır, HSET kartın alanlarının üzerine yazar.
+            cards:
+              - title: "Satış: önce sayaç, sonra sipariş"
+                text: >-
+                  Müşteri "Buy one now" butonuna basınca uygulama önce sayacı DECR ile azaltır. Sonuç 0 ya da üstüyse bir ürün bu
+                  müşterinin; sipariş Aurora'ya tek transaction ile, kampanya numarasıyla yazılır. Sonuç 0'ın altındaysa ürün
+                  kalmamıştır; INCR ile sayaç geri alınır. Uygulama, kart (lm:deal) bellekte yoksa satış denemez: DECR olmayan bir
+                  sayacı 0 sayıp −1 yapar ve ömrü olmayan yanlış bir sayaç yaratırdı. Bu satın almayı kendin görevin Adım 17'sinde
+                  yapacaksın.
+                code:
+                  - {code: "left = r.decr(\"lm:deal:stock\")", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Tek komutla azalt, yeni değeri al (ör. 49)."}
+                  - {code: "if left < 0: r.incr(\"lm:deal:stock\"); return \"tükendi\"", tag: [Uygulamanın içinde, Uygulama → ElastiCache], say: Ürün kalmadıysa sayacı geri al.}
+                  - {code: "BEGIN; INSERT INTO orders …; INSERT INTO order_items (…, campaign_id) VALUES (…, 'flash-1031'); COMMIT;", tag: Uygulama → Aurora, say: "Sipariş ve satırı birlikte; satırda kampanya numarası."}
+              - title: Oturum her sayfada
+                text: >-
+                  Fırsat zincirinin parçası değil ama aynı bellekte durur: uygulama her sayfa açılışında ziyaretçinin oturumunu
+                  yazar ve ömrünü 30 dakikaya ayarlar.
+                code:
+                  - {code: "HSET lm:session:<ziyaretçi> persona C00001 last_page /", tag: Uygulama → ElastiCache, say: Oturum kaydı.}
+                  - {code: "EXPIRE lm:session:<ziyaretçi> 1800", tag: Uygulama → ElastiCache, say: 30 dakika işlem olmazsa silinir.}
+              - title: Her dakika karşılaştırma
+                text: >-
+                  Kontrol görevi her dakika kampanya işini çalıştırır. İş Aurora'da satılan adedi sayar ve sayaçla karşılaştırır:
+                  sayaç = 50 − satılan olmalı. O an yolda olan bir satış (DECR yapılmış, sipariş henüz yazılmamış) küçük, geçici bir
+                  fark yaratabilir; bu yüzden alarm, fark iki kontrol üst üste sürerse çalar. İş farkı kendisi düzeltmez: sebebine
+                  ekip bakar (ör. DECR'den sonra, COMMIT'ten önce çöken bir uygulama sunucusu sayacı 1 eksik bırakır; ekip farkı
+                  INCRBY ile geri ekler). Sayılar her çalıştırmada CloudWatch'a yazılır.
+                code:
+                  - {code: "sold = aurora.scalar(SATILAN_SORGUSU, \"flash-1031\")   # 1. aşamadaki SUM(qty)", tag: [Kampanya işi → Aurora, Aurora → Kampanya işi], say: Satılan adet asıl kayıttan.}
+                  - {code: "left = int(r.get(\"lm:deal:stock\"))", tag: [Kampanya işi → ElastiCache, ElastiCache → Kampanya işi], say: Bellekteki sayaç.}
+                  - {code: "cloudwatch.put_metric_data(Namespace=\"Shop/Deal\", MetricData=[{\"MetricName\": \"StockDrift\", \"Value\": (50 - sold) - left}])", tag: Kampanya işi → CloudWatch, say: "Fark (normalde 0) ölçü olarak yazılır."}
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              Başlangıç görevi iki kez gelirse, ödeme başarısız olursa, zamanlayıcı işi çalıştıramazsa, bellek kaybolursa ya da
+              kampanya biterse ne olur? Her biri için zincirde bir kural ya da bir parça vardır.
+            cards:
+              - title: Başlangıç görevi iki kez gelirse
+                text: >-
+                  EventBridge Scheduler görevleri en az bir kez teslim eder; nadiren aynı görev iki kez gelir. Sayaç SET … NX ile
+                  yazıldığı için ikinci geliş sayacı başa (50) döndürmez; kart aynı değerlerle yeniden yazılır, bitiş saati aynı
+                  kalır. NX olmasaydı satışlar başladıktan sonra gelen ikinci görev, satılmış ürünleri yeniden satışa açardı.
+              - title: Ödeme başarısız olursa
+                text: >-
+                  DECR bir ürün ayırdı ama ödeme reddedildi: transaction ROLLBACK ile geri alınır, Aurora'ya satır yazılmaz. Uygulama
+                  INCR ile ürünü sayaca geri verir. Böylece "50 − satılan = sayaç" kuralı bozulmaz. Uygulama sunucusu bu iki adımın
+                  arasında çökerse INCR gönderilemez; o farkı her dakikalık karşılaştırma yakalar (3. aşama).
+                code:
+                  - {code: "except OdemeHatasi: db.rollback(); r.incr(\"lm:deal:stock\")", tag: [Uygulama → Aurora, Uygulama → ElastiCache], say: Sipariş geri alınır; ürün sayaca geri döner.}
+              - title: Zamanlayıcı işi çalıştıramazsa
+                text: >-
+                  Zamanlayıcı bir görevi teslim edemezse varsayılan olarak 24 saat boyunca, en fazla 185 kez yeniden dener; bu
+                  zincirde deneme süresi kısaltılır ve teslim edilemeyen görev hata kuyruğuna (SQS) bırakılır. CloudWatch kuyruktaki
+                  görev sayısını izler ve ekibe alarm gönderir. Başlangıç görevi geçici bir hatayla düşerse kontrol görevi bir dakika
+                  içinde fırsatın bellekte olmadığını görür ve onu kurar. Hata kalıcıysa (ör. işin çalıştırma izni silinmiş) kontrol
+                  görevi de çalışamaz; o zaman fırsatı kurtaran alarm ve ekiptir.
+                code:
+                  - {code: "RetryPolicy: { MaximumRetryAttempts: 3, MaximumEventAgeInSeconds: 300 }", tag: EventBridge Scheduler'ın içinde, say: "En fazla 3 deneme, 5 dakika içinde."}
+                  - {code: "Alarm: ApproximateNumberOfMessagesVisible (hata kuyruğu) > 0", tag: CloudWatch → Ekip, say: Kuyruğa görev düşerse alarm.}
+              - title: Bellek kaybolursa
+                text: >-
+                  ElastiCache Serverless veriyi kendiliğinden birden fazla Availability Zone'da tutar; bir veri merkezinin çökmesi
+                  fırsatı kaybettirmez. Anahtarlar yine de kaybolursa (ör. yanlış bir silme) uygulama kutuyu göstermez ve satış denemez.
+                  Bir sonraki kontrol kartı ya da sayacı bulamaz ve ikisini asıl kayıtlardan yeniden kurar: kart DocumentDB'den, sayaç
+                  50 − satılan (Aurora). Bellekten alınmış eski bir yedeğe dönmek işe yaramazdı: yedekteki sayaç, sonradan yapılan
+                  satışları bilmez.
+                code:
+                  - {code: "if not r.exists(\"lm:deal\") or not r.exists(\"lm:deal:stock\"):", tag: [Kampanya işi → ElastiCache, ElastiCache → Kampanya işi], say: "Kart ya da sayaç yok mu? (iki ayrı soru: anahtarlar farklı slotlarda)"}
+                  - {code: "    r.set(\"lm:deal:stock\", 50 - sold)   # NX yok: kalan değere güvenilmez", tag: Kampanya işi → ElastiCache, say: "Sayaç asıl kayıttan: 50 − 5 = 45."}
+                  - {code: "    r.hset(\"lm:deal\", mapping=kart); r.expireat(\"lm:deal:stock\", bitis); r.expireat(\"lm:deal\", bitis)", tag: Kampanya işi → ElastiCache, say: "Kart ve bitiş saatleri yeniden; SET ömrü sildiği için EXPIREAT şart."}
+              - title: Kampanya bitince
+                text: >-
+                  Saat 16:00 olunca iki anahtarın da ömrü dolar. Valkey süresi dolmuş bir anahtarı bir daha hiçbir okumaya vermez;
+                  belleği de kendisi boşaltır. Silme için ayrı bir iş yazılmaz. Kontrol görevi de bitiş tarihinde durur. Kampanyanın
+                  asıl kaydı DocumentDB'de, satışları Aurora'da kalır; raporlar oradan okunur.
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
