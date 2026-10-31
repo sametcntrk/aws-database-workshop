@@ -1679,64 +1679,544 @@ steps:
           - [Koleksiyon, "Aynı türden dokümanların bulunduğu yer. Burada adı products."]
           - [Collection scan, "Index kullanmadan koleksiyondaki dokümanları baştan sona tek tek okumak."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde kategori sorgusu için hazırlık
+      t1:
+        title: Önceden ne vardı? Kategori listesinin verisi ve index'i nasıl hazırlandı?
         intro: >-
-          Kategori sayfası hiç açılmadan, veritabanı bu sayfanın sorusuna göre hazırlanır. Aşağıdaki beş adım bu hazırlığın
-          sırasıdır.
-        text:
-          - title: Önce sayfanın sorusu yazılır
-            text: >-
-              Index'ler veriye göre değil, sorulara göre kurulur. Kategori sayfasının sorusu her ziyarette aynıdır:
-              "category = X olan ürünler, puanı yüksek olan önce, en fazla 48, sadece kart alanları". Bu soru listesi sayfa
-              tasarlanırken çıkarılır ve her yeni ekranla güncellenir.
-            code: |-
-              db.products.find({ category: "Elektronik" }, { name: 1, price: 1, rating: 1, … })
-                         .sort({ rating: -1 }).limit(48)
-          - title: Soruya uyan bileşik index kurulur
-            text: >-
-              Alan sırası kuralı (ESR): önce eşitlik alanı (category), sonra sıralama alanı (rating), en sonda aralık alanı
-              (ör. fiyat). Bu sırayla index'in "Elektronik" bölümü zaten puan sırasındadır: veritabanı oraya gider, 48. kayıtta
-              durur, ayrıca sıralamaz. Ters sırada bütün index'i dolaşırdı.
-            code: |-
-              db.products.createIndex({ category: 1, rating: -1 })
-          - title: Yayından önce plan kontrol edilir
-            text: >-
-              explain, veritabanına "bunu nasıl çalıştıracaksın?" diye sorar. Doğru hazırlıkta plan IXSCAN der ve okunan
-              doküman sayısı dönen sayıya eşittir. COLLSCAN ya da ayrı bir SORT görülürse index eksik ya da sırası yanlıştır.
-            code: |-
-              ….explain("executionStats")  →  IXSCAN { category: 1, rating: -1 },  totalDocsExamined = nReturned
-          - title: Index bellekte durmalı ve bedeli izlenmeli
-            text: >-
-              Hız, index'in sunucu belleğinde olmasına bağlıdır (CloudWatch: IndexBufferCacheHitRatio). Her yazma bütün
-              index'leri günceller; kullanılmayan index $indexStats ile bulunur ve silinir.
-            code: |-
-              db.products.aggregate([{ $indexStats: {} }])   →  index başına kullanım sayısı ve boyut
-          - title: Okumalar kopyalara dağıtılır
-            text: >-
-              Katalog çok okunur, az yazılır. Okuma tercihi secondaryPreferred olur: kategori sorguları replica'lara gider,
-              ana kopya (primary) yazmalara kalır. Replica'lar genelde 100 ms'den kısa gecikmeyle günceldir; "az önce
-              kaydettiğimi hemen göster" gereken ekranlar ise primary'den okur.
-      feed:
-        title: Veri nereden geliyor?
-        writes: >-
-          Katalog yönetimi: ürün ekleyen, fiyat ve stok güncelleyen arka ofis ekranları ya da tedarikçiden gelen ürün
-          dosyalarını aktaran bir iş. Hepsi uygulama üzerinden yazar.
-        reads: Uygulama, mağaza sayfaları için (kategori, ürün sayfası, ana sayfa vitrini).
-        kind: >-
-          Uygulama orkestrasyonu. DocumentDB başka bir veritabanından kendiliğinden veri çekmez. Ama kendi değişikliklerini
-          dışarı verebilir: change streams açıksa her ekleme ve güncelleme sırayla okunabilen bir kayıt olarak çıkar.
-        with: >-
-          Kategori sayfası tek bir veritabanıyla çalışmaz. Ürün görselleri bir nesne deposunda (Amazon S3) durur: ürün
-          dokümanı görselin S3'teki adını (anahtarını) tutar, görselin kendisini tarayıcı ayrı bir istekle alır ve büyük
-          sistemlerde bu istek bir CDN'den (Amazon CloudFront) karşılanır; uygulama görselin byte'larını taşımaz. Oturum
-          bilgisi (kim, hangi sayfada) bellekte duran bir veritabanında (ElastiCache) kısa ömürlü bir kayıt olarak tutulur.
-          Metinle arama ise ayrı bir arama motoruna (OpenSearch) gider.
-        best: >-
-          Katalog tek yerde (burada DocumentDB) tutulur, diğer sistemler oradan beslenir. Metin araması için ürünler
-          OpenSearch'e aktarılır: DocumentDB'nin OpenSearch ile zero-ETL entegrasyonu ya da change streams'i okuyan küçük
-          bir program bu işi yapar. Uygulama aynı ürünü iki yere ayrı ayrı yazmaz, çünkü biri unutulunca iki kopya birbirini
-          tutmaz.
+          Kategori sayfası açılmadan önce DocumentDB'deki products koleksiyonu zaten dolu ve index'leri hazır: Elektronik
+          ürünleri, kitabın sonundaki dizin gibi bir index'te yan yana ve puana göre sıralı duruyor. Burada onları kuran,
+          dolduran, her yazmada güncelleyen ve index'siz bir sorguyu yakalayan gerçek zinciri görüyorsun: önce zincirin
+          bileşenleri, sonra bir simülasyon, sonra dört aşama (tasarım, ilk yükleme, sürekli besleme, tutarlılık ve onarım).
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1", "t0'daki \"Collection scan\" tıklamandan önceki zaman. Kategori sayfasının ilk açılışı (t0 simülasyonundaki \"İstek 1\") da bu zamana düşer; bu bölüm ise ondan da önceki hazırlığı anlatır: ürünlerin ve index'in DocumentDB'ye nasıl geldiğini."]
+          - ["Ekip ve katalog ekibi", "Ekip: mağazanın sistemini kuran ve işleten mühendisler; alarmlara onlar bakar. Katalog ekibi: ürün ekleyen, fiyat ve puan değiştiren çalışanlar; kod yazmaz, arka ofis ekranını kullanır."]
+          - ["Koleksiyon ve doküman", "DocumentDB'de koleksiyon bir dosya dolabı (burada products), doküman içindeki tek bir kayıt: bir ürünün bütün bilgisi."]
+          - ["Kesit", "Simülasyonda gösterilen birkaç kayıt. Gerçek koleksiyonda 200 ürün var; kesit, t0'daki simülasyonun 8 ürünü."]
+          - ["Index ve index girişi", "Index, bir ya da birkaç alana göre sıralı tutulan ayrı bir liste; kitabın sonundaki dizin gibi. Index, DocumentDB'de dokümanların yanında ayrı bir yapı olarak durur. Her dokümanın her index'te bir satırı vardır: index girişi (ör. \"Elektronik · 4.8 → P0021\": aranan değerler ve dokümanın numarası; dizindeki \"kelime → sayfa\" satırı gibi)."]
+          - ["Bileşik index ve ESR", "Bileşik index birden fazla alanı birlikte tutar: önce category, sonra rating. ESR (Equality, Sort, Range) alan sırası kuralıdır: önce eşitlikle aranan alan, sonra sıralama alanı, en sonda aralık alanı."]
+          - ["Doğrulama kuralı (validator)", "Koleksiyona konan giriş kontrolü: zorunlu alanlar, türleri ve izinli değerleri (kategori sadece 5 bilinen kategoriden biri olabilir). Kurala uymayan doküman yazılmaz; kapıdaki bilet kontrolü gibi."]
+          - ["Upsert", "\"Bu numarayla doküman varsa güncelle, yoksa yarat.\" Aynı satır kaç kez gelirse gelsin tek doküman (ve her index'te tek giriş) olur."]
+          - ["S3 ve S3 olayı", "S3, AWS'in dosya deposu. Klasöre yeni dosya gelince S3 bir haber (olay) gönderir; bu haber bir programı kendiliğinden başlatabilir."]
+          - ["AWS Lambda", "Bir olay gelince kısa bir kodu çalıştıran AWS servisi; sunucuyu AWS yönetir."]
+          - ["explain ve plan", "explain, veritabanına \"bu sorguyu nasıl çalıştırırsın?\" diye sorar. Cevap plandır: IXSCAN (index'te arama), COLLSCAN (bütün koleksiyonu baştan sona okuma), SORT (bellekte ayrıca sıralama)."]
+          - ["Dağıtım hattı (CI/CD)", "Yeni kodun yayına çıkmadan önce geçtiği otomatik adımlar: test eder, kurar, kontrol eder. Bir kontrol başarısızsa kod yayına çıkmaz."]
+          - ["Foreground ve background index kurulumu", "Foreground (varsayılan): index kurulurken koleksiyondaki bütün işlemler bekler. Background: mağaza okumaya ve yazmaya devam ederken index arkada kurulur."]
+          - ["Primary ve replica", "DocumentDB kümesinin yazan sunucusu primary, sadece okuyan sunucuları replica. Hepsi aynı veri hacmini (diskini) paylaşır; veri kopyalanmaz. Replica yeni bir yazmayı yine de çok kısa bir gecikmeyle görür (genelde 100 ms'den az)."]
+          - ["Profiler", "DocumentDB'nin yavaş işlem kaydı: belli bir süreden (eşik, ör. 100 ms) uzun süren işlemleri süresi ve plan özetiyle yazar."]
+          - ["CloudWatch, CloudWatch Logs ve metric filter", "CloudWatch: AWS'in ölçüm ve alarm servisi. CloudWatch Logs: kayıt (log) deposu. Metric filter: kayıtlarda bir kalıbı (ör. COLLSCAN) sayıp ölçüye çeviren kural; alarm bu ölçüye kurulur."]
+          - ["Sürekli yedek (PITR)", "Point-in-time recovery: veritabanını geçmişteki herhangi bir saniyeye, yeni bir kümede geri açabilme."]
+          - ["Görev adımları", "\"Adım 1\", \"Adım 4\" gibi adlar bu görevin (mağazadaki 37 adımın) adımlarıdır. Simülasyonun sayacındaki \"Adım 1 / 14\" ise simülasyonun karesidir."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra"
+          sütunu veriyi kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim kodumuz" etiketli
+          parçaları mağazanın ekibi yazar. Zincirin üç kolu var: ürünleri yazan kol (içe aktarma işi, katalog yönetim servisi;
+          Adım 1'deki zincirin aynısı), index'leri kuran ve planları kontrol eden kol (dağıtım hattı) ve index'siz sorguyu
+          yakalayan kol (profiler, alarmlar). Aynı parçalar aşağıdaki simülasyonda birer kutu: üst sırada yazan ve kuran
+          parçalar, ortada DocumentDB, altta okuyan, izleyen ve yandaki işler.
+        inventory:
+          - id: staging
+            name: S3 (içe aktarma klasörü)
+            kind: aws
+            what: Amazon S3 bucket'ı
+            does: >-
+              Eski katalog sisteminin dışa aktardığı ürün dosyaları (ilk yükleme) ve tedarikçilerin her gece gönderdiği ürün
+              dosyaları buraya gelir. Yeni dosya gelince S3 olayı içe aktarma işini başlatır.
+            box: Ürün dosyalarının geldiği klasör; yeni dosya işi başlatır.
+            phases: [2, 3, 4]
+            before: Eski katalog sistemi, tedarikçiler
+            after: importer
+          - id: importer
+            name: İçe aktarma işi (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod
+            does: >-
+              Dosyayı satır satır okur, alanları hedef şekle çevirir, ürünü ürün numarasıyla DocumentDB'ye yazar (upsert).
+              Kabul edilmeyen satırı hata klasörüne, okunan / yazılan / reddedilen sayılarını CloudWatch'a yazar.
+            box: "Dosyayı okur, ürünü ürün no'suyla yazar (upsert); sayıları CloudWatch'a."
+            phases: [2, 3, 4]
+            before: staging
+            after: [docdb, rejects, monitor]
+          - id: admin
+            name: Katalog yönetim servisi
+            kind: code
+            what: arka ofis programı (ürün ekranlarının arka ucu)
+            does: >-
+              Katalog ekibinin ekranda eklediği ya da değiştirdiği ürünü kontrol eder ve ürün numarasıyla DocumentDB'ye yazar.
+            box: Ürün ekranından gelen ürünü kontrol eder ve yazar.
+            phases: [3]
+            before: Katalog ekibi (arka ofis ekranı)
+            after: docdb
+          - id: indexjob
+            name: Index ve plan kontrolü (dağıtım hattı)
+            kind: code
+            what: dağıtım hattında (CI/CD) çalışan kod
+            does: >-
+              Her yayından önce ve ayrıca her gece çalışır. Koleksiyonu doğrulama kuralıyla ve gereken index'leri kurar; eksik
+              bir index'i canlı koleksiyonda arka planda (background) kurar. Sonra sayfaların her sorusunu explain ile dener;
+              beklenmeyen bir COLLSCAN görürse yayını durdurur (gece çalışmasında alarm verir). Sonucu CloudWatch'a yazar.
+            box: "Index'leri kurar; her sorunun planını explain ile dener (her yayında ve her gece), COLLSCAN görürse durdurur."
+            phases: [1, 2, 3, 4]
+            before: Ekip (yeni ekran, yeni sorgu)
+            after: [docdb, monitor]
+          - id: docdb
+            name: DocumentDB (shop.products)
+            kind: aws
+            what: katalog veritabanı (bir primary, bir replica)
+            does: >-
+              Ürünlerin asıl kaydı ve index'leri. Her doküman yazılırken koleksiyonun bütün index'lerini de günceller. Okumalar
+              replica'ya gider; replica aynı veri hacmini paylaştığı için index'ler orada da hazırdır.
+            box: Ürünler ve index'leri; her yazmada bütün index'ler güncellenir.
+            phases: [1, 2, 3, 4]
+            before: [importer, admin, indexjob]
+            after: [web, profiler, backup]
+          - id: web
+            name: Uygulama (mağaza sayfaları)
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucusunda)
+            does: >-
+              Kategori sayfası her açıldığında kategori sorgusunu DocumentDB'ye gönderir (t0'daki istek); okuma tercihi
+              secondaryPreferred olduğu için sorgu replica'ya gider. Kataloğa yazmaz.
+            box: "Kategori sorgusunu gönderir (replica'ya); kataloğa yazmaz."
+            phases: [3, 4]
+            before: Tarayıcı (sayfa açılışları)
+            after: docdb
+          - id: profiler
+            name: DocumentDB profiler
+            kind: aws
+            what: DocumentDB'nin yavaş işlem kaydı
+            does: >-
+              Eşikten (burada 100 ms) uzun süren işlemleri koleksiyonu (ns), süresi (millis) ve plan özetiyle (planSummary:
+              IXSCAN, COLLSCAN …) CloudWatch Logs'a yazar. Eşiğin altında kalan işlemi yazmaz.
+            box: "100 ms'yi aşan işlemleri plan özetiyle CloudWatch Logs'a yazar."
+            phases: [3, 4]
+            before: docdb
+            after: monitor
+          - id: monitor
+            name: CloudWatch alarmları
+            kind: aws
+            what: AWS'in izleme servisi
+            does: >-
+              İçe aktarma işinin sayılarını, plan kontrolünün sonucunu, profiler kayıtlarındaki COLLSCAN sayısını (metric filter)
+              ve index'lerin bellekten okunma oranını (IndexBufferCacheHitRatio) izler; eşik aşılınca ekibe alarm gönderir.
+            box: "Yükleme sayıları, plan kontrolü, COLLSCAN sayısı, index bellek oranı; alarm verir."
+            phases: [2, 3, 4]
+            before: [importer, indexjob, profiler, docdb]
+            after: Ekip (alarm)
+          - id: rejects
+            name: Hata klasörü (S3)
+            kind: aws
+            what: Amazon S3 bucket'ı
+            does: Kabul edilmeyen satırları sebebiyle saklar; diğer satırlar beklemeden yazılır. Ekip satırı düzeltip yeniden gönderir.
+            box: Reddedilen satırlar, sebebiyle.
+            phases: [4]
+            before: importer
+            after: Ekip (düzeltir, yeniden gönderir)
+          - id: backup
+            name: DocumentDB sürekli yedeği (PITR)
+            kind: aws
+            what: DocumentDB'nin yedekleme özelliği
+            does: >-
+              Kataloğu saklama süresi içindeki (1–35 gün) herhangi bir saniyeye, yeni bir kümede geri açar. Yanlış bir toplu
+              değişiklikten sonra doğru dokümanlar oradan geri yazılır. Silinen bir index için gerekmez: index veriden yeniden kurulur.
+            box: Kataloğu geçmişteki bir saniyeye yeni bir kümede açar.
+            phases: [4]
+            before: docdb
+            after: Ekip (geri yükleme)
+        sim_title: "Simülasyon: kategori listesinin verisi ve index'i nasıl hazırlandı?"
+        sim:
+          kind: pipeline
+          title: Dosyalar, ekran ve dağıtım hattı → DocumentDB (ürünler ve index'leri) → okuyan ve izleyenler
+          caption: >-
+            DocumentDB kutusunda üç tablo var: index listesi, ürünler ve kategori index'inin girişleri. Ürünler ve girişler
+            kesit: t0'daki simülasyonun 8 ürünü (katalogda 200). Önce koleksiyon boşken index'lerin kurulması ve ilk yükleme,
+            sonra yeni bir ürünün ve bir puan değişikliğinin index'e girişi, canlı koleksiyonda yeni bir index ve sıradan bir gün,
+            en sonda aynı dosyanın ikinci kez gelmesi, bozuk bir satır, index'siz bir sorgu ve yanlış bir toplu değişiklik
+            oynuyor. 4. aşamada "Örnek durum" diye başlayan iki kare bu zincirde yaşanmış durumlar; "Olsaydı" diye başlayan iki
+            kare yaşanmadı, yaşansaydı ne olacağını gösteriyor. Ürün adları t0'daki simülasyondaki gibi kısaltıldı (gerçek adı
+            ör. Bosphorus Akıllı Saat 21); ürün no, kategori ve puan canlı sistemden. P0061'in eski puanı (4.6), dosya adları ve
+            profiler kaydındaki süre temsilî değerler. Son karede koleksiyon, kategori sayfasının açıldığı andaki (t0) hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım}
+          rows:
+            - {id: writers, title: "Ürünleri yazanlar ve index'leri kuranlar", side: true}
+            - {id: stores, title: "Kategori sayfasının okuduğu depo"}
+            - {id: helpers, title: "Okuyan, izleyen ve yandaki işler", side: true}
+          summary: >-
+            Index'leri dağıtım hattı veri gelmeden kurdu; ürünleri içe aktarma işi ve ürün ekranı yazdı ve her yazmada DocumentDB
+            bütün index'leri güncelledi. Renk index'i sonradan, canlı koleksiyonda arka planda kuruldu. İkinci kez gelen dosya
+            kopya yaratmadı, bozuk satır ne koleksiyona ne index'e girdi; index'siz bir sorgu profiler ve alarmla yakalanırdı.
+            Son durum: kesitte 8 doküman, index'in Elektronik bölümünde 4 giriş; t0'daki simülasyonun başladığı durum.
+          boxes:
+            - id: staging
+              row: writers
+            - id: importer
+              row: writers
+            - id: admin
+              row: writers
+            - id: indexjob
+              row: writers
+            - id: docdb
+              row: stores
+              tables:
+                - name: "index listesi (koleksiyonun bütün index'leri)"
+                  cols: [index, alanlar, kimin için]
+                  rows:
+                    - {key: ix_id, index: "_id_", alanlar: "{ _id: 1 }", kimin için: "ürün sayfası (tek ürün)", hidden: true}
+                    - {key: ix_cr, index: "category_1_rating_-1", alanlar: "{ category: 1, rating: -1 }", kimin için: "kategori sayfası (bu adım)", hidden: true}
+                    - {key: ix_r, index: "rating_-1", alanlar: "{ rating: -1 }", kimin için: ana sayfa vitrini, hidden: true}
+                    - {key: ix_renk, index: "attributes.renk_1", alanlar: "{ \"attributes.renk\": 1 }", kimin için: "renk filtresi (Adım 4)", hidden: true}
+                - name: "shop.products (kesit: t0'daki 8 ürün; katalogda 200)"
+                  cols: [_id, name, category, rating]
+                  rows:
+                    - {_id: P0014, name: Python ile Veri, category: Kitap, rating: 4.7, hidden: true}
+                    - {_id: P0021, name: Akıllı Saat, category: Elektronik, rating: 4.8, hidden: true}
+                    - {_id: P0052, name: Kahve Makinesi, category: Ev & Yaşam, rating: 4.9, hidden: true}
+                    - {_id: P0061, name: Powerbank, category: Elektronik, rating: 4.6, hidden: true}
+                    - {_id: P0083, name: Spor Çantası, category: Spor, rating: 4.7, hidden: true}
+                    - {_id: P0105, name: Deri Ceket, category: Moda, rating: 4.8, hidden: true}
+                    - {_id: P0131, name: Mekanik Klavye, category: Elektronik, rating: 4.8, hidden: true}
+                    - {_id: P0176, name: Bluetooth Hoparlör, category: Elektronik, rating: 4.7, hidden: true}
+                - name: "index category_1_rating_-1: girişleri (kesit: t0'daki 8 ürünün girişleri; önce kategori, sonra puan büyükten küçüğe)"
+                  cols: [category, rating, _id]
+                  rows:
+                    - {key: iP0021, category: Elektronik, rating: 4.8, _id: P0021, hidden: true}
+                    - {key: iP0131, category: Elektronik, rating: 4.8, _id: P0131, hidden: true}
+                    - {key: iP0176, category: Elektronik, rating: 4.7, _id: P0176, hidden: true}
+                    - {key: iP0061, category: Elektronik, rating: 4.6, _id: P0061, hidden: true}
+                    - {key: iP0052, category: Ev & Yaşam, rating: 4.9, _id: P0052, hidden: true}
+                    - {key: iP0014, category: Kitap, rating: 4.7, _id: P0014, hidden: true}
+                    - {key: iP0105, category: Moda, rating: 4.8, _id: P0105, hidden: true}
+                    - {key: iP0083, category: Spor, rating: 4.7, _id: P0083, hidden: true}
+            - id: web
+              row: helpers
+            - id: profiler
+              row: helpers
+            - id: monitor
+              row: helpers
+            - id: rejects
+              row: helpers
+            - id: backup
+              row: helpers
+          frames:
+            - phase: 2
+              who: indexjob
+              lit: [indexjob, docdb]
+              packet: {at: docdb, text: "createCollection(\"products\", { validator }) · createIndex({ category: 1, rating: -1 }) · createIndex({ rating: -1 })"}
+              show: {docdb: [ix_id, ix_cr, ix_r]}
+              fresh: {docdb: [ix_id, ix_cr, ix_r]}
+              note: {docdb: "3 index · 0 doküman", indexjob: "kurulan: koleksiyon + 2 index"}
+              say: >-
+                Koleksiyon henüz yok. Dağıtım hattındaki index ve plan kontrolü products koleksiyonunu doğrulama kuralıyla kurdu
+                (Adım 1'deki kural: adı, 5 bilinen kategoriden biri ve sayı olarak fiyatı olmayan doküman giremez). Sonra iki index kurdu: kategori sayfası için { category: 1, rating: -1 }, ana sayfa vitrini
+                için { rating: -1 }. _id index'ini DocumentDB her koleksiyonda kendisi kurar. AWS, büyük bir veriyi yüklemeden
+                önce index'leri kurmayı önerir; boş koleksiyonda index bir anda kurulur.
+            - phase: 2
+              who: staging
+              lit: [staging]
+              packet: {at: staging, text: "eski-katalog/products-0001.json"}
+              note: {indexjob: ""}
+              say: >-
+                Eski katalog sistemi ürünlerini dosyalara döktü; dosyalar S3'teki içe aktarma klasörüne kondu. S3 olayı içe
+                aktarma işini başlattı. Kesitte bu dosyanın 7 ürününü göreceksin; sekizincisi (P0176) sonra ürün ekranından gelecek.
+            - phase: 2
+              who: importer
+              lit: [staging, importer, docdb, monitor]
+              packet: {at: importer, text: "her satır için updateOne({ _id }, { $set: … }, upsert) · bulk_write(ordered: false)"}
+              show: {docdb: [P0014, P0021, P0052, P0061, P0083, P0105, P0131, iP0021, iP0131, iP0061, iP0052, iP0014, iP0105, iP0083]}
+              fresh: {docdb: [P0014, P0021, P0052, P0061, P0083, P0105, P0131, iP0021, iP0131, iP0061, iP0052, iP0014, iP0105, iP0083]}
+              note: {docdb: "kesitte 7 doküman · her biri 3 index'e birer giriş = 21 giriş", monitor: "ilk yükleme: okunan = yazılan · reddedilen 0"}
+              say: >-
+                İçe aktarma işi dosyayı okudu ve ürünleri ürün numarasıyla toplu yazdı (kesitte 7; katalogdaki öteki ürünler aynı
+                yoldan geldi). DocumentDB her dokümanı yazarken aynı
+                anda 3 index'in her birine bir giriş ekledi: _id, kategori + puan, puan. En alttaki tablo kategori index'inin
+                girişleri: Elektronik ürünleri yan yana ve puana göre sıralı duruyor. Bu sırayı kimse ayrıca yapmadı; index
+                girişi yazılırken kendi yerine konur.
+            - phase: 2
+              who: indexjob
+              lit: [indexjob, docdb, monitor]
+              packet: {at: indexjob, text: "explain(find({ category: \"Elektronik\" }).sort({ rating: -1 }).limit(48)) → IXSCAN category_1_rating_-1"}
+              note: {docdb: "", indexjob: "kategori sorusu: IXSCAN · okunan 3 = dönen 3 (kesitte)", monitor: "plan kontrolü: 4 soru · beklenmeyen COLLSCAN 0"}
+              say: >-
+                Mağaza açılmadan önce index ve plan kontrolü sayfaların 4 sorusunu explain ile denedi: kategori listesi, vitrin,
+                ürün sayfası ve ana sayfadaki gruplama. Kategori sorusunun planı IXSCAN: DocumentDB index'te Elektronik bölümüne
+                gitti, kesitte 3 doküman okudu ve 3'ünü döndü. Gruplama bütün dokümanları bilerek okur; listede "tam okuma
+                beklenir" diye işaretli. Beklenmeyen bir COLLSCAN olsaydı yayın durdurulurdu.
+            - phase: 3
+              who: admin
+              lit: [admin, docdb]
+              packet: {at: admin, text: "updateOne({ _id: \"P0176\" }, { $set: { name: …, category: \"Elektronik\", rating: 4.7, … } }, upsert: true)"}
+              show: {docdb: [P0176, iP0176]}
+              fresh: {docdb: [P0176, iP0176]}
+              note: {indexjob: "", monitor: "", admin: "yazılan 1 · reddedilen 0", docdb: "1 doküman + 3 index girişi"}
+              say: >-
+                Mağaza açıldı. Katalog ekibi ürün ekranından yeni bir ürün ekledi: Bluetooth Hoparlör (P0176, Elektronik, puan
+                4.7). Katalog yönetim servisi alanları kontrol etti ve dokümanı yazdı. DocumentDB aynı yazmada 3 index'i de
+                güncelledi; yeni giriş Elektronik bölümüne, 4.8'lerin altına ve 4.6'nın üstüne girdi. Index'in yazmadaki bedeli
+                bu: tek bir ürün için bir doküman ve üç index girişi yazıldı.
+            - phase: 3
+              who: staging
+              lit: [staging, importer]
+              packet: {at: staging, text: "tedarikci/2026-10-30.json geldi → S3 olayı → içe aktarma işi"}
+              note: {admin: "", docdb: ""}
+              say: >-
+                Gece bir tedarikçinin ürün dosyası klasöre geldi. S3 yeni dosya için bir olay gönderdi; olay içe aktarma işini
+                başlattı. Kimse elle bir şey çalıştırmadı.
+            - phase: 3
+              who: importer
+              lit: [importer, docdb, monitor]
+              packet: {at: importer, text: "updateOne({ _id: \"P0061\" }, { $set: { rating: 4.5 } }, upsert)"}
+              set: {docdb: {P0061: {rating: 4.5}, iP0061: {rating: 4.5}}}
+              fresh: {docdb: [P0061, iP0061]}
+              note: {monitor: "gece dosyası: okunan 1 · yazılan 1 · reddedilen 0", docdb: "1 doküman güncellendi + index girişleri"}
+              say: >-
+                Dosyada tek satır vardı: Powerbank'ın (P0061) puanı 4.6'dan 4.5'e indi. İş aynı numaralı dokümanı buldu ve sadece
+                puanını değiştirdi. Puan index'te olduğu için kategori index'indeki giriş de değişti; giriş Elektronik bölümünün
+                sonunda kaldı. AWS'in belgelerine göre DocumentDB'de her yazma koleksiyonun bütün index'lerini günceller; index
+                sayısı arttıkça her yazma biraz daha pahalı olur.
+            - phase: 3
+              who: indexjob
+              lit: [indexjob, docdb, monitor]
+              packet: {at: docdb, text: "createIndexes: \"products\", indexes: [{ key: { \"attributes.renk\": 1 }, background: true }] · currentOp → stage 8/8 … 100%"}
+              show: {docdb: [ix_renk]}
+              fresh: {docdb: [ix_renk]}
+              note: {monitor: "", docdb: "4 index · kurulum sürerken okuma ve yazma devam etti", indexjob: "yeni index: 1 (arka planda) · süre: dakikalar"}
+              say: >-
+                Ekip kategori sayfasına bir renk filtresi ekledi (Adım 4'te kullanacaksın). Yayından önce index ve plan kontrolü
+                eksik index'i gördü ve onu canlı koleksiyonda kurdu. Varsayılan kurulum (foreground) bitene kadar koleksiyondaki
+                bütün işlemleri bekletir; bu yüzden background: true ile kuruldu ve mağaza okumaya ve yazmaya devam etti. Bir
+                koleksiyonda aynı anda tek index kurulabilir. İlerleme currentOp ile izlendi; son aşama %100 olunca yayın çıktı.
+                Bundan sonra her yazma 4 index'i günceller.
+            - phase: 3
+              who: web
+              lit: [web, docdb, profiler, monitor]
+              packet: {at: web, text: "find({ category: \"Elektronik\" }).sort({ rating: -1 }).limit(48) · readPreference: secondaryPreferred → replica"}
+              note: {indexjob: "", docdb: "", profiler: "eşik 100 ms · bugün yazılan kayıt 0", monitor: "COLLSCAN kaydı 0 · IndexBufferCacheHitRatio ör. %99,9"}
+              say: >-
+                Sıradan bir gün. Kategori sayfası her açıldığında uygulama bu sorguyu gönderir; okuma tercihi secondaryPreferred
+                olduğu için sorgu replica'ya gider. Replica, primary ile aynı veri hacmini paylaştığı için index orada da hazır.
+                Plan IXSCAN, sorgu sunucuda kısa sürer. Profiler sadece 100 ms'yi aşan işlemleri yazar; bugün yazacak bir şey
+                yok. CloudWatch index'lerin bellekten okunma oranını da izler.
+            - phase: 4
+              who: importer
+              lit: [staging, importer, docdb, monitor]
+              packet: {at: importer, text: "aynı dosya yine geldi → updateOne(P0061, upsert) → eşleşen 1, değişen 0"}
+              mark: {docdb: {P0061: fix, iP0061: fix}}
+              note: {profiler: "", monitor: "aynı dosya (2. kez): okunan 1 · eşleşen 1 · değişen 0"}
+              say: >-
+                Örnek durum: S3 olayı aynı dosya için ikinci kez geldi (S3 olayları en az bir kez teslim edilir; nadiren iki kez).
+                İş satırı ürün numarasıyla yazdığı için aynı dokümanı buldu; değerler zaten aynıydı, hiçbir şey değişmedi. İkinci
+                bir Powerbank dokümanı ve index'te ikinci bir giriş oluşmadı; kategori listesinde ürün iki kez görünmez.
+            - phase: 4
+              who: importer
+              lit: [importer, docdb, rejects, monitor]
+              packet: {at: docdb, text: "Document failed validation (P0201, category: \"Elektronk\")"}
+              mark: {docdb: {P0061: "", iP0061: ""}}
+              note: {rejects: "1 satır · P0201 · category: \"Elektronk\"", monitor: "ertesi gece: okunan 3 · yazılan 2 · reddedilen 1 → alarm"}
+              say: >-
+                Örnek durum: ertesi gecenin dosyasında yeni bir ürünün (P0201) kategorisi yanlış yazılmıştı: "Elektronk".
+                Doğrulama kuralı dokümanı reddetti; doküman koleksiyona girmediği için hiçbir index'e de girmedi, index'te
+                "Elektronk" diye ayrı bir bölüm açılmadı. İş satırı sebebiyle hata klasörüne yazdı; alarm ekibe gitti, ekip
+                kategoriyi düzeltip satırı yeniden gönderecek. Dosyadaki diğer 2 satır kesitin dışındaki ürünlerin
+                güncellemeleriydi ve yazıldı.
+            - phase: 4
+              who: profiler
+              lit: [web, docdb, profiler, monitor]
+              packet: {at: profiler, text: "olsaydı (büyük bir katalogda): { ns: \"shop.products\", millis: 340, planSummary: \"COLLSCAN\", … } → CloudWatch Logs"}
+              note: {rejects: "", profiler: "olsaydı (büyük katalog): 1 kayıt · COLLSCAN", monitor: "olsaydı: COLLSCAN sayacı 1 → alarm · gece plan kontrolü: COLLSCAN 1 → alarm"}
+              say: >-
+                Olsaydı: biri kategori index'ini yanlışlıkla silseydi, DocumentDB her kategori isteğinde bütün dokümanları okurdu
+                (COLLSCAN). Katalog büyükse bu 100 ms'yi aşar; profiler işlemi süresi ve plan özetiyle CloudWatch Logs'a yazar,
+                metric filter COLLSCAN kayıtlarını sayar, alarm dakikalar içinde ekibe gider. 200 ürünlük bu katalogda tarama
+                eşiğin altında kalabilir ve profiler onu görmez; onu index ve plan kontrolünün gece çalışması en geç ertesi sabah
+                yakalar. İki durumda da ekip dağıtım hattını çalıştırır, hat index'i arka planda yeniden kurar. t0'daki
+                "Collection scan" isteğin bilerek böyle bir tarama yapacak.
+            - phase: 4
+              who: backup
+              lit: [docdb, backup]
+              note: {profiler: "", monitor: "", backup: "olsaydı: geri dönüş, ör. son 7 gün içinde bir saniye"}
+              say: >-
+                Olsaydı: biri yanlışlıkla bütün puanları bozan bir dosya yükleseydi, sürekli yedek kataloğu yüklemeden bir saniye
+                önceki hâliyle yeni bir kümede açardı; doğru dokümanlar oradan içe aktarma işiyle geri yazılır ve DocumentDB
+                index'leri her yazmada yine kendisi günceller. Yedek veriyi kurtarır; silinen bir index için yedeğe gerek yoktur,
+                çünkü index veriden yeniden kurulur.
+            - phase: 4
+              who: docdb
+              lit: [docdb]
+              note: {backup: "", docdb: "kesitte 8 doküman · Elektronik bölümünde 4 giriş"}
+              say: >-
+                Hazır: kesitte 8 doküman (gerçek katalogda bugün 200, Elektronik'te 40) ve kategori index'inin Elektronik bölümünde 4
+                giriş, sıralı: Akıllı Saat 4.8, Mekanik Klavye 4.8, Bluetooth Hoparlör 4.7, Powerbank 4.5. t0'daki simülasyon bu
+                8 dokümanla başlıyor: index'li istek doğrudan bu 4 girişe gidecek, index'siz istek 8 dokümanın hepsini okuyacak.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Index'ler veriye göre değil, sorulara göre kurulur. Önce sayfaların soruları yazılır, sonra her soruya uyan index
+              seçilir ve her index'in bedeli tartılır.
+            cards:
+              - title: Sayfaların soruları ve index'leri
+                text: >-
+                  Her ekranın DocumentDB'ye sorduğu soru bir listede durur ve her soru bir index'e bağlanır. Bir index birden fazla
+                  soruya yetebilir; hiçbir soruya yaramayan index ise sadece yazmaları yavaşlatır.
+                map:
+                  cols: [Soru, Index, Neden]
+                  rows:
+                    - ["kategori sayfası: find({ category }).sort({ rating: -1 }).limit(48)", "{ category: 1, rating: -1 }", "Bu adımın sorusu. Kategori bölümüne gider; bölüm zaten puana göre sıralı, ayrıca sıralamaz, 48'de durur."]
+                    - ["vitrin: find({ rating: { $gte: 4.5 } }).sort({ rating: -1 }).limit(8)", "{ rating: -1 }", "Ana sayfadaki en yüksek puanlı 8 ürün; puan sırasında ilk 8 giriş."]
+                    - ["ürün sayfası: find_one({ _id })", "_id_ (kendiliğinden)", "Her koleksiyonda DocumentDB'nin kendi kurduğu index."]
+                    - ["renk listesi ve filtresi: { \"attributes.renk\" }", "{ \"attributes.renk\": 1 }", "Renk filtresi eklenince canlı koleksiyonda kuruldu; planına Adım 4'te bakacaksın."]
+                    - ["ana sayfa gruplaması: aggregate($group)", "index yok", "Her kategoriyi saymak için bütün dokümanları bilerek okur (Adım 1)."]
+              - title: Alan sırası önemli (ESR)
+                text: >-
+                  Bileşik index'te alanların sırası, index'in hangi soruya yaradığını belirler. Önce eşitlikle aranan alan
+                  (category = "Elektronik"), sonra sıralama alanı (rating). Bu sırayla Elektronik girişleri yan yana ve zaten puan
+                  sırasında durur. Ters sırada ({ rating: -1, category: 1 }) Elektronik girişleri bütün index'e dağılırdı ve
+                  DocumentDB onları toplamak için index'in tamamını dolaşırdı.
+                code:
+                  - {code: "db.products.createIndex({ category: 1, rating: -1 })", tag: Index ve plan kontrolü → DocumentDB, say: "Önce kategori (eşitlik), sonra puan büyükten küçüğe (sıralama)."}
+                  - {code: "db.products.createIndex({ rating: -1 })", tag: Index ve plan kontrolü → DocumentDB, say: Vitrin için sadece puan.}
+              - title: Her index'in bir bedeli var
+                text: >-
+                  AWS'e göre her yazma koleksiyonun bütün index'lerini günceller; her index ayrıca disk ve bellek kullanır. Bu
+                  yüzden "belki lazım olur" diye index kurulmaz. AWS'in DocumentDB blogu bir koleksiyonda en fazla beş index
+                  önerir; burada dört var. Az değerli alanlar (ör. evet / hayır) iyi index olmaz: her değer çok fazla dokümanı
+                  gösterir. Kullanılmayan index $indexStats ile bulunur ve silinir.
+                code:
+                  - {code: "db.products.aggregate([{ $indexStats: {} }])", tag: [Ekip → DocumentDB, DocumentDB → Ekip], say: "Her index için boyut ve kaç kez kullanıldığı (accesses.ops)."}
+                  - {code: "  → { name: \"rating_-1\", accesses: { ops: … }, size: … }", tag: DocumentDB'nin içinde, say: "ops hep 0 kalan index hiçbir soruya yaramıyor demektir."}
+              - title: Okumalar replica'ya gider
+                text: >-
+                  Katalog çok okunur, az yazılır. Uygulama okuma tercihini secondaryPreferred yapar: kategori sorguları replica'ya
+                  gider, primary yazmalara kalır. Replica'lar primary ile aynı veri hacmini paylaşır; veri ve index kopyalanmaz,
+                  index'i her sunucuda ayrıca kurmak gerekmez. Replica yeni bir yazmayı yine de çok kısa bir gecikmeyle görür
+                  (genelde 100 ms'den az); "az önce kaydettiğimi hemen göster" gereken ekranlar primary'den okur.
+                code:
+                  - {code: "MongoClient(host=…, replicaSet=\"rs0\", readPreference=\"secondaryPreferred\", tls=True, …)", tag: Uygulamanın içinde, say: "Okumalar önce replica'ya; replica yoksa primary'ye."}
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              Mağaza açılmadan önce eski katalog bir kez taşınır. Sıra bilerek böyledir: önce koleksiyon, kural ve index'ler,
+              sonra veri, sonra planların kontrolü.
+            cards:
+              - title: Önce index'ler, sonra veri
+                text: >-
+                  AWS, DocumentDB'ye büyük bir veriyi aktarmadan önce index'leri kurmayı önerir. Boş koleksiyonda index bir anda
+                  kurulur; sonra her doküman yazılırken girişi index'e kendiliğinden eklenir. Dolu bir koleksiyonda index kurmak
+                  ise bütün koleksiyonu okumayı gerektirir (3. aşama).
+                code:
+                  - {code: "db.createCollection(\"products\", { validator: { $jsonSchema: { … } } })", tag: Index ve plan kontrolü → DocumentDB, say: "Koleksiyon, Adım 1'deki giriş kuralıyla."}
+                  - {code: "db.products.createIndex({ category: 1, rating: -1 }); db.products.createIndex({ rating: -1 })", tag: Index ve plan kontrolü → DocumentDB, say: Veri gelmeden iki index.}
+              - title: Toplu yazma index'leri de doldurur
+                text: >-
+                  İçe aktarma işi her satırı ürün numarasıyla upsert eder ve yüzlerce satırı tek pakette gönderir. Paket sırasız
+                  gider (ordered: false): bir satır reddedilirse diğerleri yine yazılır. DocumentDB her doküman için her index'e
+                  bir giriş ekler; 200 ürün ve 3 index, 600 index girişi demek.
+                code:
+                  - {code: "ops.append(UpdateOne({ \"_id\": doc[\"_id\"] }, { \"$set\": doc }, upsert=True))", tag: İçe aktarma işinin içinde, say: "Varsa güncelle, yoksa yarat."}
+                  - {code: "db.products.bulk_write(ops, ordered=False)", tag: [İçe aktarma işi → DocumentDB, DocumentDB → İçe aktarma işi], say: Paket tek seferde gider; index girişleri aynı yazmada eklenir.}
+              - title: Planlar yayından önce kontrol edilir
+                text: >-
+                  Index ve plan kontrolü her sorunun planını explain ile ister. Doğru hazırlıkta kategori sorusunun planı IXSCAN
+                  der ve okunan doküman sayısı dönen sayıya eşittir; canlı sistemde bugün Elektronik için okunan 40, dönen 40.
+                  Bilerek bütün dokümanları okuyan sorular (ana sayfadaki gruplama) listede "tam okuma beklenir" diye işaretlidir;
+                  kontrol onlarda COLLSCAN'i kabul eder. Plan
+                  COLLSCAN derse ya da ayrı bir SORT aşaması görünürse index eksiktir ya da sırası yanlıştır; yayın durur.
+                code:
+                  - {code: "plan = db.command(\"explain\", { \"find\": \"products\", \"filter\": { \"category\": \"Elektronik\" }, \"sort\": { \"rating\": -1 }, \"limit\": 48 }, verbosity=\"executionStats\")", tag: [Index ve plan kontrolü → DocumentDB, DocumentDB → Index ve plan kontrolü], say: Sorgu çalıştırılır ve nasıl çalıştığı ölçülür.}
+                  - {code: "  → IXSCAN { indexName: \"category_1_rating_-1\" } · totalDocsExamined 40 · nReturned 40", tag: DocumentDB → Index ve plan kontrolü, say: "Canlı sistemdeki plan: index'le, okunan = dönen."}
+                  - {code: "if \"COLLSCAN\" in str(plan[\"queryPlanner\"]): sys.exit(\"index eksik\")", tag: Index ve plan kontrolünün içinde, say: COLLSCAN varsa yayın durur.}
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              Mağaza açıldıktan sonra ürünler iki yoldan değişir: ürün ekranı ve gece gelen tedarikçi dosyaları. Her değişiklikte
+              DocumentDB index'leri kendisi günceller. Yeni bir ekran yeni bir soru getirirse index canlı koleksiyonda kurulur.
+            cards:
+              - title: "Yeni ürün: bir doküman, her index'e bir giriş"
+                text: >-
+                  Katalog ekibi ürünü ekrandan ekler. Katalog yönetim servisi alanları kontrol eder ve dokümanı yazar. DocumentDB
+                  aynı yazmada dokümanın girişini her index'e, kendi sırasındaki yere koyar; kimse index'i elle güncellemez.
+                code:
+                  - {code: "db.products.update_one({ \"_id\": \"P0176\" }, { \"$set\": { \"category\": \"Elektronik\", \"rating\": 4.7, … } }, upsert=True)", tag: Katalog yönetim servisi → DocumentDB, say: Yeni ürün; girişler index'lere aynı yazmada girer.}
+              - title: Gece gelen dosya
+                text: >-
+                  Tedarikçi dosyası klasöre gelince S3 olayı içe aktarma işini başlatır. İş ilk yüklemedeki kodla çalışır; değişen
+                  alanlar güncellenir. Puan, tedarikçi dosyasında gelir (Adım 1'deki alan eşlemesi: "puan → rating"). Puan gibi
+                  index'teki bir alan değişince index girişi de yeni değere taşınır.
+                code:
+                  - {code: "Events: [\"s3:ObjectCreated:*\"], Filter: { Prefix: \"tedarikci/\" } → içe aktarma işi", tag: S3 → İçe aktarma işi, say: Yeni dosya işi kendiliğinden başlatır.}
+                  - {code: "UpdateOne({ \"_id\": \"P0061\" }, { \"$set\": { \"rating\": 4.5 } }, upsert=True)", tag: İçe aktarma işi → DocumentDB, say: Puan değişir; index girişi de.}
+              - title: Canlı koleksiyonda yeni index
+                text: >-
+                  Dolu bir koleksiyonda index kurmak bütün dokümanları okumayı gerektirir. Varsayılan kurulum (foreground) bitene
+                  kadar koleksiyondaki bütün işlemleri bekletir; canlı mağazada bu yüzden background: true kullanılır. Bir
+                  koleksiyonda aynı anda tek index kurulur. İlerleme currentOp ile izlenir (aşama ve yüzde); AWS kurulumu
+                  mümkünse trafiğin az olduğu saatlere koymayı önerir. Yeni ekran index hazır olunca yayına çıkar.
+                code:
+                  - {code: "db.runCommand({ createIndexes: \"products\", indexes: [{ key: { \"attributes.renk\": 1 }, name: \"attributes.renk_1\", background: true }] })", tag: Index ve plan kontrolü → DocumentDB, say: Mağaza çalışırken arka planda kurulur.}
+                  - {code: "db.currentOp({ \"command.createIndexes\": { $exists: true } })", tag: [Index ve plan kontrolü → DocumentDB, DocumentDB → Index ve plan kontrolü], say: "Kurulum ne durumda?"}
+                  - {code: "  → msg: \"Index Build: building index attributes.renk_1, stage 5/8 … 65%\"", tag: DocumentDB'nin içinde, say: "Kurulum sürerken gelen cevap: 8 aşamanın 5'incisi, %65. Son aşama %100 olunca hazır."}
+              - title: Profiler hep açık
+                text: >-
+                  Profiler kümenin ayar grubunda (parameter group) açılır ve kayıtları CloudWatch Logs'a gönderilir. Eşik
+                  varsayılan olarak 100 ms; en düşük 50 ms. AWS yüksek bir eşikle başlayıp yavaş yavaş düşürmeyi önerir: düşük eşik
+                  yoğun bir kümede ek yük getirir. Profiler'ın kendisi ücretsizdir; CloudWatch Logs normal fiyatından ödenir.
+                code:
+                  - {code: "aws docdb modify-db-cluster-parameter-group … --parameters ParameterName=profiler,ParameterValue=enabled", tag: Ekip → AWS, say: Profiler açılır.}
+                  - {code: "  ParameterName=profiler_threshold_ms,ParameterValue=100 ParameterName=profiler_sampling_rate,ParameterValue=1.0", tag: Ekip → AWS, say: "100 ms'yi aşan her işlem yazılır."}
+                  - {code: "aws docdb modify-db-cluster … --cloudwatch-logs-export-configuration '{\"EnableLogTypes\":[\"profiler\"]}'", tag: Ekip → AWS, say: "Kayıtlar /aws/docdb/<küme>/profiler adlı yere gider."}
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              Aynı dosya iki kez gelirse, bir satır bozuksa, bir sorgu index'siz çalışırsa, index'ler belleğe sığmazsa ya da
+              yanlış bir toplu değişiklik yapılırsa ne olur? Her biri için zincirde bir kural ya da bir parça vardır; her parçanın
+              neyi yakaladığı ve neyi yakalamadığı aşağıda.
+            cards:
+              - title: Aynı dosya iki kez gelirse
+                text: >-
+                  S3 olayları en az bir kez teslim edilir; nadiren aynı olay iki kez gelir. İş her satırı ürün numarasıyla upsert
+                  ettiği için ikinci geliş aynı dokümanı bulur; kopya doküman ve index'te kopya giriş oluşmaz, ürün listede iki kez
+                  görünmez. Yakalamadığı: eski bir dosya yenisinden sonra gelirse eski değer yenisinin üstüne yazılır; bu yüzden iş
+                  dosyaları adlarındaki tarih sırasıyla işler.
+              - title: Bozuk satır index'e de girmez
+                text: >-
+                  Doğrulama kuralına uymayan doküman (ör. bilinmeyen kategori "Elektronk") yazılmaz; yazılmayan dokümanın hiçbir
+                  index'te girişi olmaz. Paket sırasız gittiği için diğer satırlar yazılır. İş reddedilen satırı sebebiyle hata
+                  klasörüne yazar, alarm ekibe gider; ekip düzeltip yeniden gönderir. Yakalamadığı: kurala uyan ama yanlış bir
+                  değer (ör. 4.5 yerine 2.5 yazılmış bir puan) kapıdan geçer; onu ancak ekip ya da tedarikçi fark eder.
+                code:
+                  - {code: "except BulkWriteError as e:", tag: DocumentDB → İçe aktarma işi, say: Reddedilen satırlar cevapta tek tek döner.}
+                  - {code: "    s3.put_object(Bucket=\"lm-import-rejects\", Key=f\"{dosya}.rejects.json\", Body=json.dumps(e.details[\"writeErrors\"]))", tag: İçe aktarma işi → S3, say: Satırlar ve sebepleri hata klasörüne.}
+              - title: Index'siz sorgu nasıl fark edilir?
+                text: >-
+                  İki ağ var ve ikisi farklı şeyleri yakalar. Plan kontrolü listedeki her soruyu her yayından önce ve her gece dener:
+                  bilinen bir sorunun index'siz çalışmasını, koleksiyon küçükken bile yakalar; yayından sonra silinen bir index'i en
+                  geç ertesi gece görür. Ama listede olmayan bir sorguyu (ör. ekibin elle çalıştırdığı bir sorgu) görmez. Profiler
+                  çalışan sistemdeki her yavaş işlemi dakikalar içinde görür: metric filter COLLSCAN kayıtlarını sayar, alarm ekibe
+                  gider. Ama sadece eşiği aşanı görür ve kayıtları "elinden geldiğince" (best-effort) gönderir; küçük bir
+                  koleksiyondaki hızlı tarama ondan kaçar.
+                code:
+                  - {code: "filter planSummary=\"COLLSCAN\" | sort millis desc | limit 10", tag: [Ekip → CloudWatch Logs, CloudWatch Logs → Ekip], say: "Logs Insights: en yavaş 10 index'siz işlem."}
+                  - {code: "metric filter: { $.planSummary = \"COLLSCAN\" } → Shop/DocDB CollScanCount (her kayıt 1)", tag: CloudWatch Logs'un içinde, say: Her COLLSCAN kaydı ölçüyü 1 artırır.}
+                  - {code: "Alarm: CollScanCount > 0 (5 dakika) → ekip", tag: CloudWatch → Ekip, say: Index'siz bir sorgu görülünce alarm.}
+              - title: Index'ler bellekte kalmalı
+                text: >-
+                  Index'in hızı, girişlerinin sunucunun belleğinde olmasına bağlıdır. CloudWatch'taki IndexBufferCacheHitRatio,
+                  index okumalarının yüzde kaçının bellekten karşılandığını söyler; alarm, oran ekibin seçtiği bir sınırın (ör.
+                  %95) altına inerse çalar. Oran düşerse index'ler belleğe sığmıyor demektir. Yakalamadığı: hangi sorgunun yavaş
+                  olduğunu söylemez; onu profiler söyler. Çare: kullanılmayan index'i silmek ($indexStats) ya da daha büyük bir sunucu. Güncellenen ve silinen
+                  dokümanların eski girişleri index'i şişirebilir; $indexStats bunu da gösterir, reIndex index'i yeniden kurar.
+              - title: Yanlış toplu değişiklik ve silinen index
+                text: >-
+                  DocumentDB sürekli yedek alır; saklama süresi 1 ile 35 gün arasında seçilir (katalog için ör. 7 gün). Yanlış bir
+                  dosya bütün puanları bozarsa küme, yüklemeden bir saniye önceki hâliyle yeni bir küme olarak açılır; doğru
+                  dokümanlar oradan içe aktarma işiyle geri yazılır ve index'ler her yazmada yine güncellenir. Yakalamadığı: geri
+                  dönülen saniyeden sonra yapılan doğru değişiklikler yedekte yoktur; ekip onları yeniden uygular. Silinen bir index
+                  için yedeğe gerek yoktur: index veriden türetilir; ekip dağıtım hattını çalıştırır, hat onu arka planda yeniden
+                  kurar.
+                code:
+                  - {code: "aws docdb restore-db-cluster-to-point-in-time --source-db-cluster-identifier <katalog> \\", tag: Ekip → AWS, say: Kataloğun eski hâli…}
+                  - {code: "  --db-cluster-identifier katalog-geri --restore-to-time <yüklemeden önceki saniye>", tag: Ekip → AWS, say: "…yeni bir kümede açılır."}
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
