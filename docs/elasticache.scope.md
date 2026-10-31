@@ -2,9 +2,9 @@
 
 status: pilot
 domain-map row: verified
-date: 2026-10-29
+date: 2026-10-29 (model 2 rebuild 2026-10-30)
 
-Page: `app/engine_app/templates/e2e/elasticache.tr.html` (Turkish only; the old English `elasticache.html` stays untouched). Data: `EC_USECASES` in `app/engine_app/e2e_usecases.py`. Simulations: the ElastiCache section of `app/engine_app/e2e_sims.py` (five `usecase_scorecard` decisions from the cards, the mechanism simulations `race_naive`, `race_atomic`, `zset`, `cache`, and the new `slots` and `failover`; the three legacy `decide_*` 2/1/0 decisions stay in `_ec_legacy()` only for the old English page).
+Page: `app/engine_app/templates/e2e/elasticache.tr.html` (Turkish only; the old English `elasticache.html` stays untouched). Data: `ELASTICACHE_W` in `app/engine_app/e2e_usecases_w.py` (model 2; the model 1 `EC_USECASES` stays for the English page). Simulations: the ElastiCache section of `app/engine_app/e2e_sims.py` (five `weighted_scorecard` decisions from the cards, the mechanism simulations `race_naive`, `race_atomic`, `zset`, `cache`, and the new `slots` and `failover`; the three legacy `decide_*` 2/1/0 decisions stay in `_ec_legacy()` only for the old English page).
 
 ## Part A topic and the everyday picture (A1)
 
@@ -52,24 +52,40 @@ Page: `app/engine_app/templates/e2e/elasticache.tr.html` (Turkish only; the old 
 
 Redis / Valkey (the Valkey engine of ElastiCache), Memcached, Amazon MemoryDB
 
-## Use cases (M2) and their closest alternatives
+## Use cases (M2), model 2 (weighted cards, 2026-10-30)
 
-| No | Use case | Alternative 1 | Alternative 2 | sim | Totals |
-|---|---|---|---|---|---|
-| 1 | Sessions and login tokens | DynamoDB | MemoryDB | race_session | ElastiCache 43, DynamoDB 42, MemoryDB 40 |
-| 2 | Live leaderboards (Lale Market) | MemoryDB | DynamoDB | race_board | ElastiCache 45, MemoryDB 42, DynamoDB 38 |
-| 3 | Rate limits and counters | MemoryDB | DynamoDB | win_rate | ElastiCache 46, MemoryDB 39, DynamoDB 38 |
-| 4 | Cache-aside for the product page (Lale Market) | Aurora | DynamoDB | none | ElastiCache 45, Aurora 39, DynamoDB 39 |
-| 5 | Real-time counters: views and unique visitors | DynamoDB | Timestream for InfluxDB | none | ElastiCache 43, DynamoDB 37, Timestream for InfluxDB 34 |
-| 6 | Pub/Sub for live updates | DynamoDB (Streams) | MemoryDB | none | ElastiCache 43, DynamoDB 39, MemoryDB 37 |
-| 7 | Distributed lock: seller payout runs exactly once | DynamoDB | MemoryDB | lose_lock | DynamoDB 48, MemoryDB 38, ElastiCache disqualified on R3 (38) |
-| 8 | Job queue with lists: image thumbnails | MemoryDB | DynamoDB | none | ElastiCache 40, MemoryDB 38, DynamoDB 37 |
-| 9 | Recommendation cache | DynamoDB | Aurora | race_reco | DynamoDB 44, ElastiCache 43, Aurora 32 |
-| 10 | Nearby couriers: geospatial lookups | Aurora (PostGIS) | OpenSearch | none | ElastiCache 43, Aurora 38, OpenSearch 35 |
+Data: `ELASTICACHE_W` at the end of `app/engine_app/e2e_usecases_w.py` (`USECASES_W["elasticache"]`, `PAGE_SVC["elasticache"] = "ec"`). Simulations: the five `w_*` of `e2e_sims.elasticache()` for `lang == "tr"` (`weighted_scorecard`). The model 1 `EC_USECASES` and the legacy sims stay for the untouched English `elasticache.html`.
+Additions to shared tables (entries only): `SVC["sqs"] = "SQS"` (e2e_sims), `CATEGORY["sqs"]`, `LINK["sqs"] = "elasticache"` (SQS has no page; card 8 and M3 compare it); `SVC["sns"] = "SNS"`, `CATEGORY["sns"]`, `LINK["sns"] = "elasticache"` (card 6, after the reader simulation).
 
-ElastiCache loses card 7 (durability-critical lock, R3 must, 1 point on R3, disqualified; DynamoDB wins clearly) and card 9 (by one point; "both together": durable list in DynamoDB, hot read in ElastiCache). "Both together" is also the answer in card 4 (ElastiCache in front of Aurora) and card 10 (live positions in ElastiCache, zones and prices in Aurora). Card 8 names Amazon SQS as the usual answer when the jobs must not be lost (no SQS page yet, so SQS is not a scored candidate).
+| No | Use case | R1 rows (weight) | Candidates, best first | Totals | R1 subtotals | sim |
+|---|---|---|---|---|---|---|
+| 1 | Sessions and login tokens | EY 10, YD 20, OY 10, DA 15 | ElastiCache, MemoryDB, DynamoDB | 95 / 85 / 76,5 | 55 / 55 / 35,5 | w_session (R1 equal, service decides) |
+| 2 | Live leaderboards (Lale Market) | EY 20, OY 15, DA 10 | MemoryDB, ElastiCache, DynamoDB | 91 / 90 / 73,5 | 45 / 45 / 26,5 | w_board (Valkey engine features win; the twin wins the close race) |
+| 3 | Rate limits and counters | OY 20, DA 15, YD 15, EY 5 | ElastiCache, MemoryDB, DynamoDB | 96 / 82 / 77 | 55 / 55 / 38 | – |
+| 4 | Cache-aside for the product page | EY 15, TA 10, DA 15, YD 10 | ElastiCache, DynamoDB, Aurora | 94 / 83 / 74,5 | 48 / 41 / 42,5 | – (both together: ElastiCache in front of Aurora) |
+| 5 | Real-time counters: views, unique visitors | OY 20, VM 10, EY 10, YD 10 | ElastiCache, DynamoDB, Timestream for InfluxDB | 90 / 68 / 64 | 48 / 34 / 34 | – (both together: live hour in ElastiCache, history in Redshift) |
+| 6 | Pub/Sub for live updates | EY 20, DA 10, YD 10 | ElastiCache, MemoryDB, SNS | 95 / 81,5 / 78 | 40 / 40 / 35 | – (record in Aurora, notification in ElastiCache) |
+| 7 | Distributed lock: seller payout once | TA 25, YD 10, OY 5, EY 5 | DynamoDB, MemoryDB, ElastiCache | 97 / 90 / 72 | 42 / 44 / 44 | w_lock (clear loss, decided by R3) |
+| 8 | Job queue: image thumbnails | OY 15, TA 15, AO 10 | SQS, ElastiCache, MemoryDB | 97 / 81,5 / 77,5 | 38,5 / 31,5 / 31,5 | w_queue (loss decided by R1) |
+| 9 | Recommendation cache | EY 10, DA 20, OY 15, VM 5 | ElastiCache, MemoryDB, DynamoDB | 86,5 / 79,5 / 79 | 48,5 / 48,5 / 40,5 | – |
+| 10 | Nearby couriers: geo lookups | EY 15, YD 15, OY 10, DA 10 | ElastiCache, Aurora, OpenSearch | 87 / 77 / 64 | 41 / 44 / 36,5 | w_geo (Aurora wins R1, ElastiCache the total) |
 
-Consistency with the DynamoDB page: the ElastiCache and DynamoDB scores of cards 1, 3 and 9 are the same as the DynamoDB cards `session` (43/42), `rate` (46/38) and `ads` (44/43); only the third candidate differs. Shared parts: additions only (`CATEGORY["mdb"]`, `LINK["mdb"] = "elasticache"`; `SVC` already had `mdb`; `COUNT_TR` got two counter names).
+ElastiCache is not the best fit in card 2 (its twin MemoryDB wins 91 to 90: small data, two small nodes cost about the same as Serverless, and the log prevents a 4-minute empty board), card 7 (DynamoDB; ElastiCache third, R3 1 point: an acknowledged lock can vanish in a failover) and card 8 (SQS; visibility timeout and dead-letter queue are engine tools of a queue, the Valkey stream keeps the delivery count, but reclaiming and dead-lettering are application code). "Both together" is the answer in cards 4, 5, 6 and 10. Another engine wins R1 but loses the total in card 10 (Aurora PostGIS 44 vs 41).
+
+Twin rule: ElastiCache and MemoryDB have the same R1 points on all seven cards where MemoryDB is a candidate (1, 2, 3, 6, 7, 8, 9). Consistency with the DynamoDB page: cards 1, 3 and 9 are the workloads of the DynamoDB cards `session`, `rate` and `ads` with the same rows, weights and points (totals 95/85/76,5, 96/82/77, 86,5/79,5/79). The same mechanism gets the same reduction: ElastiCache R3 4 when the loss is accepted (no durable log in Serverless), 1 when the row wants "never lost" (card 7); MemoryDB R4 6 (no serverless option); MemoryDB R5 4-6 (node-hours); MemoryDB R2 only for the log commit where writes meet a latency limit (capacity configuration is R4, never R2).
+
+Extra facts for the new cards (official sources):
+- Prices, eu-central-1, AWS Price List API (2026-10-30): ElastiCache Serverless Valkey 0.101 USD per GB-hour and 0.0027 USD per million ECPU; MemoryDB Valkey db.t4g.small 0.0378 USD/h, db.r7g.large 0.2597 USD/h, data written free up to 10 TB/month (card 2, cards 3 and 9 R5 reasons).
+- SNS: "published messages are stored across multiple, geographically-separated servers and data centers", delivery retry policy (https://aws.amazon.com/sns/features/).
+- Global Datastore: up to two secondary Regions, typical replication under 1 second (https://aws.amazon.com/elasticache/faqs/, https://aws.amazon.com/elasticache/features/).
+- Valkey streams: XAUTOCLAIM, XPENDING delivery count (https://valkey.io/commands/xautoclaim/, https://valkey.io/commands/xpending/).
+- SQS standard queues: "at-least-once message delivery", "Amazon SQS redundantly stores the message in multiple availability zones (AZs) before acknowledging it" (https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues.html); long poll "a maximum of 20 seconds" (https://aws.amazon.com/sqs/faqs/); dead-letter queue after maxReceiveCount (https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html, https://repost.aws/knowledge-center/sqs-dead-letter-queue).
+- ElastiCache Serverless supported commands: EVAL, SPUBLISH/SSUBSCRIBE, GEOSEARCH are supported; KEYS, FUNCTION/FCALL are unavailable on serverless caches (https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/SupportedCommands.html).
+- MemoryDB: "designed as a primary database that combines in-memory speed with Multi-AZ durability" (https://aws.amazon.com/compare/msk-and-msk-serverless/ FAQ entry); node-based clusters (https://docs.aws.amazon.com/memorydb/latest/devguide/what-is-memorydb.html).
+
+### Model 1 (kept for the English page)
+
+The old model 1 totals (equal R1-R5, must rows) are in `EC_USECASES` and are no longer shown on the Turkish page.
 
 ## Known traps (handled explicitly in Part A)
 

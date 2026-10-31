@@ -1097,6 +1097,8 @@ SVC = {"ddb": "DynamoDB", "aur": "Aurora PostgreSQL", "ec": "ElastiCache (Valkey
        "rs": "Redshift", "os": "OpenSearch", "ix": "Timestream for InfluxDB", "np": "Neptune", "s3": "S3", "rds": "RDS for PostgreSQL",
        "mdb": "MemoryDB", "ath": "Athena", "efs": "EFS", "dsql": "Aurora DSQL"}
 SVC["cas"] = "Apache Cassandra"   # self-managed, on EC2 (Keyspaces card 10)
+SVC["sqs"] = "SQS"   # Amazon SQS (ElastiCache card 8)
+SVC["sns"] = "SNS"   # Amazon SNS (ElastiCache card 6)
 
 
 def scorecard(lang, d):
@@ -1702,7 +1704,8 @@ def elasticache(lang):
     spec = {**{uc["sim"]: usecase_scorecard(lang, uc) for uc in _uc.EC_USECASES if uc["sim"]},
             **_ec_legacy(lang),   # old English page only
             "race_naive": vk_race(lang, False), "race_atomic": vk_race(lang, True), "zset": vk_zset(lang), "cache": vk_cache_aside(lang),
-            "slots": vk_slots(lang), "failover": vk_failover(lang)}
+            "slots": vk_slots(lang), "failover": vk_failover(lang),
+            **({uc["sim"]: weighted_scorecard(lang, uc) for uc in _ucw.ELASTICACHE_W if uc["sim"]} if lang == "tr" else {})}   # model 2, Turkish page
     return {k: _localize(v, lang) for k, v in spec.items()}
 
 
