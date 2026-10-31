@@ -10,6 +10,7 @@ Spec: {"tables": [{"id", "name", "cols", "rows", "key": [col idx], "ref": [col i
                   "out": [rows], "outmarks": {row idx: cls}, "count": {label: value}}]}
 Mark classes: read, match, skip, lock, new, bad, done.
 """
+import re
 from copy import deepcopy
 
 # A small teaching copy of the Lale Market shop. Names and prices come from the real data; the stock values and
@@ -1199,6 +1200,14 @@ def weighted_scorecard(lang, uc):
             "steps": steps}
 
 
+def _strip_lead(text):
+    """The card macro already prints "<best> ile kafa kafaya, <X>:" and "Karar.": drop the same words from the start of the text."""
+    if not text:
+        return text
+    text = re.sub(r"^[^.]*?(ile kafa kafaya|[Hh]ead to head with [^.]*)\.\s*", "", text, count=1)
+    return re.sub(r"^(Karar|Decision):\s*", "", text, count=1)
+
+
 def _wusecases(eid, lang):
     """The M2 cards of a page that uses the weighted model (e2e_usecases_w)."""
     page = _ucw.PAGE_SVC.get(eid)
@@ -1211,12 +1220,12 @@ def _wusecases(eid, lang):
         for c in uc["cands"]:
             cells = [{"pts": p, "contrib": _pts(p, r["w"]), "why": L(w)} for (p, w), r in zip(uc["scores"][c], uc["rows"])]
             cands.append({"key": c, "name": SVC[c], "cat": L(_uc.CATEGORY[c]), "link": _uc.LINK[c], "cells": cells, "total": _ucw.fmt(uc["total"][c]),
-                          "total_num": uc["total"][c], "page": c == page, "h2h": L(uc["h2h"][c]) if c in uc["h2h"] else None,
+                          "total_num": uc["total"][c], "page": c == page, "h2h": _strip_lead(L(uc["h2h"][c])) if c in uc["h2h"] else None,
                           "r1": _ucw.fmt(sum(p * r["w"] / 10 for (p, _), r in zip(uc["scores"][c], uc["rows"]) if r["code"] in _ucw.R1_CATALOG))})
         t = sorted(uc["total"].values(), reverse=True)
         out.append({"id": uc["id"], "no": uc["no"], "sim": uc["sim"], "title": L(uc["title"]), "key": L(uc["key"]), "story": L(uc["story"]),
                     "wnote": L(uc["wnote"]), "rows": rows, "r1n": sum(1 for r in rows if r["r1"]), "r1w": sum(r["w"] for r in uc["rows"] if r["code"] in _ucw.R1_CATALOG),
-                    "cands": cands, "best": cands[0], "race": t[0] - t[1] <= _ucw.RACE_GAP, "gap": _ucw.fmt(t[0] - t[1]), "verdict": L(uc["verdict"]), "weighted": True})
+                    "cands": cands, "best": cands[0], "race": t[0] - t[1] <= _ucw.RACE_GAP, "gap": _ucw.fmt(t[0] - t[1]), "verdict": _strip_lead(L(uc["verdict"])), "weighted": True})
     return out
 
 
