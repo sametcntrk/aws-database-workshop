@@ -1883,9 +1883,16 @@ SIMS["keyspaces"] = keyspaces
 
 
 # ================================================================ OpenSearch
-OS_DOCS = [["P0001", "Alpen Kablosuz Kulaklık 1"], ["P0031", "Alpen Kablosuz Kulaklık 31"], ["P0081", "Kapadokya Kablosuz Kulaklık 81"],
-           ["P0016", "Nordwind Powerbank 16"], ["P0044", "Kapadokya Bulut Mimarisi 44"], ["P0175", "Toros Bluetooth Hoparlör 175"]]
+# The teaching copy of the products index: six real documents of the live index (GET products/_doc/<id>, 2026-10-31).
+OS_PRODUCTS = [["P0001", "Alpen Kablosuz Kulaklık 1", "Elektronik", "Alpen", 3373.84, 4.8],
+               ["P0031", "Alpen Kablosuz Kulaklık 31", "Elektronik", "Alpen", 1884.63, 2.6],
+               ["P0081", "Kapadokya Kablosuz Kulaklık 81", "Elektronik", "Kapadokya", 4372.79, 2.8],
+               ["P0016", "Nordwind Powerbank 16", "Elektronik", "Nordwind", 610.03, 3.7],
+               ["P0044", "Kapadokya Bulut Mimarisi 44", "Kitap", "Kapadokya", 2651.39, 3.7],
+               ["P0175", "Anadolu Yün Kazak 175", "Moda", "Anadolu", 601.17, 4.8]]
+OS_DOCS = [[p[0], p[1]] for p in OS_PRODUCTS]
 EXTRA_TABLES["os_docs"] = {"cols": ["_id", "name"], "rows": OS_DOCS}
+EXTRA_TABLES["os_products"] = {"cols": ["_id", "name", "category", "brand", "price", "rating"], "rows": OS_PRODUCTS}
 _FOLD = str.maketrans("ıİşŞğĞüÜöÖçÇ", "iisSgGuUoOcC")
 
 
@@ -2012,6 +2019,148 @@ def os_geo(lang):
 
 
 OS_CANDS = ["OpenSearch", "Aurora PostgreSQL", "DocumentDB", "DynamoDB", "Redshift"]
+SVC.setdefault("oss", "OpenSearch Serverless")   # the serverless twin of the managed domain (OpenSearch page, model 2)
+SVC.setdefault("cw", "CloudWatch")               # Amazon CloudWatch Logs and metrics (OpenSearch page cards 5, 7, 10)
+
+
+def os_bm25(lang):
+    """BM25 for the query "kapadokya kulaklik" on the name field of the six teaching documents (k1 = 1.2, b = 0.75, the Lucene defaults).
+    idf = ln(1 + (N - n + 0.5) / (n + 0.5)); tf = f / (f + k1 * (1 - b + b * dl / avgdl)). The live index gives other numbers (200 documents)."""
+    import math
+    docs = [(pid, [t for t in _tokens(name, True)]) for pid, name in OS_DOCS]
+    n_docs = len(docs)
+    avgdl = sum(len(t) for _, t in docs) / n_docs
+    q = ["kapadokya", "kulaklik"]
+    k1, b = 1.2, 0.75
+    rows = [[pid, " ".join(t), len(t), "", "", ""] for pid, t in docs]
+    steps = [{"say": T(lang, None, f"Sorgu \"kapadokya kulaklik\" iki token'dır. BM25 her token için iki sayı çarpar: idf (token ne kadar nadir) ve tf (token bu alanda ne kadar ağır). Altı document'ın name alanının ortalama uzunluğu {_fmt1(avgdl)} token."),
+              "marks": {}, "rows": {"d": deepcopy(rows)}, "out": [], "count": {T(lang, None, "skorlanan document"): 0}}]
+    idf = {}
+    for t in q:
+        n = sum(1 for _, toks in docs if t in toks)
+        idf[t] = math.log(1 + (n_docs - n + 0.5) / (n + 0.5))
+        steps.append({"say": T(lang, None, f"\"{t}\" {n_docs} document'ın {n} tanesinde geçer: idf = ln(1 + ({n_docs} - {n} + 0,5) / ({n} + 0,5)) = {_fmt3(idf[t])}. Nadir bir token daha yüksek idf alır; altı document'ın hepsinde geçen bir token neredeyse sıfır alırdı."),
+                      "marks": {"d": {i: ("read" if t in toks else "skip") for i, (_, toks) in enumerate(docs)}}, "rows": {"d": deepcopy(rows)}, "out": [], "count": {T(lang, None, "skorlanan document"): 0}})
+    out = []
+    for i, (pid, toks) in enumerate(docs):
+        dl = len(toks)
+        parts = []
+        score = 0.0
+        for t in q:
+            f = toks.count(t)
+            if f:
+                tf = f / (f + k1 * (1 - b + b * dl / avgdl))
+                parts.append(f"{t}: {_fmt3(idf[t])} × {_fmt3(tf)}")
+                score += idf[t] * tf
+        if not parts:
+            continue
+        rows[i][3], rows[i][4], rows[i][5] = str(len(parts)), "; ".join(parts), _fmt3(score)
+        out.append([pid, " ".join(toks), _fmt3(score)])
+        out.sort(key=lambda r: -float(r[2].replace(",", ".")))
+        steps.append({"say": T(lang, None, f"{pid}: {dl} token'lık bir ad, sorgunun {len(parts)} token'ını içeriyor. Skor = {' + '.join(parts)} = {_fmt3(score)}. Kısa bir alanda geçen token daha ağır sayılır (tf)."),
+                      "marks": {"d": {i: "match"}}, "rows": {"d": deepcopy(rows)}, "out": deepcopy(out), "outmarks": {next(k for k, r in enumerate(out) if r[0] == pid): "new"},
+                      "count": {T(lang, None, "skorlanan document"): len(out)}})
+    steps.append({"say": T(lang, None, f"Sonuç: iki token'ı da içeren P0081 birinci. Yalnız \"kapadokya\"yı içeren P0044, yalnız \"kulaklik\"i içeren P0001 ve P0031'den önce gelir, çünkü \"kapadokya\" daha nadirdir (daha yüksek idf). İki token'dan hiçbirini içermeyen P0016 ve P0175 posting list'lerde yoktur ve hiç skorlanmadı. Canlı index'te OpenSearch aynı formülü 200 document üzerinde uygular ve explain ile gösterir (B3)."),
+                  "marks": {"d": {i: ("match" if rows[i][5] else "skip") for i in range(len(rows))}}, "rows": {"d": deepcopy(rows)}, "out": out, "outmarks": {0: "match"},
+                  "count": {T(lang, None, "skorlanan document"): len(out)}})
+    return {"tables": [{"id": "d", "name": T(lang, None, "name alanı (tr_folded token'ları)"), "cols": ["_id", "token'lar", "uzunluk", T(lang, None, "eşleşen"), "idf × tf", "skor"],
+                        "rows": [[pid, " ".join(t), len(t), "", "", ""] for pid, t in docs], "key": [0], "ref": []}],
+            "out": {"name": T(lang, None, "sonuç, skora göre"), "cols": ["_id", "token'lar", "skor"]}, "steps": steps}
+
+
+def _fmt1(x):
+    return f"{x:.1f}".replace(".", ",")
+
+
+def _fmt3(x):
+    return f"{x:.3f}".replace(".", ",")
+
+
+def os_refresh(lang):
+    """Near-real-time search: a write goes to an in-memory buffer; a refresh (every second by default) makes a new searchable segment.
+    An update writes a new version and marks the old one deleted; a merge removes deleted versions."""
+    seg = [["segment 1", "P0001 v1", T(lang, None, "aranabilir")], ["segment 1", "P0031 v1", T(lang, None, "aranabilir")]]
+    buf = []
+    hits = lambda: [r[1] for r in seg if r[2] == T(lang, None, "aranabilir") and r[1].startswith("P0001")]
+    steps = [{"say": T(lang, None, "Index'te bir segment var: P0001 ve P0031 aranabilir. Şimdi fiyatı değişen P0001 yeniden yazılacak (bir update)."),
+              "marks": {}, "rows": {"s": deepcopy(seg), "b": deepcopy(buf)}, "out": [], "count": {"refresh": 0}}]
+    buf.append(["P0001 v2", "price 3199,00"])
+    steps.append({"say": T(lang, None, "t = 0 ms. Update isteği gelir. OpenSearch yeni sürümü (v2) bellekteki tampona ve kalıcılık için bir log'a (translog) yazar ve isteğe \"tamam\" der. v2 henüz bir segment'te değildir."),
+                  "marks": {"b": {0: "new"}}, "rows": {"s": deepcopy(seg), "b": deepcopy(buf)}, "out": [], "count": {"refresh": 0}})
+    steps.append({"say": T(lang, None, "t = 300 ms. Bir ziyaretçi \"kulaklik\" arar. Arama yalnız segment'leri okur: eski fiyatlı P0001 v1 döner. GET _doc/P0001 ise v2'yi görür, çünkü id ile okuma tamponu da okur."),
+                  "marks": {"s": {0: "read"}, "b": {0: "lock"}}, "rows": {"s": deepcopy(seg), "b": deepcopy(buf)}, "out": [["300 ms", "_search", "P0001 v1 (eski fiyat)"], ["300 ms", "GET _doc", "P0001 v2"]],
+                  "outmarks": {0: "bad", 1: "match"}, "count": {"refresh": 0}})
+    seg[0][2] = T(lang, None, "silinmiş işaretli")
+    seg.append(["segment 2", "P0001 v2", T(lang, None, "aranabilir")])
+    buf = []
+    steps.append({"say": T(lang, None, "t = 1.000 ms. Refresh çalışır: tampon yeni bir segment olur (segment 2) ve aranabilir. v1 silinmez, silinmiş olarak işaretlenir; segment'ler hiç değiştirilmez."),
+                  "marks": {"s": {0: "skip", 2: "new"}}, "rows": {"s": deepcopy(seg), "b": deepcopy(buf)}, "out": [["300 ms", "_search", "P0001 v1 (eski fiyat)"], ["300 ms", "GET _doc", "P0001 v2"]],
+                  "count": {"refresh": 1}})
+    steps.append({"say": T(lang, None, "t = 1.200 ms. Aynı arama şimdi segment 2'den yeni fiyatı döndürür. Eski ve yeni arasındaki pencere en fazla bir refresh aralığıdır: varsayılan 1 saniye, Serverless'ta yaklaşık 10 saniye."),
+                  "marks": {"s": {2: "match"}}, "rows": {"s": deepcopy(seg), "b": deepcopy(buf)},
+                  "out": [["300 ms", "_search", "P0001 v1 (eski fiyat)"], ["300 ms", "GET _doc", "P0001 v2"], ["1.200 ms", "_search", "P0001 v2 (yeni fiyat)"]], "outmarks": {2: "match"}, "count": {"refresh": 1}})
+    seg = [["segment 3", "P0031 v1", T(lang, None, "aranabilir")], ["segment 3", "P0001 v2", T(lang, None, "aranabilir")]]
+    steps.append({"say": T(lang, None, "Daha sonra arka planda bir merge iki segment'i birleştirir ve silinmiş işaretli v1'i fiziksel olarak atar. Her update bu yolu izler: yeni sürüm, refresh, sonra merge. Bu yüzden saniyede yüzlerce update bir arama engine'ine pahalıdır (M2 kart 9 ve ElastiCache sayfasının kart 10'u)."),
+                  "marks": {"s": {0: "done", 1: "done"}}, "rows": {"s": deepcopy(seg), "b": []},
+                  "out": [["300 ms", "_search", "P0001 v1 (eski fiyat)"], ["300 ms", "GET _doc", "P0001 v2"], ["1.200 ms", "_search", "P0001 v2 (yeni fiyat)"]], "count": {"refresh": 1}})
+    return {"tables": [{"id": "s", "name": T(lang, None, "segment'ler (diskte, aranabilir)"), "cols": ["segment", "document", T(lang, None, "durum")], "rows": [r[:] for r in [["segment 1", "P0001 v1", "aranabilir"], ["segment 1", "P0031 v1", "aranabilir"]]], "key": [1], "ref": []},
+                       {"id": "b", "name": T(lang, None, "bellekteki tampon (henüz aranamaz)"), "cols": ["document", T(lang, None, "değişiklik")], "rows": [], "key": [0], "ref": []}],
+            "out": {"name": T(lang, None, "istekler ve gördükleri"), "cols": [T(lang, None, "zaman"), T(lang, None, "istek"), T(lang, None, "gördüğü")]}, "steps": steps}
+
+
+# The live stores index (GET stores/_doc/<id>, 2026-10-31). STORES above is the older copy of the untouched English page.
+OS_STORES = [["S001", "İstanbul Mağaza 1", 41.07272, 29.07395], ["S010", "İstanbul Mağaza 2", 41.07989, 28.90559],
+             ["S019", "İstanbul Mağaza 3", 40.89754, 28.94886], ["S002", "Ankara Mağaza 1", 39.82101, 33.00533],
+             ["S003", "İzmir Mağaza 1", 38.47421, 27.11965], ["S004", "Bursa Mağaza 1", 40.26288, 28.9117]]
+EXTRA_TABLES["os_stores"] = {"cols": ["_id", "name", "lat", "lon"], "rows": OS_STORES}
+
+
+def os_geo_tr(lang):
+    here, km = (41.0082, 28.9784), 25
+    steps = [{"say": T(lang, None, f"Ziyaretçi 41.0082, 28.9784 noktasında (İstanbul, Sultanahmet). Sorgu: location alanında (geo_point) {km} km'lik bir geo_distance filtresi ve mesafeye göre sıralama."),
+              "marks": {}, "out": [], "count": {T(lang, None, "dairedeki mağaza"): 0}}]
+    out, m = [], {}
+    for i, st in enumerate(OS_STORES):
+        d = _km(here[0], here[1], st[2], st[3])
+        ok = d <= km
+        m[i] = "match" if ok else "skip"
+        if ok:
+            out.append([st[0], st[1], _fmt1(d)])
+            out.sort(key=lambda r: float(r[2].replace(",", ".")))
+        steps.append({"say": T(lang, None, f"{st[1]}: büyük daire mesafesi {_fmt1(d)} km. " + ("Dairenin içinde." if ok else "Dairenin dışında.")),
+                      "marks": {"s": dict(m)}, "out": deepcopy(out), "outmarks": {next(k for k, r in enumerate(out) if r[0] == st[0]): "new"} if ok else {},
+                      "count": {T(lang, None, "dairedeki mağaza"): len(out)}})
+    steps.append({"say": T(lang, None, "Sıralama en yakın mağazayı öne koyar. Bu simülasyon her mağazaya mesafeyi hesapladı; OpenSearch ise geo_point alanını ağaç yapılı bir index'te tutar ve dairenin dışındaki bölgelere hiç bakmaz. Canlı index aynı sorguya aynı üç mağazayı aynı sırayla döndürdü: 10,04, 10,76 ve 12,55 km (B5)."),
+                  "marks": {"s": m}, "out": out, "outmarks": {0: "match"}, "count": {T(lang, None, "dairedeki mağaza"): len(out)}})
+    return {"tables": [{"id": "s", "name": T(lang, None, "stores (location: geo_point)"), "cols": ["_id", "name", "lat", "lon"], "rows": deepcopy(OS_STORES), "key": [0], "ref": []}],
+            "out": {"name": T(lang, None, "sonuç, en yakın önce"), "cols": ["_id", "name", "km"]}, "steps": steps}
+
+
+def _route(pid, n=3):
+    """A small teaching router: the sum of the character codes of the _id modulo the number of primary shards.
+    OpenSearch uses a murmur3 hash of the routing value (the _id by default)."""
+    return sum(ord(c) for c in pid) % n
+
+
+def os_shards(lang):
+    n = 3
+    place = {k: [] for k in range(n)}
+    steps = [{"say": T(lang, None, f"Index'in {n} primary shard'ı var. Her document'ın shard'ını _id'si seçer: öğretici router karakter kodlarını toplar ve {n}'e bölümünden kalanı alır (OpenSearch murmur3 hash'i kullanır)."),
+              "marks": {}, "rows": {f"s{k}": [] for k in range(n)}, "out": [], "count": {T(lang, None, "yerleşen document"): 0}}]
+    for i, (pid, name) in enumerate(OS_DOCS):
+        k = _route(pid, n)
+        place[k].append([pid, name])
+        steps.append({"say": T(lang, None, f"{pid}: karakter kodlarının toplamı {sum(ord(c) for c in pid)}, {n} ile bölümünden kalan {k}. Bu document'ın yeri: shard {k}."),
+                      "marks": {f"s{k}": {len(place[k]) - 1: "new"}}, "rows": {f"s{j}": deepcopy(place[j]) for j in range(n)}, "out": [],
+                      "count": {T(lang, None, "yerleşen document"): i + 1}})
+    out = [[f"shard {k}", T(lang, None, f"{len(place[k])} document"), T(lang, None, "kendi posting list'lerinde arar")] for k in range(n)]
+    steps.append({"say": T(lang, None, f"Altı document'ta dağılım eşit değildir (shard başına {', '.join(str(len(place[k])) for k in range(n))}); milyonlarca id'de hash dağılımı eşitler. Bir arama ise id bilmez: \"kablosuz kulaklik\" sorgusu {n} shard'ın hepsine gider, her shard kendi en iyi sonuçlarını döndürür ve isteği alan node sonuçları birleştirir. Okuma id ile tek shard'a, arama bütün shard'lara gider."),
+                  "marks": {f"s{k}": {j: "read" for j in range(len(place[k]))} for k in range(n)}, "rows": {f"s{j}": deepcopy(place[j]) for j in range(n)}, "out": out,
+                  "count": {T(lang, None, "yerleşen document"): len(OS_DOCS)}})
+    steps.append({"say": T(lang, None, "Primary shard sayısı index kurulurken seçilir ve sonradan kolayca değişmez, çünkü router'ın bölen sayısı odur: 3'ü 4 yaparsan her document'ın yeri değişir. Bu yüzden büyüyen veri için yeni bir index (reindex) ya da zamana göre index'ler kurulur. Replica sayısı ise her an değişebilir."),
+                  "marks": {}, "rows": {f"s{j}": deepcopy(place[j]) for j in range(n)}, "out": out, "count": {T(lang, None, "yerleşen document"): len(OS_DOCS)}})
+    return {"tables": [{"id": f"s{k}", "name": f"shard {k}", "cols": ["_id", "name"], "rows": [], "key": [0], "ref": []} for k in range(n)],
+            "out": {"name": T(lang, None, "bir aramanın shard'ları"), "cols": ["shard", T(lang, None, "document"), T(lang, None, "ne yapar")]}, "steps": steps}
 
 
 def opensearch(lang):
@@ -2037,6 +2186,10 @@ def opensearch(lang):
                                          ("Several records change as one unit", "Birkaç kayıt tek bir birim olarak değişir"),
                                          ("Rules between tables are enforced", "Table'lar arası kurallar uygulanır")], OS_CANDS, w2),
         "analyze": os_analyze(lang), "inverted": os_inverted(lang), "fuzzy": os_fuzzy(lang), "geo": os_geo(lang),
+        # model 2, the Turkish page: five weighted_scorecard simulations built from the M2 cards (e2e_usecases_w.OPENSEARCH_W);
+        # decide_search and decide_orders above are the legacy decisions of the untouched English page
+        **({uc["sim"]: weighted_scorecard(lang, uc) for uc in _ucw.OPENSEARCH_W if uc["sim"]} if lang == "tr" else {}),
+        **({"bm25": os_bm25(lang), "refresh": os_refresh(lang), "shards": os_shards(lang), "geo_tr": os_geo_tr(lang)} if lang == "tr" else {}),
     }
     return {k: _localize(v, lang) for k, v in spec.items()}
 

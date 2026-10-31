@@ -3749,3 +3749,760 @@ ELASTICACHE_W.append(wusecase("geo", 10, sim="w_geo",
 
 USECASES_W["elasticache"] = ELASTICACHE_W
 PAGE_SVC["elasticache"] = "ec"
+
+
+# ====================================================================== Amazon OpenSearch Service (page id "opensearch"), Turkish, model 2
+# The ten M2 cards of templates/e2e/opensearch.tr.html. The five M7 simulations are built from the cards (sim="w_...").
+# "os" is an OpenSearch Service managed domain (the Lale Market form: dbws-search); "oss" is OpenSearch Serverless. They are
+# twins of one engine: the same R1 points on every card; only R2-R5 separate them. A feature that the engine has but
+# Serverless leaves out (Alerting, Anomaly Detection, Security Analytics, ISM) is packaging and is counted in R4 (decisions.md rule 5).
+# Card "facets" is the same workload as DocumentDB card 8 ("search"): the same story, rows, weights and points (asserted below);
+# only the reasons name this page's features.
+# The same mechanism gets the same reduction on this page:
+#  - a search copy that must be rebuilt from the system of record: R3 8 when the rebuild takes hours, 9 when it takes minutes;
+#    Serverless keeps the data in managed storage: R3 10; a store that holds the record itself: 10.
+#  - the peak of a managed domain (data nodes are added before a campaign and take shards in minutes): R2 9; node sizing is R4.
+#  - node-hours of a domain that runs day and night for a small or new load: R5 5-6; added to the existing dbws-search domain: 8.
+#  - an update re-indexes the whole document (Ö8): OY 9 at about one update per second; 4 at hundreds per second (ElastiCache card 10).
+#  - Aurora as a second copy of a catalog that lives in DocumentDB: R4 4 (DocumentDB card 8).
+# Sources (the hedges are the hedges of the source):
+#  - inverted index, BM25, 5 primary shards and 1 replica by default on OpenSearch Service, "you can't easily change the number of
+#    primary shards", shard size "10-30 GiB ... search latency" and "30-50 GiB for write-heavy workloads such as log analytics":
+#    https://docs.opensearch.org/latest/getting-started/intro/ , https://docs.aws.amazon.com/opensearch-service/latest/developerguide/bp-sharding.html
+#  - refresh "The default refresh interval is one second", "eventual read consistency":
+#    https://docs.aws.amazon.com/opensearch-service/latest/developerguide/bp.html
+#  - fuzziness AUTO (0-2 characters exact, 3-5 one edit, 6+ two edits): https://docs.opensearch.org/latest/query-dsl/fuzziness/
+#  - a field type cannot change after the first mapping: https://docs.opensearch.org/latest/mappings/
+#  - hourly automated snapshots, "retains up to 336 of them for 14 days":
+#    https://docs.aws.amazon.com/opensearch-service/latest/developerguide/managedomains-snapshots.html
+#  - UltraWarm, cold storage, ISM: https://docs.aws.amazon.com/opensearch-service/latest/developerguide/ism.html
+#  - Serverless: refresh "approximately 10 seconds", shards and refresh not modifiable, some plugins and APIs not supported
+#    https://docs.aws.amazon.com/opensearch-service/latest/developerguide/serverless-overview.html ; the supported API list
+#    (no _plugins/_alerting, _anomaly_detection, _security_analytics, _ism) https://docs.aws.amazon.com/opensearch-service/latest/developerguide/serverless-genref.html ;
+#    NextGen collections "scale to zero after 10 minutes of inactivity", data in managed storage https://aws.amazon.com/opensearch-service/pricing/
+#  - Anomaly detection with Random Cut Forest: https://docs.aws.amazon.com/opensearch-service/latest/developerguide/ad.html
+#  - Security Analytics, Sigma rules, detectors, findings: https://docs.aws.amazon.com/opensearch-service/latest/developerguide/security-analytics.html
+#  - OpenSearch Ingestion from Aurora (CDC): https://docs.aws.amazon.com/opensearch-service/latest/developerguide/configure-client-aurora.html
+#  - CloudWatch: metric retention (under 60 s for 3 hours, 1 min 15 days, 5 min 63 days, 1 hour 455 days)
+#    https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html ; Logs Insights is priced by the data
+#    scanned https://aws.amazon.com/cloudwatch/faqs/ ; field indexes for equality https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/CloudWatchLogs-Field-Indexing.html
+#  - pgvector HNSW and IVFFlat on Aurora PostgreSQL: https://docs.aws.amazon.com/prescriptive-guidance/latest/retrieval-augmented-generation-options/rag-custom-retrievers.html
+#  - Prices, Price List API, eu-central-1, 2026-10-26: r6g.large.search $0.202/h, m6g.large.search $0.153/h, gp3 $0.1452/GB-month;
+#    Serverless OCU $0.339/OCU-hour, hot storage $0.36/GB-month, warm $0.026/GB-month; CloudWatch Logs ingestion $0.63/GB,
+#    Logs Insights $0.0063/GB scanned, custom metric $0.30/metric-month (first 10,000); Timestream for InfluxDB
+#    db.influx.medium Multi-AZ $0.289/h.
+#  - DocumentDB text index ("Only English language is supported with text index"): https://docs.aws.amazon.com/documentdb/latest/devguide/text-search.html
+CATEGORY.setdefault("oss", ("serverless search engine", "sunucusuz search engine"))
+LINK.setdefault("oss", "opensearch")       # OpenSearch Serverless is the twin of the managed domain, taught on this page (M5, C2)
+CATEGORY.setdefault("cw", ("monitoring service (logs and metrics)", "izleme servisi (log ve metrik)"))
+LINK.setdefault("cw", "opensearch")        # CloudWatch has no page; this page (cards 5, 7, 10, M5) compares it
+
+OPENSEARCH_W = []
+
+# ------------------------------------------------------------------ 1. product search with typos (OpenSearch wins on its engine)
+OPENSEARCH_W.append(wusecase("search", 1, sim="w_search",
+    title="Yazım hatalarına dayanıklı ürün araması (Lale Market)",
+    key="Index: products. Document: _id ürün id'si; name ve description text (tr_folded analyzer), category ve brand keyword, price ve rating sayı.",
+    story="Lale Market'in arama kutusuna günde 400.000 arama yazılır; kampanya akşamı saniyede 300 aramaya çıkar, normalde saniyede 30'dur. Ziyaretçiler telefondan yazar: \"kulaklk\" (bir harf eksik), \"kablosuz kulaklik\" (Türkçe harfsiz), \"alpen kulaklık siyah\". "
+          "Arama kelimelerin sırasından bağımsız olmalı ve en uygun ürünü önce göstermelidir. Katalog DocumentDB'de yaşar ve kayıt sistemi odur; bugün 200 ürün var, iki yıl içinde 200.000 ürün hedefleniyor. "
+          "Günde yaklaşık 2.000 ürün değişikliği olur ve her biri birkaç saniye içinde aramada görünmelidir. Arama katmanı kaybolursa katalogdan bir saatte yeniden kurulabilir. "
+          "İki backend geliştiricisi var; biri önceki işinde Elasticsearch kullandı. Ürün yöneticisi \"sıfır sonuç\" oranını yüzde 2'nin altına indirmek istiyor; bugün yazım hatalı aramaların çoğu boş sayfa veriyor.",
+    wnote="R1 toplam 46: aramanın kendisi (EY 18), onu her katalog boyutunda hızlı tutan algoritma (DA 14) ve Türkçe harf ve yazım hatası kurallarını ayarlayan araçlar (AO 14) bu iş yükünün tanımıdır. "
+          "R2 20 ile ikinci: kampanya akşamı on kat trafik ve 100 ms sınırı. R4 15: iki kişilik ekip. Arama katmanı bir kopya olduğu için R3 7'de kalır.",
+    rows=[
+        row("EY", 18, "Arama kutusu mağazanın girişidir ve her ziyaretçi onu kullanır; boş sonuç doğrudan kayıp satıştır.",
+            "\"kulaklk\" (bir harf eksik) ve \"kulaklik\" (Türkçe harfsiz) aramaları \"Kablosuz Kulaklık\" ürünlerini bulmalı. Kelime sırası önemli olmamalı. Adında iki kelime geçen ürün, açıklamasında bir kelime geçen üründen önce gelmeli.",
+            "Boş sonuç sayfası satış kaybıdır: ürün vardır ama ziyaretçi onu bulamaz ve siteyi terk eder. Sonuçlar alfabetik ya da rastgele sıralanırsa ziyaretçi aradığını ilk ekranda görmez."),
+        row("DA", 14, "Katalog bin kat büyüyecek; arama süresi bu büyümeye dayanmalı.",
+            "Bir aramanın süresi katalogdaki ürün sayısıyla doğrusal artmamalı: 200 üründe de 200.000 üründe de sadece aranan kelimeleri içeren ürünler okunmalı ve sıralanmalı.",
+            "Her aramada bütün ürünleri okuyan bir yöntem 200 üründe hızlıdır, 200.000 üründe saniyeler sürer ve kampanya akşamı sunucuyu doldurur."),
+        row("AO", 14, "Türkçe harf kuralı ve yazım hatası toleransı bir kez doğru kurulmalı; her sorguda kodla çözülürse hatalar tekrar tekrar çıkar.",
+            "ı/i, ş/s, ğ/g eşleşmesi, yazım hatası toleransı, ad alanının açıklamadan ağır sayılması ve \"neden bu sıra\" sorusunun cevabı engine'in kendi ayarlarıyla yapılabilmeli.",
+            "Bu kurallar uygulama kodunda yazılırsa her yeni kural bir kod değişikliğidir ve sıralamanın nedeni görünmez; ürün yöneticisi sıfır sonuç oranını ölçemez ve düzeltemez."),
+        row("R2", 20, "Kampanya akşamı on kat trafik ve 100 ms sınırı: yavaş arama, ziyaretçinin ikinci harfi yazmadan vazgeçmesidir.",
+            "Normalde saniyede 30, kampanya akşamı saniyede 300 arama. Her cevap 100 ms'nin altında. Katalog 200 üründen 200.000 ürüne büyüyecek; tasarım değişmemeli.",
+            "Arama ziyaretçinin yazarken beklediği ekrandır; tepe anında yavaşlarsa kampanyanın en değerli saati kaybolur."),
+        row("R3", 7, "Arama katmanı katalogun bir kopyasıdır; kaybı vitrini bir süre boşaltır ama veri kaybı değildir.",
+            "Arama katmanı kaybolursa katalogdan bir saatte yeniden kurulabilir. Bir Availability Zone arızası aramayı durdurmamalı.",
+            "Bir saatlik boş arama kutusu satış kaybıdır; ama kayıt sistemi DocumentDB'de olduğu için hiçbir ürün kaybolmaz."),
+        row("R4", 15, "İki kişilik backend ekibi; ama bu, engine uyumundan sonra gelir.",
+            "İki backend geliştiricisi; biri Elasticsearch biliyor. Sunucu yaması, yedek ve node değişimi istenmiyor. Katalogdaki değişiklikler aramaya kod yazmadan akmalı.",
+            "Küçük bir ekipte arama altyapısını işletmek ürün geliştirmeden çalınan zamandır; elle yazılmış bir kopyalama işi her katalog değişikliğinde kırılabilir."),
+        row("R5", 12, "Arama gelir getiren bir özelliktir; sabit bir aylık bütçe kabul edilir.",
+            "Gün içinde düz, kampanya akşamı tepe. Arama katmanı için aylık sabit bir bütçe kabul edilir; katalog büyüdükçe maliyet öngörülebilir artmalı.",
+            "Sabit maliyet kabul edilir, ama büyüme sürpriz bir fatura yaratmamalı ve küçük katalog için büyük bir sunucu filosu ödenmemeli."),
+    ],
+    cands=["os", "aur", "doc"],
+    scores={
+        "os": [sc(10, "Analyzer \"kulaklik\"i ve \"kulaklık\"ı aynı token'a çevirir (Ö1), fuzziness AUTO \"kulaklk\"i bir edit farkla eşleştirir (Ö4) ve BM25 iki kelimeli adı öne koyar (Ö3); canlı index'te \"kulaklk\" fuzziness ile 5, onsuz 0 ürün buldu (B2). Puan kırılmadı."),
+               sc(10, "Inverted index her token için posting list'i hazır tutar (Ö2): \"kablosuz kulaklik\" iki index entry'si okur, ürün adlarını okumaz; 200.000 üründe de aynı iki entry okunur. Puan kırılmadı."),
+               sc(9, "Custom analyzer (lowercase turkish + asciifolding), alan ağırlığı (name^3), synonym filtresi ve explain engine'in araçlarıdır (Ö1, Ö3). 1 puan kırıldı: Türkçe harf kuralı hazır gelmez, custom analyzer olarak bir kez tasarlanır ve ağırlıklar ölçülerek ayarlanır."),
+               sc(9, "Shard'lar ve replica'lar arama yükünü data node'lara paylaştırır (Ö7); 100 ms 300 arama için rahattır. 1 puan kırıldı: kampanya için data node'lar önceden eklenir; yeni node'un shard'ları alması dakikalar sürer."),
+               sc(8, "Replica shard'lar başka AZ'dedir; bir node ya da AZ arızasında arama sürer (Ö7). 2 puan kırıldı: domain kaybolursa katalog OpenSearch Ingestion ile baştan yüklenir ve bu yaklaşık bir saat sürer (bir saat ve üstü: 2 puan)."),
+               sc(6, "Yönetilen domain: yama ve yedek AWS'tedir; DocumentDB'deki değişiklikler OpenSearch Ingestion ile index'e akar. 4 puan kırıldı: mapping, analyzer, shard sayısı ve node tipi ekibin işidir ve ekibin yalnız biri bu engine'i biliyor."),
+               sc(6, "Data node'lar saat başına ödenir; gün içinde yük düzdür ve node'lar boş durmaz, kampanya tepesi için kapasite R2'de sayıldı. 4 puan kırıldı: üç AZ'lik bir domain gece de çalışır ve küçük katalog için fatura sabittir.")],
+        "aur": [sc(6, "to_tsvector('turkish', ...) ve tsquery kelime araması yapar, pg_trgm benzerliği yazım hatasını yakalar, unaccent harfleri sadeleştirir. 4 puan kırıldı: yazım hatası ve kelime araması iki ayrı mekanizmadır; ikisini tek bir sıralamada birleştiren sorgu elle yazılır."),
+                sc(7, "GIN index tsvector'ü ve trigram'ları index'ler; aday row'lar hızlı bulunur. 3 puan kırıldı: ts_rank her eşleşen row için ayrı hesaplanır; \"kulaklık\" gibi sık bir kelime 200.000 üründe binlerce row'u sıralamaya sokar."),
+                sc(6, "Text search configuration, setweight ile A-D ağırlıkları ve ts_rank'in normalizasyon seçenekleri vardır. 4 puan kırıldı: alan ağırlıkları dört harfle (A-D) sınırlıdır, eş anlamlı sözlüğü hazır gelmez ve \"neden bu sıra\" sorusunu açıklayan bir araç yoktur. Yazım hatasının ayrı bir mekanizma olması R1.1'de sayıldı."),
+                sc(9, "Reader instance'lar arama yükünü paylaşır. 1 puan kırıldı: beklenmeyen bir tepe yeni reader'ın eklenmesini dakikalarca bekler."),
+                sc(10, "Aurora'daki kopya üç AZ'de altı kopya olarak saklanır. Puan kırılmadı."),
+                sc(4, "Aurora Lale Market'te siparişler için çalışır. 6 puan kırıldı: katalog DocumentDB'dedir; arama için Aurora'ya bir kopya ve onu besleyen bir boru hattı gerekir ve tsvector, pg_trgm ve unaccent ekibin yeni işidir."),
+                sc(7, "Var olan cluster'a reader eklenir. 3 puan kırıldı: kampanya reader'ları ve arama sorgularının CPU'su ACU olarak ödenir.")],
+        "doc": [sc(3, "DocumentDB'nin text index'i $text ile kelime araması yapar. 7 puan kırıldı: AWS'e göre text index \"Only English language\" destekler, Türkçe harf kuralı yoktur ve yazım hatası toleransı yoktur; \"kulaklk\" hiçbir şey bulmaz."),
+                sc(5, "Text index kelimelerden document'lara giden bir index'tir. 5 puan kırıldı: collection başına tek bir text index kurulur ve sıralama yalnız terim sıklığına dayanır."),
+                sc(3, "$meta textScore ile skor okunur, alan ağırlığı verilebilir. 7 puan kırıldı: custom analyzer, synonym ve yazım hatası ayarı yoktur; kurallar uygulamada yazılır."),
+                sc(9, "Okumalar replica'lara dağılır. 1 puan kırıldı: beklenmeyen bir tepe yeni replica'nın eklenmesini dakikalarca bekler."),
+                sc(10, "Katalog zaten DocumentDB'de ve kalıcıdır; ayrı bir kopya yoktur. Puan kırılmadı."),
+                sc(9, "Var olan cluster ve bilinen API; ikinci bir sistem ve boru hattı yoktur. 1 puan kırıldı: text index ve arama sorguları için replica sayısını ekip seçer."),
+                sc(8, "Var olan cluster kullanılır. 2 puan kırıldı: kampanya için eklenen replica'lar instance saati olarak ödenir.")],
+    },
+    h2h={
+        "aur": "İlişkisel (Aurora PostgreSQL) ile kafa kafaya. Aurora gerçek bir adaydır: PostgreSQL'in tam metin araması Türkçe bir text search configuration ile kelimeleri köklerine indirir, pg_trgm yazım hatasını benzerlikle yakalar ve GIN index ikisini de hızlandırır. "
+               "Ama bu iki ayrı mekanizmadır: kelime araması bir yerde, yazım hatası başka bir yerde çalışır ve ikisini tek bir sıralamada birleştiren sorgu elle yazılır; ts_rank her eşleşen row'u ayrı puanlar. R1'de 46 puanın 29'unu alır, OpenSearch 44,6'sını. "
+               "Servis tasarımında da geridedir: katalog DocumentDB'de olduğu için Aurora'ya ikinci bir kopya ve onu besleyen bir boru hattı gerekir (R4). "
+               "Hangi koşul değişseydi Aurora PostgreSQL seçilirdi: katalog zaten Aurora'da olsaydı, aramalar az (saniyede birkaç) ve kelimeler tam yazılmış olsaydı ve ekip ikinci bir servis işletmek istemeseydi; o zaman bir tsvector column'u yeterdi.",
+        "doc": "Document (DocumentDB) ile kafa kafaya. DocumentDB'nin artısı kataloğun zaten orada olmasıdır: kopya, boru hattı ve ikinci bir sistem yoktur ve ekip API'yi bilir; R3, R4 ve R5'te öndedir. "
+               "Ama bu kartın sorusu bir metin arama sorusudur ve DocumentDB'nin text index'i AWS'e göre yalnız İngilizceyi destekler, yazım hatası toleransı ve custom analyzer yoktur, collection başına tek bir text index kurulur. \"kulaklk\" ve \"kulaklik\" aramaları boş döner, yani ürün yöneticisinin hedefi karşılanmaz. R1'de 46 puanın 16,6'sını alır. "
+               "Bu yüzden doğru mimari ikisi birliktedir: katalog DocumentDB'de kayıt sistemi olarak kalır, arama kopyası OpenSearch'te yaşar. "
+               "Hangi koşul değişseydi DocumentDB seçilirdi: arama yalnız İngilizce ürün kodları ve tam kelimelerle yapılsaydı ve sıralama önemli olmasaydı.",
+    },
+    verdict="Karar: OpenSearch {os}, Aurora PostgreSQL {aur}, DocumentDB {doc}. Kararı R1 verir: analyzer, inverted index, fuzziness ve BM25 bu iş yükünün kendisidir ve R1'in 46 puanının 44,6'sını OpenSearch alır. "
+            "OpenSearch seçtiğimizde artımız: yazım hatalı ve Türkçe harfsiz aramalar bulur, en uygun ürün önce gelir, 200.000 üründe de arama aynı sayıda index entry'si okur. "
+            "Eksimiz: ikinci bir sistem işletiriz; DocumentDB'den gelen değişiklikleri OpenSearch Ingestion ile akıtırız ve kopyanın kopabileceğini izleriz; analyzer ve shard sayısını baştan doğru seçeriz, çünkü bir alanın analyzer'ı değişirse index yeniden kurulur. "
+            "Doğru mimari ikisi birliktedir: katalog DocumentDB'de, arama kopyası OpenSearch'te. "
+            "Bir koşul değişseydi: aramalar yalnız tam kelimeyle ve az sayıda yapılsaydı kataloğun bulunduğu database'in kendi araması yeterdi."))
+
+# ------------------------------------------------------------------ 2. faceted navigation: the same workload as DocumentDB card 8 (OpenSearch wins R1, DocumentDB the total)
+_DS = next(uc for uc in DOCDB_W if uc["id"] == "search")
+OPENSEARCH_W.append(wusecase("facets", 2, sim="w_facets",
+    title=_DS["title"][1],
+    key=_DS["key"][1],
+    story=_DS["story"][1].replace("(kart 1)", "(DocumentDB sayfasının kart 1'i)"),
+    wnote=_DS["wnote"][1] + " Bu kart DocumentDB sayfasının kart 8'iyle aynı iş yüküdür ve aynı satırları, ağırlıkları ve puanları taşır. Hikâye kart 1'den önceki durumdur: henüz bir OpenSearch domain'i yoktur ve ekip OpenSearch bilmez.",
+    rows=[row(r["code"], r["w"], r["wwhy"][1], r["want"][1], r["why"][1]) for r in _DS["rows"]],
+    cands=["doc", "os", "aur"],
+    scores={
+        "doc": [sc(8, "find dot notation ile iç içe field'lara filtreler; sık birleşimlere compound index kurulur ({ category: 1, 'attributes.renk': 1, rating: -1 }). 2 puan kırıldı: 20 field'ın her birleşimine index kurulamaz; bazı birleşimler index'in bir kısmını kullanır ve kalan koşulu document üzerinde test eder."),
+                sc(6, "Facet sayıları $match ve $group ile bir aggregation pipeline'dır ve başındaki $match index kullanır. 4 puan kırıldı: her filtre değişiminde her facet için bir pipeline çalışır; sayılar sonuç kümesinin document'ları okunarak hesaplanır."),
+                sc(6, "B-tree index bir field sırasını hızlı verir. 4 puan kırıldı: her index tek bir sıradır; serbest birleşimler ve sayım için engine birkaç index'i birleştirmez, ya bir index'i kısmen kullanır ya da document okur."),
+                sc(10, "Yeni filtre field'ı sadece yeni document'lara yazılır; index'i istenince kurulur. Puan kırılmadı."),
+                sc(7, "Filtreli okumalar replica'lara dağılır. 3 puan kırıldı: kampanyada saniyede 5.000 filtre ve facet pipeline'ı replica'ların CPU'sunu doldurur; 50 ms her birleşimde garanti değildir."),
+                sc(10, "Katalog zaten DocumentDB'de ve kalıcıdır; ayrı bir arama katmanı yoktur. Puan kırılmadı."),
+                sc(9, "Var olan cluster ve bilinen API; ikinci bir sistem ve boru hattı yoktur. 1 puan kırıldı: facet yükü için replica sayısını ve index'leri ekip seçer."),
+                sc(8, "Var olan cluster kullanılır. 2 puan kırıldı: kampanya için eklenen replica'lar instance saati olarak ödenir.")],
+        "os": [sc(10, "Bir bool sorgusu her field birleşimini filtre olarak uygular, sıralar ve sayfalar; iç içe field'lar da aynı biçimdedir (Ö2). Puan kırılmadı."),
+               sc(10, "Aggregation'lar facet sayılarını aynı sorgunun içinde, doc values üzerinden verir (Ö5); canlı index'te bir sorgu 20 ürünü ve 8 kova sayısını birlikte döndürdü (B4). Puan kırılmadı."),
+               sc(10, "Inverted index her field'ı ayrı index'ler ve sorgu anında posting list'leri kesiştirerek birleştirir (Ö2); birleşim başına bir yapı gerekmez. Puan kırılmadı."),
+               sc(8, "Dynamic mapping yeni field'ı tanır (A2). 2 puan kırıldı: field'ın type'ı ilk yazmada sabitlenir; yanlış tahmin edilen bir type reindex ister."),
+               sc(9, "Shard'lar ve replica'lar filtre yükünü paylaşır (Ö7); 50 ms filtre ve facet için rahattır. 1 puan kırıldı: kampanya için node'lar önceden eklenir; yeni node'un shard'ları alması zaman ister."),
+               sc(8, "Shard replica'ları başka AZ'dedir (Ö7). 2 puan kırıldı: arama kopyası kaybolursa kataloğun tamamı yeniden index'lenir (saatler)."),
+               sc(3, "Yönetilen domain. 7 puan kırıldı: ekip OpenSearch bilmiyor; mapping, shard boyutu ve kataloğu change stream'den besleyen boru hattı ekibin yeni işidir ve iki sistem birbirinden kopabilir."),
+               sc(5, "Node'lar saat başına ödenir. 5 puan kırıldı: domain katalog cluster'ına ek olarak bütün gün çalışır.")],
+        "aur": [sc(9, "SQL her column'da ve JSONB'nin içinde filtreler, sıralar ve sayfalar. 1 puan kırıldı: iç içe field'lara göre aralık JSON yolu ve cast ister."),
+                sc(6, "Facet sayıları GROUP BY ile bir sorgudur. 4 puan kırıldı: her filtre değişiminde her facet için bir GROUP BY çalışır ve sonuç row'larını okur."),
+                sc(7, "Planner birkaç B-tree index'ini bitmap ile birleştirebilir; GIN JSONB eşitliklerini index'ler. 3 puan kırıldı: sayım yine row'ları okur ve iç içe aralıklar her field için expression index ister."),
+                sc(7, "JSONB yeni field'ı migration'sız alır. 3 puan kırıldı: index'lenecek her iç içe field için yeni bir expression index kurulur."),
+                sc(7, "Reader instance'lar okumayı paylaşır. 3 puan kırıldı: kampanyada 5.000 filtre ve GROUP BY reader'ların CPU'sunu doldurur."),
+                sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                sc(4, "Aurora Lale Market'te çalışır. 6 puan kırıldı: katalog DocumentDB'dedir; arama için Aurora'ya bir kopya ve onu besleyen bir boru hattı gerekir ve filtre sorguları JSONB yollarıyla yeniden yazılır."),
+                sc(7, "Var olan cluster'a reader eklenir. 3 puan kırıldı: kampanya reader'ları ACU olarak ödenir.")],
+    },
+    h2h={
+        "os": "Search engine (OpenSearch) ile kafa kafaya. Bu kartta R1'i OpenSearch kazanır: inverted index her field'ı ayrı index'ler ve sorgu anında birleştirir, facet sayıları aynı sorgunun içinde gelir ve R1'in 42 puanının 40,8'ini alır; DocumentDB 30,4 alır. Bu, engine'in açık bir üstünlüğüdür. "
+              "Toplamı DocumentDB'ye veren R4 ve R5'tir: katalog zaten DocumentDB'dedir, ekip OpenSearch bilmez ve ikinci bir sistem, onu besleyen bir change stream boru hattı ve bütün gün çalışan node'lar ister; fark sadece 0,8 puandır. "
+              "Bu yakın yarış bir uyarıdır: metin araması (yazım hatası toleransı, relevance) istendiği gün iş yükü kart 1'e döner; orada DocumentDB'nin text index'i çok zayıftır ve OpenSearch net kazanır. O gün kurulan OpenSearch domain'i facet'leri de taşır. "
+              "Hangi koşul değişseydi OpenSearch seçilirdi: metin araması bu çeyrekte istenseydi ya da filtre field'ları 50'yi geçseydi; o gün katalog DocumentDB'de kalır ve arama kopyası change stream ile OpenSearch'e akar.",
+        "aur": "İlişkisel (Aurora PostgreSQL) ile kafa kafaya. Aurora'nın planner'ı birkaç index'i bir sorguda birleştirebilir (bitmap) ve SQL her filtreyi ve GROUP BY ile facet'i cevaplar; R1'de DocumentDB ile neredeyse eşittir. "
+               "Ama katalog Aurora'da değildir: arama için kataloğun bir kopyası Aurora'ya yazılır, bir boru hattı onu güncel tutar ve sorgular JSONB yollarıyla yeniden yazılır. Bu R4'te altı puanlık bir kayıptır ve Aurora'nın engine kazancını siler. Facet sayıları her iki engine'de de sonuç row'larını okur; OpenSearch'ün doc values'u bu işte ikisinden de iyidir. "
+               "Hangi koşul değişseydi Aurora PostgreSQL seçilirdi: katalog zaten Aurora'da olsaydı (Aurora sayfasının kart 2'sindeki gibi) ve filtreler birkaç sabit field olsaydı.",
+    },
+    verdict="Karar: DocumentDB {doc}, OpenSearch {os}, Aurora PostgreSQL {aur}. Bu yakın bir yarıştır ve R1'i OpenSearch kazanır; toplamı DocumentDB'ye var olan cluster, ekibin bildiği API ve ikinci bir sistemin olmaması verir (R4, R5). "
+            "Yine de OpenSearch seçersek artımız: her filtre birleşimi ve facet sayıları tek bir sorguda, kampanyada da 50 ms'nin altında gelir ve metin araması geldiği gün altyapı hazırdır. "
+            "Eksimiz: ekip yeni bir engine öğrenir; kataloğu DocumentDB'den OpenSearch'e akıtan boru hattını işletiriz ve kopyanın kopmadığını izleriz; domain bütün gün ödenir. "
+            "Bu kart DocumentDB sayfasının kart 8'iyle aynı iş yüküdür ve aynı puanları taşır. "
+            "Bir koşul değişseydi: metin araması istendiği gün doğru cevap ikisi birlikte çalışmaktır: katalog DocumentDB'de, arama kopyası change stream ile OpenSearch'te."))
+for _c in ("doc", "os", "aur"):   # same workload on two pages: same points (decisions.md)
+    assert [p for p, _ in OPENSEARCH_W[-1]["scores"][_c]] == [p for p, _ in _DS["scores"][_c]], _c
+
+# ------------------------------------------------------------------ 3. autocomplete (OpenSearch wins; ElastiCache wins speed)
+OPENSEARCH_W.append(wusecase("suggest", 3,
+    title="Arama kutusunda otomatik tamamlama",
+    key="Index: suggest. Document: bir öneri (ürün adı ya da popüler arama), alanları text (search_as_you_type, tr_folded) ve popularity (sayı).",
+    story="Ziyaretçi arama kutusuna iki harf yazdığı andan itibaren her tuş vuruşunda en fazla 8 öneri görmelidir. Bir arama ortalama beş tuş vuruşu olduğu için öneri trafiği aramanın beş katıdır: normalde saniyede 1.500, kampanya akşamı saniyede 6.000 istek. "
+          "Öneriler iki kaynaktan gelir: 200.000 ürün adı ve son 30 günün en popüler 50.000 araması; liste her gece yeniden kurulur. Ziyaretçi \"kabl\", \"kulakl\" ya da \"kablsz\" yazabilir; Türkçe harfsiz ve bir harf hatalı önekler de doğru öneriyi bulmalı ve popüler öneri önce gelmelidir. "
+          "Her öneri sunucuda 50 ms içinde dönmelidir. Kart 1'in OpenSearch domain'i zaten çalışıyor; ElastiCache oturumlar için, Aurora siparişler için çalışıyor. Ekip iki backend geliştiricisidir.",
+    wnote="R1 toplam 44: öneki ve yazım hatasını birlikte bulmak (EY 18), her tuş vuruşunda cevap süresi (DA 14) ve popülerliğe göre sıralamak (AO 12) bu iş yükünün tanımıdır. "
+          "R2 22 ile ikinci: öneri trafiği aramanın beş katıdır. Öneri listesi her gece yeniden kurulduğu için R3 5'te kalır.",
+    rows=[
+        row("EY", 18, "Öneri kutusu her ziyaretçinin her tuş vuruşunda çalışır; yanlış ya da boş öneri ziyaretçiyi yanlış aramaya götürür.",
+            "\"kabl\", \"kablosuz kul\" ve \"kablsz\" (bir harf hatalı) önekleri \"Kablosuz Kulaklık\" önerisini bulmalı; Türkçe harfsiz yazım da eşleşmeli. Önek kelimenin başında ya da ikinci kelimede olabilir.",
+            "Yalnız tam önek eşleşirse telefondan yazan ziyaretçi bir harf hatasıyla hiçbir öneri görmez; öneri kutusu tam ihtiyaç olduğu anda boş kalır."),
+        row("DA", 14, "Her tuş vuruşu bir istektir; öneri yazmaktan yavaşsa işe yaramaz.",
+            "Bir öneri isteği sunucuda 50 ms içinde dönmeli; süre öneri listesinin büyüklüğünden (250.000 öneri) bağımsız olmalı.",
+            "Öneri 50 ms'den geç gelirse ziyaretçi bir sonraki harfi çoktan yazmıştır; eski öneri ekranda titrer ve yanlış öneriye tıklanır."),
+        row("AO", 12, "Popüler öneri önce gelmezse öneri kutusu satış getirmez.",
+            "Öneriler popülerliğe göre sıralanmalı: aynı önekle \"kablosuz kulaklık\" (günde 3.000 arama) \"kablo kanalı\"ndan (günde 10 arama) önce gelmeli. Kampanya ürünü bir hafta öne alınabilmeli.",
+            "Alfabetik öneri en çok aranan ürünü sona iter; kampanya ürünü öne alınamazsa pazarlama ekibi öneri kutusunu kullanamaz."),
+        row("R2", 22, "Öneri trafiği aramanın beş katıdır ve kampanya akşamı dört kat sıçrar.",
+            "Normalde saniyede 1.500, kampanya akşamı saniyede 6.000 öneri isteği; her biri 50 ms içinde.",
+            "Tepe anında yavaşlayan öneri kutusu kampanya akşamının bütün aramalarını yavaşlatır."),
+        row("R3", 5, "Öneri listesi her gece ürünlerden ve arama günlüğünden yeniden kurulur; kaybı yalnız birkaç dakikalık öneri yokluğudur.",
+            "Öneri verisi kaybolursa birkaç dakikada yeniden yüklenebilir; o sürede arama kutusu önerisiz çalışabilir.",
+            "Önerisiz birkaç dakika satış kaybı değildir; arama yine çalışır."),
+        row("R4", 15, "İki kişilik ekip yeni bir sistem işletmek istemiyor; üç servis zaten çalışıyor.",
+            "Öneri özelliği zaten çalışan bir servisin üzerine kurulmalı; yeni bir sunucu ve yeni bir sorgu dili istenmiyor.",
+            "Yeni bir sistem iki kişilik ekibe nöbet, izleme ve yedek işi ekler."),
+        row("R5", 14, "Öneri trafiği büyüktür ama her istek küçüktür; maliyet istek sayısıyla büyümemeli.",
+            "Her tuş vuruşu bir istektir; ayda yaklaşık 4 milyar istek. Fiyat bu istek sayısıyla patlamamalı.",
+            "İstek başına pahalı bir model öneri kutusunu arama kutusundan daha pahalı yapar."),
+    ],
+    cands=["os", "ec", "aur"],
+    scores={
+        "os": [sc(10, "search_as_you_type alanı her kelimenin öneklerini index'ler, fuzziness \"kablsz\"i bir edit farkla eşleştirir (Ö4) ve tr_folded analyzer Türkçe harfleri sadeleştirir (Ö1). Puan kırılmadı."),
+               sc(8, "Önekler index zamanında token olarak hazırlanır, sorgu posting list okur (Ö2). 2 puan kırıldı: yazım hatası ve popülerlik birlikte istendiği için öneri search_as_you_type ile skorlanan tam bir aramadır ve bellekteki bir yapıdan okumaya göre milisaniyeler fazladır. Bellekte duran completion suggester daha hızlıdır ama yazım hatalı önekte ve filtrede sınırlıdır."),
+               sc(9, "function_score popularity alanıyla skoru çarpar ve kampanya ürünü bir boost ile öne alınır (Ö3). 1 puan kırıldı: metin skoru ile popülerliği dengeleyen formül ölçülerek ayarlanır."),
+               sc(9, "Replica'lar öneri yükünü paylaşır (Ö7). 1 puan kırıldı: kampanya için node'lar önceden eklenir; yeni node'un shard'ları alması dakikalar sürer."),
+               sc(9, "Replica shard'lar node arızasını karşılar (Ö7). 1 puan kırıldı: domain kaybolursa öneri index'i birkaç dakikada yeniden yüklenir."),
+               sc(9, "Kart 1'in domain'i zaten çalışır ve ekip onu işletir; öneri bir index daha demektir. 1 puan kırıldı: search_as_you_type mapping'i ve gece yükleme işi yeni bir index tasarımıdır."),
+               sc(8, "Domain zaten ödenir; istek başına ücret yoktur. 2 puan kırıldı: saniyede 6.000 öneri için domain'e bir replica ya da daha büyük node'lar eklenir.")],
+        "ec": [sc(5, "Bir sorted set'te bütün öneriler score 0 ile tutulur ve ZRANGEBYLEX önekle başlayanları sırayla verir; Türkçe harfler yazarken sadeleştirilmiş bir key ile çözülür. 5 puan kırıldı: yazım hatası toleransı yoktur, \"kablsz\" hiçbir şey bulmaz; ikinci kelimedeki önek için her kelime ayrıca yazılır."),
+               sc(10, "Sorted set bellektedir; önek aralığı okuması milisaniyenin altındadır ve süre listenin büyüklüğünden neredeyse bağımsızdır. Puan kırılmadı."),
+               sc(6, "Popülerlik ikinci bir sorted set'in score'udur. 4 puan kırıldı: önek araması score'ları eşit tutmayı ister; popülerliğe göre sıralamak için önek başına ayrı listeler önceden hesaplanır ya da sonuçlar uygulamada yeniden sıralanır."),
+               sc(10, "ElastiCache Serverless saniyede 6.000 küçük komutu kendisi karşılar. Puan kırılmadı."),
+               sc(8, "Bellekteki liste yalnız bir kopyadır. 2 puan kırıldı: bir arızadan sonra liste yeniden yüklenene kadar öneri yoktur."),
+               sc(9, "Cache oturumlar için zaten çalışır; ekip Valkey komutlarını bilir. 1 puan kırıldı: öneri key'leri oturumlarla aynı cache'in belleğini ve ECPU'sunu paylaşır ve ikisi birlikte izlenir."),
+               sc(9, "ECPU ve GB-saat başına ödenir; bir ZRANGEBYLEX küçük bir istektir. 1 puan kırıldı: her tuş vuruşu ayrı bir istektir ve fatura öneri trafiğiyle doğrusal büyür.")],
+        "aur": [sc(6, "LIKE 'kabl%' bir B-tree index'iyle (text_pattern_ops) önek arar; pg_trgm yazım hatasını, unaccent Türkçe harfleri ele alır. 4 puan kırıldı: önek ve yazım hatası iki ayrı operatördür ve ikinci kelimedeki önek ayrı bir kelime tablosu ister."),
+                sc(7, "B-tree önek araması birkaç sayfa okur. 3 puan kırıldı: trigram benzerliği birçok adayı okuyup puanlar; hatalı öneklerde süre on milisaniyelere çıkar."),
+                sc(7, "ORDER BY popularity DESC bir index'le hızlıdır. 3 puan kırıldı: benzerlik ile popülerliği birleştiren formül SQL'de elle yazılır."),
+                sc(7, "Öneri sorguları reader'lara gider. 3 puan kırıldı: kampanyada saniyede 6.000 sorgu reader'ların CPU'sunu doldurur ve reader eklemek dakikalar sürer."),
+                sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                sc(7, "Aurora çalışır ve ekip SQL bilir. 3 puan kırıldı: öneri sorguları siparişlerin cluster'ına bir reader ve pg_trgm ile unaccent extension'larını ekler."),
+                sc(7, "Var olan cluster'a reader eklenir. 3 puan kırıldı: öneri trafiği için reader'lar ve ACU'lar bütün gün ödenir.")],
+    },
+    h2h={
+        "ec": "Bellek içi key-value (ElastiCache) ile kafa kafaya. ElastiCache'in gücü hızdadır ve bu kartta açıktır: sorted set bellektedir, ZRANGEBYLEX önekle başlayan önerileri milisaniyenin altında verir ve Serverless saniyede 6.000 küçük isteği ayarsız taşır; R1 · DA'yı ve R2'yi o kazanır. "
+              "Ama öneri kutusunun asıl sorusu \"ziyaretçi ne yazmak istedi\" sorusudur. Valkey'de yazım hatası toleransı yoktur, \"kablsz\" boş döner; ikinci kelimedeki önek ve popülerlik sırası için önek başına listeler önceden hesaplanır. R1 · EY'de 5, AO'da 6 alır; fark buradan gelir. "
+              "Hangi koşul değişseydi ElastiCache seçilirdi: öneriler yalnız tam öneklerle (ürün kodu, şehir adı) sorulsaydı ve listeler küçük olsaydı; ya da öneri trafiği saniyede on binlere çıkıp 50 ms sınırı 5 ms'ye inseydi. "
+              "O durumda ikisi birlikte de çalışabilir: en sık 1.000 önek ElastiCache'te, geri kalanı OpenSearch'te.",
+        "aur": "İlişkisel (Aurora PostgreSQL) ile kafa kafaya. Aurora önekleri B-tree ile, yazım hatalarını pg_trgm ile ve popülerliği bir ORDER BY ile verebilir; her parça çalışır ve ekip SQL bilir. "
+               "Ama parçalar ayrı mekanizmalardır ve onları tek bir öneri sırasında birleştiren sorgu elle yazılır; hatalı öneklerde trigram araması birçok adayı okur. "
+               "Asıl kayıp R2'dedir: öneri trafiği aramanın beş katıdır ve saniyede 6.000 küçük sorgu siparişleri taşıyan cluster'ın reader'larını doldurur. Bu, mağazanın en önemli database'ine en hafif işi yüklemektir. "
+               "Hangi koşul değişseydi Aurora PostgreSQL seçilirdi: öneri listesi birkaç bin kayıtlık bir yönetim ekranı olsaydı (saniyede birkaç istek) ve yazım hatası toleransı istenmeseydi; o zaman ayrı bir servis gereksizdir.",
+    },
+    verdict="Karar: OpenSearch {os}, ElastiCache {ec}, Aurora PostgreSQL {aur}. Kararı R1 · EY verir: önek, yazım hatası ve Türkçe harf kuralı birlikte yalnız search engine'de tek bir sorgudur. ElastiCache hızda ve tepe trafikte öndedir ama \"kablsz\" yazan ziyaretçiye öneri veremez. "
+            "OpenSearch seçtiğimizde artımız: öneri, kart 1'in domain'inde yeni bir index'tir; aynı analyzer'lar ve aynı ekip. "
+            "Eksimiz: her tuş vuruşu bir arama isteğidir; kampanyadan önce replica ekleriz, istemcide 100 ms'lik bir bekleme (debounce) koyarak istek sayısını düşürürüz ve popülerlik ağırlığını ölçerek ayarlarız. "
+            "Bir koşul değişseydi: öneriler yalnız tam öneklerle sorulsaydı ElastiCache'in sorted set'i daha hızlı ve daha ucuz olurdu."))
+
+# ------------------------------------------------------------------ 4. store finder: geo + text + filters (OpenSearch wins, close race with Aurora)
+OPENSEARCH_W.append(wusecase("stores", 4,
+    title="Mağaza ve teslim noktası bulucu: konum, metin ve filtre birlikte",
+    key="Index: pickup_points. Document: _id nokta id'si; location geo_point, service_area geo_shape, name ve address text, services keyword listesi, open_now boolean.",
+    story="Lale Market 3 mağazadan 120 mağazaya ve 2.000 kargo teslim noktasına büyüyor. Uygulamadaki \"yakınımda\" ekranı tek bir kutuda üç soruyu birlikte sorar: konum (\"5 km içinde, en yakın önce\"), metin (\"kadıköy kargo\", \"bağdat caddesi\") ve filtre (\"şimdi açık\", \"soğuk zincir hizmeti var\"). "
+          "Her noktanın bir hizmet bölgesi (çokgen) vardır: \"bu adrese hangi nokta teslim eder\". Normalde saniyede 40, kampanya akşamı saniyede 400 arama; her biri 100 ms içinde. Noktaların açılış saatleri ve hizmetleri günde bir kez değişir. "
+          "Noktaların kayıt sistemi Aurora'daki points table'ıdır. Kart 1'in OpenSearch domain'i zaten çalışıyor ve ekip onu işletiyor.",
+    wnote="R1 toplam 40: konum, metin ve filtreyi tek bir sıralı soruda birleştirmek (EY 18), nokta ve çokgen tipleri (VM 10) ve bunu taşıyan index yapısı (DA 12). "
+          "R4 18 ile ikinci: ekip mevcut sistemlerin üzerine kurmak istiyor ve yeni bir beceri öğrenmek istemiyor. R5 17: 2.000 noktalık küçük bir veri için büyük bir fatura istenmiyor.",
+    rows=[
+        row("EY", 18, "\"Yakınımda\" ekranının her araması üç soruyu birlikte sorar; biri eksikse ekran yanlış nokta gösterir.",
+            "\"5 km içinde, şimdi açık, soğuk zincir hizmeti olan ve adında ya da adresinde 'kadıköy' geçen noktalar, en yakın önce\" tek bir sorgu olmalı; metin eşleşmesi Türkçe harfsiz de çalışmalı.",
+            "Konum bir sistemde, metin başka bir sistemde aranırsa uygulama iki sonucu birleştirir ve sayfalama bozulur; Türkçe harfsiz \"kadikoy\" boş dönerse ziyaretçi noktayı bulamaz."),
+        row("VM", 10, "Teslim kuralı bir çokgenle tanımlanır; nokta tek başına yetmez.",
+            "Nokta (konum) ve çokgen (hizmet bölgesi) veri tipleri olmalı; \"bu adres hangi noktanın bölgesinde\" sorusu sorulabilmeli.",
+            "Çokgen bir liste olarak saklanırsa \"bölgenin içinde mi\" testi uygulama kodudur ve her aramada bütün bölgeler okunur."),
+        row("DA", 12, "Arama 100 ms içinde dönmeli; nokta sayısı 2.000'den 20.000'e çıkabilir.",
+            "Mekânsal sorular ve metin koşulları index'lerle birkaç adımda daraltılmalı; süre nokta sayısıyla doğrusal artmamalı.",
+            "Her aramada bütün noktalara mesafe hesaplanırsa 20.000 noktada ve kampanya akşamında 100 ms tutulamaz."),
+        row("R2", 15, "Kampanya akşamı on kat arama; ziyaretçi kapıda bekliyor olabilir.",
+            "Normalde saniyede 40, kampanya akşamı saniyede 400 arama; her biri 100 ms içinde.",
+            "Tepe anında yavaşlayan bulucu, mağazaya yönelen ziyaretçiyi kaybettirir."),
+        row("R3", 10, "Noktaların kaydı Aurora'dadır; arama katmanı bir kopyadır.",
+            "Arama katmanı kaybolursa Aurora'dan dakikalar içinde yeniden kurulabilmeli. Bir AZ arızası aramayı durdurmamalı.",
+            "Boş bir bulucu ekranı dakikalarca sürerse kampanya akşamı teslim noktası seçilemez; ama kayıt kaybolmaz."),
+        row("R4", 18, "Ekip mevcut sistemlerin üzerine kurmak istiyor ve yeni bir coğrafi beceri öğrenmek istemiyor.",
+            "Kart 1'in OpenSearch domain'i ve Aurora zaten çalışıyor; bulucu bunlardan birinin üzerine kurulmalı. Noktaların değişiklikleri kod yazmadan akmalı.",
+            "Yeni bir sistem ya da yeni bir coğrafi beceri iki kişilik ekibe aylar ekler; elle yazılmış bir kopyalama işi açılış saatlerini eskitir."),
+        row("R5", 17, "2.000 noktalık küçük bir veri için ayrı bir fatura istenmiyor.",
+            "Veri küçüktür (birkaç MB); trafik dalgalıdır. Var olan bir servisin kapasitesi kullanılmalı.",
+            "Küçük bir özellik için gece gündüz çalışan yeni bir filo, özelliğin getirisinden pahalıdır."),
+    ],
+    cands=["os", "aur", "ec"],
+    scores={
+        "os": [sc(10, "geo_distance filtresi, _geo_distance sıralaması, bir match sorgusu ve term filtreleri tek bir bool sorgusudur (Ö6, Ö1, Ö3); tr_folded \"kadikoy\"u \"Kadıköy\"e eşler. Puan kırılmadı."),
+               sc(7, "geo_point ve geo_shape alan tipleri vardır (Ö6). 3 puan kırıldı: koordinat sistemi dönüşümleri ve geometri doğrulaması PostGIS kadar geniş değildir; \"bu adres hangi bölgede\" sorusu hizmet bölgelerini ayrı bir index'te document olarak tutan ters bir sorgu ister (Aurora sayfasının kart 10'undaki aynı kırılım)."),
+               sc(10, "Mekânsal alanlar ağaç yapılı index'lerde durur ve metin koşulları posting list'lerle daraltılır (Ö2, Ö6); her iki koşul da index'ten okunur. Puan kırılmadı."),
+               sc(9, "Replica'lar arama yükünü paylaşır (Ö7). 1 puan kırıldı: kampanya için node'lar önceden eklenir; yeni node'un shard'ları alması dakikalar sürer."),
+               sc(9, "Replica shard'lar AZ arızasını karşılar (Ö7). 1 puan kırıldı: domain kaybolursa 2.000 nokta Aurora'dan dakikalar içinde yeniden yüklenir."),
+               sc(7, "Kart 1'in domain'i çalışır ve ekip onu bilir; OpenSearch Ingestion Aurora PostgreSQL'in değişikliklerini akıtır. 3 puan kırıldı: Aurora'dan akış için logical replication açılır ve pipeline işletilir; geo mapping'i yeni bir index tasarımıdır."),
+               sc(8, "Domain zaten ödenir. 2 puan kırıldı: kampanya akşamının 400 araması için domain'e kapasite eklenir.")],
+        "aur": [sc(8, "ST_DWithin, ORDER BY konum <-> nokta, tsvector araması ve WHERE koşulları tek bir SQL'dir. 2 puan kırıldı: metin skoru ile mesafe sırasını birlikte veren bir sıralama elle yazılır ve Türkçe harfsiz eşleşme unaccent ister."),
+                sc(10, "PostGIS geometry tipi noktayı ve çokgeni koordinat sistemiyle tutar; ST_Contains \"bu adres hangi bölgede\" sorusunu cevaplar ve geçersiz çokgen reddedilebilir. Puan kırılmadı."),
+                sc(9, "GiST index mekânsal soruyu, GIN index metni daraltır. 1 puan kırıldı: planner iki index'ten birini seçer, diğer koşulu row'lar üzerinde test eder."),
+                sc(9, "Arama reader'lara gider. 1 puan kırıldı: beklenmeyen bir tepe yeni reader'ın eklenmesini dakikalarca bekler."),
+                sc(10, "Kayıt sistemi Aurora'dır; üç AZ'de altı kopya. Puan kırılmadı."),
+                sc(7, "Noktalar zaten Aurora'dadır; kopya ve boru hattı yoktur. 3 puan kırıldı: PostGIS, GiST ve tsvector ekibin yeni becerileridir ve kampanya için bir reader eklenir."),
+                sc(8, "Var olan cluster kullanılır. 2 puan kırıldı: kampanya reader'ı ve arama CPU'su ACU olarak ödenir.")],
+        "ec": [sc(4, "GEOSEARCH yarıçap içindeki noktaları en yakından uzağa verir. 6 puan kırıldı: metin araması yoktur; \"şimdi açık\" ve \"soğuk zincir\" filtreleri ayrı set'lerle uygulamada kesiştirilir."),
+               sc(5, "Konum index'i noktaları tutar. 5 puan kırıldı: çokgen tipi yoktur; \"bu adres hangi bölgede\" testi uygulama kodudur."),
+               sc(10, "Konum index'i bellekteki bir sorted set'tir; arama milisaniyenin altındadır. Puan kırılmadı."),
+               sc(10, "Serverless saniyede 400 aramayı ayarsız karşılar. Puan kırılmadı."),
+               sc(8, "Bellekteki liste bir kopyadır. 2 puan kırıldı: bir arızadan sonra noktalar yeniden yüklenene kadar bulucu boştur."),
+               sc(7, "Cache çalışır ve ekip Valkey bilir. 3 puan kırıldı: noktaları ve hizmetlerini Aurora'dan cache'e taşıyan iş yazılır ve günlük değişiklikleri o iş günceller."),
+               sc(9, "ECPU ve GB-saat başına ödenir; veri çok küçüktür. 1 puan kırıldı: GEOSEARCH ve set kesişimleri basit bir GET'ten fazla ECPU harcar.")],
+    },
+    h2h={
+        "aur": "İlişkisel (Aurora PostgreSQL) ile kafa kafaya. Bu yakın bir yarıştır ve Aurora güçlü bir adaydır: PostGIS nokta ve çokgen tiplerinde, \"bu adres hangi bölgede\" sorusunda ve coğrafi doğrulukta OpenSearch'ten öndedir (R1 · VM 10'a 7), noktaların kaydı zaten Aurora'dadır ve kopya gerekmez (R3). "
+               "Farkı R1 · EY yapar: bu ekranın sorusu konum, metin ve filtreyi tek bir sıralı cevapta birleştirmektir. OpenSearch bunu tek bir bool sorgusunda, Türkçe harfsiz metin eşleşmesiyle yapar; Aurora'da metin skoru ile mesafeyi birlikte sıralayan formül elle yazılır ve planner iki index'ten birini seçer. "
+               "R4'te iki aday eşittir (7'ye 7): OpenSearch'te Aurora'dan akış ve yeni bir geo mapping'i, Aurora'da PostGIS ve tsvector öğrenmek ekibin işidir. "
+               "Hangi koşul değişseydi Aurora PostgreSQL seçilirdi: metin araması istenmeseydi ve soru yalnız \"bu adres hangi bölgede\" ile \"en yakın 5 nokta\" olsaydı; ya da sonuç bir siparişle aynı transaction'da yazılmak zorunda olsaydı (Aurora sayfasının kart 10'u).",
+        "ec": "Bellek içi key-value (ElastiCache) ile kafa kafaya. ElastiCache'in GEOSEARCH komutu yarıçap içindeki noktaları en yakından uzağa milisaniyenin altında verir ve tepe trafiği ayarsız taşır; DA'da ve R2'de öndedir. "
+              "Ama bu ekranın sorusu yalnız \"en yakın\" değildir: metin, hizmet filtreleri ve çokgen içi testi de aynı sorudadır. Valkey'de metin araması ve çokgen tipi yoktur; filtreler ayrı set'lerle uygulamada kesiştirilir. R1'de 40 puanın 24,2'sini alır. "
+              "Noktalar günde bir değişir; ElastiCache'in asıl gücü olan saniyede yüzlerce konum güncellemesi bu kartta yoktur. "
+              "Hangi koşul değişseydi ElastiCache seçilirdi: noktalar hareket etseydi (ElastiCache sayfasının kart 10'undaki kuryeler gibi) ve soru yalnız \"en yakın 5\" olsaydı.",
+    },
+    verdict="Karar: OpenSearch {os}, Aurora PostgreSQL {aur}, ElastiCache {ec}. Bu yakın bir yarıştır ve kararı R1 · EY verir: konum, metin ve filtre tek bir sıralı sorguda yalnız search engine'de birleşir. Aurora coğrafi tiplerde ve kayıt sisteminin kendisi olmakta öndedir. "
+            "OpenSearch seçtiğimizde artımız: tek sorgu, Türkçe harfsiz metin eşleşmesi, mesafeye göre sıra ve kart 1'in domain'i. "
+            "Eksimiz: noktaları Aurora'dan OpenSearch Ingestion ile akıtırız ve logical replication açarız; çokgen doğrulamasını Aurora'da yaparız, çünkü kayıt oradadır. Doğru mimari ikisi birliktedir: kayıt ve teslim kuralı Aurora'da (PostGIS), \"yakınımda\" araması OpenSearch'te. "
+            "Bir koşul değişseydi: metin araması istenmeseydi Aurora tek başına yeterdi."))
+
+# ------------------------------------------------------------------ 5. application log analytics (twins: Serverless wins on service design)
+OPENSEARCH_W.append(wusecase("logs", 5, sim="w_logs",
+    title="Uygulama log analizi: request id, hata metni ve dakika başına grafikler",
+    key="Index: logs-YYYY.MM.DD (günlük) ya da bir time series collection. Document: bir log satırı; @timestamp, service, level, request_id keyword, message text, latency_ms sayı.",
+    story="Lale Market'in on Engine App'i, load balancer'ı ve Guided uygulaması JSON log yazar: günde 40 GB, akşam üç kat tepe. Üç kişilik nöbet ekibi bir olayda request id ile bir isteğin bütün satırlarını ve hata metniyle (\"ConditionalCheckFailedException\", \"timeout\") satırları arar. "
+          "Duvardaki panolar dakika başına hata oranını ve p95 gecikmeyi gece gündüz gösterir ve dakikada bir yenilenir; hata oranı yüzde 2'yi geçince nöbetçiye alarm gitmelidir. Bir log 30 saniye içinde aranabilir olmalıdır. "
+          "Son 30 gün aranabilir kalır; boru hattı her satırı ayrıca S3'e bir yıllık arşiv olarak yazar. Ekip OpenSearch Dashboards'u önceki işinden biliyor ve sunucu işletmek istemiyor.",
+    wnote="R1 toplam 44: metinle ve id ile arama (EY 14), ekleme biçimi (OY 10), 30 günlük ömür (YD 10) ve arama ile grafikleri taşıyan yapı (DA 10). "
+          "R4 18 ile ikinci: üç kişilik ekip sunucu işletmek istemiyor ve alarm şart. R2 16 ve R5 16: log akışı ve panolar hiç durmaz. Loglar S3'te de arşivlendiği için R3 6'da kalır.",
+    rows=[
+        row("EY", 14, "Bir olayda ilk soru \"bu isteğe ne oldu\", ikinci soru \"bu hata başka nerede var\" sorusudur.",
+            "request_id ile bir isteğin bütün satırları, message içinde bir kelime ya da hata adı ve bir zaman aralığı tek bir sorgu olmalı; dakika başına hata sayısı ve p95 gecikme aynı veriden hesaplanmalı.",
+            "Kelimeyle arama bütün satırları tarıyorsa olay sırasında her arama dakikalar sürer ve nöbetçi kör kalır."),
+        row("OY", 10, "Loglar yalnız eklenir, hiç güncellenmez; yazma biçimi buna uymalı.",
+            "Günde 40 GB yalnız ekleme: satırlar toplu olarak yazılır, hiçbiri değişmez.",
+            "Her satırı tek tek yazan ya da güncelleme için tasarlanmış bir yöntem akşam tepesinde geride kalır."),
+        row("YD", 10, "30 günden eski loglar kendiliğinden gitmezse depo her gün büyür.",
+            "30 günden eski veri kendiliğinden ve ucuzca silinmeli; satır satır silme olmamalı.",
+            "Satır satır silme bir günlük veride milyonlarca silme demektir ve aramayla yarışır."),
+        row("DA", 10, "Panolar dakikada bir son saat üzerinde, olay aramaları 30 gün üzerinde çalışır; yapının bunu taşıması gerekir.",
+            "Kelime araması ve dakika başına toplama, taranan GB'tan bağımsız olarak index'ten okunmalı.",
+            "Her pano yenilemesi son saatin bütün loglarını tararsa panolar gecikir ve tarama başına ödenen bir modelde fatura büyür."),
+        row("R2", 16, "Akış ve panolar hiç durmaz; olay anında arama yükü aniden artar.",
+            "Günde 40 GB, akşam üç kat tepe; bir olay anında beş kişi aynı anda ağır aramalar yapar. Log 30 saniye içinde aranabilir olmalı ve olay aramaları yazmayı yavaşlatmamalı.",
+            "Olay anında arama yazmayı yavaşlatırsa en çok ihtiyaç duyulan son loglar geç gelir."),
+        row("R3", 6, "Her satır S3'te bir yıl arşivlenir; aranabilir kopyanın kaybı bir yeniden yüklemedir.",
+            "Aranabilir 30 gün kaybolursa S3 arşivinden yeniden yüklenebilir; bir AZ arızası aramayı durdurmamalı.",
+            "Olay sırasında aranabilir logların kaybı nöbetçiyi kör bırakır; ama arşiv kaybolmaz."),
+        row("R4", 18, "Üç kişilik nöbet ekibi sunucu işletmek istemiyor ve alarm şart.",
+            "Node, shard ve yama işi istenmiyor. Hata oranı alarmı aynı veriden kurulabilmeli. Ekip OpenSearch Dashboards biliyor.",
+            "Log sistemi bozulduğunda onu da nöbet ekibi düzeltir; işletme yükü olayları uzatır. Alarm başka bir sistemde kurulursa iki sistem birbirinden kopar."),
+        row("R5", 16, "Log hacmi büyüktür ve sürekli akar; fiyat modeli buna uymalı.",
+            "Ayda 1.200 GB yeni log, panolar dakikada bir sorgu atar, olaylar ayda birkaç kez. Aylık fatura öngörülebilir olmalı.",
+            "Sorgu başına taranan GB'a ödenen bir modelde dakikada bir yenilenen panolar faturayı katlar."),
+    ],
+    cands=["oss", "os", "cw"],
+    scores={
+        "oss": [sc(10, "Aynı engine: request_id bir term sorgusudur, message analyzer'la index'lenir (Ö1, Ö2) ve dakika başına toplama bir date_histogram'dır (Ö5). Puan kırılmadı."),
+                sc(10, "Satırlar _bulk ile toplu eklenir; log hiç güncellenmez (Ö8). Puan kırılmadı."),
+                sc(9, "Eski veri index bazında silinir (Ö7). 1 puan kırıldı: süre document başına değil index başınadır; günlük index ya da collection'ın saklama kuralı kurulur."),
+                sc(10, "Inverted index kelimeyi, doc values toplamayı taramadan okur (Ö2, Ö5). Puan kırılmadı."),
+                sc(9, "Indexing ve search OCU'ları ayrı ölçeklenir; olay aramaları yazmayı yavaşlatmaz. Refresh yaklaşık 10 saniyedir ve 30 saniye sınırının içindedir. 1 puan kırıldı: yeni OCU'lar veriyi S3'ten kopyaladıktan sonra cevap verir; ani bir sıçramada ilk dakikalar yavaştır."),
+                sc(10, "Veri managed storage'da (S3) saklanır; bir node ya da AZ arızası veri kaybettirmez. Puan kırılmadı."),
+                sc(7, "Node, shard ve yama yoktur; ekip aynı Dashboards'u kullanır. 3 puan kırıldı: Serverless'ın desteklenen API listesinde Alerting yoktur; hata oranı alarmı ayrı bir yoldan kurulur: uygulamalar hata sayısını ayrıca bir CloudWatch metric'i olarak yayınlar ve alarm orada kurulur (bir metric ayda yaklaşık 0,30 dolar)."),
+                sc(6, "OCU-saat ve GB-ay başına ödenir. 4 puan kırıldı: akış ve panolar hiç durmadığı için indexing ve search OCU'ları gece de çalışır; ayda yaklaşık 1.100 dolar (Frankfurt, 2 indexing ve 2 search OCU, 7 gün sıcak ve 23 gün warm veri).")],
+        "os": [sc(10, "request_id bir term sorgusudur, message analyzer'la index'lenir (Ö1, Ö2) ve dakika başına toplama bir date_histogram'dır (Ö5). Puan kırılmadı."),
+               sc(10, "Satırlar _bulk ile toplu eklenir; log hiç güncellenmez (Ö8). Puan kırılmadı."),
+               sc(9, "Eski veri index bazında silinir (Ö7). 1 puan kırıldı: süre document başına değil index başınadır; günlük index ve rollover düzeni kurulur."),
+               sc(10, "Inverted index kelimeyi, doc values toplamayı taramadan okur (Ö2, Ö5). Puan kırılmadı."),
+               sc(8, "Data node'lar yazmayı ve aramayı paylaşır (Ö7); refresh 1 saniyedir. 2 puan kırıldı: olay anında ağır aramalar yazmayla aynı node'larda yarışır ve sabit kapasite tepe anında yazmayı geciktirebilir."),
+               sc(8, "Replica shard'lar node arızasını karşılar ve saatlik otomatik snapshot alınır. 2 puan kırıldı: domain kaybolursa 30 günlük veri S3 arşivinden saatler içinde yeniden yüklenir."),
+               sc(6, "Yönetilen domain; Alerting ve ISM vardır, ekip Dashboards'u bilir. 4 puan kırıldı: data node tipi ve sayısı, master node'lar, 30-50 GiB shard planı ve ISM politikası ekibin işidir."),
+               sc(6, "Node-saat ve gp3 GB-ay başına ödenir. 4 puan kırıldı: üç data node, üç master ve iki kopyalı 2,6 TB disk gece de çalışır; ayda yaklaşık 1.160 dolar (Frankfurt, r6g.large.search).")],
+        "cw": [sc(6, "Logs Insights request_id gibi alanlarda field index kullanır ve stats count(*) by bin(1m) ile dakika başına sayar. 4 puan kırıldı: message içinde kelime araması bir filter'dır ve zaman aralığındaki her satırı tarar."),
+               sc(10, "Log satırları log group'lara eklenir; güncelleme yoktur. Puan kırılmadı."),
+               sc(10, "Saklama süresi log group başına bir ayardır; eski satırlar kendiliğinden gider. Puan kırılmadı."),
+               sc(6, "Field index eşitlik sorgularında taramayı azaltır. 4 puan kırıldı: kelime araması ve toplamalar taranan veriyle büyür; dakikada bir yenilenen panolar son saati her seferinde yeniden tarar."),
+               sc(10, "Yazma ve sorgu kapasitesi servisindir; akşam tepesi ve olay aramaları ayar istemez. Puan kırılmadı."),
+               sc(10, "Loglar servis tarafından kalıcı saklanır. Puan kırılmadı."),
+               sc(8, "Sunucu yoktur; metric filter ve alarm aynı serviste kurulur. 2 puan kırıldı: ekip Dashboards'u bilir, Logs Insights sorgu dili ve panoları yenidir."),
+               sc(3, "GB başına alma, saklama ve sorgunun taradığı GB başına ödenir. 7 puan kırıldı: alma ayda yaklaşık 760 dolardır ve dakikada bir yenilenen 10 pano son saati her seferinde taradığı için sorgu ücreti ayda birkaç bin dolara çıkar (Frankfurt; alma 0,63 dolar/GB, sorgu 0,0063 dolar/taranan GB).")],
+    },
+    h2h={
+        "os": "Aynı engine'in yönetilen domain'i (OpenSearch Service) ile kafa kafaya. İkisi aynı engine'i çalıştırır, bu yüzden R1'leri eşittir: 44'te 43. Kararı yalnız servis tasarımı verir. "
+              "Domain'in artısı gerçektir: Alerting ve ISM onun içindedir, hata oranı alarmı aynı veriden kurulur; refresh 1 saniyedir. Serverless'ta Alerting API'si yoktur ve alarm ayrı bir yoldan kurulur (R4'te 3 puan). "
+              "Ama domain'de data node'ların, master'ların, shard planının ve ISM politikasının sahibi ekiptir ve sabit kapasite olay anında ağır aramalarla yazmayı aynı node'larda yarıştırır (R2). Serverless'ta indexing ve search ayrı ölçeklenir ve veri S3'te saklanır (R3). Fatura iki biçimde de ayda yaklaşık 1.100-1.200 dolardır. "
+              "Hangi koşul değişseydi yönetilen domain seçilirdi: Alerting, Anomaly Detection ya da Security Analytics bu veride şart olsaydı (kart 6), ya da log hacmi günde birkaç yüz GB'a çıkıp reserved instance ve UltraWarm faturayı belirgin düşürseydi.",
+        "cw": "İzleme servisi (CloudWatch Logs) ile kafa kafaya. CloudWatch'un artısı sıfır işletmedir: loglar zaten oraya akabilir, saklama süresi bir ayardır, metric filter ve alarm aynı serviste kurulur ve kapasite servisindir; R2, R3 ve YD'de tam puan alır. "
+              "Ama engine'i bir tarama motorudur: field index eşitlik sorgularını hızlandırır, kelime araması ve toplamalar ise zaman aralığındaki satırları tarar (R1 · EY ve DA'da 6). Taranan GB'a ödenen bir modelde dakikada bir yenilenen panolar faturayı katlar (R5 3). "
+              "Hangi koşul değişseydi CloudWatch seçilirdi: panolar dakikada bir değil, olay anında açılsaydı, aramalar çoğunlukla request id ile yapılsaydı ve günlük hacim birkaç GB olsaydı; o zaman ayrı bir arama servisi gereksizdir. "
+              "Birlikte de çalışırlar: loglar önce CloudWatch'a yazılır, bir abonelik onları OpenSearch'e aktarır.",
+    },
+    verdict="Karar: OpenSearch Serverless {oss}, OpenSearch {os}, CloudWatch {cw}. Bu yakın bir yarıştır ve iki OpenSearch servisi aynı engine'i çalıştırdığı için R1'de eşittir; kararı servis tasarımı verir: node ve shard işi yoktur, indexing ve search ayrı ölçeklenir, veri S3'te durur. "
+            "Yine de yönetilen domain'i (bu sayfanın servisi) seçersek artımız: Alerting ve ISM aynı domain'dedir, refresh 1 saniyedir ve ileride Anomaly Detection ya da Security Analytics eklenebilir. "
+            "Eksimiz: data node, master ve shard planı ekibin işidir; olay anında ağır aramalar için kapasite payı bırakırız; ISM ile günlük index'leri 30 günde sileriz ve UltraWarm'ı fiyatı düşürmek için değerlendiririz. "
+            "Serverless seçersek hata oranı alarmını uygulamaların ayrıca yayınladığı bir CloudWatch metric'i üzerinde kurarız; loglar CloudWatch'a gitmediği için bir metric filter yeterli olmaz. "
+            "Bir koşul değişseydi: bu loglar üzerinde Alerting ya da Security Analytics şart olsaydı yönetilen domain kazanırdı (kart 6)."))
+
+# ------------------------------------------------------------------ 6. security analytics (managed domain wins; Serverless lacks the plugins)
+OPENSEARCH_W.append(wusecase("security", 6,
+    title="Güvenlik analitiği: CloudTrail, VPC Flow Logs ve WAF logları",
+    key="Index: security-* (log türü başına). Document: bir olay; @timestamp, src_ip ve user keyword, event_name, action, message text. Detector'lar Sigma kurallarını belirli aralıklarla çalıştırır.",
+    story="Lale Market'in iki kişilik güvenlik ekibi AWS hesabındaki CloudTrail olaylarını, VPC Flow Logs'u ve WAF loglarını izler: günde 15 GB, gün boyu düz. Analistler bir IP adresinin ya da bir kullanıcının son 90 gündeki bütün izini arar ve olay adlarında kelime arar (\"DeleteBucket\", \"ConsoleLogin failure\"). "
+          "Hazır tehdit kuralları (örneğin \"başarısız login'lerden sonra başarılı bir admin login'i\") her beş dakikada çalışmalı ve bulgu üretince nöbetçiye haber vermelidir. "
+          "Uyum kuralı bir yıl saklama ister: 90 gün hızlı aranabilir, geri kalanı ucuz bir katmanda. Ham loglar S3'te de durur. Ekip SQL bilir ama hazır kuralları kendisi yazmak istemez.",
+    wnote="R1 toplam 44: iz sürme araması (EY 14), hazır tespit kuralları ve korelasyon (AO 12), arama ile uzun taramayı taşıyan yapı (DA 10) ve bir yıllık katmanlı ömür (YD 8). "
+          "R4 16 ile ikinci: iki kişilik ekip kural motoru yazmak istemiyor. Güvenlik olayları kanıt olduğu için R3 12'dir.",
+    rows=[
+        row("EY", 14, "Bir güvenlik olayında ilk iş bir IP'nin ya da kullanıcının izini sürmektir.",
+            "Bir IP ya da kullanıcı için 90 günün bütün olayları, olay adlarında kelime araması ve bir zaman aralığı tek bir sorguda; sonuçlar saniyeler içinde.",
+            "İz sürme her seferinde saatler sürerse saldırgan o sürede hesapta kalır."),
+        row("AO", 12, "Kuralları ekip yazarsa kapsam iki kişinin zamanıyla sınırlı kalır.",
+            "Hazır tehdit kuralları (Sigma) log türüne göre çalışmalı, birkaç log türündeki olayları birleştiren korelasyon kurulabilmeli ve bulgu bir bildirime dönmeli.",
+            "Kural motoru elle yazılırsa bilinen saldırı kalıpları kaçırılır ve her yeni kalıp bir yazılım projesidir."),
+        row("DA", 10, "Aynı veride hem nokta araması hem 90 günlük tarama yapılır.",
+            "Bir IP için arama index'ten okunmalı; uyum raporu için 90 gün üzerinde toplama da çalışmalı.",
+            "Nokta araması her seferinde bütün veriyi tararsa 90 günlük iz sürme dakikalar sürer."),
+        row("YD", 8, "Uyum kuralı bir yıl ister ama yalnız 90 günü hızlı aranır.",
+            "90 gün hızlı aranabilir, 91. günden bir yıla kadar ucuz bir katmanda kalmalı ve gerektiğinde aranabilmeli; bir yıldan eski veri silinmeli.",
+            "Bütün yıl sıcak katmanda tutulursa disk faturası dört katına çıkar; silinmezse uyum kuralı çiğnenir."),
+        row("R2", 14, "Akış düzdür ama bulgular beş dakika içinde çıkmalıdır.",
+            "Günde 15 GB, düz. Bir olay en geç bir dakikada aranabilir olmalı ve kurallar beş dakikada bir çalışmalı.",
+            "Geç gelen olay geç gelen bulgudur; bir saldırı beş dakikada büyüyebilir."),
+        row("R3", 12, "Güvenlik olayları kanıttır; aranabilir kopyanın kaybı soruşturmayı durdurur.",
+            "Bir AZ arızası veri kaybettirmemeli. Ham loglar S3'te de durur; aranabilir kopya kaybolursa yeniden yüklenebilir ama bu saatler sürer.",
+            "Bir soruşturma sırasında aranabilir verinin kaybı ekibi saatlerce kör bırakır."),
+        row("R4", 16, "İki kişilik ekip kural motoru ve sunucu işletmek istemiyor.",
+            "Hazır kurallar, bulgu ekranı ve bildirim servisin içinde olmalı; ekip SQL bilir, tespit kuralı yazmak istemez.",
+            "Kural motoru, zamanlayıcı ve bildirim ayrı ayrı kurulursa iki kişilik ekibin bütün zamanı altyapıya gider."),
+        row("R5", 14, "Bir yıllık veri büyüktür; katmanlı fiyat önemlidir.",
+            "Ayda 450 GB yeni veri, bir yılda 5,4 TB. Eski verinin ucuz bir katmanda ödenmesi istenir.",
+            "Bütün yılı sıcak disk fiyatıyla ödemek güvenlik bütçesini aşar."),
+    ],
+    cands=["os", "oss", "rs"],
+    scores={
+        "os": [sc(10, "src_ip ve user term sorgusudur, event_name analyzer'la index'lenir (Ö1, Ö2); 90 günlük iz bir bool sorgusudur. Puan kırılmadı."),
+               sc(9, "Security Analytics, log türüne göre hazır Sigma kurallarıyla detector'lar çalıştırır, korelasyon kurallarını ve bulguları verir (Ö5 üzerine kurulu). 1 puan kırıldı: kurallar kendi alan adlarımıza eşlenir ve gürültülü kurallar ayarlanır."),
+               sc(9, "Inverted index nokta aramasını, doc values 90 günlük toplamayı taşır (Ö2, Ö5). 1 puan kırıldı: bir yıllık uyum raporu birçok shard'ı tarar ve columnar bir warehouse'tan yavaştır."),
+               sc(8, "Zamana göre index'ler eski veriyi index bazında siler ve ucuz katmana taşınır (Ö7). 2 puan kırıldı: süre document başına değil index başınadır ve ucuz katmana taşınan eski veri sıcak veriden yavaş aranır."),
+               sc(9, "Data node'lar 15 GB'lık düz akışı rahat taşır, refresh 1 saniyedir (Ö8). 1 puan kırıldı: ağır bir soruşturma araması ile detector'lar aynı node'larda çalışır."),
+               sc(8, "Replica shard'lar ve saatlik snapshot'lar. 2 puan kırıldı: domain kaybolursa 90 günlük veri S3'teki ham loglardan saatler içinde yeniden yüklenir."),
+               sc(6, "Security Analytics, Alerting ve ISM domain'in içindedir. 4 puan kırıldı: data node, UltraWarm ve cold katmanı boyutlandırma ve ISM politikası ekibin işidir; cold katmandaki bir index aranmadan önce geri bağlanır."),
+               sc(6, "Node-saat ve disk; UltraWarm ve cold katmanı eski veriyi ucuzlatır. 4 puan kırıldı: sıcak katmanın node'ları gece de çalışır ve UltraWarm node'ları ayrıca ödenir.")],
+        "oss": [sc(10, "Aynı engine: src_ip ve user term sorgusudur, event_name analyzer'la index'lenir (Ö1, Ö2). Puan kırılmadı."),
+                sc(9, "Engine'in Security Analytics araçları aynıdır (Ö5). 1 puan kırıldı: kurallar kendi alan adlarımıza eşlenir. Serverless'ın bu aracı sunmaması bir paketleme farkıdır ve R4'te sayılır."),
+                sc(9, "Inverted index ve doc values aynıdır (Ö2, Ö5). 1 puan kırıldı: bir yıllık uyum raporu birçok shard'ı tarar."),
+                sc(8, "Zamana göre index'ler eski veriyi index bazında siler ve ucuz katmana taşınır (Ö7). 2 puan kırıldı: süre document başına değil index başınadır ve ucuz katmana taşınan eski veri sıcak veriden yavaş aranır."),
+                sc(9, "OCU'lar akışa göre ölçeklenir; refresh yaklaşık 10 saniyedir. 1 puan kırıldı: yeni OCU'lar veriyi S3'ten kopyaladıktan sonra cevap verir."),
+                sc(10, "Veri managed storage'da (S3) saklanır. Puan kırılmadı."),
+                sc(2, "Node ve shard işi yoktur. 8 puan kırıldı: Serverless'ın desteklenen API listesinde Security Analytics, Alerting ve ISM yoktur; detector'lar, zamanlayıcı ve bildirim başka bir yerde kurulur ve kurallar ekibin yazdığı sorgulara döner."),
+                sc(6, "OCU-saat ve GB-ay; time series collection'da eski veri kendiliğinden warm katmana geçer (0,026 dolar/GB-ay, sıcak katman 0,36). 4 puan kırıldı: indexing ve search OCU'ları gece de çalışır; aylık fatura yönetilen domain'inkine yakındır, bu yüzden bu kartta R5 iki biçimi ayırmaz.")],
+        "rs": [sc(6, "SQL src_ip ve user column'larında hızlıdır. 4 puan kırıldı: olay adlarında kelime araması LIKE ile column'u tarar; relevance yoktur."),
+               sc(3, "Zamanlanmış SQL sorguları kural gibi çalıştırılabilir. 7 puan kırıldı: hazır tehdit kuralı, korelasyon ve bulgu ekranı yoktur; her kural ekibin yazdığı bir sorgudur."),
+               sc(8, "Columnar depolama 90 günlük ve bir yıllık taramalarda çok güçlüdür. 2 puan kırıldı: tek bir IP'nin araması bir index'ten değil, sort key ve blok özetleriyle daraltılan bir taramadan gelir."),
+               sc(8, "Zamana göre sıralı table'lar ve S3'teki veriye Spectrum ile sorgu ucuz bir katman verir. 2 puan kırıldı: eski row'ları silmek DELETE ve VACUUM ister."),
+               sc(8, "Veri S3'ten COPY ya da streaming ingestion ile gelir. 2 puan kırıldı: toplu yüklemede olaylar dakikalar sonra sorgulanabilir; bulgular gecikir."),
+               sc(10, "Redshift managed storage ve otomatik snapshot'lar. Puan kırılmadı."),
+               sc(5, "Serverless Redshift'te node yoktur. 5 puan kırıldı: yükleme işleri, kural sorguları, zamanlayıcı ve bildirim ekibin yazdığı parçalardır."),
+               sc(7, "RPU-saat sorgu çalıştıkça ödenir; Spectrum eski veriyi S3 fiyatıyla tutar. 3 puan kırıldı: beş dakikada bir çalışan kurallar RPU'ları gün boyu uyanık tutar.")],
+    },
+    h2h={
+        "oss": "Aynı engine'in sunucusuz biçimi (OpenSearch Serverless) ile kafa kafaya. R1'leri eşittir: aynı inverted index, aynı analyzer ve engine'in aynı Security Analytics araçları. Kart 5'te Serverless node işini kaldırdığı için kazanmıştı; bu kartta kaybeder. "
+               "Neden: Serverless'ın desteklenen API listesinde Security Analytics, Alerting ve ISM yoktur. Engine'in sahip olduğu ama servisin dışarıda bıraktığı bir özellik paketleme farkıdır ve bu kartta R4'ün kendisidir: detector'lar, zamanlayıcı ve bildirim başka bir yerde yazılır (R4'te 2). "
+               "Serverless'ın artıları da gerçektir: veri S3'te durur (R3 10) ve kapasite servisindir. Toplam fark 4 puandır, yani yakın bir yarıştır. "
+               "Hangi koşul değişseydi OpenSearch Serverless seçilirdi: tespit kuralları başka bir serviste (örneğin GuardDuty) çalışsaydı ve OpenSearch'e yalnız analistlerin iz sürme araması kalsaydı; o zaman kart 5'in koşulları geçerli olur.",
+        "rs": "Data warehouse (Redshift) ile kafa kafaya. Redshift'in gücü uzun taramalardadır: bir yıllık uyum raporu ya da \"geçen çeyrekte en çok reddedilen 100 IP\" columnar depolamada çok hızlıdır, Spectrum eski veriyi S3'te ucuz tutar ve ekip SQL bilir. "
+              "Ama bu kartın günlük işi iz sürme ve tespittir: bir IP'nin 90 günlük izi, olay adlarında kelime araması ve hazır Sigma kuralları. Redshift'te kelime araması bir taramadır, hazır kural ve bulgu ekranı yoktur; her kural ekibin yazdığı ve zamanladığı bir SQL'dir (R1 · AO'da 3, R4'te 5). "
+              "Hangi koşul değişseydi Redshift seçilirdi: iş tespit değil uyum raporlaması olsaydı (aylık ve yıllık raporlar), tespit başka bir serviste yapılsaydı ve analistler yalnız SQL ile çalışsaydı. "
+              "Büyük bir şirkette ikisi birlikte de çalışır: son 90 gün OpenSearch'te tespit ve iz sürme için, bütün yıl S3 ve Redshift'te rapor için.",
+    },
+    verdict="Karar: OpenSearch {os}, OpenSearch Serverless {oss}, Redshift {rs}. Bu yakın bir yarıştır: iki OpenSearch servisi R1'de eşittir ve kararı R4 verir, çünkü hazır kurallar, bulgular ve bildirim yalnız yönetilen domain'dedir. "
+            "OpenSearch seçtiğimizde artımız: Sigma kuralları, korelasyon ve bildirim kurulu gelir; iz sürme araması saniyelerdir; UltraWarm ve cold katmanı bir yılı ucuz tutar. "
+            "Eksimiz: data node'lar, UltraWarm ve ISM politikası ekibin işidir; kuralları kendi alan adlarımıza eşler ve gürültülü kuralları ayarlarız; soğuk index'leri aramadan önce geri bağlarız. "
+            "Bir koşul değişseydi: tespit başka bir serviste yapılsaydı OpenSearch Serverless'ın sıfır node işi öne geçerdi (kart 5)."))
+
+# ------------------------------------------------------------------ 7. metrics dashboards (Timestream for InfluxDB wins, OpenSearch clearly third)
+OPENSEARCH_W.append(wusecase("metrics", 7, sim="w_metrics",
+    title="Uygulama metrikleri panosu: 10 saniyelik ölçümler, 13 ay geçmiş",
+    key="Ölçüm: host ve metric etiketleri, value ve zaman. 60 host × 40 metrik = 2.400 seri, her biri 10 saniyede bir nokta.",
+    story="Lale Market'in 60 sunucusu ve container'ı her 10 saniyede 40 ölçüm gönderir: CPU, bellek, istek gecikmesinin p95'i, dakikadaki sipariş sayısı. Bu 2.400 seri ve saniyede 240 noktadır. "
+          "Panolar son 6 saati 10 saniyelik çözünürlükle, son 30 günü dakikalık, son 13 ayı saatlik ortalamayla gösterir; eski veri kendiliğinden özetlenmeli ve silinmelidir. "
+          "Üç kişilik nöbet ekibi Grafana kullanır ve eşik alarmları kurar. EC2 ve load balancer metrikleri zaten CloudWatch'a kendiliğinden gelir. Metin araması yoktur; her soru \"şu serinin şu zaman aralığında ortalaması\" sorusudur.",
+    wnote="R1 toplam 42: veri bir zaman serisidir (VM 14), soru zaman penceresinde toplama (EY 14) ve eski veri özetlenip silinir (YD 14). "
+          "R4 18 ve R5 18 ile ikinci sıradadır: üç kişilik ekip yeni bir sistem işletmek istemiyor ve 2.400 serinin aylık faturası seçimde belirleyicidir.",
+    rows=[
+        row("VM", 14, "Her nokta bir zaman, birkaç etiket ve bir sayıdır; model bunu doğrudan taşımalı.",
+            "Nokta = zaman + etiketler (host, metric) + sayı. Aynı etiketli noktalar bir seri olarak saklanmalı; etiket adları her noktada tekrar yazılmamalı.",
+            "Her nokta etiket adlarıyla ayrı bir kayıt olarak saklanırsa depo ve okuma bir seri modeline göre katlanır."),
+        row("EY", 14, "Her pano isteği \"şu serinin şu aralıktaki ortalaması\" sorusudur.",
+            "Bir zaman aralığında, seriler üzerinde 10 saniyelik ya da dakikalık pencerelerle ortalama, maksimum ve p95; birkaç seriyi bir grafikte birleştirmek.",
+            "Pencere hesabı uygulamada yapılırsa her pano bütün noktaları çeker ve yavaşlar."),
+        row("YD", 14, "13 ay 10 saniyelik çözünürlükte tutulursa veri gereksiz büyür.",
+            "10 saniyelik veri 6 saat, dakikalık özet 30 gün, saatlik özet 13 ay tutulmalı; özetleme ve silme kendiliğinden olmalı.",
+            "Özetleme elle yapılırsa unutulur; silinmeyen veri her ay büyür ve sorgular yavaşlar."),
+        row("R2", 14, "Saniyede 240 nokta küçüktür; panolar düz bir okuma yüküdür.",
+            "Saniyede 240 nokta yazma, 20 kullanıcının panoları dakikada bir yenilenir.",
+            "Yazma geride kalırsa pano son dakikayı göstermez ve alarm geç çalışır."),
+        row("R3", 8, "Bir metrik kaybı grafikte bir boşluktur; kayıt kaybı değildir.",
+            "Bir AZ arızasında metrik kaybı olmamalı; birkaç dakikalık boşluk kabul edilir.",
+            "Olay anında grafikte boşluk nöbetçiyi yanıltır."),
+        row("R4", 18, "Üç kişilik nöbet ekibi yeni bir sistem işletmek istemiyor.",
+            "Instance, depolama ve ajan işi en az olmalı. EC2 ve load balancer metrikleri ayrıca taşınmadan aynı panoda görünmeli.",
+            "Metrik sistemi bozulduğunda onu da nöbet ekibi düzeltir; AWS metrikleri ayrı bir yerde kalırsa iki pano izlenir."),
+        row("R5", 18, "2.400 serinin aylık faturası bu iş yükünün en görünür maliyetidir.",
+            "Ayda 620 milyon nokta, birkaç GB veri. Seri sayısı yılda iki katına çıkabilir; fatura buna göre öngörülebilir olmalı.",
+            "Seri başına ödenen bir modelde her yeni host ve metrik faturayı doğrudan büyütür."),
+    ],
+    cands=["ix", "cw", "os"],
+    scores={
+        "ix": [sc(10, "Point = measurement + tag set + field + timestamp; aynı tag set'li noktalar bir seridir ve seri olarak sıkıştırılır. Puan kırılmadı."),
+               sc(10, "aggregateWindow (Flux) ya da GROUP BY time (InfluxQL) pencere başına ortalama, maksimum ve yüzdelik verir. Puan kırılmadı."),
+               sc(9, "Bucket'ın saklama süresi eski veriyi siler; downsampling bir task'tır. 1 puan kırıldı: dakikalık ve saatlik özetleri yazan task'ları ekip yazar."),
+               sc(9, "Saniyede 240 nokta bir instance için küçüktür. 1 puan kırıldı: bütün yazmalar tek bir instance'tan geçer; seri sayısı on kat büyürse instance büyütülür."),
+               sc(8, "Multi-AZ seçeneği bir standby tutar. 2 puan kırıldı: failover sırasında birkaç dakikalık yazma boşluğu olabilir."),
+               sc(6, "Yönetilen instance; Grafana doğrudan bağlanır. 4 puan kırıldı: instance sınıfı ve depolama ekibin seçimidir, ajanlar (Telegraf) kurulur ve EC2 ile load balancer metrikleri ayrıca taşınır."),
+               sc(8, "Instance-saat ve depolama ödenir; seri sayısı faturayı doğrudan büyütmez. 2 puan kırıldı: Multi-AZ db.influx.medium ayda yaklaşık 210 dolar gece de çalışır (Frankfurt).")],
+        "cw": [sc(9, "Bir metric namespace, ad ve dimension'larla tanımlanır ve zamanlı sayılar tutar. 1 puan kırıldı: her dimension birleşimi ayrı bir metric'tir; host × endpoint birleşimleri metric sayısını katlar."),
+               sc(9, "İstatistikler (Average, Maximum, p95) her periyot için hesaplanır ve math expression'lar serileri birleştirir. 1 puan kırıldı: 10 saniyelik çözünürlük için high-resolution metric yayınlanır."),
+               sc(8, "Özetleme ve silme kendiliğindendir: dakikalık veri 15 gün, 5 dakikalık 63 gün, saatlik 455 gün tutulur. 2 puan kırıldı: AWS'e göre 60 saniyeden kısa periyotlu veri 3 saat tutulur; 6 saatlik 10 saniyelik pano karşılanmaz ve dakikalık veri 30 değil 15 gündür."),
+               sc(10, "Yazma ve okuma kapasitesi servisindir. Puan kırılmadı."),
+               sc(10, "Metrikler servis tarafından kalıcı saklanır. Puan kırılmadı."),
+               sc(9, "Sunucu yoktur; EC2 ve load balancer metrikleri zaten oradadır ve alarm aynı servistedir. 1 puan kırıldı: uygulama metrikleri PutMetricData ya da gömülü metric formatı ile koddan yayınlanır."),
+               sc(5, "Custom metric başına ödenir. 5 puan kırıldı: 2.400 metric ayda yaklaşık 720 dolardır (Frankfurt, ilk 10.000 metric için 0,30 dolar) ve her yeni seri faturayı büyütür.")],
+        "os": [sc(6, "Bir nokta bir JSON document'ıdır; etiketler keyword, değer sayı alanıdır. 4 puan kırıldı: engine'de seri kavramı yoktur; her nokta etiket adlarıyla ayrı bir document olarak saklanır."),
+               sc(8, "date_histogram ve terms aggregation'ları pencere başına ortalama, maksimum ve yüzdelik verir (Ö5). 2 puan kırıldı: oran ve türev gibi hesaplar pipeline aggregation'larla yazılır ve her pano isteği bütün document'ları toplar."),
+               sc(7, "Zamana göre index'ler index bazında silinir (Ö7) ve index rollup işi özet index'ler üretir. 3 puan kırıldı: dakikalık ve saatlik özetler ayrı rollup işleri ve ayrı index'lerdir; panolar hangi index'i soracağını bilir."),
+               sc(9, "Saniyede 240 document küçüktür (Ö7). 1 puan kırıldı: kapasite sabittir ve büyüme için node eklenir."),
+               sc(8, "Replica shard'lar ve saatlik snapshot. 2 puan kırıldı: bir domain kaybında snapshot'tan sonraki noktalar kaybolur."),
+               sc(5, "Yönetilen domain. 5 puan kırıldı: node, shard ve rollup işleri ekibin işidir ve EC2 metrikleri ayrıca taşınır."),
+               sc(5, "Node-saat ödenir. 5 puan kırıldı: birkaç GB'lık bir veri için üç data node'luk bir domain ayda yaklaşık 440 dolar gece de çalışır (Frankfurt, r6g.large.search; küçük bir domain'de ayrı master node yoktur, disk hariç).")],
+    },
+    h2h={
+        "cw": "İzleme servisi (CloudWatch) ile kafa kafaya. Bu yakın bir yarıştır. CloudWatch'un artısı sıfır işletmedir: EC2 ve load balancer metrikleri zaten oradadır, özetleme ve silme kendiliğindendir, alarm aynı servistedir ve kapasite servisindir; R2, R3 ve R4'te öndedir. "
+              "Timestream for InfluxDB'yi öne geçiren R1'in üç alt maddesi (her birinde bir puan, toplam 4,2) ve R5'tir; CloudWatch R2, R3 ve R4'te 6,8 puan geri alır. En anlamlı fark R1 · YD'dedir: CloudWatch'un saklama kuralı sabittir; AWS'e göre 60 saniyeden kısa periyotlu veri 3 saat, dakikalık veri 15 gün tutulur, yani 6 saatlik 10 saniyelik pano ve 30 günlük dakikalık pano karşılanmaz. R5: CloudWatch seri başına öder; 2.400 seri ayda yaklaşık 720 dolardır ve seri sayısıyla büyür, InfluxDB instance'ı ise yaklaşık 210 dolardır. "
+              "Hangi koşul değişseydi CloudWatch seçilirdi: seri sayısı birkaç yüz olsaydı, 10 saniyelik çözünürlük 3 saat yetseydi ya da ekip ikinci bir sistem istemeseydi.",
+        "os": "Search engine (OpenSearch) ile kafa kafaya. Bu kartta OpenSearch net kaybeder ve kaybın büyük kısmı R1'dedir: engine bir metin ve document engine'idir, zaman serisi engine'i değildir. Her nokta etiket adlarıyla ayrı bir document olur, seri kavramı yoktur, özetler ayrı rollup işleri ve ayrı index'lerdir. R1'in 42 puanının 29,4'ünü alır; Timestream for InfluxDB 40,6'sını. "
+              "Servis tasarımında da geridedir: birkaç GB'lık metrik için üç node'luk bir domain ve rollup işleri işletilir. "
+              "OpenSearch'ün güçlü olduğu yer metriklerin yanında metin olduğu yerdir: log satırları ve izler (kart 5). "
+              "Hangi koşul değişseydi OpenSearch seçilirdi: metrikler logların içinden çıkarılsaydı (her log satırının gecikmesi gibi) ve aynı panoda log araması da istenseydi; o zaman ayrı bir metrik sistemi yerine aynı domain kullanılır.",
+    },
+    verdict="Karar: Timestream for InfluxDB {ix}, CloudWatch {cw}, OpenSearch {os}. Bu iş yüküne en uygun servis zaman serisi engine'idir: seri modeli, pencere sorguları ve saklama kuralı engine'in kendisidir. CloudWatch yakın ikincidir ve işletmede öndedir. "
+            "Yine de OpenSearch seçersek artımız: loglar ve metrikler aynı domain'de ve aynı Dashboards'ta olur. "
+            "Eksimiz: her nokta bir document olur ve depo bir seri modeline göre büyür; dakikalık ve saatlik özetleri rollup işleriyle üretiriz ve panoları doğru index'e yönlendiririz; birkaç GB için bir domain işletir ve öderiz. Bu kart OpenSearch'ün net kaybettiği karttır. "
+            "Bir koşul değişseydi: seri sayısı birkaç yüz olsaydı ve 10 saniyelik çözünürlük 3 saat yetseydi CloudWatch kazanırdı."))
+
+# ------------------------------------------------------------------ 8. knowledge base search with vectors (Aurora wins; OpenSearch wins R1 but is third)
+OPENSEARCH_W.append(wusecase("kb", 8, sim="w_kb",
+    title="Yardım merkezi araması ve destek asistanı: kelime ve anlam birlikte",
+    key="Yardım makaleleri 60.000 parçaya bölünür; her parça metin ve 1.024 boyutlu bir vektör (embedding) taşır. Sorgu: kelime araması + vektör benzerliği, tek bir sıralı liste.",
+    story="Lale Market'in yardım merkezinde 4.000 Türkçe makale var; makaleler 60.000 parçaya bölünür ve her parçanın bir embedding'i (anlamını temsil eden 1.024 sayılık bir vektör) vardır. Yardım merkezindeki arama kutusu ve destek asistanı (bir RAG uygulaması) aynı aramayı kullanır: "
+          "\"kargom nerede\" sorusu \"sipariş takibi\" başlıklı makaleyi bulmalı (anlam), \"iade kodu RT-204\" sorusu tam o kodu içeren parçayı bulmalı (kelime). Gündüz saniyede 5, kampanya günü saniyede 30 arama olur; gece neredeyse sıfırdır. Günde 50 makale değişir. "
+          "Siparişler zaten Aurora PostgreSQL'de çalışıyor; üç geliştirici SQL biliyor ve yeni bir servis işletmek istemiyor. Makalelerin kaynağı CMS'tir; index kaybolursa bir saatte yeniden kurulur.",
+    wnote="R1 toplam 38: kelime ve anlamı tek bir sıralı listede birleştirmek (EY 16), yaklaşık en yakın komşu araması (DA 12) ve skorları dengeleyen araçlar (AO 10). "
+          "R4 20 ve R5 20 ile R1'in her alt maddesinden ağırdır, ama R1 grup olarak yine en ağırdır: trafik küçüktür ve gece sıfırdır, ekip yeni bir servis istemiyor.",
+    rows=[
+        row("EY", 16, "Destek asistanının cevabı bulduğu parçalar kadar doğrudur.",
+            "Kelime araması (tam kod, ürün adı) ve anlam araması (eş anlamlı sorular) tek bir sorguda, tek bir sıralı listede birleşmeli; kategoriye göre filtre de aynı sorguda olmalı.",
+            "Yalnız kelime araması \"kargom nerede\" sorusunu kaçırır; yalnız anlam araması \"RT-204\" kodunu kaçırır. İki ayrı sonuç uygulamada birleştirilirse sıralama tutarsızdır."),
+        row("DA", 12, "60.000 vektör her sorguda tek tek karşılaştırılmamalı.",
+            "Vektör araması yaklaşık en yakın komşu index'iyle (HNSW) yapılmalı; süre parça sayısıyla doğrusal artmamalı.",
+            "Her sorguda 60.000 vektörü karşılaştırmak kampanya günü saniyede 30 aramada yavaşlar."),
+        row("AO", 10, "İki skor farklı ölçeklerdedir; dengelemek bir ayar işidir.",
+            "Kelime skoru ile vektör benzerliğini normalleştiren ve ağırlıklandıran bir araç olmalı; ağırlık kod değişmeden değiştirilebilmeli.",
+            "Skorlar elle toplanırsa biri diğerini ezer ve ayar her seferinde bir kod değişikliğidir."),
+        row("R2", 10, "Trafik küçüktür; kampanya günü altı kat.",
+            "Gündüz saniyede 5, kampanya günü saniyede 30 arama; her biri 200 ms içinde. Gece neredeyse sıfır.",
+            "Kampanya günü yavaşlayan asistan müşteri hizmetleri kuyruğunu büyütür."),
+        row("R3", 12, "Makalelerin kaynağı CMS'tir; index'in kaybı bir yeniden kurulumdur.",
+            "Index kaybolursa CMS'ten bir saatte yeniden kurulabilir (embedding'ler yeniden hesaplanır). Bir AZ arızası aramayı durdurmamalı.",
+            "Bir saatlik boş yardım merkezi müşteri hizmetlerine yük bindirir; ama makaleler kaybolmaz."),
+        row("R4", 20, "Üç SQL geliştiricisi yeni bir servis işletmek istemiyor ve Aurora zaten çalışıyor.",
+            "Arama zaten çalışan bir sistemin üzerine kurulmalı; yeni bir sorgu dili ve yeni bir nöbet istenmiyor.",
+            "Yeni bir servis üç kişilik ekibe nöbet, izleme ve yeni bir sorgu dili ekler."),
+        row("R5", 20, "Trafik küçük ve gece sıfır; 60.000 parça için sabit bir filo ödemek israftır.",
+            "Birkaç GB veri, günde birkaç bin arama. Boştayken neredeyse sıfır ödenmeli.",
+            "Gece gündüz çalışan bir sunucu filosu bu küçük özelliğin getirisini aşar."),
+    ],
+    cands=["aur", "oss", "os"],
+    scores={
+        "aur": [sc(9, "pgvector'ün <=> operatörü anlam araması, tsvector kelime araması yapar ve WHERE kategoriyi filtreler; ikisi tek bir SQL'de birleşir. 1 puan kırıldı: Türkçe harfsiz yazım için unaccent ayrıca kurulur. İki skoru tek sıraya koyan formül R1.3'te sayıldı."),
+                sc(9, "pgvector HNSW ve IVFFlat index'lerini destekler; arama yaklaşık en yakın komşu ile yapılır. 1 puan kırıldı: filtreli vektör aramasında HNSW parametreleri (ef_search) ölçülerek ayarlanır."),
+                sc(7, "setweight ve ts_rank kelime skorunu, mesafe vektör skorunu verir. 3 puan kırıldı: iki skoru normalleştiren hazır bir araç yoktur; ağırlıklar sorgunun içinde yazılır."),
+                sc(10, "Saniyede 30 arama bir reader için küçüktür. Puan kırılmadı."),
+                sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                sc(9, "Aurora çalışır, ekip SQL bilir; yeni bir servis yoktur. 1 puan kırıldı: pgvector extension'ı ve HNSW index ayarları ekibin yeni işidir."),
+                sc(9, "Birkaç GB var olan cluster'a eklenir. 1 puan kırıldı: HNSW index'inin belleği için daha yüksek bir minimum ACU gerekebilir.")],
+        "oss": [sc(10, "Aynı engine: bir hybrid sorgusu match (BM25) ve knn sorgusunu tek bir sıralı listede birleştirir ve filtre aynı sorgudadır (Ö3, Ö9). Puan kırılmadı."),
+                sc(10, "k-NN index'i HNSW grafiğiyle yaklaşık en yakın komşuyu bulur (Ö9). Puan kırılmadı."),
+                sc(9, "Normalization processor'lı bir search pipeline iki skoru normalleştirir ve ağırlıklandırır; ağırlık bir ayardır (Ö9). 1 puan kırıldı: ağırlıklar ölçülerek ayarlanır."),
+                sc(9, "OCU'lar trafiğe göre ölçeklenir. 1 puan kırıldı: NextGen koleksiyonu boşta sıfıra indiyse ilk sorgu, OCU'lar veriyi yüklerken bekler."),
+                sc(10, "Veri managed storage'da (S3) saklanır. Puan kırılmadı."),
+                sc(6, "Node ve shard işi yoktur. 4 puan kırıldı: ekip için yeni bir servis, yeni bir sorgu dili ve embedding'leri index'e yazan yeni bir boru hattıdır."),
+                sc(6, "OCU-saat ve GB-ay ödenir; NextGen koleksiyonu 10 dakika boşta kalınca sıfıra iner. 4 puan kırıldı: gündüz saatlerinde OCU'lar çalışır; AWS'in benzer bir örneği ayda yaklaşık 250 dolardır.")],
+        "os": [sc(10, "Bir hybrid sorgusu match (BM25) ve knn sorgusunu tek bir sıralı listede birleştirir ve filtre aynı sorgudadır (Ö3, Ö9). Puan kırılmadı."),
+               sc(10, "k-NN index'i HNSW grafiğiyle yaklaşık en yakın komşuyu bulur (Ö9). Puan kırılmadı."),
+               sc(9, "Normalization processor'lı bir search pipeline iki skoru normalleştirir ve ağırlıklandırır (Ö9). 1 puan kırıldı: ağırlıklar ölçülerek ayarlanır."),
+               sc(10, "Saniyede 30 arama küçük bir domain için de rahattır (Ö7). Puan kırılmadı."),
+               sc(8, "Replica shard'lar ve saatlik snapshot. 2 puan kırıldı: domain kaybolursa embedding'ler yeniden hesaplanarak bir saatte yeniden kurulur."),
+               sc(4, "Yönetilen domain. 6 puan kırıldı: ekip için yeni bir servis, yeni bir sorgu dili, node ve shard seçimi ve embedding boru hattıdır."),
+               sc(3, "Node-saat ödenir. 7 puan kırıldı: üretim için üç AZ'lik, üç data node'luk bir domain ayda yaklaşık 440 dolardır (küçük bir domain'de ayrı master node yoktur, disk hariç) ve gece boş çalışır; saniyede 5 arama için büyük bir sabit faturadır.")],
+    },
+    h2h={
+        "oss": "Sunucusuz search engine (OpenSearch Serverless) ile kafa kafaya. R1'i OpenSearch kazanır: hybrid sorgusu kelime ve vektör skorunu normalleştirip tek bir listede birleştirir; Aurora'da bu formül elle yazılır. R1'de 38 puanın 37'sini alır, Aurora 32,2'sini. "
+               "Toplamı Aurora'ya veren R4 ve R5'tir: Aurora zaten çalışır, ekip SQL bilir ve birkaç GB'lık veri var olan cluster'a eklenir. Serverless'ın NextGen koleksiyonu gece sıfıra iner ve node işi yoktur; bu yüzden yönetilen domain'in önündedir, ama yine de yeni bir servis ve yeni bir sorgu dilidir. "
+               "Hangi koşul değişseydi OpenSearch Serverless seçilirdi: makale sayısı milyonlara çıksaydı ve arama kalitesi (hibrit ağırlıklar, rerank) bir ürün hedefi olsaydı; ya da ekip Bedrock Knowledge Bases kullansaydı, çünkü o servis vektör deposunu sunucusuz bir koleksiyon olarak kendisi kurabilir.",
+        "os": "Search engine (OpenSearch) ile kafa kafaya. Engine'i Serverless ile aynıdır, R1'i de aynıdır: 38'de 37. Bu kart, R1'i kazanan bir servisin toplamda üçüncü olabileceğini gösterir. "
+              "Kaybı servis tasarımından gelir: saniyede 5 arama ve birkaç GB veri için üç AZ'lik bir domain ayda yaklaşık 440 dolardır ve gece boş çalışır (R5'te 3); node, shard ve embedding boru hattı üç kişilik SQL ekibinin yeni işidir (R4'te 4). Serverless aynı engine'i gece sıfıra inen bir faturayla verir; Aurora ise hiçbir yeni servis istemez. "
+              "Hangi koşul değişseydi yönetilen domain seçilirdi: Lale Market'in kart 1 domain'i zaten çalıştığı için yardım merkezi bir index daha olsaydı (o zaman R4 ve R5 kart 3'teki gibi 9 ve 8 olur) ya da trafik gün boyu düz ve yüksek olsaydı.",
+    },
+    verdict="Karar: Aurora PostgreSQL {aur}, OpenSearch Serverless {oss}, OpenSearch {os}. Engine uyumunu iki OpenSearch servisi kazanır; toplamı Aurora alır, çünkü bu küçük ve gece sıfıra inen iş yükünde R4 ve R5 ağırdır ve Aurora zaten çalışır. "
+            "Yine de OpenSearch seçersek artımız: kelime ve anlam araması tek bir hybrid sorgusunda, skorlar hazır bir araçla dengelenir ve arama kalitesi büyüdükçe aynı engine yeter. "
+            "Eksimiz: üç kişilik SQL ekibi yeni bir servis ve sorgu dili öğrenir, embedding boru hattını işletir ve küçük bir trafik için gece gündüz çalışan bir domain öder; bu yüzden OpenSearch seçilecekse Serverless biçimi ya da kart 1'in var olan domain'i seçilir. "
+            "Bir koşul değişseydi: Lale Market'in OpenSearch domain'i bu ekip tarafından zaten işletilseydi yardım merkezi bir index daha olurdu ve OpenSearch kazanırdı."))
+
+# ------------------------------------------------------------------ 9. e-commerce relevance tuning (OpenSearch wins on its engine tools)
+OPENSEARCH_W.append(wusecase("relevance", 9,
+    title="Arama sıralamasını ayarlamak: stok, satış, kampanya ve eş anlamlılar",
+    key="Index: products (kart 1). Ek alanlar: in_stock (boolean), sales_30d (sayı), campaign (keyword). Sorgu: function_score ile metin skoru × satış ve stok sinyali.",
+    story="Kart 1'in araması çalışıyor; şimdi pazarlama ekibi sıralamayı iş kurallarıyla ayarlamak istiyor. Stokta olmayan ürün geriye düşmeli, son 30 günde çok satan ürün öne çıkmalı, kampanya ürünü bir hafta öne alınmalı. "
+          "Eş anlamlılar tanımlanmalı: \"telefon kılıfı\" ile \"kapak\", \"powerbank\" ile \"taşınabilir şarj\". Her hafta iki sıralama A/B testiyle karşılaştırılır; ekip 200 örnek aramanın \"doğru sonuçlarını\" işaretledi ve her değişikliği bu listeyle ölçmek istiyor. "
+          "Stok ve satış sinyalleri saatte 5.000 ürün için değişir. Arama trafiği kart 1'deki gibidir: kampanya akşamı saniyede 300. Katalog DocumentDB'dedir, arama kopyası kart 1'in domain'indedir.",
+    wnote="R1 toplam 46: sıralamayı ayarlayan araçlar (AO 16), metin ve sayısal sinyallerin tek skorda birleşmesi (EY 12), sinyallerin güncellenme biçimi (OY 10) ve bunu taşıyan algoritma (DA 8). "
+          "R2 16 ve R4 16 ile ikinci sıradadır: trafik kart 1'inkidir ve ekip var olan sistemin üzerine kurmak istiyor.",
+    rows=[
+        row("AO", 16, "Bu kartın işi sıralamayı ayarlamaktır; araçlar engine'de değilse her ayar bir kod değişikliğidir.",
+            "Alan ağırlığı, sayısal sinyalle skor çarpımı, belirli ürünü öne alma, eş anlamlılar ve işaretlenmiş 200 arama üzerinde sıralama ölçümü engine'in araçlarıyla yapılabilmeli.",
+            "Sıralama kodda yazılırsa pazarlama ekibi her hafta bir geliştiriciyi bekler ve bir değişikliğin sıralamayı iyileştirip iyileştirmediği ölçülemez."),
+        row("EY", 12, "Her arama metin ve iş sinyallerini aynı anda sorar.",
+            "Metin skoru, stok durumu, son 30 günün satışı ve kampanya etiketi tek bir sorguda, tek bir skorda birleşmeli.",
+            "Sinyaller sonuç geldikten sonra uygulamada uygulanırsa yalnız ilk sayfa yeniden sıralanır; ikinci sayfadaki iyi ürün hiç görünmez."),
+        row("OY", 10, "Stok ve satış sinyalleri saatte binlerce ürün için değişir.",
+            "Saatte 5.000 ürünün in_stock ve sales_30d alanı değişir; değişiklik bir dakika içinde sıralamaya yansımalı.",
+            "Sinyal geç yansırsa stokta olmayan ürün saatlerce ilk sırada kalır ve tıklayan ziyaretçi boş sayfa görür."),
+        row("DA", 8, "Skor her aramada eşleşen ürünler üzerinde hesaplanır; yapı bunu taşımalı.",
+            "Skor yalnız eşleşen ürünlerde hesaplanmalı ve en iyi 20 ürün bütün eşleşmeleri sıralamadan bulunmalı.",
+            "Her aramada bütün eşleşmeleri sıralamak kampanya akşamı yavaşlar."),
+        row("R2", 16, "Trafik kart 1'in trafiğidir.",
+            "Kampanya akşamı saniyede 300 arama, her biri 100 ms içinde; sıralama kuralları süreyi belirgin artırmamalı.",
+            "Sıralama kuralı aramayı yavaşlatırsa kazanılan dönüşüm kaybedilen sabırla gider."),
+        row("R3", 6, "Arama katmanı bir kopyadır.",
+            "Arama kopyası kaybolursa katalogdan yeniden kurulabilir; sıralama ayarları kaybolmamalı.",
+            "Kaybolan ayarlar haftalarca ölçülerek bulunmuş ağırlıklardır."),
+        row("R4", 16, "Ekip var olan sistemin üzerine kurmak istiyor.",
+            "Sıralama kart 1'in arama sisteminin üzerine kurulmalı; A/B testi ve ölçüm yeni bir sistem istememeli.",
+            "Sıralama için ikinci bir arama sistemi, iki sistemin sonuçlarının birbirinden kopması demektir."),
+        row("R5", 16, "Sıralama ayarı bir özelliktir; ek bir filo istemez.",
+            "Var olan kapasite kullanılmalı; ek maliyet küçük olmalı.",
+            "Sıralama için ayrı bir sistem ödemek pazarlama bütçesini aşar."),
+    ],
+    cands=["os", "aur", "doc"],
+    scores={
+        "os": [sc(10, "function_score skoru sales_30d ve in_stock ile çarpar, pinned sorgusu kampanya ürününü öne alır, synonym filtresi eş anlamlıları ekler (Ö1, Ö3) ve _rank_eval işaretlenmiş 200 aramada sıralamayı ölçer. Puan kırılmadı."),
+               sc(10, "Metin skoru ve sayısal sinyaller tek bir sorguda tek bir skordur (Ö3); sayfalama bu skorla yapılır. Puan kırılmadı."),
+               sc(9, "Partial update isteği sinyal alanlarını gönderir; refresh 1 saniye sonra görünür ve bir dakikalık hedef rahatça tutulur (Ö8). 1 puan kırıldı: engine her güncellemede document'ı içeride baştan yazar ve yeniden index'ler; saniyede yaklaşık 1,4 güncelleme küçük ama sıfır olmayan bir merge yüküdür."),
+               sc(10, "Skor yalnız posting list'lerdeki eşleşmeler için hesaplanır ve en iyi 20 ürün bir öncelik kuyruğuyla bulunur (Ö2). Puan kırılmadı."),
+               sc(9, "Replica'lar arama yükünü paylaşır (Ö7). 1 puan kırıldı: kampanya için node'lar önceden eklenir; yeni node'un shard'ları alması dakikalar sürer."),
+               sc(8, "Replica shard'lar başka AZ'dedir (Ö7). 2 puan kırıldı: domain kaybolursa katalog yeniden index'lenir; sıralama ayarları ve eş anlamlılar bu yüzden kodda ya da bir depoda da tutulur."),
+               sc(9, "Kart 1'in domain'i ve ekip vardır; A/B testi iki sorgu şablonudur. 1 puan kırıldı: _rank_eval listelerini ve search pipeline sürümlerini ekip saklar."),
+               sc(8, "Domain zaten ödenir. 2 puan kırıldı: function_score ve sinyal güncellemeleri için biraz daha CPU, yani daha büyük node'lar gerekebilir.")],
+        "aur": [sc(5, "setweight ve ts_rank alan ağırlığı verir; ORDER BY bir ifadeyle satış ve stok sinyallerini ekler. 5 puan kırıldı: eş anlamlılar, ürün öne alma ve sıralama ölçümü için hazır araç yoktur; hepsi SQL ve uygulama kodudur."),
+                sc(7, "ORDER BY ts_rank(...) * log(sales_30d) gibi bir ifade metin ve sinyalleri tek bir sırada birleştirir. 3 puan kırıldı: formül her sorguda elle yazılır ve Türkçe harf ve yazım hatası kuralları kart 1'deki gibi ayrı mekanizmalardır."),
+                sc(10, "Bir UPDATE sinyal column'unu değiştirir ve commit'te görünür. Puan kırılmadı."),
+                sc(7, "GIN index eşleşen row'ları bulur. 3 puan kırıldı: ifadeyle sıralama her eşleşen row'un skorunu hesaplar; sık bir kelimede binlerce row sıralanır."),
+                sc(9, "Reader'lar arama yükünü paylaşır. 1 puan kırıldı: beklenmeyen bir tepe yeni reader'ın eklenmesini dakikalarca bekler."),
+                sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                sc(4, "Aurora çalışır. 6 puan kırıldı: katalog DocumentDB'dedir; arama ve sıralama için Aurora'ya bir kopya ve onu besleyen bir boru hattı gerekir."),
+                sc(7, "Var olan cluster'a reader eklenir. 3 puan kırıldı: arama ve sıralama CPU'su reader ACU'su olarak ödenir.")],
+        "doc": [sc(2, "$text sorgusu ve $meta textScore ile skor okunur, alan ağırlığı verilebilir. 8 puan kırıldı: eş anlamlı, öne alma, sinyalle skor çarpımı ve sıralama ölçümü yoktur. Türkçe dil desteğinin yokluğu R1.2'de sayıldı."),
+                sc(4, "Aggregation pipeline textScore'u satış ve stokla birleştirip $sort ile sıralayabilir. 6 puan kırıldı: Türkçe kelime araması yoktur; birleştirme her sorguda pipeline aşamalarıyla elle yazılır."),
+                sc(10, "$set sinyal field'ını yerinde değiştirir. Puan kırılmadı."),
+                sc(5, "Text index eşleşen document'ları bulur. 5 puan kırıldı: pipeline'da skorla sıralama bütün eşleşmeleri okur."),
+                sc(9, "Okumalar replica'lara dağılır. 1 puan kırıldı: beklenmeyen bir tepe yeni replica'nın eklenmesini dakikalarca bekler."),
+                sc(10, "Katalog zaten DocumentDB'dedir. Puan kırılmadı."),
+                sc(9, "Var olan cluster ve bilinen API; ikinci bir sistem yoktur. 1 puan kırıldı: sıralama pipeline'larının yükü için replica sayısını ekip seçer. Sıralama kodunun kendisi R1 · AO'da sayıldı."),
+                sc(8, "Var olan cluster kullanılır. 2 puan kırıldı: sıralama pipeline'ları için replica eklenir.")],
+    },
+    h2h={
+        "aur": "İlişkisel (Aurora PostgreSQL) ile kafa kafaya. Aurora'nın artısı sinyal güncellemesindedir: bir UPDATE stok ve satış column'larını yerinde değiştirir ve commit'te görünür; R1 · OY'de OpenSearch'ün önündedir (10'a 9). ORDER BY içinde bir ifade metin skorunu satışla birleştirebilir. "
+               "Ama bu kartın asıl işi sıralamayı ayarlamaktır ve araçlar Aurora'da yoktur: eş anlamlılar, belirli ürünü öne alma ve işaretlenmiş aramalarla sıralama ölçümü SQL ve uygulama koduna döner (AO'da 5). Katalog Aurora'da olmadığı için bir kopya ve boru hattı da gerekir (R4'te 4). "
+               "Hangi koşul değişseydi Aurora PostgreSQL seçilirdi: katalog Aurora'da olsaydı ve sıralama kuralı yalnız \"stokta olan önce, sonra satışa göre\" gibi sabit bir ORDER BY olsaydı; ölçüm ve eş anlamlı istenmeseydi.",
+        "doc": "Document (DocumentDB) ile kafa kafaya. DocumentDB'nin artısı kataloğun orada olmasıdır: sinyaller $set ile yerinde değişir, kopya ve boru hattı yoktur, ekip API'yi bilir; R3, R4 ve R5'te iyi puan alır. "
+               "Ama sıralama bir arama engine'i işidir: DocumentDB'nin text index'i AWS'e göre yalnız İngilizceyi destekler, eş anlamlı, öne alma ve sıralama ölçümü yoktur ve skorla sıralama bütün eşleşmeleri okuyan bir pipeline'dır. R1'de 46 puanın 22'sini alır. Bu yüzden katalog DocumentDB'de kalır ve sıralama arama kopyasında yapılır; kart 1'deki gibi ikisi birlikte çalışır. "
+               "Hangi koşul değişseydi DocumentDB seçilirdi: \"sıralama\" yalnız bir kategori sayfasında \"satışa göre sırala\" düğmesi olsaydı (metin araması olmadan); o zaman bir compound index ve bir sort yeterdi.",
+    },
+    verdict="Karar: OpenSearch {os}, Aurora PostgreSQL {aur}, DocumentDB {doc}. Kararı R1 · AO verir: function_score, pinned sorgusu, synonym filtresi ve _rank_eval sıralamayı ayarlamanın ve ölçmenin araçlarıdır ve engine'in içindedir. "
+            "OpenSearch seçtiğimizde artımız: pazarlama ekibinin kuralları kod değil sorgu şablonudur, her değişiklik 200 işaretli aramayla ölçülür ve kart 1'in domain'i kullanılır. "
+            "Eksimiz: her sinyal güncellemesi document'ı yeniden index'ler; güncellemeleri toplu (bulk) göndeririz ve refresh'i bir dakikalık hedefe göre ayarlarız; ağırlıkları ve eş anlamlıları bir depoda saklarız, çünkü index yeniden kurulabilir. "
+            "Bir koşul değişseydi: sıralama yalnız sabit bir \"satışa göre\" düzeni olsaydı kataloğun database'i yeterdi."))
+
+# ------------------------------------------------------------------ 10. anomaly detection per category and city (OpenSearch wins on its engine tool)
+OPENSEARCH_W.append(wusecase("anomaly", 10,
+    title="Sipariş akışında anomali tespiti: kategori ve şehir başına",
+    key="Index: order-events (Aurora'dan OpenSearch Ingestion ile). Document: bir sipariş olayı; @timestamp, category ve city keyword, amount sayı. Detector: 5 dakikalık aralık, category ve city kırılımı.",
+    story="Bir ödeme sağlayıcısı bir şehirde çöktüğünde ya da bir kategorinin fiyatı yanlış yüklendiğinde sipariş akışı birden düşer ya da sıçrar; Lale Market bunu bugün ertesi gün fark ediyor. "
+          "Hedef: 5 kategori × 81 şehir = 405 kırılımın her biri için sipariş sayısı ve tutarı 5 dakikalık aralıklarla izlensin, normal dalgalanmayı (gece düşüşü, öğle tepesi) öğrensin ve gerçek bir sapmada 10 dakika içinde nöbetçiye haber versin; kırılım sayısı franchise planıyla 4.000'e çıkacak. "
+          "Sipariş olayları Aurora'dan OpenSearch Ingestion ile zaten Lale Market'in OpenSearch domain'ine akıyor ve analistler onları Dashboards'ta inceliyor. Ekip iki analist ve bir SRE; makine öğrenmesi modeli yazmak istemiyorlar.",
+    wnote="R1 toplam 42: kırılım başına normali öğrenen bir tespit aracı (AO 18), kırılım ve pencere sorusu (EY 14) ve olay verisinin biçimi (VM 10). "
+          "R4 20 tek başına R1'in her alt maddesinden ağırdır, ama R1 grup olarak (42) en ağırdır: ekip model yazmak istemiyor ve yeni bir sistem işletmek istemiyor. R5 18: kırılım sayısı faturayı belirler.",
+    rows=[
+        row("AO", 18, "Bu kartın işi \"normal\"i öğrenen bir araçtır; ekip model yazmak istemiyor.",
+            "Her kırılım için normal dalgalanmayı kendisi öğrenen, bir sapmaya bir skor veren ve skoru bir bildirime bağlayan bir araç engine'de olmalı.",
+            "Sabit eşik (\"saatte 10 siparişin altı\") gece her gün yanlış alarm verir, öğle tepesinde gerçek düşüşü kaçırır; model elle yazılırsa iki analist onu bakımla geçirir."),
+        row("EY", 14, "Soru her zaman \"bu kırılımın son 5 dakikası\"dır.",
+            "Kategori ve şehir kırılımında, 5 dakikalık pencerelerde sipariş sayısı ve tutar; aynı veride analist bir sapmanın siparişlerine inebilmeli.",
+            "Pencere hesabı her kırılım için ayrı bir sorgu olursa 4.000 kırılım 4.000 sorgu demektir."),
+        row("VM", 10, "Veri sipariş olaylarıdır; sayılara çevrilmeden saklanması analiste iniş yolu verir.",
+            "Her sipariş bir olaydır (kategori, şehir, tutar, ödeme sağlayıcısı); sayılar bu olaylardan hesaplanmalı ve olayların kendisi aranabilmeli.",
+            "Olaylar yalnız önceden hesaplanmış sayılara çevrilirse \"hangi ödeme sağlayıcısı\" sorusu sorulamaz."),
+        row("R2", 14, "Kampanya günü sipariş akışı on kat; tespit 10 dakika içinde olmalı.",
+            "Normalde saniyede 5, kampanya günü saniyede 50 sipariş olayı; her kırılım 5 dakikada bir değerlendirilir ve bildirim 10 dakika içinde gider.",
+            "Tespit gecikirse ödeme sağlayıcısı çöktüğü sürece satış kaybolur."),
+        row("R3", 6, "Siparişlerin kaydı Aurora'dadır; tespit verisi bir kopyadır.",
+            "Olay kopyası kaybolursa Aurora'dan yeniden yüklenebilir; detector'ların öğrendiği model kaybolursa yeniden öğrenir.",
+            "Kopya kaybı birkaç saatlik tespit boşluğudur; sipariş kaybı değildir."),
+        row("R4", 20, "İki analist ve bir SRE; ekip yeni bir sistem ve model bakımı istemiyor.",
+            "Olayların zaten aktığı sistemin üzerine kurulmalı; detector ve bildirim bir ayar olmalı, kod olmamalı.",
+            "Yeni bir sistem ya da her kırılım için elle kurulan alarm üç kişilik ekibin bütün zamanını alır."),
+        row("R5", 18, "Kırılım sayısı 405'ten 4.000'e çıkacak; fatura kırılım sayısıyla patlamamalı.",
+            "4.000 kırılımda da fatura öngörülebilir kalmalı.",
+            "Kırılım başına ödenen bir modelde franchise planı faturayı on katına çıkarır."),
+    ],
+    cands=["os", "ix", "cw"],
+    scores={
+        "os": [sc(9, "Anomaly Detection, Random Cut Forest ile her kırılımın normalini kendisi öğrenir, bir anomaly grade ve confidence verir ve Alerting ile bildirime bağlanır; category ve city kırılım alanı (high cardinality) olarak seçilir (Ö5 üzerine kurulu). 1 puan kırıldı: detector'ın özellikleri (count, sum) tasarlanır ve model ısınana kadar bir süre veri ister."),
+               sc(10, "date_histogram ve terms aggregation'ları kırılım ve pencereyi tek bir sorguda verir (Ö5); analist aynı index'te bir sapmanın siparişlerini arar. Puan kırılmadı."),
+               sc(10, "Her sipariş bir document'tır; alanlar keyword ve sayıdır ve olayların kendisi aranır (Ö2). Puan kırılmadı."),
+               sc(9, "Detector'lar 5 dakikada bir çalışır ve olaylar saniyeler içinde aranabilir (Ö8). 1 puan kırıldı: detector'lar Dashboards sorgularıyla aynı node'larda çalışır."),
+               sc(8, "Replica shard'lar ve saatlik snapshot. 2 puan kırıldı: domain kaybolursa olaylar Aurora'dan yeniden yüklenir ve modeller yeniden ısınır."),
+               sc(8, "Olaylar domain'e zaten akar; detector ve monitor bir ayardır. 2 puan kırıldı: kırılım sayısı büyüdükçe Anomaly Detection'ın bellek sınırı izlenir ve node'lar büyütülür."),
+               sc(8, "Domain zaten ödenir; kırılım başına ücret yoktur. 2 puan kırıldı: 4.000 kırılımın modelleri için daha büyük data node'lar gerekebilir.")],
+        "ix": [sc(4, "Task'lar zamanlanmış Flux ya da InfluxQL sorgularıdır ve bir eşik hesabı yapabilir. 6 puan kırıldı: engine'de normali öğrenen bir tespit aracı yoktur; mevsimsellik ve eşikler ekibin yazdığı istatistik koduyla hesaplanır."),
+               sc(10, "Kategori ve şehir tag'leri ile 5 dakikalık aggregateWindow kırılım ve pencereyi tek bir sorguda verir. Puan kırılmadı."),
+               sc(7, "Bir nokta tag'ler ve field'larla saklanır; sayılar serilerden hesaplanır. 3 puan kırıldı: olay bir sipariş kaydı olarak değil bir ölçüm olarak saklanır; analistin bir sapmanın siparişlerine inişi başka bir sistemdedir."),
+               sc(9, "Saniyede 50 nokta bir instance için küçüktür. 1 puan kırıldı: bütün yazmalar tek bir instance'tan geçer."),
+               sc(8, "Multi-AZ standby. 2 puan kırıldı: failover sırasında birkaç dakikalık boşluk olabilir ve veri Aurora'dan yeniden yüklenir."),
+               sc(5, "Yönetilen instance. 5 puan kırıldı: yeni bir sistemdir; instance sınıfı, Aurora'dan akış ve bildirim kanalı ekibin işidir. Tespit kodu R1 · AO'da sayıldı."),
+               sc(8, "Instance-saat ve depolama ödenir; kırılım sayısı faturayı doğrudan büyütmez. 2 puan kırıldı: Multi-AZ db.influx.medium ayda yaklaşık 210 dolar gece de çalışır (Frankfurt).")],
+        "cw": [sc(7, "Anomaly detection bir metric ve istatistik için normali öğrenir (saatlik, günlük ve haftalık desenler) ve bir alarm bandı verir. 3 puan kırıldı: model metric başınadır; 4.000 kırılım 4.000 ayrı model ve alarm demektir ve kırılımlar arasında öğrenme yoktur."),
+               sc(7, "Dimension'lı metric'ler kırılımı verir; 5 dakikalık periyotla Sum ve SampleCount okunur. 3 puan kırıldı: her kategori ve şehir birleşimi uygulamadan ayrı bir metric olarak yayınlanır."),
+               sc(6, "Metric bir sayıdır; olayın kendisi saklanmaz. 4 puan kırıldı: siparişler yayından önce sayılara çevrilir; \"hangi ödeme sağlayıcısı\" sorusu için olaylara başka bir sistemde inilir."),
+               sc(10, "Metric yazma ve alarm değerlendirme kapasitesi servisindir. Puan kırılmadı."),
+               sc(10, "Metrikler servis tarafından kalıcı saklanır. Puan kırılmadı."),
+               sc(7, "Sunucu yoktur ve alarm aynı servistedir. 3 puan kırıldı: 4.000 alarmın kurulması ve bakımı (örneğin altyapı kodu ile) ekibin işidir. Metric'leri yayınlayan kod R1 · EY'de sayıldı."),
+               sc(4, "Metric ve alarm başına ödenir. 6 puan kırıldı: 4.000 custom metric ayda yaklaşık 1.200 dolardır (Frankfurt, 0,30 dolar) ve buna her kırılımın alarmı eklenir.")],
+    },
+    h2h={
+        "ix": "Zaman serisi (Timestream for InfluxDB) ile kafa kafaya. InfluxDB'nin artısı pencere sorusudur: kategori ve şehir tag'leriyle 5 dakikalık toplam tek bir sorgudur ve seri sayısı faturayı büyütmez (R5). Kart 7'de bu yüzden kazanmıştı. "
+              "Ama bu kartın işi \"normal\"i öğrenmektir ve engine'de bunu yapan bir araç yoktur: task'lar zamanlanmış sorgulardır, gece düşüşünü ve öğle tepesini öğrenen istatistik ekibin yazacağı koddur (AO'da 4). Yeni bir sistem olarak instance, Aurora'dan akış ve bildirim de ekibin işidir (R4'te 5). "
+              "Hangi koşul değişseydi Timestream for InfluxDB seçilirdi: kırılımlar sabit eşiklerle izlenebilseydi (\"saatte 10 siparişin altı\") ve ekipte zaman serisi istatistiği bilen biri olsaydı; ya da metrikler zaten InfluxDB'de olsaydı.",
+        "cw": "İzleme servisi (CloudWatch) ile kafa kafaya. CloudWatch'un anomaly detection'ı gerçek bir aracıdır: bir metric'in saatlik, günlük ve haftalık desenlerini öğrenir ve bir alarm bandı verir; kapasite ve kalıcılık servisindir (R2, R3). Birkaç kırılım için en basit cevaptır. "
+              "Ama model metric başınadır: 405 kırılım bugün 405, yarın 4.000 ayrı metric, model ve alarm demektir; her kırılımı uygulama ayrı bir metric olarak yayınlar ve olayların kendisi saklanmaz. Bu R1'de üç alt maddede, R4'te ve R5'te kayıptır: 4.000 metric ayda yaklaşık 1.200 dolardır. "
+              "Hangi koşul değişseydi CloudWatch seçilirdi: yalnız toplam sipariş akışı ve birkaç ödeme sağlayıcısı izlenseydi (on kadar metric) ve olaylar zaten OpenSearch'e akmasaydı.",
+    },
+    verdict="Karar: OpenSearch {os}, Timestream for InfluxDB {ix}, CloudWatch {cw}. Kararı R1 · AO verir: Random Cut Forest ile kırılım başına normali öğrenen bir detector ve Alerting engine'in içindedir ve olaylar zaten domain'dedir. "
+            "OpenSearch seçtiğimizde artımız: 405 kırılım tek bir detector'dır, model yazılmaz, analist sapmanın siparişlerine aynı Dashboards'ta iner. "
+            "Eksimiz: detector özelliklerini tasarlarız ve modellerin ısınmasını bekleriz; kırılım sayısı büyüdükçe Anomaly Detection'ın bellek sınırını izler ve node'ları büyütürüz; bu araç yönetilen domain'dedir, Serverless'ın API listesinde yoktur. "
+            "Bir koşul değişseydi: yalnız birkaç toplam metric izlenseydi CloudWatch'un anomaly detection alarmı daha basit olurdu."))
+
+USECASES_W["opensearch"] = OPENSEARCH_W
+PAGE_SVC["opensearch"] = "os"
