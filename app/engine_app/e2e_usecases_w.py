@@ -150,7 +150,7 @@ DDB_W.append(wusecase("cart", 1, sim="w_cart",
                 sc(10, "UPDATE … SET qty = qty + 2 WHERE … AND qty + 2 <= 5 row kilidiyle korunur; sepet, stok ve sipariş aynı database'teyse checkout tek bir transaction'dır. Puan kırılmadı: bu satırda en güçlü aday Aurora'dır."),
                 sc(9, "UPDATE miktarı okumadan artırır; DELETE FROM cart WHERE cart_id = ? sepeti tek komutta siler. 1 puan kırıldı: her UPDATE MVCC ile yeni bir row sürümü yazar; sık güncellenen sepetler VACUUM işini artırır."),
                 sc(4, "PostgreSQL'de TTL yoktur. 6 puan kırıldı: terk edilen sepetler için zamanlanmış bir DELETE işi (pg_cron) gerekir ve günde milyonlarca satırı silmek VACUUM yükü getirir."),
-                sc(6, "Saniyede 5.000 küçük yazma güçlü bir writer'ın erişimindedir; Serverless v2 ACU'yu artırır. 4 puan kırıldı: bütün yazmalar tek writer'dan geçer; on dakikada 20 kat için minimum ACU yüksek tutulmalı ya da ölçeklenme önceden test edilmelidir."),
+                sc(6, "Saniyede 5.000 küçük yazma güçlü bir writer'ın erişimindedir; Serverless v2 ACU'yu artırır. 4 puan kırıldı: sepet tablosu siparişlerin writer'ına eklenir ve kampanya akşamının 5.000 yazması checkout tepesiyle aynı andadır (Aurora sayfasının tek writer tablosu: 5.000'e kadar, checkout ile aynı tepede 3 puan); on dakikada 20 kat için minimum ACU da önceden yükseltilir (sabit 1 puan)."),
                 sc(10, "Üç AZ'de altı kopya ve sürekli yedek. Puan kırılmadı."),
                 sc(7, "Lale Market siparişler için zaten bir Aurora işletir; sepet tablosu oraya eklenir. 3 puan kırıldı: kampanya yükü siparişlerle aynı cluster'a biner ve ACU aralığı ile connection pool ayarı database yöneticisi olmayan ekibin işidir."),
                 sc(7, "Var olan Aurora'da sepet tablosu ayrıca ödenmez. 3 puan kırıldı: kampanya akşamı için ACU üst sınırı ve minimum ACU yükseltilir; tepe kapasitesi siparişlerle paylaşılır ve ACU-saat olarak ödenir.")],
@@ -351,7 +351,7 @@ DDB_W.append(wusecase("game", 4,
                 sc(6, "Türe özel alanlar bir JSONB kolonunda tutulur. 4 puan kırıldı: JSONB içindeki alanların tipi denetlenmez ve sabit kolonlarla iki ayrı model oluşur."),
                 sc(7, "JSONB içine yeni alan migration istemez. 3 puan kırıldı: sorgulanacak her yeni alan için bir index ya da kolon değişikliği gerekir."),
                 sc(10, "ACID transaction ve CHECK (durability >= 0); satın alma tek transaction'dır. Puan kırılmadı."),
-                sc(4, "Serverless v2 ACU'yu artırır. 6 puan kırıldı: 200.000 istek/saniyenin yazma kısmı tek writer'dan geçer; bu yük bir sharding tasarımı ister."),
+                sc(4, "Serverless v2 ACU'yu artırır. 6 puan kırıldı: 200.000 istek/saniyenin yazma kısmı tek writer'dan geçer; bu yük bir sharding tasarımı ister (Aurora sayfasının tek writer tablosu: saniyede 20.000'in üstü 6 puan)."),
                 sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
                 sc(5, "Yönetilen servis. 5 puan kırıldı: lansman kapasitesi, connection pool ve sharding operasyon ekibi olmayan bir stüdyonun işidir."),
                 sc(5, "ACU-saat ile ödenir. 5 puan kırıldı: lansman için yüksek minimum ACU ayarı unutulursa sonraki aylarda da ödenir.")],
@@ -470,7 +470,7 @@ DDB_W.append(wusecase("idem", 6,
                 sc(8, "ON CONFLICT DO NOTHING var olan satırı döndürmez. 2 puan kırıldı: ilk sonucu almak için ikinci bir SELECT gerekir (ya da ON CONFLICT DO UPDATE ile yapay bir güncelleme)."),
                 sc(4, "PostgreSQL'de TTL yoktur. 6 puan kırıldı: 24 saatten eski işaretler zamanlanmış bir DELETE işiyle (pg_cron) ya da tarih partition'larını düşürerek silinir."),
                 sc(10, "request_id primary key'i bir B-tree aramasıdır. Puan kırılmadı."),
-                sc(9, "Bu hacim tek writer için küçüktür. 1 puan kırıldı: bağlantı sayısı ödeme API'ının ölçeğiyle birlikte izlenmelidir."),
+                sc(7, "Ortalama saniyede 230 istek tek writer için küçüktür. 3 puan kırıldı: işaret tablosu ödeme kaydını yazan writer'a eklenir ve tepedeki saniyede 3.000 işaret, ödeme yazmalarıyla aynı anda aynı writer'dan geçer (Aurora sayfasının tek writer tablosu: 5.000'e kadar, paylaşılan writer'da aynı tepede 3 puan; connection pool R4'te sayıldı)."),
                 sc(10, "Üç AZ'de altı kopya; commit kalıcıdır. Puan kırılmadı."),
                 sc(8, "Ödeme kaydı zaten ilişkisel bir database'tedir; işaret tablosu oraya eklenir ve yeni bir cluster gerekmez. 2 puan kırıldı: ödeme database'inin connection pool'u ve kapasitesi bu ek yükle birlikte izlenmelidir."),
                 sc(9, "Var olan database'e eklenen küçük bir tablonun ek maliyeti küçüktür. 1 puan kırıldı: ödeme database'inin storage'ı ve I/O'su biraz büyür.")],
@@ -538,7 +538,7 @@ DDB_W.append(wusecase("seat", 7, sim="w_seat",
         "aur": [sc(10, "SELECT … WHERE event_id = ? 20.000 satırı tek sorguda, index ile okur. Puan kırılmadı."),
                 sc(10, "UPDATE seats SET holder = ? WHERE id = ? AND (holder IS NULL OR hold_until < now()) row kilidiyle atomiktir. Puan kırılmadı."),
                 sc(7, "Süre sonu aynı biçimde koşulun içindedir; temizlik işi gerekmez. 3 puan kırıldı: salon planı her satırda hold_until'i karşılaştırır."),
-                sc(4, "Saniyede 50.000 tutma denemesi tek writer'dan geçer ve en çok aranan koltuklarda row kilitleri sıraya girer. 6 puan kırıldı: açılış yükü bir kuyruk ya da sharding ister."),
+                sc(4, "Saniyede 50.000 tutma denemesi tek writer'dan geçer ve en çok aranan koltuklarda row kilitleri sıraya girer. 6 puan kırıldı: açılış yükü bir kuyruk ya da sharding ister (Aurora sayfasının tek writer tablosu: saniyede 20.000'in üstü 6 puan)."),
                 sc(10, "Üç AZ'de altı kopya; commit kalıcıdır. Puan kırılmadı."),
                 sc(6, "Yönetilen servis. 4 puan kırıldı: açılış için minimum ACU, connection pool ve kilit beklemesi ayarı ekibin işidir."),
                 sc(6, "ACU-saat ile ödenir. 4 puan kırıldı: açılıştan önce yüksek minimum ACU ayarlanmalı ve sonra geri alınmalıdır.")],
@@ -723,7 +723,7 @@ DDB_W.append(wusecase("ads", 10,
                sc(9, "Pipeline ile toplu SET saniyede 11.000 yazmayı kolayca taşır. 1 puan kırıldı: gece işi her listeye süre (EX) koymalı ya da eski listeleri üzerine yazmalıdır."),
                sc(10, "2 KB'lık liste tek bir string value'dur. Puan kırılmadı."),
                sc(9, "Serverless saniyede 100.000 okumayı taşır. 1 puan kırıldı: gece yazma sıçraması için minimum ECPU ayarı önerilir."),
-               sc(4, "Kalıcı bir yazma log'u yoktur. 6 puan kırıldı: bir arızada listeler yeniden yüklenmelidir; bu kartta kabul edilen bir sonuçtur."),
+               sc(9, "Kalıcı bir yazma log'u yoktur, ama listeler bir kopyadır: gece işi onları 30 dakikada yeniden yazar ve kart kaybı ertesi güne kadar kabul eder. 1 puan kırıldı: bir arızadan sonra listeler yeniden yüklenene kadar genel liste gösterilir (yeniden yükleme dakikalar sürerse 1, bir saat ve üstü 2 puan)."),
                sc(9, "Serverless. 1 puan kırıldı: yeniden yükleme işi bir arıza planına yazılmalıdır."),
                sc(6, "ECPU ve GB-saat başına ödenir. 4 puan kırıldı: 40 GB verinin bellekteki saklama fiyatı diskten çok yüksektir ve faturanın büyük kısmıdır.")],
         "ddb": [sc(10, "GetItem kullanıcı id'si ile doğrudan okumadır (Ö1). Puan kırılmadı."),
@@ -744,7 +744,7 @@ DDB_W.append(wusecase("ads", 10,
                 sc(4, "Node saat başına ve yazılan GB başına ödenir. 6 puan kırıldı: 40 GB veri ve replica'lar için büyük node'lar sürekli çalışır; bu kartın istemediği dayanıklılığa para verilir.")],
     },
     h2h={
-        "ddb": "Key-value (DynamoDB) ile kafa kafaya. Fark 7,5 puandır ve kararı R1'in depolama satırı verir. İki aday da key ile tek okuma yapar ve gece toplu yazmayı taşır; DynamoDB dayanıklılıkta öndedir. "
+        "ddb": "Key-value (DynamoDB) ile kafa kafaya. Fark 10 puandır ve kararı R1'in depolama satırı verir. İki aday da key ile tek okuma yapar ve gece toplu yazmayı taşır; DynamoDB dayanıklılıkta öndedir. "
                "Ama 5 ms sınırı katıdır: ElastiCache listeyi bellekte tutar ve mikrosaniyede döner, DynamoDB ise SSD'deki partition'lardan tek haneli milisaniyede döner ve yük altında okumaların bir kısmı sınırı aşar. "
                "Sınırı garanti etmek için DynamoDB'nin önüne DAX konur; bu durumda mimari zaten bir bellek içi cache içerir. "
                "R5'te de günde milyarlarca okumanın istek başına fiyatı, bellekteki 40 GB'ın fiyatına yaklaşır ya da onu aşar. "
@@ -2035,9 +2035,9 @@ DOCDB_W.append(wusecase("orders", 7,
                 sc(9, "UPDATE status ve INSERT history tek transaction'dır. 1 puan kırıldı: iki cümle ve bir transaction; tek yazma değildir."),
                 sc(10, "SQL ve index'ler üç soruyu cevaplar; \"bu ürünü içeren\" order_items üzerinde bir JOIN'dir. Puan kırılmadı."),
                 sc(7, "Yeni kargo field'ı JSONB'de migration istemez. 3 puan kırıldı: column'a dönen her field bir migration'dır."),
-                sc(9, "Okumalar reader instance'a gider. 1 puan kırıldı: okuma modelinin yazmaları checkout writer'ından geçer."),
+                sc(10, "Okumalar reader instance'a gider; okuma modelinin saniyede birkaç yazması checkout writer'ından geçer ama Aurora sayfasının tek writer tablosunun ilk satırındadır (saniyede 500'e kadar: 0). Puan kırılmadı."),
                 sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
-                sc(7, "Aurora zaten çalışır ve ekip SQL biliyor; okuma modeli checkout ile aynı transaction'da yazılabilir, bu yüzden tüketici, ikinci kopya ve sırasız event sorunu yoktur. 3 puan kırıldı: okuma modeli checkout'un schema'sında yaşar ve her kargo field'ı checkout'un migration takvimini bekler; writer yükü R2'de sayıldı."),
+                sc(7, "Aurora zaten çalışır ve ekip SQL biliyor; okuma modeli checkout ile aynı transaction'da yazılabilir, bu yüzden tüketici, ikinci kopya ve sırasız event sorunu yoktur. 3 puan kırıldı: okuma modeli checkout'un schema'sında yaşar ve her kargo field'ı checkout'un migration takvimini bekler; writer yükü R2'nin satırıdır."),
                 sc(8, "Var olan cluster'a table eklenir. 2 puan kırıldı: ekran okumaları için bir reader instance ve okuma modelinin yazmaları ACU olarak ödenir.")],
         "ddb": [sc(10, "Sipariş map ve list tipleriyle tek value'dur; adres kopyalanır; dört beş elemanlı geçmiş 400 KB sınırının çok altındadır. Puan kırılmadı."),
                 sc(9, "UpdateItem SET status ve list_append tek yazmadır. 1 puan kırıldı: list_append sadece sona ekler; bir geçmiş kaydını düzeltmek sırasıyla yapılır."),
@@ -2050,7 +2050,7 @@ DOCDB_W.append(wusecase("orders", 7,
     },
     h2h={
         "aur": "İlişkisel (Aurora PostgreSQL) ile kafa kafaya. Bu, okuyucunun \"sipariş zaten Aurora'da, neden ikinci bir yer?\" dediği yarıştır. Aurora'nın gücü sorulardadır: üç soru SQL ve index'lerle cevaplanır, durum değişikliği ve geçmiş tek transaction'dır ve Aurora zaten çalışır. "
-               "Aurora'nın bir kazancı daha vardır: okuma modeli checkout ile aynı transaction'da yazılabilir, tüketici ve sırasız event sorunu olmaz. Ama story'nin istediği iki şey Aurora'da kaybolur: okuma modeli checkout'un cluster'ında ve schema'sında yaşar, bu yüzden her kargo field'ı checkout'un migration takvimini bekler ve okuma modelinin yazmaları checkout writer'ından geçer. R1'de de sipariş ekranı bir JOIN'dir ya da sipariş bir JSONB document'ıdır; DocumentDB'de sipariş, ekranın istediği şekliyle tek bir document'tır. "
+               "Aurora'nın bir kazancı daha vardır: okuma modeli checkout ile aynı transaction'da yazılabilir, tüketici ve sırasız event sorunu olmaz. Ama story'nin istediği iki şey Aurora'da kaybolur: okuma modeli checkout'un cluster'ında ve schema'sında yaşar, bu yüzden her kargo field'ı checkout'un migration takvimini bekler; okuma modelinin yazmaları checkout writer'ından geçer, ama saniyede birkaç yazma R2'de puan kırdırmaz. R1'de de sipariş ekranı bir JOIN'dir ya da sipariş bir JSONB document'ıdır; DocumentDB'de sipariş, ekranın istediği şekliyle tek bir document'tır. "
                "Hangi koşul değişseydi Aurora PostgreSQL seçilirdi: sipariş ekranı checkout ile aynı ekip ve aynı migration takvimiyle yaşasaydı ve okumalar bir reader instance'ı yormayacak kadar az olsaydı. O zaman ayrı bir okuma modeli gereksizdir. Aynı cluster'da ayrı bir schema writer'ı ve storage'ı paylaşır; materialized view ise her yenilemede bütün sorguyu yeniden çalıştırır.",
         "ddb": "Key-value (DynamoDB) ile kafa kafaya. DynamoDB'nin gücü operasyondadır: sunucu yoktur ve sipariş map ve list tipleriyle tek value olarak saklanır; \"müşterinin siparişleri\" partition key ve sort key ile tek Query'dir. "
                "Ama üçüncü soru, \"bu ürünü içeren siparişler\", bir list elemanına göredir ve DynamoDB list elemanına index kuramaz: her satır ayrı bir value olarak ikinci kez yazılır ve uygulama iki kopyayı güncel tutar. \"Kargoda ve üç günden eski\" de bir ikinci index'tir. R4'te okuma modeli için yeni bir table ve key tasarımı gerekir; DocumentDB'de ise var olan cluster'a bir collection eklenir. "
@@ -2351,10 +2351,10 @@ KEYSPACES_W.append(wusecase("activity", 1,
                 sc(5, "DynamoDB Lale Market'te sepet için zaten çalışır; yeni bir servis değildir. 5 puan kırıldı: veri ekibinin Spark Cassandra Connector ve CQL ile yazdığı gece işi DynamoDB'nin API'ına yeniden yazılır ve yeniden test edilir; ilk büyük kampanyadan önce warm throughput yükseltilir."),
                 sc(10, "İstek başına ödeme; TTL silmesi ücretsizdir. Puan kırılmadı.")],
         "aur": [sc(10, "(user_id, event_time DESC) üzerinde bir B-tree index ve LIMIT; her iki soru SQL ile sorulur. Puan kırılmadı."),
-                sc(7, "INSERT okumadan ekler. 3 puan kırıldı: her event heap'e, index'e ve write-ahead log'a yazılır; saniyede on binlerce küçük ekleme tek writer'da yazma işini katlar."),
+                sc(7, "INSERT okumadan ekler. 3 puan kırıldı: her event heap'e, index'e ve write-ahead log'a yazılır; her küçük ekleme üç ayrı yazmadır (writer'ın yükü R2'de sayıldı)."),
                 sc(6, "Günlük partition'lar ve en eski partition'ın düşürülmesi 7 günü sınırlar. 4 puan kırıldı: kendiliğinden süre sonu yoktur; partition bakımı zamanlanmış bir iştir (pg_partman, pg_cron) ve iş durursa eski event'ler kalır (Aurora sayfasının kademesi: partition düşüren iş 4 puan)."),
                 sc(8, "Index en yeni 40 event'i sırayla bulur. 2 puan kırıldı: row'lar heap'te yazma sırasıyla durur, kullanıcıya göre değil; 40 event çoğu zaman 40 ayrı page okumasıdır."),
-                sc(4, "Bütün yazmalar checkout'u da taşıyan tek writer'dan geçer. 6 puan kırıldı: kampanya akşamı saniyede 15.000 ekleme aynı writer'da sipariş yazmalarıyla yarışır."),
+                sc(5, "Bütün yazmalar checkout'u da taşıyan tek writer'dan geçer. 5 puan kırıldı: kampanya akşamı saniyede 15.000 ekleme aynı writer'da sipariş yazmalarıyla yarışır (Aurora sayfasının tek writer tablosu: 5.000–20.000, checkout ile aynı tepede 5 puan)."),
                 sc(10, "Altı kopya, üç AZ. Puan kırılmadı."),
                 sc(6, "Aurora Lale Market'te zaten çalışır; yeni bir table eklenir. 4 puan kırıldı: gece işi JDBC'ye yeniden yazılır ve event yükünün checkout cluster'ındaki etkisi izlenir."),
                 sc(6, "Var olan cluster'a eklenir. 4 puan kırıldı: kampanya tepesi için ACU aralığı yükseltilir ve günde yaklaşık 100 milyon eklemenin I/O'su ödenir.")],
@@ -2485,7 +2485,7 @@ KEYSPACES_W.append(wusecase("inbox", 3,
                 sc(9, "Liste sırası tek bir UPDATE'tir ve index kendiliğinden güncellenir. 1 puan kırıldı: her UPDATE row'un yeni bir sürümünü yazar; sık güncellenen sohbet row'ları VACUUM işini artırır (Aurora sayfasının kademesi: birçok row'a dağılan sık güncelleme 1 puan)."),
                 sc(6, "Logical replication değişiklikleri engine'den sırayla dışarı verir. 4 puan kırıldı: kendiliğinden süre sonu yoktur; iki yıllık silme aylık partition'ları düşüren zamanlanmış bir iştir."),
                 sc(10, "Index'i database transaction'ın içinde günceller; sohbet ve liste hiç ayrılmaz. Puan kırılmadı."),
-                sc(7, "Saniyede 2.500 yazma tek writer için olağandır. 3 puan kırıldı: dalgada beş kat, yani saniyede 12.500 yazma, bütün yazmaları taşıyan tek writer'a gelir."),
+                sc(7, "Saniyede 2.500 yazma tek writer için olağandır. 3 puan kırıldı: dalgada beş kat, yani saniyede 12.500 yazma, bütün yazmaları taşıyan tek writer'a gelir (Aurora sayfasının tek writer tablosu: 5.000–20.000, kendi writer'ında 3 puan)."),
                 sc(10, "Altı kopya, üç AZ. Puan kırılmadı."),
                 sc(5, "Yönetilen cluster. 5 puan kırıldı: DynamoDB ekibi için yeni bir database türü, SQL migration'ları ve ACU aralığı seçimi; değişiklik akışını bildirim Lambda'sına taşıyan bileşen ayrıca kurulur ve işletilir."),
                 sc(6, "Serverless v2 ACU saat başına ödenir. 4 puan kırıldı: dalgalara göre seçilen minimum ACU boşta da ödenir ve iki yıllık mesaj storage'ı büyür.")],
@@ -2554,7 +2554,7 @@ KEYSPACES_W.append(wusecase("audit", 4,
                 sc(10, "Kayıt tek bir row'dur ve iki index aynı transaction'da güncellenir; iki liste hiç ayrılmaz. Puan kırılmadı."),
                 sc(10, "GRANT INSERT, SELECT ve REVOKE UPDATE, DELETE: yazan rol bile kaydı değiştiremez; bir trigger da değişikliği reddedebilir. Puan kırılmadı."),
                 sc(9, "INSERT okumadan ekler. 1 puan kırıldı: her kayıt heap'e ve iki index'e yazılır."),
-                sc(4, "Saniyede 3.000 ekleme tek writer için olağandır ve bir yıllık çevrim içi hacim 128 TiB'lık storage sınırının altındadır. 6 puan kırıldı: 95 milyar row'luk tek bir table ve iki index onlarca TB'tır; bütün yazmalar tek writer'dadır ve bu büyüklükteki B-tree index'lere ekleme, row sayısı büyüdükçe yavaşlar."),
+                sc(4, "Saniyede 3.000 ekleme kendi writer'ı için olağandır (Aurora sayfasının tek writer tablosu: 5.000'e kadar, kendi writer'ında 0) ve bir yıllık çevrim içi hacim 128 TiB'lık storage sınırının altındadır. 6 puan kırıldı: 95 milyar row'luk tek bir table ve iki index onlarca TB'tır; bu büyüklükteki B-tree index'lere ekleme row sayısı büyüdükçe yavaşlar ve table partition'lara bölünmeden taşınamaz."),
                 sc(10, "Altı kopya, üç AZ; point-in-time restore. Puan kırılmadı."),
                 sc(5, "Yönetilen cluster. 5 puan kırıldı: yüz milyarlarca row için partition bakımı, VACUUM ve ANALYZE izlenir; ekip CQL bilir, SQL tarafını bilmez."),
                 sc(6, "Instance, storage ve I/O ödenir. 4 puan kırıldı: düz trafikte bile instance'lar gece de çalışır ve Aurora Standard'da her eklemenin I/O'su ayrıca ödenir.")],
@@ -3124,13 +3124,13 @@ ELASTICACHE_W.append(wusecase("board", 2, sim="w_board",
             "2 milyon member birkaç yüz MB tutar. Okuma hacmi yüksek, yazma hacmi düşük; trafik kampanya akşamlarında sıçrar.",
             "Küçük veride GB fiyatı az etkilidir; boş saatlerde sürekli çalışan kapasite ve okuma başına fiyat faturayı belirler."),
     ],
-    cands=["mdb", "ec", "ddb"],
+    cands=["ec", "mdb", "ddb"],
     scores={
         "ec": [sc(10, "ZREVRANGE lm:leaderboard 0 9 WITHSCORES ilk 10'u, ZREVRANK bir müşterinin sırasını tek komutla verir (Ö2). Puan kırılmadı."),
                sc(10, "ZINCRBY skoru okumadan ve atomik artırır, member'ı hemen yeni yerine taşır; komutlar sırayla çalıştığı için iki sipariş de sayılır (Ö3). Puan kırılmadı."),
                sc(10, "Sorted set sırayı her yazmada O(log N) ile korur ve bellektedir; okuma anında sıralama yoktur, cevap mikrosaniyelerdedir (Ö1, Ö2). Puan kırılmadı."),
                sc(10, "Serverless saniyede 3.000 okumayı ve 400 eklemeyi kendisi taşır (Ö6). Puan kırılmadı."),
-               sc(4, "Replica'lar bir node arızasında tabloyu ayakta tutar (Ö7), ama kalıcı log yoktur. 6 puan kırıldı: bir arıza son eklemeleri ya da bütün tabloyu götürebilir; Seed onu 4 dakikada yeniden kurar ve bu sürede tablo eksik görünür. Bu kartta kabul edilen bir sonuçtur."),
+               sc(9, "Replica'lar bir node arızasında tabloyu ayakta tutar (Ö7) ve kalıcı log yoktur, ama tablo bir kopyadır: her skor Aurora'daki siparişlerde vardır ve Seed tabloyu 4 dakikada yeniden kurar; kart bu 4 dakikayı kabul eder. 1 puan kırıldı: bir arızadan sonra tablo yeniden kurulana kadar eksik görünür (yeniden kurma dakikalar sürerse 1, bir saat ve üstü 2 puan)."),
                sc(10, "Serverless; ZINCRBY checkout kodunda tek satırdır ve yeniden kurma işi zaten vardır. Puan kırılmadı."),
                sc(9, "GB-saat ve ECPU başına ödenir: birkaç yüz MB yaklaşık 22 dolar, saniyede 3.000 okuma ve eklemenin yaklaşık 6.000 ECPU'su ayda yaklaşık 43 dolar; toplam yaklaşık 65 dolar. 1 puan kırıldı: sorted set komutları basit bir GET'ten daha fazla ECPU harcar ve kampanya akşamı fatura büyür.")],
         "mdb": [sc(10, "Aynı Valkey engine'i: ZREVRANGE ve ZREVRANK. Puan kırılmadı."),
@@ -3149,18 +3149,18 @@ ELASTICACHE_W.append(wusecase("board", 2, sim="w_board",
                 sc(8, "İstek başına ödenir. 2 puan kırıldı: her ekleme table'a ve index'e iki yazma birimidir (sıra sorgusunun okumaları R1.1'de sayıldı).")],
     },
     h2h={
-        "ec": "Bellek içi key-value (ElastiCache) ile kafa kafaya. İkiz servisler: aynı Valkey engine'i, aynı sorted set ve aynı komutlar; R1'de ikisi de 45'te 45 alır. "
-              "Fark servis tasarımındadır ve bu kartta iki yöne çeker. MemoryDB'nin log'u R3'te açık bir artıdır: bir arıza tabloyu boşaltmaz ve kampanya akşamı 4 dakikalık boş bir vitrin görünmez. "
-              "ElastiCache Serverless'ın sunucusuz işletimi R4'te bu farkın bir kısmını geri alır. R5'te ise iki servis bu küçük veride birbirine yakındır: ayda yaklaşık 65 dolara karşı iki küçük node ile yaklaşık 55 dolar; MemoryDB'nin bedeli kampanya için daha büyük node seçildiğinde büyür. Fark tek puandır: bu sayfanın en yakın yarışı ve ElastiCache'in ikizine kaybettiği tek kart. "
-              "Hangi koşul değişseydi ElastiCache seçilirdi: tablo saniyeler içinde yeniden kurulabilseydi (R3'ün ağırlığı düşerdi), ekip hiçbir node işletmek istemeseydi ya da kampanya akşamları node'ları büyük boyda tutmayı gerektirseydi.",
+        "mdb": "Kalıcı bellek içi key-value (MemoryDB) ile kafa kafaya. İkiz servisler: aynı Valkey engine'i, aynı sorted set ve aynı komutlar; R1'de ikisi de 45'te 45 alır, bu yüzden kararı yalnız servis tasarımı verir. "
+               "MemoryDB'nin log'u R3'te bir artıdır: bir arıza tabloyu boşaltmaz. Ama tablo bir kopyadır: her skor Aurora'daki siparişlerde vardır ve Seed tabloyu 4 dakikada yeniden kurar; kopya kuralıyla bu artı yalnız 1,5 puandır (10'a 9). "
+               "Geri kalan satırlar ElastiCache'e döner: her ZINCRBY'nin log'a işlenmesi R2'de 2 puan, serverless seçeneğin olmaması ve node tipi ile replica sayısının ekibe kalması R4'te 4 puan, kampanya akşamı için güvenli node boyu R5'te 2 puan farkla ElastiCache'i öne geçirir; fark 6,5 puandır. "
+               "Hangi koşul değişseydi MemoryDB seçilirdi: tablo siparişlerden yeniden hesaplanamasaydı, yani skorlar başka hiçbir yerde olmasaydı ve ay sonu hediyesi doğrudan tablodan verilseydi, ya da yeniden kurma saatler sürseydi; o zaman tablo bir kopya değil tek yer olurdu, ElastiCache R3'te 4 alırdı ve MemoryDB 91'e 90 kazanırdı.",
         "ddb": "Key-value (DynamoDB) ile kafa kafaya. Bu kart Valkey engine'inin özelliklerinin iş yükünün kendisi olduğu karttır: R1'de iki Valkey servisi DynamoDB'nin 18,5 puan önündedir. "
                "DynamoDB ilk 10'u bir ikinci index ile verebilir, ama \"kaçıncı sıradayım\" sorusunu soramaz: sıra bir sayımdır ve 2 milyon müşteride her sorgu binlerce okumadır. Sorted set ise sırayı yazma anında tutar ve ZREVRANK onu tek adımda verir. "
-               "DynamoDB'nin dayanıklılığı bu kartta gerçek bir artıdır (R3), ama bütün müşterilerin tek bir index partition key'inde durması kampanya akşamı key'i bölmeyi ve ilk 10'ları birleştirmeyi ister. "
+               "DynamoDB'nin dayanıklılığı bu kartta küçük bir artıdır, çünkü tablo bir kopyadır (R3'te 10'a 9), ama bütün müşterilerin tek bir index partition key'inde durması kampanya akşamı key'i bölmeyi ve ilk 10'ları birleştirmeyi ister. "
                "Hangi koşul değişseydi DynamoDB seçilirdi: kimse kendi sırasını sormasaydı (yalnız ilk 10 gösterilseydi), sıra saatte bir hesaplansaydı ve skorlar başka hiçbir yerde olmayan kalıcı bir kayıt olsaydı.",
     },
-    verdict="Karar: MemoryDB {mdb}, ElastiCache {ec}, DynamoDB {ddb}. Bu iş yüküne en uygun servis MemoryDB'dir, ama fark tek puandır: yakın bir yarış. Engine uyumunda iki Valkey servisi eşittir ve DynamoDB'nin çok önündedir; MemoryDB'yi öne geçiren tabloyu arızada da koruyan log ve bu küçük veride ElastiCache'e yakın faturasıdır, ElastiCache'i yaklaştıran sunucusuz işletimdir. "
-            "Yine de ElastiCache seçersek artımız: ilk 10 ve kişisel sıra tek komut, eklemede yarış yok, node yok; Lale Market bugün bunu yapar. "
-            "Eksimiz: bir arızada tablo eksik ya da boş görünebilir; uygulama Seed'i bir arıza adımı olarak yazmalı, ay sonu hediyesini tablodan değil Aurora'daki siparişlerden hesaplamalı ve her ay için yeni bir key (lm:leaderboard:2026-10) açıp eski aya süre vermelidir. Bir koşul değişseydi: tablo saniyeler içinde yeniden kurulabilseydi ElastiCache kazanırdı."))
+    verdict="Karar: ElastiCache {ec}, MemoryDB {mdb}, DynamoDB {ddb}. Bu iş yüküne en uygun servis ElastiCache'tir. Engine uyumunda iki Valkey servisi eşittir ve DynamoDB'nin çok önündedir; kararı servis tasarımı verir: tablo 4 dakikada yeniden kurulan bir kopyadır, bu yüzden MemoryDB'nin log'u R3'te yalnız 1,5 puan getirir, ElastiCache'in sunucusuz işletimi ve faturası ise R2, R4 ve R5'te 8 puan getirir. "
+            "ElastiCache seçtiğimizde artımız: ilk 10 ve kişisel sıra tek komut, eklemede yarış yok, node yok; Lale Market bugün bunu yapar. "
+            "Eksimiz: bir arızada tablo eksik ya da boş görünebilir; uygulama Seed'i bir arıza adımı olarak yazmalı, ay sonu hediyesini tablodan değil Aurora'daki siparişlerden hesaplamalı ve her ay için yeni bir key (lm:leaderboard:2026-10) açıp eski aya süre vermelidir. Bir koşul değişseydi: tablo siparişlerden yeniden kurulamasaydı ve tek yer bellek olsaydı MemoryDB kazanırdı."))
 
 # ------------------------------------------------------------------ 3. rate limits (the DynamoDB card "rate": same rows, weights, points)
 ELASTICACHE_W.append(wusecase("rate", 3,
@@ -3638,7 +3638,7 @@ ELASTICACHE_W.append(wusecase("reco", 9,
                sc(9, "Pipeline (komutları cevap beklemeden art arda göndermek) ile toplu SET saniyede 11.000 yazmayı kolayca taşır. 1 puan kırıldı: gece işi her listeye süre (EX, Ö4) koymalı ya da eski listeleri üzerine yazmalıdır."),
                sc(10, "2 KB'lık liste tek bir string value'dur (Ö2). Puan kırılmadı."),
                sc(9, "Serverless saniyede 100.000 okumayı taşır (Ö6). 1 puan kırıldı: gece yazma sıçraması için minimum ECPU ayarı önerilir."),
-               sc(4, "Kalıcı bir yazma log'u yoktur. 6 puan kırıldı: bir arızada listeler yeniden yüklenmelidir; bu kartta kabul edilen bir sonuçtur."),
+               sc(9, "Kalıcı bir yazma log'u yoktur, ama listeler bir kopyadır: gece işi onları 30 dakikada yeniden yazar ve kart kaybı ertesi güne kadar kabul eder. 1 puan kırıldı: bir arızadan sonra listeler yeniden yüklenene kadar genel liste gösterilir (yeniden yükleme dakikalar sürerse 1, bir saat ve üstü 2 puan)."),
                sc(9, "Serverless. 1 puan kırıldı: yeniden yükleme işi bir arıza planına yazılmalıdır."),
                sc(6, "ECPU ve GB-saat başına ödenir. 4 puan kırıldı: 40 GB verinin bellekteki saklama fiyatı diskten çok yüksektir ve faturanın büyük kısmıdır (B9).")],
         "mdb": [sc(10, "Aynı Valkey engine'i: GET ile doğrudan okuma. Puan kırılmadı."),
@@ -3719,7 +3719,7 @@ ELASTICACHE_W.append(wusecase("geo", 10, sim="w_geo",
                 sc(10, "WHERE last_seen > now() - interval '30 seconds' aynı sorgudadır; eskiyen konum doğruluk için bir temizlik işi istemez. Puan kırılmadı."),
                 sc(6, "UPDATE couriers SET pos = … her 5 saniyede bir yapılır. 4 puan kırıldı: PostgreSQL her UPDATE'te row'un yeni bir sürümünü yazar (MVCC) ve GiST index'ini günceller; saniyede 800 güncelleme sürekli bir VACUUM yükü üretir."),
                 sc(8, "GiST index'i buffer cache'te durur ve arama birkaç milisaniyedir. 2 puan kırıldı: 20 ms sınırının içindedir, ama arama bellekten değil bir index sayfa zincirinden gelir."),
-                sc(5, "Okumalar reader'lara gönderilebilir. 5 puan kırıldı: saniyede 800 güncelleme checkout'u yapan tek writer'dan geçer ve kampanya akşamı checkout tepesiyle aynı anda gelir; tepe anında konum yazmaları ile siparişler aynı writer'ı bekler."),
+                sc(7, "Okumalar reader'lara gönderilebilir. 3 puan kırıldı: saniyede 800 güncelleme checkout'u yapan tek writer'dan geçer ve kampanya akşamı checkout tepesiyle aynı anda gelir; tepe anında konum yazmaları ile siparişler aynı writer'ı bekler (Aurora sayfasının tek writer tablosu: 500–5.000, checkout ile aynı tepede 3 puan)."),
                 sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
                 sc(8, "Aurora ve PostGIS zaten çalışır ve ekip bölgeleri orada sorgular. 2 puan kırıldı: kampanya için bir reader eklemek ve aramaları reader endpoint'ine yönlendirmek ekibin işidir; VACUUM yükü R1.3'te sayıldı."),
                 sc(6, "Var olan cluster'a eklenir. 4 puan kırıldı: kampanya akşamı için bir reader ve daha yüksek bir minimum ACU ödenir.")],
@@ -3745,7 +3745,7 @@ ELASTICACHE_W.append(wusecase("geo", 10, sim="w_geo",
     },
     verdict="Karar: ElastiCache {ec}, Aurora {aur}, OpenSearch {os}. Bu iş yüküne en uygun servis ElastiCache'tir, ama engine uyumunda Aurora öndedir: PostGIS bütün kuralı tek sorguda uygular. ElastiCache'i öne geçiren R2'dir: sürekli yazmalar ve kampanya aramaları checkout'un writer'ından uzak kalır. "
             "ElastiCache seçtiğimizde artımız: tek komutla en yakın beş, yerinde üzerine yazma, milisaniyenin altında arama ve Aurora'ya sıfır yük. "
-            "Eksimiz: 30 saniyelik kural ikinci bir sorted set ve periyodik bir silme işiyle uygulanır, \"boş\" kuryeler uygulamada elenir; bölge ve fiyat soruları için Aurora'ya gidilir, yani mimari ikisi birliktedir. Bir koşul değişseydi: konumlar on kat seyrek gelseydi ve kampanya aramaları checkout tepesiyle çakışmasaydı (iki koşul birlikte; yalnız biri farkı kapatmaz) Aurora tek başına yeterdi."))
+            "Eksimiz: 30 saniyelik kural ikinci bir sorted set ve periyodik bir silme işiyle uygulanır, \"boş\" kuryeler uygulamada elenir; bölge ve fiyat soruları için Aurora'ya gidilir, yani mimari ikisi birliktedir. Bir koşul değişseydi: kampanya aramaları checkout tepesiyle çakışmasaydı Aurora'nın R2'si tek writer tablosunun ilk sütununa geçer ve iki aday 87'de eşitlenirdi; konumlar da on kat seyrek gelseydi Aurora tek başına yeterdi."))
 
 USECASES_W["elasticache"] = ELASTICACHE_W
 PAGE_SVC["elasticache"] = "ec"
@@ -3919,7 +3919,7 @@ NEPTUNE_W.append(wusecase("fraud", 2, sim="w_fraud",
                 sc(4, "Her seviye bir index araması ve birleştirmedir. 6 puan kırıldı: bir alışveriş merkezi adresinde ara sonuç on binlerce row'a çıkar; 50 ms bütçesi her ödemede tutmaz."),
                 sc(9, "INSERT edge row'ları ve INSERT … ON CONFLICT DO NOTHING ile cihaz. 1 puan kırıldı: her edge yönü için index güncellemesi ve MVCC row sürümleri yazmayı büyütür."),
                 sc(10, "Transaction'lar ve snapshot okumalar; commit edilmiş edge görünür. Puan kırılmadı."),
-                sc(7, "Okumalar reader'lara gider. 3 puan kırıldı: saniyede 2.400 recursive sorgu reader'ları yorar ve yazmalar checkout'u yapan tek writer'dan geçer."),
+                sc(2, "Okumalar reader'lara gider. 8 puan kırıldı: saniyede 2.400 recursive sorgu reader'ları yorar (3 puan) ve kampanya akşamı saniyede 7.200 edge yazması checkout'u yapan tek writer'dan checkout tepesiyle aynı anda geçer (Aurora sayfasının tek writer tablosu: 5.000–20.000, checkout ile aynı tepede 5 puan)."),
                 sc(10, "Üç AZ'de altı kopya ve sürekli yedek. Puan kırılmadı."),
                 sc(9, "Ekip SQL biliyor ve Aurora zaten çalışıyor. 1 puan kırıldı: kampanya akşamı için reader sayısı ve ACU aralığı ayarlanır; sorgunun yazılışı R1.1'de sayıldı."),
                 sc(8, "Var olan cluster'a eklenir. 2 puan kırıldı: akşam için reader'lar ve ACU saat başına ödenir.")],
@@ -3931,7 +3931,7 @@ NEPTUNE_W.append(wusecase("fraud", 2, sim="w_fraud",
                "Hangi koşul değişseydi Neptune Analytics seçilirdi: soru her ödemede değil gece bir kez sorulsaydı, yani bütün graph üzerinde halkaları (community detection) bulup işaretlemek isteseydik; doğru mimari çoğunlukla ikisi birliktedir.",
         "aur": "İlişkisel (Aurora) ile kafa kafaya. Aurora'da edge'ler bir table'dır ve WITH RECURSIVE üç seviyeye kadar arayabilir; transaction ve dayanıklılık güçlüdür ve ekip SQL bilir. "
                "Ama engine bu soruyu bir arama olarak çalıştırır: her seviye bir index araması ve birleştirmedir ve bir alışveriş merkezi adresinde ara sonuç on binlerce row'a çıkar (R1.2). "
-               "Recursive sorgu, döngü kontrolü ve yol dizisi elle yazılır (R1.1) ve saniyede 2.400 kontrol reader'ları yorar (R2). "
+               "Recursive sorgu, döngü kontrolü ve yol dizisi elle yazılır (R1.1) ve saniyede 2.400 kontrol reader'ları yorar; kampanya akşamının saniyede 7.200 edge yazması da checkout'un writer'ına gelir (R2'de 10 puanın 2'si). "
                "Hangi koşul değişseydi Aurora seçilirdi: kontrol yalnız tek hop olsaydı (\"bu kart işaretli bir hesapla aynı cihazı kullandı mı?\") ya da saniyede birkaç kontrol yapılsaydı ve bütçe 50 ms değil birkaç saniye olsaydı.",
     },
     verdict="Karar: Neptune {np}, Neptune Analytics {npa}, Aurora {aur}. Bu iş yüküne en uygun servis Neptune'dür. Engine uyumunda Neptune ile Neptune Analytics eşittir; kararı servis tasarımı verir: okuma ölçekleyen replica'lar, altı kopyalı volume ve sürekli trafiğe uyan fiyat. "
@@ -4766,7 +4766,7 @@ OPENSEARCH_W.append(wusecase("suggest", 3,
                sc(10, "Sorted set bellektedir; önek aralığı okuması milisaniyenin altındadır ve süre listenin büyüklüğünden neredeyse bağımsızdır. Puan kırılmadı."),
                sc(6, "Popülerlik ikinci bir sorted set'in score'udur. 4 puan kırıldı: önek araması score'ları eşit tutmayı ister; popülerliğe göre sıralamak için önek başına ayrı listeler önceden hesaplanır ya da sonuçlar uygulamada yeniden sıralanır."),
                sc(10, "ElastiCache Serverless saniyede 6.000 küçük komutu kendisi karşılar. Puan kırılmadı."),
-               sc(8, "Bellekteki liste yalnız bir kopyadır. 2 puan kırıldı: bir arızadan sonra liste yeniden yüklenene kadar öneri yoktur."),
+               sc(9, "Bellekteki liste yalnız bir kopyadır ve birkaç dakikada yeniden yüklenir. 1 puan kırıldı: bir arızadan sonra liste yeniden yüklenene kadar öneri yoktur (yeniden yükleme dakikalar sürerse 1, bir saat ve üstü 2 puan)."),
                sc(9, "Cache oturumlar için zaten çalışır; ekip Valkey komutlarını bilir. 1 puan kırıldı: öneri key'leri oturumlarla aynı cache'in belleğini ve ECPU'sunu paylaşır ve ikisi birlikte izlenir."),
                sc(9, "ECPU ve GB-saat başına ödenir; bir ZRANGEBYLEX küçük bir istektir. 1 puan kırıldı: her tuş vuruşu ayrı bir istektir ve fatura öneri trafiğiyle doğrusal büyür.")],
         "aur": [sc(6, "LIKE 'kabl%' bir B-tree index'iyle (text_pattern_ops) önek arar; pg_trgm yazım hatasını, unaccent Türkçe harfleri ele alır. 4 puan kırıldı: önek ve yazım hatası iki ayrı operatördür ve ikinci kelimedeki önek ayrı bir kelime tablosu ister."),
@@ -4844,7 +4844,7 @@ OPENSEARCH_W.append(wusecase("stores", 4,
                sc(5, "Konum index'i noktaları tutar. 5 puan kırıldı: çokgen tipi yoktur; \"bu adres hangi bölgede\" testi uygulama kodudur."),
                sc(10, "Konum index'i bellekteki bir sorted set'tir; arama milisaniyenin altındadır. Puan kırılmadı."),
                sc(10, "Serverless saniyede 400 aramayı ayarsız karşılar. Puan kırılmadı."),
-               sc(8, "Bellekteki liste bir kopyadır. 2 puan kırıldı: bir arızadan sonra noktalar yeniden yüklenene kadar bulucu boştur."),
+               sc(9, "Bellekteki liste bir kopyadır ve 2.000 nokta Aurora'dan dakikalar içinde yeniden yüklenir. 1 puan kırıldı: bir arızadan sonra noktalar yeniden yüklenene kadar bulucu boştur (yeniden yükleme dakikalar sürerse 1, bir saat ve üstü 2 puan)."),
                sc(7, "Cache çalışır ve ekip Valkey bilir. 3 puan kırıldı: noktaları ve hizmetlerini Aurora'dan cache'e taşıyan iş yazılır ve günlük değişiklikleri o iş günceller."),
                sc(9, "ECPU ve GB-saat başına ödenir; veri çok küçüktür. 1 puan kırıldı: GEOSEARCH ve set kesişimleri basit bir GET'ten fazla ECPU harcar.")],
     },
@@ -5061,7 +5061,7 @@ OPENSEARCH_W.append(wusecase("metrics", 7, sim="w_metrics",
                sc(8, "Instance-saat ve depolama ödenir; seri sayısı faturayı doğrudan büyütmez. 2 puan kırıldı: Multi-AZ db.influx.medium ayda yaklaşık 210 dolar gece de çalışır (Frankfurt).")],
         "cw": [sc(9, "Bir metric namespace, ad ve dimension'larla tanımlanır ve zamanlı sayılar tutar. 1 puan kırıldı: her dimension birleşimi ayrı bir metric'tir; host × endpoint birleşimleri metric sayısını katlar."),
                sc(9, "İstatistikler (Average, Maximum, p95) her periyot için hesaplanır ve math expression'lar serileri birleştirir. 1 puan kırıldı: 10 saniyelik çözünürlük için high-resolution metric yayınlanır."),
-               sc(8, "Özetleme ve silme kendiliğindendir: dakikalık veri 15 gün, 5 dakikalık 63 gün, saatlik 455 gün tutulur. 2 puan kırıldı: AWS'e göre 60 saniyeden kısa periyotlu veri 3 saat tutulur; 6 saatlik 10 saniyelik pano karşılanmaz ve dakikalık veri 30 değil 15 gündür."),
+               sc(3, "Özetleme ve silme kendiliğindendir: dakikalık veri 15 gün, 5 dakikalık 63 gün, saatlik 455 gün tutulur. 7 puan kırıldı: AWS'e göre 60 saniyeden kısa periyotlu veri 3 saat tutulur; isteğin üç parçasından ikisi karşılanmaz (10 saniyelik veri 6 değil 3 saat, dakikalık veri 30 değil 15 gün), bu yüzden ölçeğin 0–3 bandındadır; yalnız 13 aylık saatlik özet karşılanır."),
                sc(10, "Yazma ve okuma kapasitesi servisindir. Puan kırılmadı."),
                sc(10, "Metrikler servis tarafından kalıcı saklanır. Puan kırılmadı."),
                sc(9, "Sunucu yoktur; EC2 ve load balancer metrikleri zaten oradadır ve alarm aynı servistedir. 1 puan kırıldı: uygulama metrikleri PutMetricData ya da gömülü metric formatı ile koddan yayınlanır."),
@@ -5075,18 +5075,18 @@ OPENSEARCH_W.append(wusecase("metrics", 7, sim="w_metrics",
                sc(5, "Node-saat ödenir. 5 puan kırıldı: birkaç GB'lık bir veri için üç data node'luk bir domain ayda yaklaşık 440 dolar gece de çalışır (Frankfurt, r6g.large.search; küçük bir domain'de ayrı master node yoktur, disk hariç).")],
     },
     h2h={
-        "cw": "İzleme servisi (CloudWatch) ile kafa kafaya. Bu yakın bir yarıştır. CloudWatch'un artısı sıfır işletmedir: EC2 ve load balancer metrikleri zaten oradadır, özetleme ve silme kendiliğindendir, alarm aynı servistedir ve kapasite servisindir; R2, R3 ve R4'te öndedir. "
-              "Timestream for InfluxDB'yi öne geçiren R1'in üç alt maddesi (her birinde bir puan, toplam 4,2) ve R5'tir; CloudWatch R2, R3 ve R4'te 8,4 puan geri alır. En büyük fark R5'tedir (5,4 puan); R1'in üç alt maddesinin her biri 1,4 puan getirir. R1 · YD'de CloudWatch'un saklama kuralı sabittir; AWS'e göre 60 saniyeden kısa periyotlu veri 3 saat, dakikalık veri 15 gün tutulur, yani 6 saatlik 10 saniyelik pano ve 30 günlük dakikalık pano karşılanmaz. R5: CloudWatch seri başına öder; 2.400 seri ayda yaklaşık 720 dolardır ve seri sayısıyla büyür, InfluxDB instance'ı ise yaklaşık 210 dolardır. "
-              "Hangi koşul değişseydi CloudWatch seçilirdi: seri sayısı birkaç yüz olsaydı, 10 saniyelik çözünürlük 3 saat yetseydi ya da ekip ikinci bir sistem istemeseydi.",
+        "cw": "İzleme servisi (CloudWatch) ile kafa kafaya. Fark 8,2 puandır; yakın bir yarış değildir. CloudWatch'un artısı sıfır işletmedir: EC2 ve load balancer metrikleri zaten oradadır, özetleme ve silme kendiliğindendir, alarm aynı servistedir ve kapasite servisindir; R2, R3 ve R4'te öndedir ve orada 8,4 puan geri alır. "
+              "Timestream for InfluxDB'yi öne geçiren R1 (11,2 puan) ve R5'tir (5,4 puan). En büyük fark R1 · YD'dedir (8,4 puan): CloudWatch'un saklama kuralı sabittir; AWS'e göre 60 saniyeden kısa periyotlu veri 3 saat, dakikalık veri 15 gün tutulur, yani 6 saatlik 10 saniyelik pano ve 30 günlük dakikalık pano karşılanmaz; isteğin üç parçasından ikisi eksik kaldığı için puan 0–3 bandındadır. R1'in diğer iki alt maddesi 1,4'er puan getirir. R5: CloudWatch seri başına öder; 2.400 seri ayda yaklaşık 720 dolardır ve seri sayısıyla büyür, InfluxDB instance'ı ise yaklaşık 210 dolardır. "
+              "Hangi koşul değişseydi CloudWatch seçilirdi: 10 saniyelik veri 3 saat ve dakikalık veri 15 gün yetseydi; R1 · YD tam karşılanır ve CloudWatch 86,4'e 84,8 öne geçerdi. Seri sayısının birkaç yüz olması tek başına farkı kapatmaz.",
         "os": "Search engine (OpenSearch) ile kafa kafaya. Bu kartta OpenSearch net kaybeder ve kaybın büyük kısmı R1'dedir: engine bir metin ve document engine'idir, zaman serisi engine'i değildir. Her nokta etiket adlarıyla ayrı bir document olur, seri kavramı yoktur, özetler ayrı rollup işleri ve ayrı index'lerdir. R1'in 42 puanının 29,4'ünü alır; Timestream for InfluxDB 40,6'sını. "
               "Servis tasarımında da geridedir: birkaç GB'lık metrik için üç node'luk bir domain ve rollup işleri işletilir. "
               "OpenSearch'ün güçlü olduğu yer metriklerin yanında metin olduğu yerdir: log satırları ve izler (kart 5). "
               "Hangi koşul değişseydi OpenSearch seçilirdi: metrikler logların içinden çıkarılsaydı (her log satırının gecikmesi gibi) ve aynı panoda log araması da istenseydi; o zaman ayrı bir metrik sistemi yerine aynı domain kullanılır.",
     },
-    verdict="Karar: Timestream for InfluxDB {ix}, CloudWatch {cw}, OpenSearch {os}. Bu iş yüküne en uygun servis zaman serisi engine'idir: seri modeli, pencere sorguları ve saklama kuralı engine'in kendisidir. CloudWatch yakın ikincidir ve işletmede öndedir. "
+    verdict="Karar: Timestream for InfluxDB {ix}, CloudWatch {cw}, OpenSearch {os}. Bu iş yüküne en uygun servis zaman serisi engine'idir: seri modeli, pencere sorguları ve saklama kuralı engine'in kendisidir. CloudWatch ikincidir ve işletmede öndedir, ama sabit saklama kuralı isteğin iki parçasını karşılamaz. "
             "Yine de OpenSearch seçersek artımız: loglar ve metrikler aynı domain'de ve aynı Dashboards'ta olur. "
             "Eksimiz: her nokta bir document olur ve depo bir seri modeline göre büyür; dakikalık ve saatlik özetleri rollup işleriyle üretiriz ve panoları doğru index'e yönlendiririz; birkaç GB için bir domain işletir ve öderiz. Bu kart OpenSearch'ün net kaybettiği karttır. "
-            "Bir koşul değişseydi: seri sayısı birkaç yüz olsaydı ve 10 saniyelik çözünürlük 3 saat yetseydi CloudWatch kazanırdı."))
+            "Bir koşul değişseydi: 10 saniyelik veri 3 saat ve dakikalık veri 15 gün yetseydi CloudWatch kazanırdı."))
 
 # ------------------------------------------------------------------ 8. knowledge base search with vectors (Aurora wins; OpenSearch wins R1 but is third)
 OPENSEARCH_W.append(wusecase("kb", 8, sim="w_kb",
@@ -5714,7 +5714,7 @@ REDSHIFT_W.append(wusecase("mlfeatures", 6,
                 sc(3, "Index dar aralıkları hızlandırır. 7 puan kırıldı: PostgreSQL row'ları tam saklar; üç yılı tarayan sorgu her row'un tamamını okur."),
                 sc(8, "INSERT INTO ... SELECT tek bir cümledir. 2 puan kırıldı: her gece 2 milyon row'un yeniden yazılması eski row sürümleri bırakır ve VACUUM işi artar."),
                 sc(6, "Materialized view ve partition kullanılabilir. 4 puan kırıldı: kolon bazlı sıkıştırma yoktur ve materialized view'lar elle yenilenir."),
-                sc(4, "Taramalar bir reader'da çalışabilir. 6 puan kırıldı: feature table'ının yazılması writer'da olur; tek writer gece işini ve checkout'u birlikte taşır, büyük okuma da storage'ı checkout ile paylaşır."),
+                sc(5, "Taramalar bir reader'da çalışabilir; 2 milyon row'luk feature table'ı gece writer'a yazılır, ama bu checkout tepesinin dışındadır (Aurora sayfasının tek writer tablosu: 0). 5 puan kırıldı: reader'lar checkout ile aynı storage'ı okur ve üç yılı tarayan gece işi storage I/O'sunu checkout ile paylaşır; tarama süresinin kendisi R1 · DA'da sayıldı."),
                 sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
                 sc(6, "Aurora'nın SageMaker entegrasyonu SQL'den tahmin çağırır. 4 puan kırıldı: satış geçmişini Redshift'ten Aurora'ya getirmek, partition ve materialized view bakımı ekibin işidir."),
                 sc(4, "Instance saat başına ödenir. 6 puan kırıldı: gece işini iki saatte bitirecek büyük bir instance 7/24 çalışır.")],
@@ -5724,7 +5724,7 @@ REDSHIFT_W.append(wusecase("mlfeatures", 6,
                "Bu kartta satış ve tıklamalar Redshift'tedir. Athena için önce düzenli bir S3 aktarımı gerekir (R4), dosyalar müşteriye göre bir arada durmaz (R1.2) ve tekrar eden aylık toplamlar için materialized view yoktur (R1.4). "
                "Redshift aynı işi verinin durduğu yerde, kolon bloklarından ve paralel bir CREATE TABLE AS ile yapar; sonucu UNLOAD ile S3'e bırakır. "
                "Kaynak veri S3'te olsaydı ve iş haftada bir çalışsaydı fark kabaca 3 puana inerdi. Hangi koşul değişseydi Athena seçilirdi: kaynak veri S3'te bir veri gölünde dursaydı, feature işi haftada bir çalışsaydı ve ekipte hiç warehouse olmasaydı; o zaman Redshift için yeni bir sistem kurmak R4'ü düşürürdü.",
-        "aur": "İlişkisel (Aurora PostgreSQL) ile kafa kafaya. Aurora SQL'i aynı biçimde yazar ve SageMaker'dan SQL içinde tahmin çağırabilir. Ama feature işi her gece üç yılı tarar: PostgreSQL row'ları tam okur (R1.2) ve 2 milyon row'luk sonucu tek writer'a yazar; checkout aynı writer'dadır (R2). "
+        "aur": "İlişkisel (Aurora PostgreSQL) ile kafa kafaya. Aurora SQL'i aynı biçimde yazar ve SageMaker'dan SQL içinde tahmin çağırabilir. Ama feature işi her gece üç yılı tarar: PostgreSQL row'ları tam okur (R1.2) ve gece taraması storage I/O'sunu checkout ile paylaşır (R2); 2 milyon row'luk sonucun writer'a yazılması ise checkout tepesinin dışında olduğu için tek writer tablosunda puan kırdırmaz. "
                "Büyük bir instance'ı iki saatlik bir gece işi için 7/24 ödemek de R5'te kaybettirir. Aurora'nın dürüst yeri burada skorların kendisidir: sabah CRM'in okuyacağı 2 milyon skor küçük bir table'dır ve Aurora'ya ya da DynamoDB'ye yazılabilir. "
                "Hangi koşul değişseydi Aurora seçilirdi: feature'lar son 90 günden hesaplansaydı, müşteri sayısı 50.000 olsaydı ve ayrı bir analiz servisi istenmeseydi.",
     },
@@ -6117,7 +6117,7 @@ INFLUXDB_W.append(wusecase("warehouse", 1, sim="w_warehouse",
             "Kural uygulama koduna gömülürse her yeni kural bir deploy'dur; kural yanlış çalışırsa ıslanan kitaplar satılamaz."),
     ] + [
         row("R2", 12, "Saniyede 100 okuma küçüktür ama franchise planıyla on kat büyüyebilir.",
-            "Saniyede 100 okuma yazma, düz; Operations sayfası ve Grafana'da 15 kullanıcı. Plan 3 yılda 400 mağazaya çıkmak.",
+            "Saniyede 100 okuma yazma, düz; Operations sayfası ve Grafana'da 15 kullanıcı. Plan 3 yılda 400 mağazaya çıkmak, yani saniyede 1.000 okuma yazma.",
             "Yazma geride kalırsa grafik son dakikayı göstermez ve nem alarmı geç çalışır."),
         row("R3", 10, "Gateway bir saatlik tampon tuttuğu için kısa bir kesinti veri kaybettirmez.",
             "Bir AZ arızasında okumalar kaybolmamalı; gateway bir saat tampon tuttuğu için birkaç dakikalık yazma kesintisi kabul edilir.",
@@ -6154,7 +6154,7 @@ INFLUXDB_W.append(wusecase("warehouse", 1, sim="w_warehouse",
                 sc(5, "(site, sensor, ts) üzerinde B-tree index bir aralığı bulur. 5 puan kırıldı: PostgreSQL row'ları sıkıştırmaz ve zamana göre bitişik tutmaz; 260 milyon row ve index'i diskte birkaç kat yer tutar. Aurora sayfası bütün geçmişi tarayan sorgulara 6–7 puan kırar; burada pencere index ile bulunur ve kayıp sadece storage boyutundadır."),
                 sc(4, "PostgreSQL'de retention yoktur. 6 puan kırıldı: 30 günden eski row'lar için zamanlanmış bir DELETE işi (ya da günlük partition'ları düşüren bir iş) ve saatlik özet için ikinci bir iş gerekir; DELETE VACUUM yükü getirir."),
                 sc(5, "Engine'de eşik kontrolü ya da bildirim yoktur. 5 puan kırıldı: kural pg_cron ile zamanlanmış bir sorgu ve haber veren bir uygulama kodudur."),
-                sc(9, "Saniyede 100 küçük INSERT var olan writer için küçüktür. 1 puan kırıldı: yazmalar siparişlerle aynı writer'dan geçer; 400 mağazada ayrıca izlenir."),
+                sc(7, "Saniyede 100 küçük INSERT var olan writer için küçüktür. 3 puan kırıldı: yazmalar siparişlerle aynı writer'dan geçer ve trafik düz olduğu için checkout tepesinde de oradadır; 400 mağazada saniyede 1.000 yazma olur (Aurora sayfasının tek writer tablosu: 500–5.000, checkout ile aynı tepede 3 puan)."),
                 sc(10, "Üç AZ'de altı kopya ve sürekli yedek. Puan kırılmadı."),
                 sc(9, "Aurora zaten işletiliyor ve ekip SQL biliyor; Grafana PostgreSQL'e doğrudan bağlanır. 1 puan kırıldı: sensör yükü sipariş cluster'ı ile paylaşılır ve ayrıca izlenir."),
                 sc(8, "Var olan cluster'da ayrı bir instance ödenmez. 2 puan kırıldı: sıkıştırılmamış row'lar ve index'leri storage ve I/O olarak ödenir ve 400 mağazada ACU üst sınırı yükselir.")],
@@ -6164,7 +6164,7 @@ INFLUXDB_W.append(wusecase("warehouse", 1, sim="w_warehouse",
               "Timestream for InfluxDB'yi öne geçiren iki şeydir. Birincisi R1 · YD: CloudWatch'un saklama kuralı sabittir; AWS'e göre 60 saniyeden kısa periyotlu veri 3 saat, dakikalık veri 15 gün, saatlik veri 455 gün tutulur, yani 30 günlük ham veri ve 2 yıllık saatlik özet karşılanmaz. "
               "İkincisi R5: CloudWatch series başına öder; 1.080 metric ayda yaklaşık 324 USD'dir ve 400 mağazada on katına çıkar, InfluxDB instance'ı ise yaklaşık 211 USD'dir ve büyük ölçüde sabit kalır. "
               "Hangi koşul değişseydi CloudWatch seçilirdi: ham veri 3 saat, özet 15 ay yetseydi ve mağaza sayısı 40'ta kalsaydı; o zaman işletmesiz bir servis fark yaratırdı.",
-        "aur": "İlişkisel (Aurora) ile kafa kafaya. Aurora bu kartta var olan bir sistemdir: ayrı bir instance ödenmez, ekip SQL biliyor ve Grafana PostgreSQL'e doğrudan bağlanır; R3, R4 ve R5'te öndedir. "
+        "aur": "İlişkisel (Aurora) ile kafa kafaya. Aurora bu kartta var olan bir sistemdir: ayrı bir instance ödenmez, ekip SQL biliyor ve Grafana PostgreSQL'e doğrudan bağlanır; R3, R4 ve R5'te öndedir. 400 mağazada saniyede 1.000 yazma checkout'u da taşıyan writer'a gelir ve R2'de 3 puan kaybettirir. "
                "Ama R1'in üç alt maddesinde geride kalır. PostgreSQL okumaları sıkıştırmaz ve zamana göre bitişik tutmaz; 260 milyon row ve index'i diskte birkaç kat yer tutar (DA). Retention yoktur; 30 günden eski row'lar zamanlanmış bir DELETE ya da partition düşüren bir işle gider ve saatlik özet ikinci bir iştir (YD). "
                "Nem kuralı için engine'de bir kontrol ve bildirim aracı yoktur (AO). Bu üç satırın ağırlığı 26'dır: Aurora 12 alır, Timestream for InfluxDB 24,2. "
                "Hangi koşul değişseydi Aurora seçilirdi: sadece 4 deponun 8 sensörü kalsaydı (bugünkü workshop verisi), ham veri birkaç gün tutulsaydı ve sensör verisi siparişlerle aynı SQL'de join'lenmek istenseydi.",
@@ -6190,12 +6190,12 @@ INFLUXDB_W.append(wusecase("metrics", 2, sim="w_metrics",
             "Yönetilen instance; Grafana doğrudan bağlanır. 4 puan kırıldı: instance sınıfı ve storage ekibin seçimidir, ajanlar (Telegraf) kurulur ve EC2 ile load balancer metrikleri ayrıca taşınır.",
             "Instance-saat ve storage ödenir; series sayısı faturayı doğrudan büyütmez (Ö2). 2 puan kırıldı: Multi-AZ standby ikinci bir instance ücretidir; db.influx.medium Multi-AZ ayda yaklaşık 211 USD (Frankfurt, Price List API, 2026-10-31)."]),
         "cw": _same(_s, "cw"), "os": _same(_s, "os")},
-    h2h={"cw": "İzleme servisi (CloudWatch) ile kafa kafaya. Bu yakın bir yarıştır. CloudWatch'un artısı sıfır işletmedir: EC2 ve load balancer metrikleri zaten oradadır, özetleme ve silme kendiliğindendir, alarm aynı servistedir ve kapasite servisindir. R2, R3 ve R4'te birlikte 8,4 puan önde olur (1,4 + 1,6 + 5,4). Timestream for InfluxDB R1'in üç alt maddesinde 4,2 puan (her birinde 1,4) ve R5'te 5,4 puan önde olur; toplam fark 1,2'dir. Tek satırda en büyük fark R5'tedir: CloudWatch series başına öder; 2.400 series ayda yaklaşık 720 USD'dir ve series sayısıyla büyür, InfluxDB instance'ı ise yaklaşık 211 USD'dir. R1 · YD'de fark küçüktür ama isteğin bir parçası karşılanmaz: AWS'e göre 60 saniyeden kısa periyotlu veri 3 saat, dakikalık veri 15 gün tutulur. Hangi koşul değişseydi CloudWatch seçilirdi: series sayısı birkaç yüz olsaydı (yaklaşık 700 series'te iki fatura eşitlenir), 10 saniyelik çözünürlük 3 saat yetseydi ya da ekip ikinci bir sistem istemeseydi.", "os": _strip(_s["h2h"]["os"][1]).replace("(kart 5)", "(OpenSearch sayfasının 5. kartı)")},
-    verdict="Karar: Timestream for InfluxDB {ix}, CloudWatch {cw}, OpenSearch {os}. Yakın bir yarış: bu iş yüküne en uygun servis bir time series engine'idir, çünkü series modeli, pencere sorusu ve retention engine'in kendisidir. "
-            "CloudWatch işletmede öndedir; saklama kuralı ve series başına fiyat onu geride bırakır. Bu kart OpenSearch sayfasının 7. kartıyla aynı iş yüküdür ve aynı puanları taşır. "
+    h2h={"cw": "İzleme servisi (CloudWatch) ile kafa kafaya. Fark 8,2 puandır; yakın bir yarış değildir. CloudWatch'un artısı sıfır işletmedir: EC2 ve load balancer metrikleri zaten oradadır, özetleme ve silme kendiliğindendir, alarm aynı servistedir ve kapasite servisindir. R2, R3 ve R4'te birlikte 8,4 puan önde olur (1,4 + 1,6 + 5,4). Timestream for InfluxDB R1'de 11,2 puan ve R5'te 5,4 puan önde olur. Tek satırda en büyük fark R1 · YD'dedir (8,4 puan): CloudWatch'un saklama kuralı sabittir; AWS'e göre 60 saniyeden kısa periyotlu veri 3 saat, dakikalık veri 15 gün tutulur, yani isteğin üç parçasından ikisi (6 saatlik 10 saniyelik veri ve 30 günlük dakikalık veri) karşılanmaz ve puan 0–3 bandındadır (kart 1'deki gibi 3). R5'te CloudWatch series başına öder; 2.400 series ayda yaklaşık 720 USD'dir ve series sayısıyla büyür, InfluxDB instance'ı ise yaklaşık 211 USD'dir. Hangi koşul değişseydi CloudWatch seçilirdi: 10 saniyelik veri 3 saat ve dakikalık veri 15 gün yetseydi (R1 · YD tam karşılanır, 86,4'e 84,8); series sayısının birkaç yüz olması (yaklaşık 700 series'te iki fatura eşitlenir) tek başına farkı kapatmaz.", "os": _strip(_s["h2h"]["os"][1]).replace("(kart 5)", "(OpenSearch sayfasının 5. kartı)")},
+    verdict="Karar: Timestream for InfluxDB {ix}, CloudWatch {cw}, OpenSearch {os}. Bu iş yüküne en uygun servis bir time series engine'idir, çünkü series modeli, pencere sorusu ve retention engine'in kendisidir. "
+            "CloudWatch işletmede öndedir; isteğin iki parçasını karşılamayan sabit saklama kuralı ve series başına fiyat onu 8,2 puan geride bırakır. Bu kart OpenSearch sayfasının 7. kartıyla aynı iş yüküdür ve aynı puanları taşır. "
             "Timestream for InfluxDB seçtiğimizde artımız: 2.400 series tek bir instance'ta, pano başına tek bir sorgu, eski veri kendiliğinden gider ve fatura series sayısıyla büyümez. "
             "Eksimiz: instance'ı ve storage'ı biz seçeriz, Telegraf ajanlarını kurarız, downsampling task'larını yazarız ve EC2 metriklerini ayrıca taşırız. "
-            "Bir koşul değişseydi: series sayısı birkaç yüz olsaydı ve 10 saniyelik çözünürlük 3 saat yetseydi CloudWatch kazanırdı."))
+            "Bir koşul değişseydi: 10 saniyelik veri 3 saat ve dakikalık veri 15 gün yetseydi CloudWatch kazanırdı."))
 
 # ------------------------------------------------------------------ 3. wind farm sensors (= Keyspaces card 2)
 _s = _src("keyspaces", "sensor")

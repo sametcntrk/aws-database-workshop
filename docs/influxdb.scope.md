@@ -60,8 +60,8 @@ Prometheus, TimescaleDB, InfluxDB 2 (InfluxDB 3 explained in text and M5).
 
 | No | Use case | Candidates (best fit first) | R1 sub-items (weight) | Totals | sim |
 |---|---|---|---|---|---|
-| 1 | Lale Market warehouses and stores, 1,000 sensors | ix, CloudWatch, Aurora (existing) | VM, EY, DA, YD, AO (48) | 85,5 · 83,3 · 78,1 (race) | w_warehouse |
-| 2 | Application metrics (= OpenSearch card 7) | ix, CloudWatch, OpenSearch | VM, EY, YD (42) | 84,8 · 83,6 · 66,4 (race) | w_metrics |
+| 1 | Lale Market warehouses and stores, 1,000 sensors | ix, CloudWatch, Aurora (existing) | VM, EY, DA, YD, AO (48) | 85,5 · 83,3 · 75,7 (race) | w_warehouse |
+| 2 | Application metrics (= OpenSearch card 7) | ix, CloudWatch, OpenSearch | VM, EY, YD (42) | 84,8 · 76,6 · 66,4 | w_metrics |
 | 3 | Wind farm sensors (= Keyspaces card 2) | Keyspaces, ix, DynamoDB | EY, VM, DA, YD (50) | 91,2 · 88,4 · 85,2 (race; ix wins R1 50 vs 42) | w_sensor |
 | 4 | Fleet telemetry, last value + history | ix3, ix, DynamoDB | EY, VM, DA, YD (46) | 89,5 · 83,1 · 77,6 | — |
 | 5 | Factory monitoring, migration of an existing InfluxDB | ix, ix3, CloudWatch | VM, EY, YD, AO (46) | 91,3 · 77,2 · 65,2 | — |

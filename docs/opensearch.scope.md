@@ -66,11 +66,11 @@ Domain: database. Catalog: VM, ŞE, EY, OY, TA, DA, YD, AO (`R1_CATALOG`), uncha
 |---|---|---|---|---|---|---|
 | 1 | Product search with typos | os, aur, doc | EY, DA, AO | 46 | 84,4 / 68,4 / 64,7 | w_search |
 | 2 | Faceted navigation (= DocumentDB card 8) | doc, os, aur | EY, AO, DA, ŞE | 42 | 77,6 / 76,8 / 68 | w_facets |
-| 3 | Autocomplete | os, ec, aur | EY, DA, AO | 44 | 89 / 82,3 / 69,7 | none |
-| 4 | Store and pickup-point finder (geo + text) | os, aur, ec | EY, VM, DA | 40 | 85,7 / 84,9 / 75,1 | none |
+| 3 | Autocomplete | os, ec, aur | EY, DA, AO | 44 | 89 / 82,8 / 69,7 | none |
+| 4 | Store and pickup-point finder (geo + text) | os, aur, ec | EY, VM, DA | 40 | 85,7 / 84,9 / 76,1 | none |
 | 5 | Application log analytics | oss, os, cw | EY, OY, YD, DA | 44 | 85,6 / 81 / 75,6 | w_logs |
 | 6 | Security analytics | os, oss, rs | EY, AO, DA, YD | 44 | 80,4 / 76,4 / 67,4 | none |
-| 7 | Metrics dashboards (observability) | ix, cw, os | VM, EY, YD | 42 | 84,8 / 83,6 / 66,4 | w_metrics |
+| 7 | Metrics dashboards (observability) | ix, cw, os | VM, EY, YD | 42 | 84,8 / 76,6 / 66,4 | w_metrics |
 | 8 | Knowledge base search (keyword + vector) | aur, oss, os | EY, DA, AO | 38 | 90,2 / 82 / 70,6 | w_kb |
 | 9 | E-commerce relevance tuning | os, aur, doc | AO, EY, OY, DA | 46 | 91,4 / 70 / 69,6 | none |
 | 10 | Anomaly detection per category and city | os, ix, cw | AO, EY, VM | 42 | 88 / 70 / 69,6 | none |

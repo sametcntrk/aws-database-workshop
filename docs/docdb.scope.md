@@ -61,7 +61,7 @@ MongoDB, Amazon DocumentDB, DynamoDB
 | 4 | Event logs with flexible schema | DynamoDB, DocumentDB elastic cluster, DocumentDB | 85,9 · 82,2 · 66,2 (close race) | 46,4 / 45,2 / 45,2 of 50 | w_events |
 | 5 | IoT device registry and configuration | DocumentDB, DynamoDB, Aurora PostgreSQL | 90,6 · 83,6 · 76,2 | 44,6 / 36,0 / 35,0 of 46 | |
 | 6 | Mobile app sync: list documents | DocumentDB, DynamoDB, DocumentDB elastic cluster | 89,4 · 83,8 · 82,2 | 42,8 / 35,4 / 42,8 of 44 | |
-| 7 | Order documents: read model next to Aurora | DocumentDB, Aurora PostgreSQL, DynamoDB | 92,8 · 82,6 · 80,2 | 46,0 / 38,8 / 37,8 of 46 | |
+| 7 | Order documents: read model next to Aurora | DocumentDB, Aurora PostgreSQL, DynamoDB | 92,8 · 83,6 · 80,2 | 46,0 / 38,8 / 37,8 of 46 | |
 | 8 | Catalog search by nested fields (filters, facets) | DocumentDB, OpenSearch, Aurora PostgreSQL | 77,6 · 76,8 · 68,0 (close race) | 30,4 / 40,8 / 31,0 of 42 | w_search |
 | 9 | Session documents (quote wizard) | ElastiCache (Valkey), DynamoDB, DocumentDB | 85,2 · 79,2 · 64,0 | 41,0 / 32,4 / 32,8 of 46 | w_sessions |
 | 10 | Feature flags and settings | DocumentDB, DynamoDB, Aurora PostgreSQL | 94,1 · 88,4 · 75,6 | 37,6 / 36,4 / 31,6 of 40 | |
