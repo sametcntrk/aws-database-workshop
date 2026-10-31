@@ -4,8 +4,8 @@
 
 <h2 id="goal" data-short="What you will learn"><span class="sec">00</span>What you will learn, and how to use this page</h2>
 <p>Section 01 gives the architect's decision: where Amazon Redshift fits and where it does not. Then the tutorial has two parts.
-   Part 1 teaches how a columnar data warehouse works: facts and dimensions, column storage, zone maps and sort keys, and parallel slices. Part 2 shows the AWS service and how Lale Market uses it.</p>
-<p>The examples come from the sales reports of Lale Market. Sometimes a different example makes an idea easier to see. Then the tutorial uses it: a spreadsheet, a library shelf, a team that counts votes.</p>
+   Part 1 teaches how a columnar data warehouse works: facts and dimensions, column storage, zone maps and sort keys, and parallel slices. Part 2 shows the AWS service and how TDS Academy Market uses it.</p>
+<p>The examples come from the sales reports of TDS Academy Market. Sometimes a different example makes an idea easier to see. Then the tutorial uses it: a spreadsheet, a library shelf, a team that counts votes.</p>
 <p>After this tutorial, you can do these tasks:</p>
 <ol>
   <li>Say for which workloads a data warehouse is the right choice, and why it is not the database of the checkout.</li>
@@ -41,8 +41,8 @@
 <table class="data">
   <thead><tr><th>Use case</th><th>Data</th><th>Why a warehouse</th><th>The feature that does the work</th></tr></thead>
   <tbody>
-    <tr><td>Sales reports (Lale Market)</td><td>Order lines with date, city, category, quantity and amount.</td><td>GROUP BY month, category or city over all orders.</td><td>Column storage, SORTKEY order_date</td></tr>
-    <tr><td>Near-real-time operations dashboard (Lale Market)</td><td>The live Aurora tables.</td><td>Today's orders in a report without an ETL pipeline.</td><td>Zero-ETL integration from Aurora</td></tr>
+    <tr><td>Sales reports (TDS Academy Market)</td><td>Order lines with date, city, category, quantity and amount.</td><td>GROUP BY month, category or city over all orders.</td><td>Column storage, SORTKEY order_date</td></tr>
+    <tr><td>Near-real-time operations dashboard (TDS Academy Market)</td><td>The live Aurora tables.</td><td>Today's orders in a report without an ETL pipeline.</td><td>Zero-ETL integration from Aurora</td></tr>
     <tr><td>Finance and accounting reports</td><td>Invoices, payments, ledgers.</td><td>Monthly closing over millions of entries.</td><td>SQL, joins, window functions</td></tr>
     <tr><td>Marketing attribution</td><td>Ad clicks, sessions, orders.</td><td>Join events from many sources by customer.</td><td>Distribution on the join key</td></tr>
     <tr><td>Business intelligence tools</td><td>Any warehouse tables.</td><td>Dashboards for many users.</td><td>JDBC and ODBC drivers, concurrency scaling</td></tr>
@@ -78,7 +78,7 @@
 <table class="data">
   <thead><tr><th>Option</th><th>What it is</th><th>Choose it when</th></tr></thead>
   <tbody>
-    <tr><td>Redshift Serverless</td><td>A workgroup with capacity in Redshift Processing Units (RPUs) that scales with the load.</td><td>Variable load and no cluster to size. Lale Market uses it.</td></tr>
+    <tr><td>Redshift Serverless</td><td>A workgroup with capacity in Redshift Processing Units (RPUs) that scales with the load.</td><td>Variable load and no cluster to size. TDS Academy Market uses it.</td></tr>
     <tr><td>Redshift provisioned cluster</td><td>A leader node and compute nodes that you select and size.</td><td>A steady, predictable load.</td></tr>
     <tr><td>Amazon Athena</td><td>Serverless SQL directly on files in S3. You pay per query.</td><td>Occasional queries on a data lake.</td></tr>
     <tr><td>Aurora read replica</td><td>A copy of the operational database for reads.</td><td>Small reports on current data, no warehouse.</td></tr>
@@ -86,7 +86,7 @@
 </table>
 {{ k.fig("redshift-architecture.png", "the Redshift architecture. Clients connect with JDBC, ODBC or the Data API. The compute runs serverless or as a cluster with a leader node and compute nodes, on Redshift managed storage.") }}
 
-<h3>Where Redshift sits in Lale Market</h3>
+<h3>Where Redshift sits in TDS Academy Market</h3>
 <p>The orders live in Aurora PostgreSQL. A zero-ETL integration copies the Aurora tables into the Redshift database <code>aurora_live</code>, and keeps the copy in step within seconds.
    For the history, the Seed also loads a flat table <code>sales</code>, with one row for each order line that is not cancelled.
    The admin page "Sales reports" reads from Redshift only. It never sends a report query to the checkout database.</p>
@@ -109,11 +109,11 @@
 <p>A warehouse usually stores events in one large {{ k.term("fact table") }}: one row for each sale, with numbers (quantity, amount) and keys.
    Around it are {{ k.term("dimension table") }}s: customers, products, dates, stores. A dimension describes the keys of the fact table. The drawing looks like a star.</p>
 {{ k.fig("redshift-star-schema.png", "a star schema. One fact table is in the middle, and four dimension tables are around it.") }}
-<p>Lale Market keeps the history in one flat table <code>sales</code>. It already contains the city of the customer and the category of the product, so most reports need no join. These are eight example rows:</p>
+<p>TDS Academy Market keeps the history in one flat table <code>sales</code>. It already contains the city of the customer and the category of the product, so most reports need no join. These are eight example rows:</p>
 {{ k.sample("rs_sales", "sales: eight example rows", key=["order_id", "product_id"], ref=["customer_id"]) }}
 <p>Identifiers: Aurora owns the order id, the customer id and the product id. The sales table borrows all three. The pair of <code>order_id</code> and <code>product_id</code> identifies one order line.
    Redshift does not enforce primary keys or foreign keys. It accepts them as information for the planner, so the load process must keep the ids correct.</p>
-{% call k.sql("Q1", "The report of the Lale Market admin page") %}
+{% call k.sql("Q1", "The report of the TDS Academy Market admin page") %}
 <pre><code>SELECT category AS category, count(DISTINCT order_id) AS orders, sum(qty) AS units, sum(amount) AS revenue
 FROM sales GROUP BY 1 ORDER BY revenue DESC LIMIT 24</code></pre>
 <table class="clause">
@@ -207,7 +207,7 @@ GROUP  BY category;</code></pre>
 <p>The AWS documentation describes the zero-ETL integration as a managed solution. It makes transactional data available in Redshift "within seconds of being written"
    (<a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/zero-etl.html">Aurora zero-ETL integrations</a>). You create the integration once. In Redshift, one statement creates a database from it:</p>
 {{ k.fig("redshift-zero-etl.png", "zero-ETL integrations. Aurora source clusters replicate into Redshift data warehouses for analytics and machine learning.") }}
-{% call k.sql("Q3", "Connect Redshift to the integration (Lale Market admin action)") %}
+{% call k.sql("Q3", "Connect Redshift to the integration (TDS Academy Market admin action)") %}
 <pre><code>CREATE DATABASE aurora_live FROM INTEGRATION '&lt;integration id&gt;' DATABASE shop</code></pre>
 <table class="clause">
   <tr><td>CREATE DATABASE aurora_live</td><td>A new database in Redshift. Its tables are the copies of the Aurora tables.</td></tr>
@@ -231,7 +231,7 @@ GROUP BY 1 ORDER BY revenue DESC LIMIT 24</code></pre>
 </table>
 {% endcall %}
 
-<h2 id="lalemarket" data-short="Redshift in Lale Market"><span class="sec">08</span>Redshift in Lale Market</h2>
+<h2 id="lalemarket" data-short="Redshift in TDS Academy Market"><span class="sec">08</span>Redshift in TDS Academy Market</h2>
 <ul>
   <li>One Redshift Serverless workgroup in the data subnets. The Redshift Engine App connects on TLS port 5439 with a password from Secrets Manager.</li>
   <li>The history table <code>sales</code> has DISTKEY customer_id and SORTKEY order_date. The Seed loads it with one row for each order line that is not cancelled.</li>
@@ -247,7 +247,7 @@ GROUP BY 1 ORDER BY revenue DESC LIMIT 24</code></pre>
 {{ k.quiz("rs-r2", "What does DISTSTYLE ALL do?",
    ["It puts a complete copy of the table on every node", "It sorts the table by all columns", "It compresses all columns", "It drops the distribution key"],
    0, "ALL copies a table, usually a small dimension, to every node. Every join with it is then local.") }}
-{{ k.quiz("rs-r3", "How does a new checkout order reach the live report of Lale Market?",
+{{ k.quiz("rs-r3", "How does a new checkout order reach the live report of TDS Academy Market?",
    ["A nightly COPY from S3", "The zero-ETL integration copies it from Aurora within seconds", "The checkout writes it into Redshift directly", "The report reads Aurora directly"],
    1, "The checkout writes only to Aurora. The integration copies the change into aurora_live.") }}
 

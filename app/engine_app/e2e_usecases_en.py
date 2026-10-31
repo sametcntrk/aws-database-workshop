@@ -6,9 +6,9 @@ e2e_usecases.apply_en() merges it into the (en, tr) tuples."""
 
 EN = {
     "cart": {
-        "title": "Shopping carts (Lale Market)",
+        "title": "Shopping carts (TDS Academy Market)",
         "key": "Key: cart, then product. Value: quantity, price, expiry.",
-        "story": "The product page of Lale Market has an \"Add to cart\" button. The button adds a row to the cart with the visitor id from the browser cookie. If the row exists, the button increases its quantity. "
+        "story": "The product page of TDS Academy Market has an \"Add to cart\" button. The button adds a row to the cart with the visitor id from the browser cookie. If the row exists, the button increases its quantity. "
                  "The cart page shows all rows with price and quantity. The checkout reads the final cart, writes the order to Aurora together with the stock and the customer records, and then empties the cart. "
                  "The rule of the store: at most 5 units of one product in one cart. On a normal day there are 250 cart writes per second. On a campaign evening, at 20:00, the traffic goes to 5,000 writes per second in ten minutes and stays there for three hours. "
                  "70 percent of the visitors leave their cart. One day later those carts have no value. The team has three developers and no database administrator.",

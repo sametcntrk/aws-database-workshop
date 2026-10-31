@@ -47,9 +47,9 @@ def usecase(uid, no, title, key, story, reqs, cands, scores, h2h, verdict, sim=N
 DDB_USECASES = [
     # ------------------------------------------------------------------ 1. shopping cart
     usecase("cart", 1, sim="race_cart", kind="race",
-        title=_t("Alışveriş sepetleri (Lale Market)"),
+        title=_t("Alışveriş sepetleri (TDS Academy Market)"),
         key=_t("Key: sepet, sonra ürün. Value: miktar, fiyat, süre sonu."),
-        story=_t("Lale Market'in ürün sayfasında \"Sepete ekle\" düğmesi var. Düğme, tarayıcının cookie'sindeki ziyaretçi id'siyle sepete bir satır ekler ya da var olan satırın miktarını artırır. "
+        story=_t("TDS Academy Market'in ürün sayfasında \"Sepete ekle\" düğmesi var. Düğme, tarayıcının cookie'sindeki ziyaretçi id'siyle sepete bir satır ekler ya da var olan satırın miktarını artırır. "
                  "Sepet sayfası bütün satırları fiyat ve miktarla gösterir. Checkout sepeti son hâliyle okur, siparişi stok ve müşteri kayıtlarıyla birlikte Aurora'ya yazar ve sonra sepeti boşaltır. "
                  "Mağazanın kuralı: bir üründen bir sepette en fazla 5 adet. Normal bir günde saniyede 250 sepet yazması olur. Kampanya akşamlarında, saat 20:00'de, trafik on dakika içinde saniyede 5.000 yazmaya çıkar ve üç saat öyle kalır. "
                  "Ziyaretçilerin yüzde 70'i sepeti bırakıp gider; bir gün sonra o sepetlerin hiçbir değeri yoktur. Ekipte üç geliştirici var, database yöneticisi yok."),
@@ -597,9 +597,9 @@ LINK["rds"] = "aurora"
 AURORA_USECASES = [
     # ------------------------------------------------------------------ 1. checkout: order, stock, payment (clear win)
     usecase("checkout", 1, sim="win_checkout", kind="win",
-        title=_t("Sipariş, stok ve ödeme: checkout (Lale Market)"),
+        title=_t("Sipariş, stok ve ödeme: checkout (TDS Academy Market)"),
         key=_t("Table'lar: products, orders, order_items, payments. Kural: stok sıfırın altına inmez, sipariş stoksuz var olmaz."),
-        story=_t("Lale Market'in checkout düğmesi dört şeyi birden yapar: sepetteki her ürünün stoğunu düşürür, siparişi ve line'larını yazar ve ödeme kaydını açar. "
+        story=_t("TDS Academy Market'in checkout düğmesi dört şeyi birden yapar: sepetteki her ürünün stoğunu düşürür, siparişi ve line'larını yazar ve ödeme kaydını açar. "
                  "Mağazanın kuralı: bir sipariş hiçbir zaman stok düşmeden var olmaz, stok hiçbir zaman sıfırın altına inmez ve son adedi aynı saniyede isteyen iki müşteriden tam olarak biri alır. "
                  "Normal günde saatte 400 sipariş, kampanya akşamlarında saatte 3.000 sipariş; yani saniyede en fazla birkaç checkout. Ürün sayfası stoğu saniyede 300 kez okur. "
                  "Bugün 5.000 sipariş ve 12.500 line var; yılda iki katına çıkıyor. Sipariş paranın resmi kaydıdır: kaybolan bir sipariş kaybolan paradır. Ekipte üç geliştirici var, hepsi SQL biliyor, database yöneticisi yok."),
@@ -1120,11 +1120,11 @@ USECASES["aurora"] = AURORA_USECASES
 #   On-demand: "scales up to any previously reached traffic level instantly" (https://docs.aws.amazon.com/keyspaces/latest/devguide/how-it-works.html)
 #   Multi-Region: active-active, "replication lag across Regions is typically less than one second"; PITR 35 days.
 KS_USECASES = [
-    # ------------------------------------------------------------------ 1. activity history per user (Lale Market)
+    # ------------------------------------------------------------------ 1. activity history per user (TDS Academy Market)
     usecase("activity", 1, sim="race_activity", kind="race",
-        title=_t("Kullanıcı başına aktivite geçmişi (Lale Market)"),
+        title=_t("Kullanıcı başına aktivite geçmişi (TDS Academy Market)"),
         key=_t("Partition key: user_id. Clustering column: event_time (en yeni önce). Row: event türü, ürün, detay."),
-        story=_t("Lale Market'te her ürün görüntüleme, arama, sepete ekleme ve satın alma bir event row'u yazar. Ürün sayfasındaki \"Son baktıkların\" şeridi ziyaretçinin son 40 event'inden en yeni 8 ürün görüntülemesini seçer, \"Aktivitem\" sayfası en yeni 20'sini okur ve geriye doğru sayfalar. "
+        story=_t("TDS Academy Market'te her ürün görüntüleme, arama, sepete ekleme ve satın alma bir event row'u yazar. Ürün sayfasındaki \"Son baktıkların\" şeridi ziyaretçinin son 40 event'inden en yeni 8 ürün görüntülemesini seçer, \"Aktivitem\" sayfası en yeni 20'sini okur ve geriye doğru sayfalar. "
                  "Destek ekibi \"bu müşteri dün 14:00 ile 16:00 arasında ne yaptı?\" diye sorar. Normal günde saniyede 1.200 event yazılır; kampanya akşamlarında üç saat boyunca saniyede 15.000. Okumalar yazmaların onda biri kadardır. "
                  "Event'ler 7 gün sonra değersizdir ve kendiliğinden silinmelidir. İki milyon kullanıcı var. Uygulama ekibi üç geliştiricidir; iki kişilik veri ekibi öneri modelini her gece bu geçmişten Spark Cassandra Connector ve CQL ile besler. Kimse sunucu işletmek istemiyor."),
         reqs=[
@@ -1643,9 +1643,9 @@ USECASES["keyspaces"] = KS_USECASES
 DOCDB_USECASES = [
     # ------------------------------------------------------------------ 1. product catalog with variable attributes (clear win)
     usecase("catalog", 1, sim="win_catalog", kind="win",
-        title=_t("Değişken özellikli ürün kataloğu (Lale Market)"),
+        title=_t("Değişken özellikli ürün kataloğu (TDS Academy Market)"),
         key=_t("Collection: products. Document: _id, name, category, price, attributes (iç içe), tags (array)."),
-        story=_t("Lale Market'in kataloğunda 200 ürün var, gerçek bir pazar yerinde 200.000 olur. Her ürün türünün özellikleri farklıdır: kulaklıkta renk ve garanti ayı, kitapta sayfa sayısı ve dil, kazakta beden ve kumaş. "
+        story=_t("TDS Academy Market'in kataloğunda 200 ürün var, gerçek bir pazar yerinde 200.000 olur. Her ürün türünün özellikleri farklıdır: kulaklıkta renk ve garanti ayı, kitapta sayfa sayısı ve dil, kazakta beden ve kumaş. "
                  "Ürün sayfası ürünü bütün özellikleri ve etiketleriyle tek seferde ister; kategori sayfası \"Elektronik, siyah, rating'e göre\" filtreler. Pazarlama ekibi her ay yeni bir özellik ekler (\"su geçirmez\", \"enerji sınıfı\") ve bu özellik sadece yeni ürünlerde dolu başlar. "
                  "Saniyede 2.000 okuma (önünde bir cache var), saniyede 20 yazma; kampanya gününde okuma beş katına çıkar. Katalog kaybolursa satıcı beslemelerinden bir günde yeniden kurulur. Dört geliştirici, ikisi MongoDB API'sini önceki işinden biliyor; sunucu boyutlandırmak istenmiyor. Metin araması ayrı bir arama servisine verilecek."),
         reqs=[
@@ -1947,7 +1947,7 @@ DOCDB_USECASES = [
     usecase("orders", 7, sim="race_orders", kind="race",
         title=_t("Sipariş document'ları: satırlar, adres ve durum geçmişi"),
         key=_t("Collection: orders. Document: _id, customer_id, lines (array), address (iç içe), status, history (array). Checkout Aurora'da kalır."),
-        story=_t("Lale Market'in checkout'u stok ve ödemeyi Aurora'da tek transaction ile yazar. Sipariş onaylandıktan sonra \"siparişlerim\" ekranı, kargo takibi ve destek ekibi siparişin tamamını ister: satırlar ürün adlarıyla, teslimat adresi o günkü hâliyle, durum geçmişi (alındı, hazırlanıyor, kargoda, teslim). "
+        story=_t("TDS Academy Market'in checkout'u stok ve ödemeyi Aurora'da tek transaction ile yazar. Sipariş onaylandıktan sonra \"siparişlerim\" ekranı, kargo takibi ve destek ekibi siparişin tamamını ister: satırlar ürün adlarıyla, teslimat adresi o günkü hâliyle, durum geçmişi (alındı, hazırlanıyor, kargoda, teslim). "
                  "Ekip bu okuma modelini ayrı bir serviste tutmak istiyor, çünkü sipariş ekranı okumaları checkout writer'ını yormamalı ve okuma modeli checkout'un migration takviminden bağımsız değişmeli: her sipariş tek bir document, checkout commit'inden sonra bir event ile yazılır, her durum değişikliği history array'ine eklenir. Sorular: \"bu müşterinin siparişleri, yeniye göre\", \"kargoda olan ve üç günden eski siparişler\", \"bu ürünü içeren siparişler\". "
                  "Günde 5.000 sipariş, saniyede 200 okuma; 3 yıl, 5 milyon sipariş. Üç geliştirici, SQL ve MongoDB ikisini de biliyor. Sipariş kaydı Aurora'da zaten kalıcıdır; bu kopya kaybolursa event'lerden yeniden kurulur."),
         reqs=[
@@ -1998,7 +1998,7 @@ DOCDB_USECASES = [
     usecase("search", 8, sim="race_search", kind="race",
         title=_t("İç içe field'lara göre katalog araması: filtre ve facet"),
         key=_t("Collection: products. Sorgu: category, 'attributes.renk', 'attributes.garanti_ay' ve price üzerinde filtre, sıralama, limit. Facet sayıları $group ile."),
-        story=_t("Lale Market'in kategori sayfasında ziyaretçi filtre seçer: \"Elektronik, siyah, garanti 24 ay ve üzeri, 2.000 TL altı, rating'e göre\". Sayfa her filtre için seçenek sayılarını da gösterir (\"siyah (9), lacivert (6)\"). "
+        story=_t("TDS Academy Market'in kategori sayfasında ziyaretçi filtre seçer: \"Elektronik, siyah, garanti 24 ay ve üzeri, 2.000 TL altı, rating'e göre\". Sayfa her filtre için seçenek sayılarını da gösterir (\"siyah (9), lacivert (6)\"). "
                  "Katalog zaten DocumentDB'de (kart 1); soru bu filtrelerin ve facet sayılarının nereden geleceğidir. Metin araması (\"kablosz kulaklk\" gibi yazım hatalı) ayrı bir ihtiyaçtır ve bu kartta istenmiyor; ürün ekibi bunu bir sonraki çeyreğe bıraktı. "
                  "Saniyede 1.200 filtreli okuma, kampanyada 5.000; 200.000 ürün; filtre field'ları 20 tane ve her ay bir yenisi geliyor. Cevap 50 ms'nin altında olmalı. Dört geliştirici, MongoDB biliyor, OpenSearch bilmiyor."),
         reqs=[
@@ -2179,7 +2179,7 @@ EC_USECASES = [
         key=_t("Key: session id. Value: kullanıcı id'si, rol, son sayfa; bir hash ve bir TTL."),
         story=_t("Bir web mağazasının her HTTP isteği cookie'deki session id ile oturumu okur: kullanıcı kim, rolü ne, sepeti var mı. Oturum 30 dakika hareketsizlikten sonra düşer ve her sayfa görüntülemede süresi yenilenir. "
                  "Saniyede 40.000 sayfa isteği, dolayısıyla saniyede 40.000 oturum okuması ve 40.000 süre yenilemesi. Oturum okuması her isteğin önünde durur: 1 ms gecikme, her sayfaya 1 ms ekler. "
-                 "Kaybolan bir oturum sadece yeni bir login demektir; sepet DynamoDB'de, sipariş Aurora'da zaten kalıcıdır. Toplam oturum verisi birkaç GB'ı geçmez. Ekip sunucu istemiyor; Lale Market'in kendi oturumları da tam olarak böyle tutulur (lm:session:7f3a)."),
+                 "Kaybolan bir oturum sadece yeni bir login demektir; sepet DynamoDB'de, sipariş Aurora'da zaten kalıcıdır. Toplam oturum verisi birkaç GB'ı geçmez. Ekip sunucu istemiyor; TDS Academy Market'in kendi oturumları da tam olarak böyle tutulur (lm:session:7f3a)."),
         reqs=[
             req(True, "Tek soru: \"bu session id'nin oturumu\". Her istekte bir okuma ve bir süre yenileme (yazma). Oturum küçük bir nesnedir (1 KB'tan az). Süresi dolan oturum okunmamalı: 30 dakika 1 saniye sonra istek yeni login'e gitmeli.",
                       "Oturum okuması her isteğin ilk adımıdır. Süresi dolmuş bir oturumun kabul edilmesi bir güvenlik açığıdır: paylaşılan bilgisayarda bir sonraki kişi önceki hesapta kalır."),
@@ -2195,7 +2195,7 @@ EC_USECASES = [
         cands=["ec", "ddb", "mdb"],
         scores={
             "ec": [sc(10, "Oturum başına bir hash (Ö2): HGETALL okur, HSET yazar; EXPIRE her istekte süreyi yeniler ve key tam süre sonunda yok olur (Ö4): süresi dolmuş oturum hiçbir zaman okunmaz. Puan kırılmadı."),
-                   sc(10, "Komutun store'daki süresi mikrosaniyedir (Ö1); AWS'in ölçümüne göre ElastiCache Serverless'ta p50 okuma gecikmesi 1 ms'nin altında kalır. Lale Market'in Engine App ölçümleri (1–2 ms) Python istemcisinin ve izleme kodunun süresini de içerir; aynı AZ'den bir okuma 1 ms sınırını karşılar. Serverless bellek ve işlem kapasitesini kendisi büyütür. Puan kırılmadı."),
+                   sc(10, "Komutun store'daki süresi mikrosaniyedir (Ö1); AWS'in ölçümüne göre ElastiCache Serverless'ta p50 okuma gecikmesi 1 ms'nin altında kalır. TDS Academy Market'in Engine App ölçümleri (1–2 ms) Python istemcisinin ve izleme kodunun süresini de içerir; aynı AZ'den bir okuma 1 ms sınırını karşılar. Serverless bellek ve işlem kapasitesini kendisi büyütür. Puan kırılmadı."),
                    sc(5, "Serverless veriyi birkaç AZ'de replica olarak tutar (Ö7), ama her yazmayı diske yazan dayanıklı bir log yoktur; bir arıza son oturumları kaybedebilir ve kullanıcılar yeniden login olur. 5 puan kırıldı: kayıp mümkündür, bu iş yükünde kabul edilir."),
                    sc(10, "Serverless; EXPIRE tek komut. Puan kırılmadı."),
                    sc(8, "Veri (GB-saat) ve istek (ECPU) başına ödenir. 2 puan kırıldı: bellek GB başına diskten pahalıdır ve minimum bir ücret vardır; oturum verisi küçük olduğu için fark küçüktür.")],
@@ -2226,9 +2226,9 @@ EC_USECASES = [
 
     # ------------------------------------------------------------------ 2. leaderboards
     usecase("board", 2, sim="race_board", kind="race",
-        title=_t("Canlı liderlik tabloları (Lale Market)"),
+        title=_t("Canlı liderlik tabloları (TDS Academy Market)"),
         key=_t("Key: lm:leaderboard. Value: bir sorted set; member müşteri id'si, score gelir."),
-        story=_t("Lale Market'in admin ekranında ve ana sayfasında canlı bir liderlik tablosu var: ayın en çok alışveriş yapan 10 müşterisi. Ay sonunda ilk 10'a hediye çeki verilir. "
+        story=_t("TDS Academy Market'in admin ekranında ve ana sayfasında canlı bir liderlik tablosu var: ayın en çok alışveriş yapan 10 müşterisi. Ay sonunda ilk 10'a hediye çeki verilir. "
                  "Her checkout siparişin tutarını müşterinin skoruna ekler: normal günde saniyede 20, kampanya akşamı saniyede 400 sipariş. Tabloyu 300 ekran her 5 saniyede okur (saniyede 60 okuma) ve ana sayfayı açan her müşteri kendi sırasını görür (\"sen 42. sıradasın\"): saniyede yaklaşık 3.000 sıra sorgusu daha. "
                  "Müşteri sayısı 2 milyon. Siparişlerin kendisi Aurora'da kalıcıdır, bu yüzden tablo her an siparişlerden yeniden hesaplanabilir; hesap yaklaşık 4 dakika sürer. Ekip iki geliştirici, sunucu istemiyor."),
         reqs=[
@@ -2280,7 +2280,7 @@ EC_USECASES = [
         key=_t("Key: kullanıcı id'si ve dakika. Value: bir sayı (string), TTL 60 saniye."),
         story=_t("Bir API gateway her kullanıcıya dakikada 100 istek izni verir. Her istek sayacı artırır; yeni değer 100'ü geçince istek reddedilir. Sayaç dakika bitince değersizdir. "
                  "Saniyede 20.000 artırma, günün her saati. Sayaç kontrolü her API isteğinin önünde durur: 2 ms gecikme her isteğe 2 ms ekler. Kaybolan bir sayaç bir dakikalığına fazladan 100 istek demektir. "
-                 "Gateway 12 sunucuda çalışır ve sayaç bu sunucuların hepsinde ortak olmalıdır; sunucu başına ayrı bir sayaç limiti 12 katına çıkarır. Platform ekibi serverless tercih eder. Aynı desen Lale Market'te de vardır: sipariş sayacı lm:orders:today her checkout'ta INCR ile artar."),
+                 "Gateway 12 sunucuda çalışır ve sayaç bu sunucuların hepsinde ortak olmalıdır; sunucu başına ayrı bir sayaç limiti 12 katına çıkarır. Platform ekibi serverless tercih eder. Aynı desen TDS Academy Market'te de vardır: sipariş sayacı lm:orders:today her checkout'ta INCR ile artar."),
         reqs=[
             req(True, "\"Bu kullanıcının bu dakikadaki sayacını 1 artır ve yeni değeri döndür\" tek adımda ve atomik olmalı: aynı anda gelen iki istek ikisi de sayılmalı. Eski dakikaların sayaçları kendiliğinden silinmeli.",
                       "Artırma atomik değilse iki istek aynı değeri okur, ikisi de +1 yazar ve biri kaybolur: limit delinir."),
@@ -2325,9 +2325,9 @@ EC_USECASES = [
 
     # ------------------------------------------------------------------ 4. cache-aside for a product page
     usecase("cache", 4,
-        title=_t("Ürün sayfası için cache-aside (Lale Market)"),
+        title=_t("Ürün sayfası için cache-aside (TDS Academy Market)"),
         key=_t("Key: product:P0001. Value: ürün sayfasının JSON'u, TTL 300 saniye."),
-        story=_t("Lale Market'in ürün sayfası her açılışta Aurora'dan ürünü, stok durumunu ve ortalama puanı okur: üç table, bir JOIN, yaklaşık 8 ms. Normal günde saniyede 600 görüntüleme olur; kampanya akşamı saniyede 6.000 olur ve görüntülemelerin yüzde 80'i aynı 50 ürüne gider. "
+        story=_t("TDS Academy Market'in ürün sayfası her açılışta Aurora'dan ürünü, stok durumunu ve ortalama puanı okur: üç table, bir JOIN, yaklaşık 8 ms. Normal günde saniyede 600 görüntüleme olur; kampanya akşamı saniyede 6.000 olur ve görüntülemelerin yüzde 80'i aynı 50 ürüne gider. "
                  "Aurora writer'ı checkout'u yapar; kampanya akşamı okuma yükü checkout'u yavaşlatmamalıdır. Fiyat değişince en geç 5 dakika içinde sayfada görünmesi kabul edilir; stok \"son 3 adet\" gösterimi de 5 dakika eski olabilir, çünkü checkout stoğu Aurora'da yeniden kontrol eder. Ekip üç geliştirici."),
         reqs=[
             req(True, "Tek soru: \"bu ürünün sayfa verisi\". Uygulama ürün id'sini URL'den bilir. Veri en fazla 5 dakika eski olabilir; fiyat değişince uygulama eski kopyayı silebilmelidir.",
@@ -2375,7 +2375,7 @@ EC_USECASES = [
     usecase("counters", 5,
         title=_t("Gerçek zamanlı sayaçlar: görüntüleme ve tekil ziyaretçi"),
         key=_t("Key: views:2026-10-28T14:{0..15} (saat, 16 parça). Value: bir hash; field ürün id'si, değer sayı. Tekil ziyaretçi için ürün başına bir HyperLogLog."),
-        story=_t("Lale Market'in pazarlama ekranı her ürünün son bir saatteki görüntüleme sayısını ve tekil ziyaretçi sayısını canlı gösterir; \"şu an en çok bakılan 20 ürün\" kutusu ana sayfadadır. "
+        story=_t("TDS Academy Market'in pazarlama ekranı her ürünün son bir saatteki görüntüleme sayısını ve tekil ziyaretçi sayısını canlı gösterir; \"şu an en çok bakılan 20 ürün\" kutusu ana sayfadadır. "
                  "Saniyede 15.000 görüntüleme olayı gelir; kampanya akşamı 50.000'e çıkar ve olayların yarısı aynı 10 ürüne gider. Her saat sonunda sayılar Redshift'e yazılır ve bellekteki saat silinir. "
                  "Bir arızada son saatin sayıları kaybolursa ekran o saati eksik gösterir; muhasebe ya da faturalandırma bu sayılara dayanmaz. Ekip iki geliştirici ve bir veri analisti; analist saatlik sayıları Redshift'te sorgular."),
         reqs=[
@@ -2424,7 +2424,7 @@ EC_USECASES = [
     usecase("pubsub", 6,
         title=_t("Canlı güncellemeler için pub/sub"),
         key=_t("Channel: order:<id> ve stock:<ürün>. Message: yeni durum ya da yeni stok sayısı."),
-        story=_t("Lale Market'in sipariş takip sayfası ve kampanya sayfası tarayıcıya WebSocket ile canlı güncelleme gönderir: \"siparişin kargoya verildi\", \"bu üründen 3 adet kaldı\". Tarayıcılar 20 WebSocket sunucusuna dağılmıştır; bir olayın hangi sunucudaki tarayıcıya gideceği bilinmez. "
+        story=_t("TDS Academy Market'in sipariş takip sayfası ve kampanya sayfası tarayıcıya WebSocket ile canlı güncelleme gönderir: \"siparişin kargoya verildi\", \"bu üründen 3 adet kaldı\". Tarayıcılar 20 WebSocket sunucusuna dağılmıştır; bir olayın hangi sunucudaki tarayıcıya gideceği bilinmez. "
                  "Saniyede 2.000 olay yayınlanır, kampanya akşamı 10.000; aynı anda 150.000 tarayıcı bağlıdır. Her olay 500 ms içinde ilgili tarayıcılara ulaşmalıdır. Kaçan bir mesaj zararsızdır, çünkü sayfa yeniden bağlanınca son durumu Aurora'dan okur. Mesaj geçmişi tutulmaz; olayın kalıcı kaydı zaten Aurora'daki sipariş ve stok row'larıdır. Ekip üç geliştirici, sunucu istemiyor."),
         reqs=[
             req(True, "Bir olay bir kez yayınlanır ve o kanala abone olan her WebSocket sunucusuna gider (fan-out). Yayınlayan, abonelerin kim olduğunu bilmez.",
@@ -2472,9 +2472,9 @@ EC_USECASES = [
     usecase("lock", 7, sim="lose_lock", kind="lose",
         title=_t("Dağıtık kilitler: satıcı ödemesi tam bir kez çalışsın"),
         key=_t("Key: lock:payout:2026-10-28. Value: kilidi alan worker'ın rastgele değeri; süre 15 dakika."),
-        story=_t("Lale Market'in pazar yerinde 3.000 satıcı var. Her gece 02:00'de ödeme işi her satıcının günlük hakedişini hesaplar ve bankaya ödeme talimatı gönderir; iş yaklaşık 10 dakika sürer. "
+        story=_t("TDS Academy Market'in pazar yerinde 3.000 satıcı var. Her gece 02:00'de ödeme işi her satıcının günlük hakedişini hesaplar ve bankaya ödeme talimatı gönderir; iş yaklaşık 10 dakika sürer. "
                  "İş altı worker'da zamanlanmıştır, çünkü bir worker düşerse diğeri devralmalıdır; ama aynı gece iş iki kez çalışırsa her satıcıya iki kez ödeme yapılır. Bir gecenin toplam ödemesi yaklaşık 4 milyon TL'dir. "
-                 "Kilit günde bir kez alınır ve bırakılır; hız önemli değildir. Ekip iki geliştirici; Lale Market zaten ElastiCache ve DynamoDB kullanıyor ve ekip kilidi hangisine koyacağını soruyor."),
+                 "Kilit günde bir kez alınır ve bırakılır; hız önemli değildir. Ekip iki geliştirici; TDS Academy Market zaten ElastiCache ve DynamoDB kullanıyor ve ekip kilidi hangisine koyacağını soruyor."),
         reqs=[
             req(True, "\"Bu gecenin kilidi kimsede değilse bana ver, 15 dakika süreyle\" tek atomik adım olmalı. Kilidi sadece alan worker bırakabilmeli. Worker ölürse kilit süre sonunda kendiliğinden düşmeli.",
                       "İki worker aynı anda \"kilit boş\" görürse ikisi de ödeme yapar. Başka bir worker'ın kilidini silmek aynı sonucu verir."),
@@ -2493,11 +2493,11 @@ EC_USECASES = [
                    sc(10, "Mikrosaniyeler (Ö1); altı worker'ın yarışını tek sıra çözer. Puan kırılmadı."),
                    sc(1, "Replica'lar asenkron kopyalanır (Ö7) ve Serverless'ta dayanıklı log yoktur. 9 puan kırıldı, zorunlu gereksinimde diskalifiye: kilit primary'ye yazıldıktan sonra, replica'ya ulaşmadan primary düşerse yeni primary'de kilit yoktur ve ikinci worker onu alır; Valkey'in kendi belgesi tek primary ve replica ile kurulan kilidin bu yüzden güvenli olmadığını yazar."),
                    sc(9, "Serverless; bir komut ve bir script. 1 puan kırıldı: Lua script'i ve süre ayarı bakım ister."),
-                   sc(9, "Günde birkaç komut; maliyet önemsizdir. 1 puan kırıldı: Lale Market'te cache zaten vardır, ama yoksa sadece kilit için bir cache açmak gereksizdir.")],
+                   sc(9, "Günde birkaç komut; maliyet önemsizdir. 1 puan kırıldı: TDS Academy Market'te cache zaten vardır, ama yoksa sadece kilit için bir cache açmak gereksizdir.")],
             "ddb": [sc(9, "PutItem lock:payout:2026-10-28 ConditionExpression attribute_not_exists(pk) OR expires_at < :now: koşullu yazma kilidi tek adımda alır; bırakma owner = :me koşullu DeleteItem'dır. 1 puan kırıldı: süre kontrolü koşulun içine yazılır, çünkü DynamoDB'nin TTL silmesi tam anında değildir."),
                     sc(9, "Tek haneli milisaniye; altı koşullu yazmadan biri kazanır. 1 puan kırıldı: mikrosaniye değildir, burada önemsizdir."),
                     sc(10, "DynamoDB bir yazmayı onaylamadan önce birkaç AZ'de saklar; onaylanan kilit arızada kaybolmaz ve strongly consistent okuma onu görür. Puan kırılmadı."),
-                    sc(10, "Serverless, iki çağrı, Lale Market'te zaten kullanılıyor. Puan kırılmadı."),
+                    sc(10, "Serverless, iki çağrı, TDS Academy Market'te zaten kullanılıyor. Puan kırılmadı."),
                     sc(10, "Günde birkaç istek; on-demand modda fiyat sıfıra yakındır. Puan kırılmadı.")],
             "mdb": [sc(9, "Aynı SET NX PX ve Lua script'i. 1 puan kırıldı: fencing token yine uygulamanın işidir."),
                     sc(10, "Mikrosaniye okuma, tek haneli milisaniye yazma; burada önemsizdir. Puan kırılmadı."),
@@ -2522,7 +2522,7 @@ EC_USECASES = [
         title=_t("List ile iş kuyruğu: ürün görseli küçültme"),
         key=_t("Key: jobs:thumbs (bekleyen) ve jobs:thumbs:processing:<worker>. Value: list; her eleman bir iş (görselin S3 key'i)."),
         story=_t("Satıcılar ürün görsellerini S3'e yükler. Her yükleme, görselin dört boyutta küçültülmesi için bir iş üretir; 8 worker işleri alır ve sonucu S3'e yazar. Normal günde saniyede 30 iş, yeni sezon başında saniyede 500 iş gelir ve iki saat sürer. "
-                 "Bir iş kaybolursa görsel küçültülmeden kalır, ama gece çalışan bir kontrol S3'teki küçültülmemiş görselleri bulur ve işi yeniden üretir. Bir işin iki kez yapılması zararsızdır (aynı dosya yeniden yazılır). İş 5 saniye içinde başlamalıdır. Ekip iki geliştirici; Lale Market'te ElastiCache zaten var."),
+                 "Bir iş kaybolursa görsel küçültülmeden kalır, ama gece çalışan bir kontrol S3'teki küçültülmemiş görselleri bulur ve işi yeniden üretir. Bir işin iki kez yapılması zararsızdır (aynı dosya yeniden yazılır). İş 5 saniye içinde başlamalıdır. Ekip iki geliştirici; TDS Academy Market'te ElastiCache zaten var."),
         reqs=[
             req(True, "Üretici işi kuyruğun sonuna ekler; bir worker kuyruğun başından bir iş alır ve iki worker aynı işi almaz. Worker işi alırken çökerse iş kaybolmamalı, bir \"işleniyor\" listesinde kalmalıdır.",
                       "İki worker aynı işi alırsa iş boşa tekrarlanır; çöken worker'ın işi hiçbir yerde kalmazsa görsel küçültülmez."),
@@ -2618,7 +2618,7 @@ EC_USECASES = [
     usecase("geo", 10,
         title=_t("Yakındaki kuryeler: konum araması"),
         key=_t("Key: couriers:istanbul. Value: geo index (koordinat score'lu bir sorted set); member kurye id'si."),
-        story=_t("Lale Market aynı gün teslimat için 4.000 kuryeyle çalışır. Her kurye uygulaması konumunu 5 saniyede bir gönderir: saniyede 800 konum yazması. Sipariş verildiğinde sistem mağazaya 3 km içindeki en yakın 5 boş kuryeyi arar; kampanya akşamı saniyede 2.000 arama olur. "
+        story=_t("TDS Academy Market aynı gün teslimat için 4.000 kuryeyle çalışır. Her kurye uygulaması konumunu 5 saniyede bir gönderir: saniyede 800 konum yazması. Sipariş verildiğinde sistem mağazaya 3 km içindeki en yakın 5 boş kuryeyi arar; kampanya akşamı saniyede 2.000 arama olur. "
                  "Konumlar 5 saniye sonra eskir; geçmiş konumlar ayrıca S3'e yazılır. Arama 20 ms içinde dönmelidir, çünkü sipariş ekranı bekler. Teslimat bölgelerinin çokgenleri ve fiyatları Aurora'da (PostGIS) zaten vardır. Konumu 30 saniyedir gelmeyen kurye (telefonu kapanmış, tünelde) aramada görünmemelidir. Ekip üç geliştirici."),
         reqs=[
             req(True, "\"Bu kuryenin konumu şu\" (üzerine yazma) ve \"şu noktaya 3 km içindeki kuryeler, yakından uzağa, ilk 5\". Konumu 30 saniyedir gelmeyen kurye aramada çıkmamalı.",

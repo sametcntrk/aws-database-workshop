@@ -103,7 +103,7 @@ DDB_W = []
 
 # ------------------------------------------------------------------ 1. shopping cart
 DDB_W.append(wusecase("cart", 1, sim="w_cart",
-    title="Alışveriş sepetleri (Lale Market)",
+    title="Alışveriş sepetleri (TDS Academy Market)",
     key="Key: sepet, sonra ürün. Value: miktar, fiyat, süre sonu.",
     story=story("cart"),
     wnote="R1 toplam 50: sepetin dört engine sorusu (nasıl okunur, kural nasıl korunur, nasıl yazılır, nasıl biter) her istekte çalışır. "
@@ -152,7 +152,7 @@ DDB_W.append(wusecase("cart", 1, sim="w_cart",
                 sc(4, "PostgreSQL'de TTL yoktur. 6 puan kırıldı: terk edilen sepetler için zamanlanmış bir DELETE işi (pg_cron) gerekir ve günde milyonlarca satırı silmek VACUUM yükü getirir."),
                 sc(6, "Saniyede 5.000 küçük yazma güçlü bir writer'ın erişimindedir; Serverless v2 ACU'yu artırır. 4 puan kırıldı: sepet tablosu siparişlerin writer'ına eklenir ve kampanya akşamının 5.000 yazması checkout tepesiyle aynı andadır (Aurora sayfasının tek writer tablosu: 5.000'e kadar, checkout ile aynı tepede 3 puan); on dakikada 20 kat için minimum ACU da önceden yükseltilir (sabit 1 puan)."),
                 sc(10, "Üç AZ'de altı kopya ve sürekli yedek. Puan kırılmadı."),
-                sc(7, "Lale Market siparişler için zaten bir Aurora işletir; sepet tablosu oraya eklenir. 3 puan kırıldı: kampanya yükü siparişlerle aynı cluster'a biner ve ACU aralığı ile connection pool ayarı database yöneticisi olmayan ekibin işidir."),
+                sc(7, "TDS Academy Market siparişler için zaten bir Aurora işletir; sepet tablosu oraya eklenir. 3 puan kırıldı: kampanya yükü siparişlerle aynı cluster'a biner ve ACU aralığı ile connection pool ayarı database yöneticisi olmayan ekibin işidir."),
                 sc(7, "Var olan Aurora'da sepet tablosu ayrıca ödenmez. 3 puan kırıldı: kampanya akşamı için ACU üst sınırı ve minimum ACU yükseltilir; tepe kapasitesi siparişlerle paylaşılır ve ACU-saat olarak ödenir.")],
     },
     h2h={
@@ -804,7 +804,7 @@ AURORA_W = []
 
 # ------------------------------------------------------------------ 1. checkout: order, stock, payment
 AURORA_W.append(wusecase("checkout", 1, sim="w_checkout",
-    title="Sipariş, stok ve ödeme: checkout (Lale Market)",
+    title="Sipariş, stok ve ödeme: checkout (TDS Academy Market)",
     key="Table'lar: products, orders, order_items, payments. Kural: stok sıfırın altına inmez, sipariş stoksuz var olmaz.",
     story=astory("checkout").replace("line'larını", "satırlarını").replace("12.500 line", "12.500 sipariş satırı"),
     wnote="R1 toplam 50: checkout'un dört yazması, kuralları ve soruları engine'in garanti modeline dayanır; en ağır alt madde tutarlılık ve atomikliktir (18). "
@@ -840,7 +840,7 @@ AURORA_W.append(wusecase("checkout", 1, sim="w_checkout",
                 sc(9, "UPDATE … SET stock = stock - 2 değeri okumadan düşürür; RETURNING yeni değeri aynı cümlede verir. 1 puan kırıldı: her UPDATE MVCC ile row'un yeni bir sürümünü yazar; sık değişen stok row'larında VACUUM işi artar."),
                 sc(10, "Saniyede 10 checkout tek writer için küçük bir yüktür; 300 stok okuması primary key index'inden gelir ve reader'a yönlendirilebilir (Ö7). Puan kırılmadı."),
                 sc(10, "Veri üç Availability Zone'da altı kopyadır (Ö7); commit edilmiş sipariş bir AZ arızasında kaybolmaz. Point-in-time restore yanlış bir silmeyi saniye hassasiyetiyle geri alır. Puan kırılmadı."),
-                sc(9, "Lale Market'te Aurora zaten çalışır; yedek, yama ve failover yönetilir ve ekip bildiği SQL ile çalışır. 1 puan kırıldı: ACU aralığı, connection pool ve migration disiplini ekibin işidir."),
+                sc(9, "TDS Academy Market'te Aurora zaten çalışır; yedek, yama ve failover yönetilir ve ekip bildiği SQL ile çalışır. 1 puan kırıldı: ACU aralığı, connection pool ve migration disiplini ekibin işidir."),
                 sc(8, "Serverless v2 ACU-saniye olarak ödenir ve boş gecede 0,5 ACU'ya iner. 2 puan kırıldı: minimum ACU iki instance için boş gecede de ödenir ve Aurora Standard'da I/O başına ek ücret vardır.")],
         "doc": [sc(8, "Sipariş ve satırları tek bir document'tır ve tek yazmada atomiktir; stok ayrı bir collection'da olduğu için DocumentDB'nin birkaç document'lık transaction'ı (4.0 ve sonrası) kullanılır. 2 puan kırıldı: uygulama transaction'ı açar, yeniden deneme hatalarını kendisi işler ve son adet kuralını koşullu bir update ile yazar."),
                 sc(5, "$jsonSchema ile bir collection'a yazılan document'ın alanları ve type'ları denetlenebilir. 5 puan kırıldı: collection'lar arası kural yoktur; siparişin gösterdiği ürünün ya da müşterinin var olduğunu uygulama kontrol eder."),
@@ -862,7 +862,7 @@ AURORA_W.append(wusecase("checkout", 1, sim="w_checkout",
     h2h={
         "doc": "Document (DocumentDB) ile kafa kafaya. Fark R1'in şema satırında ve R4'tedir. DocumentDB'nin gücü siparişin şeklindedir: sipariş, satırları ve teslimat adresiyle tek bir document'tır, tek okumayla gelir ve tek yazmada atomiktir; birkaç document'lık transaction da vardır. "
                "Ama checkout'un kuralları dört şeyin arasındadır: stok, sipariş, satır ve ödeme. Aurora bu kuralları foreign key, CHECK ve koşullu UPDATE ile database'in içinde, her programa uygular; DocumentDB'de $jsonSchema bir collection'ın içini denetler, collection'lar arası kuralı ise uygulama yazar. "
-               "Servis tasarımında da fark vardır: Aurora Lale Market'te zaten çalışır, DocumentDB yeni bir cluster ve ekip için yeni bir API demektir. "
+               "Servis tasarımında da fark vardır: Aurora TDS Academy Market'te zaten çalışır, DocumentDB yeni bir cluster ve ekip için yeni bir API demektir. "
                "Hangi koşul değişseydi DocumentDB seçilirdi: sipariş ilişkisiz, sık şekil değiştiren bir belge olsaydı, stok kuralı başka bir sistemde korunsaydı ve ekip MongoDB API'sini zaten işletiyor olsaydı.",
         "ddb": "Key-value (DynamoDB) ile kafa kafaya. Fark R1'in şema ve erişim yolu satırlarındadır; R2, R3 ve R5'te DynamoDB eşit ya da biraz öndedir. TransactWriteItems dört yazmayı ya hep ya hiç yapabilir ve koşul stoğu korur; kampanya akşamı için hiçbir şey ayarlanmaz. "
                "Ama foreign key ve CHECK yoktur: var olmayan ürünü gösteren bir satırı database reddetmez. \"Siparişin satırları ürün adlarıyla\" ve \"stoğu azalan ürünler\" soruları JOIN ve serbest filtre ister; DynamoDB'de bunlar ikinci index'ler ya da uygulamada birleştirmedir. "
@@ -872,7 +872,7 @@ AURORA_W.append(wusecase("checkout", 1, sim="w_checkout",
     verdict="Karar: Aurora {aur}, DocumentDB {doc}, DynamoDB {ddb}. Kararı R1 verir: dört table arası kural, ya hep ya hiç yazma ve önceden bilinmeyen sorular ilişkisel engine'in tanımıdır; R3'te üç aday da güçlüdür. "
             "Aurora PostgreSQL seçtiğimizde artımız: kurallar database'de yaşar ve her programa uygulanır, checkout tek transaction'dır, her yeni rapor sorusu bir SQL cümlesidir, sipariş altı kopyayla kalıcıdır. "
             "Eksimiz: bütün yazmalar tek writer'dan geçer; boş gecelerde minimum ACU ödenir; schema değişiklikleri migration disiplini ister; ödeme dış bir servisse transaction ödeme çağrısı boyunca açık tutulmamalı, ödeme önce yetkilendirilmelidir (B5); çok ürünlü sepetlerde deadlock olmaması için satırlar product_id sırasıyla düşürülür ve 40P01 hatası alan transaction yeniden denenir. "
-            "Aynı engine'i çalıştıran RDS for PostgreSQL bu kartta aday değildir, çünkü R1'i Aurora ile aynıdır ve fark yalnız R2–R5'tedir: Lale Market'te Aurora zaten çalışır ve checkout'u RDS'e taşımak yeni bir cluster işletmek demektir; sıfırdan başlayan düz yüklü küçük bir mağazada RDS kart 5'teki gibi fiyatla yakın bir yarışa girer. "
+            "Aynı engine'i çalıştıran RDS for PostgreSQL bu kartta aday değildir, çünkü R1'i Aurora ile aynıdır ve fark yalnız R2–R5'tedir: TDS Academy Market'te Aurora zaten çalışır ve checkout'u RDS'e taşımak yeni bir cluster işletmek demektir; sıfırdan başlayan düz yüklü küçük bir mağazada RDS kart 5'teki gibi fiyatla yakın bir yarışa girer. "
             "Bir koşul değişseydi: checkout hacmi saniyede binlerce transaction'a çıksaydı ve sipariş ilişkisiz tek bir value olsaydı DynamoDB yarışa girerdi; bu eşik bir büyüklük sırasıdır, A8'deki gibi kendi yükünle ölçülür."))
 
 # ------------------------------------------------------------------ 2. product catalog with relations (DocumentDB wins R1)
@@ -1584,7 +1584,7 @@ DOCDB_W = []
 
 # ------------------------------------------------------------------ 1. product catalog with variable attributes (DocumentDB wins on its engine)
 DOCDB_W.append(wusecase("catalog", 1, sim="w_catalog",
-    title="Değişken özellikli ürün kataloğu (Lale Market)",
+    title="Değişken özellikli ürün kataloğu (TDS Academy Market)",
     key="Collection: products. Document: _id, name, category, price, attributes (iç içe), tags (array).",
     story=dstory("catalog"),
     wnote="R1 toplam 55: ürünün şekli (VM 14), her ay gelen yeni özellik (ŞE 12) ve iç içe field'lara göre filtreler (EY 15) bu kataloğun günlük işidir. "
@@ -1628,7 +1628,7 @@ DOCDB_W.append(wusecase("catalog", 1, sim="w_catalog",
                 sc(7, "GIN index JSONB'deki eşitlik sorularını hızlandırır; expression index tek bir yolu index'ler. 3 puan kırıldı: GIN sıralama ve aralık vermez; aralık ve sıralama isteyen her iç içe field için ayrı bir expression index kurulur."),
                 sc(9, "Reader instance'lar okumayı paylaşır. 1 puan kırıldı: beklenmeyen bir tepe yeni reader'ın eklenmesini dakikalarca bekler."),
                 sc(10, "Üç AZ'de altı kopya; point-in-time restore. Puan kırılmadı."),
-                sc(8, "Aurora Lale Market'te siparişler için zaten çalışır. 2 puan kırıldı: kataloğu oraya taşımak sabit column'lar için migration disiplini ve vitrin okumaları için reader instance'ları ister; ekibin MongoDB bilen ikisi SQL'e geçer."),
+                sc(8, "Aurora TDS Academy Market'te siparişler için zaten çalışır. 2 puan kırıldı: kataloğu oraya taşımak sabit column'lar için migration disiplini ve vitrin okumaları için reader instance'ları ister; ekibin MongoDB bilen ikisi SQL'e geçer."),
                 sc(8, "Var olan cluster'a eklenir. 2 puan kırıldı: vitrinin 2.000 okuması için reader instance'ları ve ACU'lar ödenir.")],
         "os": [sc(8, "Ürün bir JSON document'ıdır; iç içe nesneler ve listeler saklanır. 2 puan kırıldı: bir listedeki nesnelerin field'larını birlikte sormak için nested mapping tanımlanır."),
                sc(8, "Dynamic mapping yeni field'ı kendisi tanır. 2 puan kırıldı: bir field'ın type'ı ilk yazmada sabitlenir; yanlış tahmin edilen bir type reindex ister (OpenSearch sayfasının kademesi: yalnız yeni alan gelirse 2, var olan alanların type'ı ya da analizi değişirse 4 puan; bu hikâyede yalnız yeni özellik gelir)."),
@@ -1641,7 +1641,7 @@ DOCDB_W.append(wusecase("catalog", 1, sim="w_catalog",
                sc(6, "Node'lar saat başına ödenir. 4 puan kırıldı: kataloğun kayıt sistemi olarak bütün gün çalışan bir domain ve kalıcılık için ek replica'lar.")],
     },
     h2h={
-        "aur": "İlişkisel (Aurora PostgreSQL) ile kafa kafaya. Fark R1'in veri modeli, okuma/yazma şekli ve index araçları satırlarındadır; R2 ve R3'te iki aday eşittir. Aurora güçlü bir adaydır: JSONB değişken özellikleri migration'sız saklar, SQL her column'da ve JSON'un içinde sorar ve Lale Market'te Aurora zaten siparişler için çalışır. "
+        "aur": "İlişkisel (Aurora PostgreSQL) ile kafa kafaya. Fark R1'in veri modeli, okuma/yazma şekli ve index araçları satırlarındadır; R2 ve R3'te iki aday eşittir. Aurora güçlü bir adaydır: JSONB değişken özellikleri migration'sız saklar, SQL her column'da ve JSON'un içinde sorar ve TDS Academy Market'te Aurora zaten siparişler için çalışır. "
                "Ama ürün iki biçime bölünür: sabit field'lar column'larda, değişken olanlar JSON'da. Tek bir özelliği değiştirmek MVCC yüzünden bütün row'un yeni bir sürümüdür ve iç içe bir field'a göre aralık ya da sıralama her field için ayrı bir expression index ister. DocumentDB'de aynı ürün tek bir document'tır ve iç içe her field'a doğrudan index kurulur. "
                "Hangi koşul değişseydi Aurora PostgreSQL seçilirdi: ürünler sipariş ve stokla aynı transaction'da değişseydi, özellikler az ve sabit olsaydı ve ekip sadece SQL bilseydi (Aurora sayfasının kart 2'si tam bu koşullarla Aurora'yı öne koyar).",
         "os": "Search engine (OpenSearch) ile kafa kafaya. OpenSearch filtrelerde ve facet'lerde çok güçlüdür ve bu kartın erişim yolu satırında DocumentDB'ye çok yakındır. Ama bu kart kataloğun kendisini, yani kayıt sistemini soruyor: bir ürünün tek özelliğini güvenle değiştirmek, iki satıcının yazmasını ayırmak ve type'ı değişen bir field için index'i baştan kurmadan yaşamak. "
@@ -1998,7 +1998,7 @@ DOCDB_W.append(wusecase("orders", 7,
     key="Collection: orders. Document: _id, customer_id, lines (array), address (iç içe), status, history (array). Checkout Aurora'da kalır.",
     story=dstory("orders"),
     wnote="R1 toplam 46: siparişin şekli (VM 14), üç sorusu (EY 14) ve durum değişikliğinin biçimi (OY 12) okuma modelinin kendisidir. "
-          "R4 20 ile ikinci: Lale Market'te Aurora ve DocumentDB zaten çalışır ve okuma modeli checkout'un takviminden bağımsız olmalıdır. R5 16: ikisine de ekleme yapılır, yeni bir database kurulmaz.",
+          "R4 20 ile ikinci: TDS Academy Market'te Aurora ve DocumentDB zaten çalışır ve okuma modeli checkout'un takviminden bağımsız olmalıdır. R5 16: ikisine de ekleme yapılır, yeni bir database kurulmaz.",
     rows=[
         row("VM", 14, "\"Siparişlerim\", kargo takibi ve destek ekranı siparişin tamamını ister.",
             "Sipariş _id ile tek okumada satırlar, o günkü adres ve durum geçmişiyle gelmeli; adres siparişteki hâliyle saklanmalı.",
@@ -2029,7 +2029,7 @@ DOCDB_W.append(wusecase("orders", 7,
                 sc(10, "Yeni durum türü ya da satır field'ı sadece yeni document'lara yazılır (Ö2). Puan kırılmadı."),
                 sc(10, "Saniyede birkaç yazma ve 200 okuma var olan cluster için küçüktür. Puan kırılmadı."),
                 sc(10, "Cluster volume üç AZ'de altı kopya tutar; kopya kaybolsa event'lerden yeniden kurulur. Puan kırılmadı."),
-                sc(8, "Lale Market'in DocumentDB cluster'ına bir collection eklenir; checkout'tan bağımsızdır ve ekip API'yi biliyor. 2 puan kırıldı: checkout event'ini okuyup document'ı yazan tüketici ekibin işlettiği bir süreçtir."),
+                sc(8, "TDS Academy Market'in DocumentDB cluster'ına bir collection eklenir; checkout'tan bağımsızdır ve ekip API'yi biliyor. 2 puan kırıldı: checkout event'ini okuyup document'ı yazan tüketici ekibin işlettiği bir süreçtir."),
                 sc(8, "Var olan cluster'a bir collection: yeni bir minimum kapasite yoktur. 2 puan kırıldı: ek okuma ve yazma cluster'ın I/O'sunu artırır, belki bir replica daha gerekir.")],
         "aur": [sc(7, "Sipariş orders ve order_items table'larında durur; geçmiş ayrı bir table ya da JSONB'dir. 3 puan kırıldı: sipariş ekranı bir JOIN'dir ya da sipariş bir JSONB document'ı olarak tutulur ve type'lı column'larla yan yana yaşar."),
                 sc(9, "UPDATE status ve INSERT history tek transaction'dır. 1 puan kırıldı: iki cümle ve bir transaction; tek yazma değildir."),
@@ -2045,7 +2045,7 @@ DOCDB_W.append(wusecase("orders", 7,
                 sc(10, "Key dışındaki alanlar serbesttir. Puan kırılmadı."),
                 sc(10, "On-demand mod bu küçük yükü karşılar. Puan kırılmadı."),
                 sc(10, "Birkaç AZ'de saklanır. Puan kırılmadı."),
-                sc(5, "Serverless: sunucu yoktur. 5 puan kırıldı: Lale Market'te sepet DynamoDB'dedir ama okuma modeli için yeni bir table, key tasarımı ve satırların ikinci kopyası ekibin işidir."),
+                sc(5, "Serverless: sunucu yoktur. 5 puan kırıldı: TDS Academy Market'te sepet DynamoDB'dedir ama okuma modeli için yeni bir table, key tasarımı ve satırların ikinci kopyası ekibin işidir."),
                 sc(9, "İstek başına ödeme. 1 puan kırıldı: her satırın ikinci kopyası yazma birimi tüketir.")],
     },
     h2h={
@@ -2112,7 +2112,7 @@ DOCDB_W.append(wusecase("search", 8, sim="w_search",
                 sc(7, "JSONB yeni field'ı migration'sız alır. 3 puan kırıldı: index'lenecek her iç içe field için yeni bir expression index kurulur."),
                 sc(7, "Reader instance'lar okumayı paylaşır. 3 puan kırıldı: kampanyada 5.000 filtre ve GROUP BY reader'ların CPU'sunu doldurur."),
                 sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
-                sc(4, "Aurora Lale Market'te çalışır. 6 puan kırıldı: katalog DocumentDB'dedir; arama için Aurora'ya bir kopya ve onu besleyen bir boru hattı gerekir ve filtre sorguları JSONB yollarıyla yeniden yazılır."),
+                sc(4, "Aurora TDS Academy Market'te çalışır. 6 puan kırıldı: katalog DocumentDB'dedir; arama için Aurora'ya bir kopya ve onu besleyen bir boru hattı gerekir ve filtre sorguları JSONB yollarıyla yeniden yazılır."),
                 sc(7, "Var olan cluster'a reader eklenir. 3 puan kırıldı: kampanya reader'ları ACU olarak ödenir.")],
     },
     h2h={
@@ -2308,9 +2308,9 @@ def kreq(uid, i, part):
 
 KEYSPACES_W = []
 
-# ------------------------------------------------------------------ 1. activity history (Lale Market)
+# ------------------------------------------------------------------ 1. activity history (TDS Academy Market)
 KEYSPACES_W.append(wusecase("activity", 1,
-    title="Kullanıcı başına aktivite geçmişi (Lale Market)",
+    title="Kullanıcı başına aktivite geçmişi (TDS Academy Market)",
     key="Partition key: user_id. Clustering column: event_time (en yeni önce), event_id. Row: event türü, ürün, detay. Table varsayılan TTL'i 7 gün.",
     story=kstory("activity"),
     wnote="R1 toplam 50: iki ekranın sorusu ve 7 günlük ömür engine'in partition ve sıra modeline dayanır; en ağır alt madde erişim yoludur (18). "
@@ -2348,7 +2348,7 @@ KEYSPACES_W.append(wusecase("activity", 1,
                 sc(10, "Aynı partition key'in item'ları sort key sırasıyla bir arada durur; okuma bitişiktir. Puan kırılmadı."),
                 sc(10, "On-demand mod ısıtılmış bir table ile tepeyi taşır ve partition'lar yazmaları dağıtır. Puan kırılmadı."),
                 sc(10, "Her yazma birkaç AZ'de saklanır; point-in-time recovery. Puan kırılmadı."),
-                sc(5, "DynamoDB Lale Market'te sepet için zaten çalışır; yeni bir servis değildir. 5 puan kırıldı: veri ekibinin Spark Cassandra Connector ve CQL ile yazdığı gece işi DynamoDB'nin API'ına yeniden yazılır ve yeniden test edilir; ilk büyük kampanyadan önce warm throughput yükseltilir."),
+                sc(5, "DynamoDB TDS Academy Market'te sepet için zaten çalışır; yeni bir servis değildir. 5 puan kırıldı: veri ekibinin Spark Cassandra Connector ve CQL ile yazdığı gece işi DynamoDB'nin API'ına yeniden yazılır ve yeniden test edilir; ilk büyük kampanyadan önce warm throughput yükseltilir."),
                 sc(10, "İstek başına ödeme; TTL silmesi ücretsizdir. Puan kırılmadı.")],
         "aur": [sc(10, "(user_id, event_time DESC) üzerinde bir B-tree index ve LIMIT; her iki soru SQL ile sorulur. Puan kırılmadı."),
                 sc(7, "INSERT okumadan ekler. 3 puan kırıldı: her event heap'e, index'e ve write-ahead log'a yazılır; her küçük ekleme üç ayrı yazmadır (writer'ın yükü R2'de sayıldı)."),
@@ -2356,16 +2356,16 @@ KEYSPACES_W.append(wusecase("activity", 1,
                 sc(8, "Index en yeni 40 event'i sırayla bulur. 2 puan kırıldı: row'lar heap'te yazma sırasıyla durur, kullanıcıya göre değil; 40 event çoğu zaman 40 ayrı page okumasıdır."),
                 sc(5, "Bütün yazmalar checkout'u da taşıyan tek writer'dan geçer. 5 puan kırıldı: kampanya akşamı saniyede 15.000 ekleme aynı writer'da sipariş yazmalarıyla yarışır (Aurora sayfasının tek writer tablosu: 5.000–20.000, checkout ile aynı tepede 5 puan)."),
                 sc(10, "Altı kopya, üç AZ. Puan kırılmadı."),
-                sc(6, "Aurora Lale Market'te zaten çalışır; yeni bir table eklenir. 4 puan kırıldı: gece işi JDBC'ye yeniden yazılır ve event yükünün checkout cluster'ındaki etkisi izlenir."),
+                sc(6, "Aurora TDS Academy Market'te zaten çalışır; yeni bir table eklenir. 4 puan kırıldı: gece işi JDBC'ye yeniden yazılır ve event yükünün checkout cluster'ındaki etkisi izlenir."),
                 sc(6, "Var olan cluster'a eklenir. 4 puan kırıldı: kampanya tepesi için ACU aralığı yükseltilir ve günde yaklaşık 100 milyon eklemenin I/O'su ödenir.")],
     },
     h2h={
         "ddb": "Key-value (DynamoDB) ile kafa kafaya. Engine uyumunda iki servis neredeyse eşittir: ikisi de veriyi partition key'in hash'iyle dağıtır, kullanıcının event'lerini zaman sırasıyla bir arada tutar ve yazmadan önce okumaz. "
                "Tek engine farkı süre sonudur: DynamoDB süresi dolan item'ı genellikle birkaç gün içinde siler ve o zamana kadar okumada gösterir, Keyspaces ise süresi dolan row'u hiç döndürmez. "
-               "DynamoDB'nin dürüst üstünlüğü servis tarafındadır: Lale Market'te zaten çalışır ve TTL silmesi ücretsizdir. "
+               "DynamoDB'nin dürüst üstünlüğü servis tarafındadır: TDS Academy Market'te zaten çalışır ve TTL silmesi ücretsizdir. "
                "Kararı R4 verir: veri ekibinin gece işi CQL ile yazılmıştır ve DynamoDB'de yeniden yazılması gerekir. "
                "Hangi koşul değişseydi DynamoDB seçilirdi: gece işi olmasaydı ya da veri ekibi işi zaten yeniden yazmayı planlasaydı; o zaman R4 eşitlenir, ücretsiz TTL silmesi R5'i DynamoDB'ye verir ve fark DynamoDB lehine döner.",
-        "aur": "İlişkisel (Aurora PostgreSQL) ile kafa kafaya. Aurora Lale Market'te siparişler için zaten çalışır ve SQL her soruyu sorar; erişim yolunda eksiği yoktur. "
+        "aur": "İlişkisel (Aurora PostgreSQL) ile kafa kafaya. Aurora TDS Academy Market'te siparişler için zaten çalışır ve SQL her soruyu sorar; erişim yolunda eksiği yoktur. "
                "Ama bu iş yükünün geri kalanı engine'in doğasına uymaz: her küçük ekleme heap'e, index'e ve log'a yazılır, row'lar kullanıcıya göre değil yazma sırasına göre durur ve süre sonu bir partition bakım işidir. "
                "Servis tarafında da en büyük bedel R2'dedir: kampanya akşamının saniyede 15.000 eklemesi checkout'u taşıyan tek writer'dan geçer ve sipariş yazmalarıyla yarışır. "
                "Hangi koşul değişseydi Aurora seçilirdi: event'ler saniyede birkaç yüz olsaydı, siparişlerle JOIN'li raporlar ana iş olsaydı ve 7 günlük ömür yerine aylarca saklama istenseydi.",
@@ -3058,7 +3058,7 @@ ELASTICACHE_W.append(wusecase("session", 1, sim="w_session",
         "ec": [sc(10, "GET ya da HGETALL lm:session:{id} key ile doğrudan, bellekten okumadır (Ö1). Puan kırılmadı."),
                sc(10, "EXPIRE süreyi milisaniye hassasiyetle uygular; süresi dolmuş bir key hiçbir okumada dönmez (Ö4). Puan kırılmadı."),
                sc(10, "GETEX lm:session:{id} EX 1800 oturumu okur ve süresini aynı komutta yeniler; tek istek, tek satır (Ö3). Puan kırılmadı."),
-               sc(10, "Valkey bütün veriyi bellekteki bir hash table'da tutar; komut mikrosaniyelerdedir ve AWS'e göre Serverless'ta okumaların yarısı (p50) 1 ms'nin altında döner (Ö1). Puan kırılmadı: Lale Market'in 1,3–1,8 ms ölçümü (B1–B5) Python istemcisi ve TLS dahil uçtan uca süredir; bu satır engine'in kendi süresini puanlar."),
+               sc(10, "Valkey bütün veriyi bellekteki bir hash table'da tutar; komut mikrosaniyelerdedir ve AWS'e göre Serverless'ta okumaların yarısı (p50) 1 ms'nin altında döner (Ö1). Puan kırılmadı: TDS Academy Market'in 1,3–1,8 ms ölçümü (B1–B5) Python istemcisi ve TLS dahil uçtan uca süredir; bu satır engine'in kendi süresini puanlar."),
                sc(10, "Serverless belleği ve trafiği izleyip kendisi büyür; okumalar tepe anında da milisaniyenin altındadır (Ö6). Puan kırılmadı."),
                sc(4, "Serverless veriyi birkaç AZ'de replica olarak tutar ve failover yapar (Ö7), ama her yazmayı kalıcı bir log'a yazmaz. 6 puan kırıldı: bir arızada son oturumlar kaybolabilir ve kullanıcılar yeniden login olur; bu kartta kabul edilen bir sonuçtur."),
                sc(10, "Serverless: node, yama ve kapasite planı yoktur. Puan kırılmadı."),
@@ -3094,9 +3094,9 @@ ELASTICACHE_W.append(wusecase("session", 1, sim="w_session",
             "ElastiCache seçtiğimizde artımız: tek komutla oku ve yenile, saniyesinde düşen oturum, mikrosaniye okuma ve sunucusuz işletim. "
             "Eksimiz: bir arızada son oturumlar kaybolabilir; uygulama \"oturum yok\" durumunu login'e yönlendirerek sakin karşılamalı ve sepet gibi değerli durumu oturumda değil kalıcı store'da tutmalıdır. Bir koşul değişseydi: oturum kaybı pahalı olsaydı MemoryDB kazanırdı."))
 
-# ------------------------------------------------------------------ 2. live leaderboard (Lale Market)
+# ------------------------------------------------------------------ 2. live leaderboard (TDS Academy Market)
 ELASTICACHE_W.append(wusecase("board", 2, sim="w_board",
-    title="Canlı liderlik tabloları (Lale Market)",
+    title="Canlı liderlik tabloları (TDS Academy Market)",
     key="Key: lm:leaderboard. Value: bir sorted set; member müşteri id'si, score gelir.",
     story=estory("board"),
     wnote="R1 toplam 45: tablonun üç engine sorusu (ilk 10 ve \"kaçıncı sıradayım\" nasıl sorulur, bir sipariş skora nasıl eklenir, sıra nerede tutulur) her okumada ve her checkout'ta çalışır. "
@@ -3159,7 +3159,7 @@ ELASTICACHE_W.append(wusecase("board", 2, sim="w_board",
                "Hangi koşul değişseydi DynamoDB seçilirdi: kimse kendi sırasını sormasaydı (yalnız ilk 10 gösterilseydi), sıra saatte bir hesaplansaydı ve skorlar başka hiçbir yerde olmayan kalıcı bir kayıt olsaydı.",
     },
     verdict="Karar: ElastiCache {ec}, MemoryDB {mdb}, DynamoDB {ddb}. Bu iş yüküne en uygun servis ElastiCache'tir. Engine uyumunda iki Valkey servisi eşittir ve DynamoDB'nin çok önündedir; kararı servis tasarımı verir: tablo 4 dakikada yeniden kurulan bir kopyadır, bu yüzden MemoryDB'nin log'u R3'te yalnız 1,5 puan getirir, ElastiCache'in sunucusuz işletimi ve faturası ise R2, R4 ve R5'te 8 puan getirir. "
-            "ElastiCache seçtiğimizde artımız: ilk 10 ve kişisel sıra tek komut, eklemede yarış yok, node yok; Lale Market bugün bunu yapar. "
+            "ElastiCache seçtiğimizde artımız: ilk 10 ve kişisel sıra tek komut, eklemede yarış yok, node yok; TDS Academy Market bugün bunu yapar. "
             "Eksimiz: bir arızada tablo eksik ya da boş görünebilir; uygulama Seed'i bir arıza adımı olarak yazmalı, ay sonu hediyesini tablodan değil Aurora'daki siparişlerden hesaplamalı ve her ay için yeni bir key (lm:leaderboard:2026-10) açıp eski aya süre vermelidir. Bir koşul değişseydi: tablo siparişlerden yeniden kurulamasaydı ve tek yer bellek olsaydı MemoryDB kazanırdı."))
 
 # ------------------------------------------------------------------ 3. rate limits (the DynamoDB card "rate": same rows, weights, points)
@@ -3239,7 +3239,7 @@ ELASTICACHE_W.append(wusecase("rate", 3,
 
 # ------------------------------------------------------------------ 4. cache-aside for the product page (both together: ElastiCache in front of Aurora)
 ELASTICACHE_W.append(wusecase("cache", 4,
-    title="Ürün sayfası için cache-aside (Lale Market)",
+    title="Ürün sayfası için cache-aside (TDS Academy Market)",
     key="Key: product:P0001. Value: ürün sayfasının JSON'u, TTL 300 saniye.",
     story=estory("cache"),
     wnote="R1 toplam 50: sayfa verisinin nasıl sorulduğu (hazır cevap mı, her seferinde bir JOIN mi), cevabın kaynağa göre ne kadar eski olabileceği, nerede tutulduğu ve kopyanın nasıl bittiği. "
@@ -3264,7 +3264,7 @@ ELASTICACHE_W.append(wusecase("cache", 4,
             "Düşük: cache bir kopyadır, kaynak Aurora'dadır. Ama cache bir anda boşalırsa bütün okumalar aynı anda Aurora'ya gider; bu \"soğuk cache\" anı Aurora'yı yormamalı.",
             "Kaybolan kopya veri kaybı değildir, ama boş bir cache kampanya akşamında Aurora'ya saniyede 6.000 JOIN demektir."),
         row("R4", 10, "Üç geliştirici; cache kodu birkaç satır olmalı.",
-            "Üç geliştirici. Cache kodu birkaç satır olmalı; fiyat değişikliğinde silme tek bir yerde yazılmalı. Lale Market'te ElastiCache ve Aurora zaten çalışır.",
+            "Üç geliştirici. Cache kodu birkaç satır olmalı; fiyat değişikliğinde silme tek bir yerde yazılmalı. TDS Academy Market'te ElastiCache ve Aurora zaten çalışır.",
             "Cache kodu her okuma yoluna dağılırsa eski veri hataları bulunması zor hatalara dönüşür."),
         row("R5", 10, "Sıcak veri 50 MB'tan azdır; kampanya için ek bir okuma instance'ı istenmiyor.",
             "Sayfa verisi küçük (2 KB) ve sıcak ürün sayısı az; toplam sıcak veri 50 MB'tan az. Kampanya akşamı için Aurora'ya ayrıca reader eklemek istenmiyor.",
@@ -3286,7 +3286,7 @@ ELASTICACHE_W.append(wusecase("cache", 4,
                 sc(6, "TTL alanı eski kopyaları siler. 4 puan kırıldı: silme günler içinde olur; \"5 dakikadan eski kopyayı kullanma\" kuralını okuma her seferinde expires_at ile kendisi kontrol eder."),
                 sc(9, "On-demand mod on kat okumayı taşır ve Aurora writer'ı okuma görmez. 1 puan kırıldı: önceki tepenin iki katından hızlı bir sıçrama için table önceden ısıtılmalıdır."),
                 sc(10, "Her yazma birkaç AZ'de saklanır; kopya bir arızada kaybolmaz ve soğuk başlangıç yoktur. Puan kırılmadı."),
-                sc(8, "Lale Market DynamoDB'yi sepet için zaten kullanır. 2 puan kırıldı: yeni bir table ve onu dolduran kod ürün sayfasının okuma yoluna eklenir."),
+                sc(8, "TDS Academy Market DynamoDB'yi sepet için zaten kullanır. 2 puan kırıldı: yeni bir table ve onu dolduran kod ürün sayfasının okuma yoluna eklenir."),
                 sc(6, "İstek başına ödenir. 4 puan kırıldı: kampanya akşamı saniyede 6.000 okuma, saniyede 6.000 okuma isteğidir; aynı okumalar bellekte ECPU olarak çok daha ucuzdur.")],
         "aur": [sc(7, "Sayfa verisi üç table'ın JOIN'idir ve index'lerle yaklaşık 8 ms sürer. 3 puan kırıldı: aynı cevap her açılışta yeniden hesaplanır; hazır bir cevap yoktur."),
                 sc(10, "Cevap her zaman kaynaktır: fiyat değiştiği anda sayfada görünür. Puan kırılmadı: bu satırda en güçlü aday Aurora'dır."),
@@ -3429,7 +3429,7 @@ ELASTICACHE_W.append(wusecase("pubsub", 6,
                 sc(10, "Pub/Sub mesajı aynı biçimde saklanmaz. Puan kırılmadı."),
                 sc(9, "Yayın bir yazma değildir ve log'a işlenmez; hız aynıdır. 1 puan kırıldı: aynı biçimde sharded Pub/Sub tasarımı gerekir."),
                 sc(8, "Log key'lerdeki veriyi korur, Pub/Sub mesajlarını değil. 2 puan kırıldı: ElastiCache'teki gibi failover'daki mesajlar kaçar; log bu kartta bir şey eklemez."),
-                sc(6, "Yönetilen node'lar. 4 puan kırıldı: serverless seçenek yoktur ve Lale Market'te zaten çalışan cache'in yanına ikinci bir bellek içi sistem eklenir."),
+                sc(6, "Yönetilen node'lar. 4 puan kırıldı: serverless seçenek yoktur ve TDS Academy Market'te zaten çalışan cache'in yanına ikinci bir bellek içi sistem eklenir."),
                 sc(4, "Node saat başına ödenir. 6 puan kırıldı: hiç saklanmayan mesajlar için gece gündüz çalışan node'lar ve kullanılmayan bir dayanıklılık ödenir.")],
         "sns": [sc(9, "Bir topic'e bir kez yayınlanan mesaj, topic'e abone olan her WebSocket sunucusunun HTTPS endpoint'ine gider; yayınlayan aboneleri bilmez. 1 puan kırıldı: her yeni sunucu bir abonelik olarak kaydedilir ve onaylanır; kapanan sunucunun aboneliği silinir."),
                 sc(7, "Mesaj servisin içinden her aboneye ayrı bir HTTPS isteğiyle teslim edilir. 3 puan kırıldı: açık bir bağlantıya yazmak yerine her teslim bir istek ve bir cevaptır; 500 ms sınırının içindedir ama payı ElastiCache'ten küçüktür."),
@@ -3442,7 +3442,7 @@ ELASTICACHE_W.append(wusecase("pubsub", 6,
     h2h={
         "mdb": "Kalıcı bellek içi key-value (MemoryDB) ile kafa kafaya. İkiz servisler aynı Pub/Sub'ı çalıştırır ve R1'de ikisi de 40'ta 40 alır. "
                "Bu kart ikizlerin farkının bile sıfıra indiği bir durumu gösterir: MemoryDB'nin asıl artısı olan log key'lerdeki veriyi korur, Pub/Sub mesajlarını değil; failover'da kaçan mesaj iki serviste de kaçar (R3 eşit). "
-               "Geriye yalnız servis tasarımının bedeli kalır: serverless seçenek yoktur, Lale Market'te zaten çalışan cache'in yanına ikinci bir sistem eklenir ve hiç saklanmayan mesajlar için node'lar gece gündüz ödenir (R4, R5). "
+               "Geriye yalnız servis tasarımının bedeli kalır: serverless seçenek yoktur, TDS Academy Market'te zaten çalışan cache'in yanına ikinci bir sistem eklenir ve hiç saklanmayan mesajlar için node'lar gece gündüz ödenir (R4, R5). "
                "Hangi koşul değişseydi MemoryDB seçilirdi: mesajlar Pub/Sub yerine bir stream'e yazılsaydı ve kaçan mesaj zarar verseydi (örneğin \"kargoya verildi\" olayından bir e-posta doğsaydı); o zaman log stream key'ini korurdu.",
         "sns": "Yayın-abone servisi (SNS) ile kafa kafaya. SNS bu iş yükünün en yakın yönetilen alternatifidir: bir yayını abonelere dağıtmak onun işidir, mesajları birden fazla veri merkezinde saklar ve ulaşılamayan aboneye teslimi yeniden dener (R3). "
                "Fark teslim biçimindedir: Valkey mesajı WebSocket sunucularının açık bağlantılarına doğrudan yazar; SNS her sunucuya ayrı bir HTTPS isteği gönderir. Saniyede 10.000 olay ve 20 sunucu, saniyede 200.000 teslim demektir; bu hem gecikme payını küçültür (R1.2) hem de teslim başına ödenen faturayı büyütür (R5). "
@@ -3480,7 +3480,7 @@ ELASTICACHE_W.append(wusecase("lock", 7, sim="w_lock",
             "Onaylanan bir kilit hiçbir arızada kaybolmamalı. Kilit kaybolursa ikinci bir worker onu alır ve aynı gece iki ödeme yapılır.",
             "Bir gecenin çift ödemesi 4 milyon TL'dir ve geri almak haftalar süren bir banka sürecidir; bu kartta dayanıklılık bir iş kuralıdır."),
         row("R4", 15, "İki geliştirici; kilit kodu birkaç satır olmalı ve hikâye yalnız kilit için yeni bir sistem istemediğini açıkça söyler.",
-            "İki geliştirici; sunucu istenmiyor; kilit kodu birkaç satır olmalı. Lale Market zaten ElastiCache ve DynamoDB kullanıyor.",
+            "İki geliştirici; sunucu istenmiyor; kilit kodu birkaç satır olmalı. TDS Academy Market zaten ElastiCache ve DynamoDB kullanıyor.",
             "Kilit kodu karmaşıksa hatası gece 02:00'de, kimse bakmazken ortaya çıkar."),
         row("R5", 5, "Maliyet hikâyede önemsizdir; satır en düşük ağırlıktadır.",
             "Günde birkaç istek; maliyet önemsizdir.",
@@ -3494,7 +3494,7 @@ ELASTICACHE_W.append(wusecase("lock", 7, sim="w_lock",
                 sc(10, "GetItem ve PutItem tarihli key ile doğrudan gider. Puan kırılmadı."),
                 sc(10, "Günde bir istek DynamoDB için önemsizdir. Puan kırılmadı."),
                 sc(10, "Koşullu yazma onaylanmadan önce birkaç AZ'de saklanır; failover penceresi yoktur. Puan kırılmadı."),
-                sc(10, "Lale Market DynamoDB'yi zaten kullanır; serverless ve birkaç satır. Puan kırılmadı."),
+                sc(10, "TDS Academy Market DynamoDB'yi zaten kullanır; serverless ve birkaç satır. Puan kırılmadı."),
                 sc(10, "Günde birkaç istek, birkaç kuruş. Puan kırılmadı.")],
         "mdb": [sc(10, "SET lock:payout:… <rastgele değer> NX PX 900000 tek komuttur; Valkey komutları sırayla çalıştırdığı için yalnız bir worker kilidi alır. Puan kırılmadı."),
                 sc(10, "PX 900000 kilidi tam 15 dakikada siler. Puan kırılmadı."),
@@ -3520,7 +3520,7 @@ ELASTICACHE_W.append(wusecase("lock", 7, sim="w_lock",
         "ec": "Bellek içi key-value (ElastiCache) ile kafa kafaya: bu sayfanın net kaybı. ElastiCache R1'de MemoryDB ile eşittir, çünkü aynı engine'i çalıştırırlar: kilit atomik, süre sonu tam, bırakma küçük bir script. "
               "Kararı tek bir satır verir ve o satır bu kartın ikinci en ağır satırıdır: R3. Kopyalama asenkrondur ve Serverless'ta her yazmayı kalıcı kılan bir log yoktur; primary \"OK\" deyip replica'ya kopyalamadan düşerse kilit yeni primary'de yoktur ve ikinci worker aynı gece ikinci ödemeyi yapar (B8'deki simülasyon). "
               "Atomik olmak kalıcı olmak değildir. Kilidi ElastiCache'te bırakıp asıl korumayı ödeme talimatının DynamoDB'ye koşullu yazılmasına taşımak da bir çözümdür; ama o zaman kilit sadece bir verimlilik aracıdır. "
-              "Bu karttaki ElastiCache adayı Lale Market'in kullandığı Serverless'tır. Node'lu bir Valkey 9.0 cluster'ında senkron kalıcılık açılsaydı R3 MemoryDB gibi tam puan alırdı, ama R4 ve R5 de MemoryDB'ninki gibi olurdu (yalnız kilit için node'lu bir cluster); sonuç MemoryDB'nin yanında, DynamoDB'nin gerisinde kalırdı. Hangi koşul değişseydi ElastiCache seçilirdi: kilidin kaybı zararsız olsaydı (örneğin bir cache'in stampede kilidi, B6) ya da korunan iş idempotent olsaydı, yani iki kez çalışması aynı sonucu verseydi.",
+              "Bu karttaki ElastiCache adayı TDS Academy Market'in kullandığı Serverless'tır. Node'lu bir Valkey 9.0 cluster'ında senkron kalıcılık açılsaydı R3 MemoryDB gibi tam puan alırdı, ama R4 ve R5 de MemoryDB'ninki gibi olurdu (yalnız kilit için node'lu bir cluster); sonuç MemoryDB'nin yanında, DynamoDB'nin gerisinde kalırdı. Hangi koşul değişseydi ElastiCache seçilirdi: kilidin kaybı zararsız olsaydı (örneğin bir cache'in stampede kilidi, B6) ya da korunan iş idempotent olsaydı, yani iki kez çalışması aynı sonucu verseydi.",
     },
     verdict="Karar: DynamoDB {ddb}, MemoryDB {mdb}, ElastiCache {ec}. Bu iş yüküne en uygun servis DynamoDB'dir ve ElastiCache burada net olarak kaybeder: üçüncüdür. Engine uyumunda üç aday birbirine yakındır; kararı R3 verir: onaylanan kilit hiçbir arızada kaybolmamalıdır. "
             "Yine de ElastiCache seçersek artımız: kilit zaten çalışan cache'te, birkaç satır ve tam süre sonuyla. "
@@ -3534,7 +3534,7 @@ ELASTICACHE_W.append(wusecase("queue", 8, sim="w_queue",
           "Normal günde saniyede 30 iş, yeni sezon başında saniyede 500 iş gelir ve iki saat sürer. İş 5 saniye içinde başlamalıdır. "
           "Bozuk bir görsel küçültmeyi her seferinde çökertebilir: üç kez başarısız olan iş kuyruktan ayrılmalı ve bir ekranda gösterilmelidir, yoksa worker'ları sonsuza kadar meşgul eder. "
           "Bir iş kaybolursa görsel küçültülmeden kalır, ama gece çalışan bir kontrol S3'teki küçültülmemiş görselleri bulur ve işi yeniden üretir. Bir işin iki kez yapılması zararsızdır (aynı dosya yeniden yazılır). "
-          "Ekip iki geliştirici; Lale Market'te ElastiCache zaten var ve ekip kuyruğu oraya koymayı düşünüyor.",
+          "Ekip iki geliştirici; TDS Academy Market'te ElastiCache zaten var ve ekip kuyruğu oraya koymayı düşünüyor.",
     wnote="R1 toplam 40 ve en ağır grup: bir işin nasıl eklenip alındığı, çöken worker'ın işinin geri gelmesi ve üç kez başarısız olan işin ayrılması bu iş yükünün kurallarıdır. "
           "R2 20 ile ikinci: sezon başında on altı kat iş ve 5 saniyelik başlama sınırı. R3 ve R4 15'tir: kaybolan iş bir gece gecikir, ekip ise iki kişidir.",
     rows=[
@@ -3865,7 +3865,7 @@ NEPTUNE_W.append(wusecase("social", 1, sim="w_social",
 NEPTUNE_W.append(wusecase("fraud", 2, sim="w_fraud",
     title="Ödeme anında dolandırıcılık halkası kontrolü",
     key="Vertex: Card, Device, Address, Phone, Account. Edge: USED, LIVES_AT, OWNS. Soru: bu ödemenin kartı ya da cihazı, en fazla üç hop'ta işaretli bir hesaba bağlı mı?",
-    story="Lale Market'in ödeme ortağı her kartlı ödemede bir dolandırıcılık kontrolü yapar. Graph'ta 30 milyon vertex (kart, cihaz, adres, telefon, hesap) ve 120 milyon edge var; 2.000 hesap dolandırıcılık nedeniyle işaretli. "
+    story="TDS Academy Market'in ödeme ortağı her kartlı ödemede bir dolandırıcılık kontrolü yapar. Graph'ta 30 milyon vertex (kart, cihaz, adres, telefon, hesap) ve 120 milyon edge var; 2.000 hesap dolandırıcılık nedeniyle işaretli. "
           "Her ödemede soru şudur: bu kart, bu cihaz ya da bu teslimat adresi en fazla üç hop'ta işaretli bir hesaba bağlı mı? Cevap 50 ms içinde gelmeli, yoksa ödeme kontrolsüz geçer. "
           "Gündüz saniyede 800, kampanya akşamı saniyede 2.400 ödeme olur; her ödeme iki ya da üç yeni edge yazar (kart bu cihazı kullandı) ve bir sonraki ödeme bu edge'i görmelidir. "
           "Bazı adresler (bir alışveriş merkezi, bir kargo deposu) on binlerce karta bağlıdır. Altı kişilik veri ekibi bir pilot projede openCypher kullandı. Edge'ler denetim kanıtıdır ve kaybolmamalıdır.",
@@ -3939,11 +3939,11 @@ NEPTUNE_W.append(wusecase("fraud", 2, sim="w_fraud",
             "Eksimiz: ortak adresler önceden işaretlenip sorgudan çıkarılır, replica gecikmesi kadar küçük bir pencere kabul edilir, tek writer'ın kampanya akşamındaki yazma hızı bir yük testiyle doğrulanır ve replica ile NCU ayarlanır. "
             "Doğru mimari ikisi birliktedir: ödeme anı Neptune'de, gece halka taraması Neptune Analytics'te (A9). Bir koşul değişseydi: kontrol gerçek zamanlı olmasaydı Neptune Analytics yeterdi."))
 
-# ------------------------------------------------------------------ 3. recommendations by graph (Lale Market; close race with Aurora)
+# ------------------------------------------------------------------ 3. recommendations by graph (TDS Academy Market; close race with Aurora)
 NEPTUNE_W.append(wusecase("reco", 3, sim="w_reco",
-    title="Graph ile öneri: bunu alanlar şunları da aldı (Lale Market)",
+    title="Graph ile öneri: bunu alanlar şunları da aldı (TDS Academy Market)",
     key="Vertex: Customer, Product. Edge: BOUGHT (müşteriden ürüne). Soru: bu ürünü alanların aldığı diğer ürünler; kişisel öneride bir hop daha.",
-    story="Lale Market'in ürün sayfası \"Bunu alanlar şunları da aldı\" kutusunu, ana sayfa ise persona'ya göre kişisel öneriyi gösterir. Bugün bu iş Neptune'dedir ve küçük bir graph'tır; bu kart mağaza büyüdüğündeki hâlini puanlar: "
+    story="TDS Academy Market'in ürün sayfası \"Bunu alanlar şunları da aldı\" kutusunu, ana sayfa ise persona'ya göre kişisel öneriyi gösterir. Bugün bu iş Neptune'dedir ve küçük bir graph'tır; bu kart mağaza büyüdüğündeki hâlini puanlar: "
           "400.000 müşteri, 20.000 ürün ve 6 milyon BOUGHT edge'i. Ürün sayfası tepe anında saniyede 1.500, ana sayfa saniyede 300 kez açılır; kutu 80 ms içinde gelmelidir. "
           "En çok satan ürünlerin her biri 30.000'den fazla alıcıya sahiptir ve öneri tam da onlardan başlar. Yeni bir sipariş öneriyi hemen değiştirmelidir. "
           "Siparişlerin resmi kaydı Aurora'dadır; graph onların bir kopyasıdır. Ekip dört geliştiriciden oluşur ve SQL bilir; Aurora zaten çalışmaktadır.",
@@ -3977,7 +3977,7 @@ NEPTUNE_W.append(wusecase("reco", 3, sim="w_reco",
     ],
     cands=["np", "aur", "ddb"],
     scores={
-        "np": [sc(10, "Ürün sayfası iki hop'luk, ana sayfa üç hop'luk tek bir openCypher pattern'idir (Ö4); Lale Market'in canlı sorguları budur (B2). Puan kırılmadı."),
+        "np": [sc(10, "Ürün sayfası iki hop'luk, ana sayfa üç hop'luk tek bir openCypher pattern'idir (Ö4); TDS Academy Market'in canlı sorguları budur (B2). Puan kırılmadı."),
                sc(8, "Traversal başlangıç ürününden başlar ve yalnız komşuları okur (Ö3). 2 puan kırıldı: en çok satan ürünler supernode'dur ve öneri tam onlardan başladığı için dışarıda bırakılamaz; sorgu alıcıları örneklemeli ya da hop başına bir LIMIT koymalıdır (A4). Workshop'un canlı ölçümü (B2: en düşük kapasitede, ağ ve imza dahil 205 ms) 80 ms'yi kanıtlamaz; bütçe sınırlı sorguyla bir yük testinde doğrulanır."),
                sc(10, "Her sipariş satırı bir CREATE ile BOUGHT edge'idir ve bir sonraki öneri onu hemen sayar (Ö6); canlı mağaza bunu yapar. Puan kırılmadı."),
                sc(10, "Customer ve Product vertex'leri, BOUGHT edge'i üzerinde order_id ve qty (Ö1). Puan kırılmadı."),
@@ -4005,7 +4005,7 @@ NEPTUNE_W.append(wusecase("reco", 3, sim="w_reco",
     h2h={
         "aur": "İlişkisel (Aurora) ile kafa kafaya. Bu kartın en yakın yarışıdır. Aurora'nın güçlü yanı R4'tedir: siparişler zaten oradadır, kopyalama hattı yoktur, yeni sipariş öneride hemen görünür ve ekip SQL bilir. "
                "Neptune'ü öne geçiren R1'dir: iki ve üç hop'luk öneri bir pattern'dir ve maliyeti başlangıç ürününün komşularına bağlıdır; Aurora'da her hop bir self-join'dir ve en çok satan ürünlerde ara sonuç 30.000 alıcı ve onların satırlarına büyür (R1.1, R1.2). R1'de Neptune 8 puan önde, R4'te Aurora 8 puan öndedir; R2 Neptune'e 4 puan kazandırır, R5 Aurora'ya 2 puan geri verir ve net fark 2 puandır. "
-               "Hangi koşul değişseydi Aurora seçilirdi: kişisel üç hop'luk öneri istenmeseydi ve ürün sayfası önerisi her gece toplu hesaplanıp bir table'a yazılsaydı; bugünkü küçük Lale Market'te (11.887 edge) de Aurora yeterli olurdu.",
+               "Hangi koşul değişseydi Aurora seçilirdi: kişisel üç hop'luk öneri istenmeseydi ve ürün sayfası önerisi her gece toplu hesaplanıp bir table'a yazılsaydı; bugünkü küçük TDS Academy Market'te (11.887 edge) de Aurora yeterli olurdu.",
         "ddb": "Key-value (DynamoDB) ile kafa kafaya. DynamoDB ölçekte ve işletimde güçlüdür ve tepe trafiği ayarsız karşılar (R2). Ama bu iş yükü bir key ile okuma değil, bir yolun hesaplanmasıdır: en çok satan bir ürünün önerisi 30.000 alıcının ürünlerini okumayı ister ve DynamoDB'de bu 30.000 ayrı Query'dir (R1.1). "
                "Aynı alıcılar tek bir büyük item collection'da durur ve hot partition olur (R1.2); siparişler de Aurora'dan kopyalanmalıdır (R4). "
                "Hangi koşul değişseydi DynamoDB seçilirdi: öneri listeleri gece başka bir sistemde hesaplanıp ürün başına bir value olarak saklansaydı; o zaman soru bir GetItem olurdu (DynamoDB sayfasındaki öneri kartı ve ElastiCache sayfasının kart 9'u bu iş yüküdür).",
@@ -4019,7 +4019,7 @@ NEPTUNE_W.append(wusecase("reco", 3, sim="w_reco",
 NEPTUNE_W.append(wusecase("knowledge", 4,
     title="Ürün bilgi graph'ı ve alışveriş asistanı (GraphRAG)",
     key="Vertex: Product, Brand, Category, Feature, Chunk. Edge: COMPATIBLE_WITH, PART_OF, HAS_FEATURE, DESCRIBES. Soru: bu soruya anlamca en yakın metin parçaları ve onlardan bir-iki hop uzaktaki ürünler.",
-    story="Lale Market bir alışveriş asistanı kuruyor: müşteri \"bu kulaklığa uyan bir şarj aleti\" diye yazar. Asistan sorunun embedding'ine anlamca en yakın 10 metin parçasını bulur, sonra onlardan iki hop uzaktaki ürünlere (uyumlu aksesuar, aynı marka, aynı kategori) gider ve bu bağlamı bir dil modeline verir. "
+    story="TDS Academy Market bir alışveriş asistanı kuruyor: müşteri \"bu kulaklığa uyan bir şarj aleti\" diye yazar. Asistan sorunun embedding'ine anlamca en yakın 10 metin parçasını bulur, sonra onlardan iki hop uzaktaki ürünlere (uyumlu aksesuar, aynı marka, aynı kategori) gider ve bu bağlamı bir dil modeline verir. "
           "Graph'ta 20.000 ürün, 2 milyon ilişki ve embedding'li 500.000 metin parçası var. Saniyede 30 soru gelir ve getirme adımı 300 ms içinde bitmelidir. "
           "Graph her hafta katalogdan (S3'teki dışa aktarım) yeniden kurulur, gün içinde küçük güncellemeler olur. Ekip üç veri bilimcidir, Python ve notebook kullanır ve tek bir sistem ister. Graph kaybolursa S3'ten yeniden yüklenir.",
     wnote="R1 toplam 50: vector benzerliği ile hop'un aynı sorguda olması (15), bunun bellek hızında çalışması (15), graph ile embedding'in tek modelde durması (10) ve engine'in araçları (10). "
@@ -4096,7 +4096,7 @@ NEPTUNE_W.append(wusecase("knowledge", 4,
 NEPTUNE_W.append(wusecase("identity", 5,
     title="Identity graph: bir kişinin bütün identifier'ları",
     key="Vertex: Cookie, Device, Email, Phone, LoyaltyCard. Edge: SEEN_WITH (aynı oturumda görüldü). Soru: bu cookie'ye bağlı bütün identifier'lar (en fazla 6 hop).",
-    story="Lale Market'in pazarlama ekibi aynı kişinin cookie'lerini, cihazlarını, e-postalarını, telefon özetlerini ve sadakat kartını tek bir kişi olarak görmek istiyor. "
+    story="TDS Academy Market'in pazarlama ekibi aynı kişinin cookie'lerini, cihazlarını, e-postalarını, telefon özetlerini ve sadakat kartını tek bir kişi olarak görmek istiyor. "
           "Graph'ta 50 milyon identifier ve 200 milyon bağlantı var. Her login ya da checkout iki identifier'ı aynı oturumda görür ve bir bağlantı yazar: saniyede 2.000 olay. "
           "Kişiselleştirme servisi her sayfa açılışında \"bu cookie'ye bağlı bütün identifier'lar\" sorusunu sorar: saniyede 1.000 istek, 50 ms bütçe, en fazla 6 hop. "
           "Bazı identifier'lar milyonlarca kişiyle paylaşılır (bir mağaza tableti, test@ adresi) ve önceden bilinmez. Aynı identifier iki olayda aynı anda ilk kez görülebilir. Ekip beş kişidir; bir kişinin silinme talebi (KVKK) bütün identifier'larını silmelidir.",
@@ -4172,7 +4172,7 @@ NEPTUNE_W.append(wusecase("identity", 5,
 NEPTUNE_W.append(wusecase("network", 6, sim="w_network",
     title="Ağ topolojisi: bu switch düşerse ne düşer?",
     key="Vertex: Switch, Server, Service, Endpoint. Edge: CONNECTED_TO, RUNS_ON, DEPENDS_ON. Soru: bir parçadan, herhangi bir derinlikte, ona bağlı bütün müşteri servisleri.",
-    story="Lale Market'in platform ekibi 3.000 sunucu, 400 servis ve 120 switch'ten oluşan bir altyapı işletir; aralarında 15.000 bağımlılık var. Nöbetçi mühendis bir arızada şunu sorar: \"bu switch düşerse hangi müşteri servisleri düşer?\" "
+    story="TDS Academy Market'in platform ekibi 3.000 sunucu, 400 servis ve 120 switch'ten oluşan bir altyapı işletir; aralarında 15.000 bağımlılık var. Nöbetçi mühendis bir arızada şunu sorar: \"bu switch düşerse hangi müşteri servisleri düşer?\" "
           "Cevap 1 ile 8 hop arasındadır ve yol da gösterilmelidir. Soru günde yaklaşık 200 kez sorulur, bir arıza sırasında dakikada birkaç kez; birkaç saniyelik bir cevap yeterlidir. "
           "Envanter (CMDB) bugün Aurora PostgreSQL'de üç table'dır ve her gece Terraform hattı tarafından güncellenir. Veri 50 MB'tır. Ekip iki SRE'den oluşur ve SQL bilir; bütçe sıkıdır ve yeni bir sistem istemezler.",
     wnote="R1 toplam 45: değişken derinlikli bağımlılık sorusu (20) bu kartın kendisidir. R4 20 ve R5 20 ile ikinci sıradadır: iki SRE'lik ekip yeni bir sistem istemiyor ve trafik o kadar küçüktür ki her sabit fatura belirleyicidir. "
@@ -4246,7 +4246,7 @@ NEPTUNE_W.append(wusecase("network", 6, sim="w_network",
 NEPTUNE_W.append(wusecase("supply", 7,
     title="Tedarik zinciri: tek nokta riskleri (bütün graph analizi)",
     key="Vertex: Supplier, Part, Product. Edge: SUPPLIES, PART_OF. Soru: her tedarikçi için ona herhangi bir derinlikte bağlı ürün sayısı ve merkezilik; bir tedarikçi çıkarılırsa kaynaksız kalan ürünler.",
-    story="Lale Market'in kendi markalı ürünleri için 900 tedarikçi, 40.000 parça ve 12.000 ürün var; aralarında 300.000 SUPPLIES ve PART_OF edge'i bulunuyor. Satın alma ekibi her hafta bir risk analizi yapar: "
+    story="TDS Academy Market'in kendi markalı ürünleri için 900 tedarikçi, 40.000 parça ve 12.000 ürün var; aralarında 300.000 SUPPLIES ve PART_OF edge'i bulunuyor. Satın alma ekibi her hafta bir risk analizi yapar: "
           "her tedarikçi için ona herhangi bir derinlikte bağlı ürün sayısı ve PageRank ile merkezilik; amaç tek nokta risklerini bulmaktır. Bir kriz haftasında (bir liman kapanır) analistler \"bu üç tedarikçi çıkarsa hangi ürünler kaynaksız kalır?\" sorusunu saatte 50 kez farklı senaryolarla sorar. "
           "Veri her gece ERP'den S3'e dışa aktarılır. Ekip iki analisttir ve Python ile notebook kullanır. Graph kaybolursa S3'ten yeniden yüklenir.",
     wnote="R1 toplam 45: soru bir vertex'ten değil bütün graph'tan başlar (10), algoritmanın bütün graph üzerinde çalışması (15) ve hazır algoritmalar (15) bu kartın kendisidir. "
@@ -4322,7 +4322,7 @@ NEPTUNE_W.append(wusecase("supply", 7,
 NEPTUNE_W.append(wusecase("access", 8,
     title="Erişim kontrolü graph'ı: iç içe gruplar ve klasörler",
     key="Vertex: User, Group, Folder, Document. Edge: MEMBER_OF, CAN_READ, IN. Soru: bu kullanıcının, herhangi bir grup ve klasör zinciri üzerinden, bu belgeyi okuma hakkı var mı?",
-    story="Lale Market'in tedarikçi portalında 20.000 kullanıcı, 6 seviyeye kadar iç içe 3.000 grup ve 200.000 klasör ile belge var; haklar klasörden alt klasörlere miras kalır. "
+    story="TDS Academy Market'in tedarikçi portalında 20.000 kullanıcı, 6 seviyeye kadar iç içe 3.000 grup ve 200.000 klasör ile belge var; haklar klasörden alt klasörlere miras kalır. "
           "Her belge açılışında soru şudur: \"bu kullanıcının, herhangi bir grup zinciri ve klasör zinciri üzerinden, bu belgeyi okuma hakkı var mı?\" Saniyede 2.000 kontrol yapılır ve her biri 20 ms içinde dönmelidir. "
           "Yöneticiler dakikada 100 üyelik değiştirir; bir hakkın geri alınması saniyeler içinde etkili olmalıdır, çünkü ayrılan bir çalışanın erişimi sürmemelidir. \"Bütün çalışanlar\" grubunun 20.000 üyesi var. "
           "Haklar denetim kaydıdır ve kaybolmamalıdır. Ekip dört geliştiriciden oluşur ve SQL bilir; Aurora sistemde zaten çalışır.",
@@ -4397,7 +4397,7 @@ NEPTUNE_W.append(wusecase("access", 8,
 NEPTUNE_W.append(wusecase("c360", 9, sim="w_c360",
     title="Customer 360: çağrı merkezi ekranı",
     key="Tek ekranda: müşteri profili, son 20 sipariş, açık destek talepleri, adresler, sadakat puanı. Soru: müşteri id'si ya da telefonla bu müşterinin bütün kayıtları.",
-    story="Lale Market'in çağrı merkezinde 300 temsilci çalışır. Temsilci müşteri id'sini ya da telefon numarasını yazar ve tek bir ekranda profili, son 20 siparişi (tarihe göre), açık destek taleplerini, adresleri ve sadakat puanını görür. "
+    story="TDS Academy Market'in çağrı merkezinde 300 temsilci çalışır. Temsilci müşteri id'sini ya da telefon numarasını yazar ve tek bir ekranda profili, son 20 siparişi (tarihe göre), açık destek taleplerini, adresleri ve sadakat puanını görür. "
           "Saniyede 50 ekran açılır; ekran 500 ms içinde gelmelidir. Siparişler ve müşteriler Aurora PostgreSQL'dedir; destek talepleri her gece destek aracından dışa aktarılır. Finans aynı verilerden aylık rapor alır. "
           "Bir ürün yöneticisi \"customer 360 bir graph use case'idir\" diyerek Neptune önerdi. İlişkiler tek hop'tur: müşteriden siparişlere, taleplere ve adreslere. Ekip dört geliştiricidir ve SQL bilir.",
     wnote="R1 toplam 45: id ya da telefonla bulup tek hop'luk listeleri tarihe göre getirmek (15), sabit alanlı kayıtlar (10), az önceki siparişin ekranda görünmesi (10) ve sıralama ile arama araçları (10). "
@@ -4473,7 +4473,7 @@ NEPTUNE_W.append(wusecase("c360", 9, sim="w_c360",
 NEPTUNE_W.append(wusecase("drugs", 10,
     title="İlaç etkileşim graph'ı (RDF ve SPARQL)",
     key="RDF üçlüleri: ilaç, sınıf (rdfs:subClassOf), enzim, etkileşim. Soru: bu reçetedeki ilaçlar arasında doğrudan, sınıf üzerinden ya da ortak enzim üzerinden bir etkileşim var mı ve neden?",
-    story="Lale Market'in eczane ortağı her reçete sepetinde bir etkileşim kontrolü yapar. Hastanın kullandığı ilaçlar (ortalama 6) ve yeni ilaç için soru şudur: aralarında doğrudan bir etkileşim, bir üst sınıf düzeyinde tanımlı bir etkileşim ya da ortak bir enzim üzerinden dolaylı bir etkileşim var mı? "
+    story="TDS Academy Market'in eczane ortağı her reçete sepetinde bir etkileşim kontrolü yapar. Hastanın kullandığı ilaçlar (ortalama 6) ve yeni ilaç için soru şudur: aralarında doğrudan bir etkileşim, bir üst sınıf düzeyinde tanımlı bir etkileşim ya da ortak bir enzim üzerinden dolaylı bir etkileşim var mı? "
           "Bilgi kamuya açık bir ontolojiden RDF olarak gelir: 50.000 ilaç ve 2 milyon üçlü; sınıf hiyerarşisi 8 seviyeye kadar iner. Ontoloji her ay yeni bir sürümle güncellenir ve yeni ilişki türleri (predicate) ekleyebilir. "
           "Saniyede 40 kontrol yapılır, her biri 200 ms içinde; cevap etkileşimin nedenini (yolunu) da göstermelidir. Ekipteki iki eczacı-bilişimci SPARQL bilir.",
     wnote="R1 toplam 50: verinin RDF ontolojisi olması (15), sınıf hiyerarşisinden ve enzimden geçen soru (15), her ay değişen predicate'ler (10) ve sorgu araçları (10). "
@@ -4550,7 +4550,7 @@ PAGE_SVC["neptune"] = "np"
 
 # ====================================================================== Amazon OpenSearch Service (page id "opensearch"), Turkish, model 2
 # The ten M2 cards of templates/e2e/opensearch.tr.html. The five M7 simulations are built from the cards (sim="w_...").
-# "os" is an OpenSearch Service managed domain (the Lale Market form: dbws-search); "oss" is OpenSearch Serverless. They are
+# "os" is an OpenSearch Service managed domain (the TDS Academy Market form: dbws-search); "oss" is OpenSearch Serverless. They are
 # twins of one engine: the same R1 points on every card; only R2-R5 separate them. A feature that the engine has but
 # Serverless leaves out (Alerting, Anomaly Detection, Security Analytics, ISM) is packaging and is counted in R4 (decisions.md rule 5).
 # Card "facets" is the same workload as DocumentDB card 8 ("search"): the same story, rows, weights and points (asserted below);
@@ -4598,9 +4598,9 @@ OPENSEARCH_W = []
 
 # ------------------------------------------------------------------ 1. product search with typos (OpenSearch wins on its engine)
 OPENSEARCH_W.append(wusecase("search", 1, sim="w_search",
-    title="Yazım hatalarına dayanıklı ürün araması (Lale Market)",
+    title="Yazım hatalarına dayanıklı ürün araması (TDS Academy Market)",
     key="Index: products. Document: _id ürün id'si; name ve description text (tr_folded analyzer), category ve brand keyword, price ve rating sayı.",
-    story="Lale Market'in arama kutusuna günde 400.000 arama yazılır; kampanya akşamı saniyede 300 aramaya çıkar, normalde saniyede 30'dur. Ziyaretçiler telefondan yazar: \"kulaklk\" (bir harf eksik), \"kablosuz kulaklik\" (Türkçe harfsiz), \"alpen kulaklık siyah\". "
+    story="TDS Academy Market'in arama kutusuna günde 400.000 arama yazılır; kampanya akşamı saniyede 300 aramaya çıkar, normalde saniyede 30'dur. Ziyaretçiler telefondan yazar: \"kulaklk\" (bir harf eksik), \"kablosuz kulaklik\" (Türkçe harfsiz), \"alpen kulaklık siyah\". "
           "Arama kelimelerin sırasından bağımsız olmalı ve en uygun ürünü önce göstermelidir. Katalog DocumentDB'de yaşar ve kayıt sistemi odur; bugün 200 ürün var, iki yıl içinde 200.000 ürün hedefleniyor. "
           "Günde yaklaşık 2.000 ürün değişikliği olur ve her biri birkaç saniye içinde aramada görünmelidir. Arama katmanı kaybolursa katalogdan bir saatte yeniden kurulabilir. "
           "İki backend geliştiricisi var; biri önceki işinde Elasticsearch kullandı. Ürün yöneticisi \"sıfır sonuç\" oranını yüzde 2'nin altına indirmek istiyor; bugün yazım hatalı aramaların çoğu boş sayfa veriyor.",
@@ -4643,7 +4643,7 @@ OPENSEARCH_W.append(wusecase("search", 1, sim="w_search",
                 sc(6, "Text search configuration, setweight ile A-D ağırlıkları ve ts_rank'in normalizasyon seçenekleri vardır. 4 puan kırıldı: alan ağırlıkları dört harfle (A-D) sınırlıdır, eş anlamlı sözlüğü hazır gelmez ve \"neden bu sıra\" sorusunu açıklayan bir araç yoktur. Yazım hatasının ayrı bir mekanizma olması R1.1'de sayıldı."),
                 sc(9, "Reader instance'lar arama yükünü paylaşır. 1 puan kırıldı: beklenmeyen bir tepe yeni reader'ın eklenmesini dakikalarca bekler."),
                 sc(10, "Aurora'daki kopya üç AZ'de altı kopya olarak saklanır. Puan kırılmadı."),
-                sc(4, "Aurora Lale Market'te siparişler için çalışır. 6 puan kırıldı: katalog DocumentDB'dedir; arama için Aurora'ya bir kopya ve onu besleyen bir boru hattı gerekir ve tsvector, pg_trgm ve unaccent ekibin yeni işidir."),
+                sc(4, "Aurora TDS Academy Market'te siparişler için çalışır. 6 puan kırıldı: katalog DocumentDB'dedir; arama için Aurora'ya bir kopya ve onu besleyen bir boru hattı gerekir ve tsvector, pg_trgm ve unaccent ekibin yeni işidir."),
                 sc(7, "Var olan cluster'a reader eklenir. 3 puan kırıldı: kampanya reader'ları ve arama sorgularının CPU'su ACU olarak ödenir.")],
         "doc": [sc(3, "DocumentDB'nin text index'i $text ile kelime araması yapar. 7 puan kırıldı: AWS'e göre text index \"Only English language\" destekler, Türkçe harf kuralı yoktur ve yazım hatası toleransı yoktur; \"kulaklk\" hiçbir şey bulmaz."),
                 sc(5, "Text index kelimelerden document'lara giden bir index'tir. 5 puan kırıldı: collection başına tek bir text index kurulur ve sıralama yalnız terim sıklığına dayanır."),
@@ -4701,7 +4701,7 @@ OPENSEARCH_W.append(wusecase("facets", 2, sim="w_facets",
                 sc(7, "JSONB yeni field'ı migration'sız alır. 3 puan kırıldı: index'lenecek her iç içe field için yeni bir expression index kurulur."),
                 sc(7, "Reader instance'lar okumayı paylaşır. 3 puan kırıldı: kampanyada 5.000 filtre ve GROUP BY reader'ların CPU'sunu doldurur."),
                 sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
-                sc(4, "Aurora Lale Market'te çalışır. 6 puan kırıldı: katalog DocumentDB'dedir; arama için Aurora'ya bir kopya ve onu besleyen bir boru hattı gerekir ve filtre sorguları JSONB yollarıyla yeniden yazılır."),
+                sc(4, "Aurora TDS Academy Market'te çalışır. 6 puan kırıldı: katalog DocumentDB'dedir; arama için Aurora'ya bir kopya ve onu besleyen bir boru hattı gerekir ve filtre sorguları JSONB yollarıyla yeniden yazılır."),
                 sc(7, "Var olan cluster'a reader eklenir. 3 puan kırıldı: kampanya reader'ları ACU olarak ödenir.")],
     },
     h2h={
@@ -4796,7 +4796,7 @@ OPENSEARCH_W.append(wusecase("suggest", 3,
 OPENSEARCH_W.append(wusecase("stores", 4,
     title="Mağaza ve teslim noktası bulucu: konum, metin ve filtre birlikte",
     key="Index: pickup_points. Document: _id nokta id'si; location geo_point, service_area geo_shape, name ve address text, services keyword listesi, open_now boolean.",
-    story="Lale Market 3 mağazadan 120 mağazaya ve 2.000 kargo teslim noktasına büyüyor. Uygulamadaki \"yakınımda\" ekranı tek bir kutuda üç soruyu birlikte sorar: konum (\"5 km içinde, en yakın önce\"), metin (\"kadıköy kargo\", \"bağdat caddesi\") ve filtre (\"şimdi açık\", \"soğuk zincir hizmeti var\"). "
+    story="TDS Academy Market 3 mağazadan 120 mağazaya ve 2.000 kargo teslim noktasına büyüyor. Uygulamadaki \"yakınımda\" ekranı tek bir kutuda üç soruyu birlikte sorar: konum (\"5 km içinde, en yakın önce\"), metin (\"kadıköy kargo\", \"bağdat caddesi\") ve filtre (\"şimdi açık\", \"soğuk zincir hizmeti var\"). "
           "Her noktanın bir hizmet bölgesi (çokgen) vardır: \"bu adrese hangi nokta teslim eder\". Normalde saniyede 40, kampanya akşamı saniyede 400 arama; her biri 100 ms içinde. Noktaların açılış saatleri ve hizmetleri günde bir kez değişir. "
           "Noktaların kayıt sistemi Aurora'daki points table'ıdır. Kart 1'in OpenSearch domain'i zaten çalışıyor ve ekip onu işletiyor.",
     wnote="R1 toplam 40: konum, metin ve filtreyi tek bir sıralı soruda birleştirmek (EY 18), nokta ve çokgen tipleri (VM 10) ve bunu taşıyan index yapısı (DA 12). "
@@ -4867,7 +4867,7 @@ OPENSEARCH_W.append(wusecase("stores", 4,
 OPENSEARCH_W.append(wusecase("logs", 5, sim="w_logs",
     title="Uygulama log analizi: request id, hata metni ve dakika başına grafikler",
     key="Index: logs-YYYY.MM.DD (günlük) ya da bir time series collection. Document: bir log satırı; @timestamp, service, level, request_id keyword, message text, latency_ms sayı.",
-    story="Lale Market'in on Engine App'i, load balancer'ı ve Guided uygulaması JSON log yazar: günde 40 GB, akşam üç kat tepe. Üç kişilik nöbet ekibi bir olayda request id ile bir isteğin bütün satırlarını ve hata metniyle (\"ConditionalCheckFailedException\", \"timeout\") satırları arar. "
+    story="TDS Academy Market'in on Engine App'i, load balancer'ı ve Guided uygulaması JSON log yazar: günde 40 GB, akşam üç kat tepe. Üç kişilik nöbet ekibi bir olayda request id ile bir isteğin bütün satırlarını ve hata metniyle (\"ConditionalCheckFailedException\", \"timeout\") satırları arar. "
           "Duvardaki panolar dakika başına hata oranını ve p95 gecikmeyi gece gündüz gösterir ve dakikada bir yenilenir; hata oranı yüzde 2'yi geçince nöbetçiye alarm gitmelidir. Bir log 30 saniye içinde aranabilir olmalıdır. "
           "Son 30 gün aranabilir kalır; boru hattı her satırı ayrıca S3'e bir yıllık arşiv olarak yazar. Ekip OpenSearch Dashboards'u önceki işinden biliyor ve sunucu işletmek istemiyor.",
     wnote="R1 toplam 44: metinle ve id ile arama (EY 14), ekleme biçimi (OY 10), 30 günlük ömür (YD 10) ve arama ile grafikleri taşıyan yapı (DA 10). "
@@ -4945,7 +4945,7 @@ OPENSEARCH_W.append(wusecase("logs", 5, sim="w_logs",
 OPENSEARCH_W.append(wusecase("security", 6,
     title="Güvenlik analitiği: CloudTrail, VPC Flow Logs ve WAF logları",
     key="Index: security-* (log türü başına). Document: bir olay; @timestamp, src_ip ve user keyword, event_name, action, message text. Detector'lar Sigma kurallarını belirli aralıklarla çalıştırır.",
-    story="Lale Market'in iki kişilik güvenlik ekibi AWS hesabındaki CloudTrail olaylarını, VPC Flow Logs'u ve WAF loglarını izler: günde 15 GB, gün boyu düz. Analistler bir IP adresinin ya da bir kullanıcının son 90 gündeki bütün izini arar ve olay adlarında kelime arar (\"DeleteBucket\", \"ConsoleLogin failure\"). "
+    story="TDS Academy Market'in iki kişilik güvenlik ekibi AWS hesabındaki CloudTrail olaylarını, VPC Flow Logs'u ve WAF loglarını izler: günde 15 GB, gün boyu düz. Analistler bir IP adresinin ya da bir kullanıcının son 90 gündeki bütün izini arar ve olay adlarında kelime arar (\"DeleteBucket\", \"ConsoleLogin failure\"). "
           "Hazır tehdit kuralları (örneğin \"başarısız login'lerden sonra başarılı bir admin login'i\") her beş dakikada çalışmalı ve bulgu üretince nöbetçiye haber vermelidir. "
           "Uyum kuralı bir yıl saklama ister: 90 gün hızlı aranabilir, geri kalanı ucuz bir katmanda. Ham loglar S3'te de durur. Ekip SQL bilir ama hazır kuralları kendisi yazmak istemez.",
     wnote="R1 toplam 44: iz sürme araması (EY 14), hazır tespit kuralları ve korelasyon (AO 12), arama ile uzun taramayı taşıyan yapı (DA 10) ve bir yıllık katmanlı ömür (YD 8). "
@@ -5022,7 +5022,7 @@ OPENSEARCH_W.append(wusecase("security", 6,
 OPENSEARCH_W.append(wusecase("metrics", 7, sim="w_metrics",
     title="Uygulama metrikleri panosu: 10 saniyelik ölçümler, 13 ay geçmiş",
     key="Ölçüm: host ve metric etiketleri, value ve zaman. 60 host × 40 metrik = 2.400 seri, her biri 10 saniyede bir nokta.",
-    story="Lale Market'in 60 sunucusu ve container'ı her 10 saniyede 40 ölçüm gönderir: CPU, bellek, istek gecikmesinin p95'i, dakikadaki sipariş sayısı. Bu 2.400 seri ve saniyede 240 noktadır. "
+    story="TDS Academy Market'in 60 sunucusu ve container'ı her 10 saniyede 40 ölçüm gönderir: CPU, bellek, istek gecikmesinin p95'i, dakikadaki sipariş sayısı. Bu 2.400 seri ve saniyede 240 noktadır. "
           "Panolar son 6 saati 10 saniyelik çözünürlükle, son 30 günü dakikalık, son 13 ayı saatlik ortalamayla gösterir; eski veri kendiliğinden özetlenmeli ve silinmelidir. "
           "Üç kişilik nöbet ekibi Grafana kullanır ve eşik alarmları kurar. EC2 ve load balancer metrikleri zaten CloudWatch'a kendiliğinden gelir. Metin araması yoktur; her soru \"şu serinin şu zaman aralığında ortalaması\" sorusudur.",
     wnote="R1 toplam 42: veri bir zaman serisidir (VM 14), soru zaman penceresinde toplama (EY 14) ve eski veri özetlenip silinir (YD 14). "
@@ -5092,7 +5092,7 @@ OPENSEARCH_W.append(wusecase("metrics", 7, sim="w_metrics",
 OPENSEARCH_W.append(wusecase("kb", 8, sim="w_kb",
     title="Yardım merkezi araması ve destek asistanı: kelime ve anlam birlikte",
     key="Yardım makaleleri 60.000 parçaya bölünür; her parça metin ve 1.024 boyutlu bir vektör (embedding) taşır. Sorgu: kelime araması + vektör benzerliği, tek bir sıralı liste.",
-    story="Lale Market'in yardım merkezinde 4.000 Türkçe makale var; makaleler 60.000 parçaya bölünür ve her parçanın bir embedding'i (anlamını temsil eden 1.024 sayılık bir vektör) vardır. Yardım merkezindeki arama kutusu ve destek asistanı (bir RAG uygulaması) aynı aramayı kullanır: "
+    story="TDS Academy Market'in yardım merkezinde 4.000 Türkçe makale var; makaleler 60.000 parçaya bölünür ve her parçanın bir embedding'i (anlamını temsil eden 1.024 sayılık bir vektör) vardır. Yardım merkezindeki arama kutusu ve destek asistanı (bir RAG uygulaması) aynı aramayı kullanır: "
           "\"kargom nerede\" sorusu \"sipariş takibi\" başlıklı makaleyi bulmalı (anlam), \"iade kodu RT-204\" sorusu tam o kodu içeren parçayı bulmalı (kelime). Gündüz saniyede 5, kampanya günü saniyede 30 arama olur; gece neredeyse sıfırdır. Günde 50 makale değişir. "
           "Siparişler zaten Aurora PostgreSQL'de çalışıyor; üç geliştirici SQL biliyor ve yeni bir servis işletmek istemiyor. Makalelerin kaynağı CMS'tir; index kaybolursa bir saatte yeniden kurulur.",
     wnote="R1 toplam 38: kelime ve anlamı tek bir sıralı listede birleştirmek (EY 16), yaklaşık en yakın komşu araması (DA 12) ve skorları dengeleyen araçlar (AO 10). "
@@ -5150,12 +5150,12 @@ OPENSEARCH_W.append(wusecase("kb", 8, sim="w_kb",
                "Hangi koşul değişseydi OpenSearch Serverless seçilirdi: makale sayısı milyonlara çıksaydı ve arama kalitesi (hibrit ağırlıklar, rerank) bir ürün hedefi olsaydı; ya da ekip Bedrock Knowledge Bases kullansaydı, çünkü o servis vektör deposunu sunucusuz bir koleksiyon olarak kendisi kurabilir.",
         "os": "Search engine (OpenSearch) ile kafa kafaya. Engine'i Serverless ile aynıdır, R1'i de aynıdır: 38'de 37. Bu kart, R1'i kazanan bir servisin toplamda üçüncü olabileceğini gösterir. "
               "Kaybı servis tasarımından gelir: saniyede 5 arama ve birkaç GB veri için üç AZ'lik bir domain ayda yaklaşık 440 dolardır ve gece boş çalışır (R5'te 3); node, shard ve embedding boru hattı üç kişilik SQL ekibinin yeni işidir (R4'te 4). Serverless aynı engine'i gece sıfıra inen bir faturayla verir; Aurora ise hiçbir yeni servis istemez. "
-              "Hangi koşul değişseydi yönetilen domain seçilirdi: Lale Market'in kart 1 domain'i zaten çalıştığı için yardım merkezi bir index daha olsaydı (o zaman R4 ve R5 kart 3'teki gibi 9 ve 8 olur) ya da trafik gün boyu düz ve yüksek olsaydı.",
+              "Hangi koşul değişseydi yönetilen domain seçilirdi: TDS Academy Market'in kart 1 domain'i zaten çalıştığı için yardım merkezi bir index daha olsaydı (o zaman R4 ve R5 kart 3'teki gibi 9 ve 8 olur) ya da trafik gün boyu düz ve yüksek olsaydı.",
     },
     verdict="Karar: Aurora PostgreSQL {aur}, OpenSearch Serverless {oss}, OpenSearch {os}. Engine uyumunu iki OpenSearch servisi kazanır; toplamı Aurora alır, çünkü bu küçük ve gece sıfıra inen iş yükünde R4 ve R5 ağırdır ve Aurora zaten çalışır. "
             "Yine de OpenSearch seçersek artımız: kelime ve anlam araması tek bir hybrid sorgusunda, skorlar hazır bir araçla dengelenir ve arama kalitesi büyüdükçe aynı engine yeter. "
             "Eksimiz: üç kişilik SQL ekibi yeni bir servis ve sorgu dili öğrenir, embedding boru hattını işletir ve küçük bir trafik için gece gündüz çalışan bir domain öder; bu yüzden OpenSearch seçilecekse Serverless biçimi ya da kart 1'in var olan domain'i seçilir. "
-            "Bir koşul değişseydi: Lale Market'in OpenSearch domain'i bu ekip tarafından zaten işletilseydi yardım merkezi bir index daha olurdu ve OpenSearch kazanırdı."))
+            "Bir koşul değişseydi: TDS Academy Market'in OpenSearch domain'i bu ekip tarafından zaten işletilseydi yardım merkezi bir index daha olurdu ve OpenSearch kazanırdı."))
 
 # ------------------------------------------------------------------ 9. e-commerce relevance tuning (OpenSearch wins on its engine tools)
 OPENSEARCH_W.append(wusecase("relevance", 9,
@@ -5236,9 +5236,9 @@ OPENSEARCH_W.append(wusecase("relevance", 9,
 OPENSEARCH_W.append(wusecase("anomaly", 10,
     title="Sipariş akışında anomali tespiti: kategori ve şehir başına",
     key="Index: order-events (Aurora'dan OpenSearch Ingestion ile). Document: bir sipariş olayı; @timestamp, category ve city keyword, amount sayı. Detector: 5 dakikalık aralık, category ve city kırılımı.",
-    story="Bir ödeme sağlayıcısı bir şehirde çöktüğünde ya da bir kategorinin fiyatı yanlış yüklendiğinde sipariş akışı birden düşer ya da sıçrar; Lale Market bunu bugün ertesi gün fark ediyor. "
+    story="Bir ödeme sağlayıcısı bir şehirde çöktüğünde ya da bir kategorinin fiyatı yanlış yüklendiğinde sipariş akışı birden düşer ya da sıçrar; TDS Academy Market bunu bugün ertesi gün fark ediyor. "
           "Hedef: 5 kategori × 81 şehir = 405 kırılımın her biri için sipariş sayısı ve tutarı 5 dakikalık aralıklarla izlensin, normal dalgalanmayı (gece düşüşü, öğle tepesi) öğrensin ve gerçek bir sapmada 10 dakika içinde nöbetçiye haber versin; kırılım sayısı franchise planıyla 4.000'e çıkacak. "
-          "Sipariş olayları Aurora'dan OpenSearch Ingestion ile zaten Lale Market'in OpenSearch domain'ine akıyor ve analistler onları Dashboards'ta inceliyor. Ekip iki analist ve bir SRE; makine öğrenmesi modeli yazmak istemiyorlar.",
+          "Sipariş olayları Aurora'dan OpenSearch Ingestion ile zaten TDS Academy Market'in OpenSearch domain'ine akıyor ve analistler onları Dashboards'ta inceliyor. Ekip iki analist ve bir SRE; makine öğrenmesi modeli yazmak istemiyorlar.",
     wnote="R1 toplam 42: kırılım başına normali öğrenen bir tespit aracı (AO 18), kırılım ve pencere sorusu (EY 14) ve olay verisinin biçimi (VM 10). "
           "R4 20 tek başına R1'in her alt maddesinden ağırdır, ama R1 grup olarak (42) en ağırdır: ekip model yazmak istemiyor ve yeni bir sistem işletmek istemiyor. R5 18: kırılım sayısı faturayı belirler.",
     rows=[
@@ -5402,7 +5402,7 @@ REDSHIFT_W.append(wusecase("reporting", 1, sim="w_reporting",
 REDSHIFT_W.append(wusecase("attribution", 2, sim="w_attribution",
     title="Pazarlama attribution'ı: hangi reklam tıklaması satışı getirdi",
     key="Fact table'lar: ad_clicks (S3'te Parquet, her gece) ve orders. Ortak kolon customer_id: distribution key; ad_clicks'in sort key'i click_time.",
-    story="Lale Market üç reklam ağında kampanya yürütüyor. Ağlar tıklama dosyalarını her gece S3'e Parquet olarak bırakıyor: yılda 900 milyon tıklama. Siparişler Aurora'da, ayda 600.000 sipariş; veri ekibi siparişleri zaten her gece S3'e de yazıyor. "
+    story="TDS Academy Market üç reklam ağında kampanya yürütüyor. Ağlar tıklama dosyalarını her gece S3'e Parquet olarak bırakıyor: yılda 900 milyon tıklama. Siparişler Aurora'da, ayda 600.000 sipariş; veri ekibi siparişleri zaten her gece S3'e de yazıyor. "
           "Pazarlama her sabah 08:00'de \"son tıklama, 7 gün penceresi\" modeliyle her siparişi aynı müşterinin siparişten önceki son tıklamasına bağlamak istiyor. İş en geç 08:30'da bitmeli. "
           "Sonra gün boyunca üç analist sonucu kampanyaya, kanala ve cihaza göre kesiyor; haftada bir \"ilk tıklama\" ve \"eşit pay\" modelleriyle karşılaştırma yapılıyor. "
           "Ekip SQL biliyor; yarı zamanlı bir veri mühendisi var. Sonuçlar kaynaklardan yeniden hesaplanabilir.",
@@ -5480,7 +5480,7 @@ REDSHIFT_W.append(wusecase("attribution", 2, sim="w_attribution",
 REDSHIFT_W.append(wusecase("finclose", 3,
     title="Ay sonu finansal kapanış: üç yoğun gün, yirmi yedi sakin gün",
     key="Fact table: journal_lines (account_id, cost_center, period, amount), Aurora'dan zero-ETL ile; düzeltme kayıtları Redshift'in dev database'inde ayrı bir table'da (adjustments), çünkü zero-ETL kopyası salt okunurdur. Sort key period, distribution key account_id.",
-    story="Lale Market'in muhasebe defteri siparişlerle aynı Aurora cluster'ındadır ve zero-ETL ile Redshift'e kopyalanır: yılda 80 milyon defter satırı. Her ayın ilk üç iş günü 12 muhasebeci kapanış yapar: 09:00–19:00 arasında yaklaşık 400 ağır sorgu (mizan, masraf merkezine göre dağılım, kur farkı). "
+    story="TDS Academy Market'in muhasebe defteri siparişlerle aynı Aurora cluster'ındadır ve zero-ETL ile Redshift'e kopyalanır: yılda 80 milyon defter satırı. Her ayın ilk üç iş günü 12 muhasebeci kapanış yapar: 09:00–19:00 arasında yaklaşık 400 ağır sorgu (mizan, masraf merkezine göre dağılım, kur farkı). "
           "Kapanış sırasında muhasebeciler kapanış aracından birkaç bin düzeltme kaydı girer; araç bu kayıtları kapanış raporlarının çalıştığı database'e yazar. Her düzeltme kaydının borç ve alacağı eşit olmalı ve hesap kodu var olmalı. "
           "Bütün kapanış raporları ayın son gününün 23:59 hâlini görmeli. Ayın geri kalan 27 gününde günde birkaç sorgu çalışır. Ekipte bir finans BI geliştiricisi var; finans müdürü öngörülebilir bir fatura istiyor.",
     wnote="R1 toplam 42: soruların biçimi (EY 10), bir yılın defterini taramak (DA 10), düzeltme kaydının kuralları (ŞE 14) ve kapanışın tek bir ânı görmesi (TA 8). "
@@ -5584,7 +5584,7 @@ REDSHIFT_W.append(wusecase("clicks", 4, sim="w_clicks",
 REDSHIFT_W.append(wusecase("datashare", 5,
     title="Ekipler ve hesaplar arası veri paylaşımı: tek kopya, ayrı compute",
     key="Üretici: satış table'ları (iki milyar row) tek bir workgroup'ta. Tüketiciler: finans, pazarlama ve başka bir AWS hesabındaki tedarikçi portalı; her biri kendi compute'uyla.",
-    story="Lale Market büyüdü ve üç ekip aynı satış verisine bakıyor: finans, pazarlama ve ayrı bir AWS hesabında çalışan tedarikçi portalı. Bugün veri ekibi her gece satış table'larını CSV olarak dışa aktarıyor ve her ekip kendi kopyasını yüklüyor; sabahları üç ekip üç farklı rakam söylüyor. "
+    story="TDS Academy Market büyüdü ve üç ekip aynı satış verisine bakıyor: finans, pazarlama ve ayrı bir AWS hesabında çalışan tedarikçi portalı. Bugün veri ekibi her gece satış table'larını CSV olarak dışa aktarıyor ve her ekip kendi kopyasını yüklüyor; sabahları üç ekip üç farklı rakam söylüyor. "
           "Satış geçmişi iki milyar row ve Redshift'te. Pazarlama kampanya akşamları ağır sorgular çalıştırıyor ve finansın raporlarını yavaşlatmamalı. Tedarikçi portalının 120 tedarikçisi var; her tedarikçi sadece kendi ürünlerinin satışını görmeli. "
           "Yeni bir satış bütün ekiplere aynı anda görünmeli. Veri ekibi iki kişi; her ekip kendi sorgularının faturasını ödemek istiyor.",
     wnote="R1 toplam 44: paylaşılan table'lar üzerinde serbest SQL (EY 12), büyük taramalar (DA 12), tedarikçinin sadece kendi row'larını görmesi (AO 12) ve herkesin aynı commit'i görmesi (TA 8). "
@@ -5738,7 +5738,7 @@ REDSHIFT_W.append(wusecase("mlfeatures", 6,
 REDSHIFT_W.append(wusecase("logs", 7, sim="w_logs",
     title="Log toplama ve arama: olay anında bir hata mesajını bulmak",
     key="Her log satırı bir JSON: time, service, level, request_id, message ve değişen alanlar. Son 30 gün sıcak, 13 ay arşiv.",
-    story="Lale Market'in on Engine App'i ve load balancer'ı günde 600 GB log üretiyor: normalde saniyede 7.000 satır, bir olay anında beş katı. Üç kişilik SRE ekibinin üç sorusu var. "
+    story="TDS Academy Market'in on Engine App'i ve load balancer'ı günde 600 GB log üretiyor: normalde saniyede 7.000 satır, bir olay anında beş katı. Üç kişilik SRE ekibinin üç sorusu var. "
           "Birincisi, olay anında son yedi günde bir hata mesajını ya da bir request id'yi saniyeler içinde bulmak: \"payment\" yakınında \"timeout\" geçen satırlar. İkincisi, servis başına dakikalık 5xx oranını gösteren canlı bir pano; en fazla bir dakika gecikmeyle. "
           "Üçüncüsü, ayda bir 13 aylık kapasite raporu. Log'ların alanları servisten servise değişiyor ve her sürümde yeni alan geliyor. Log'lar 30 gün sıcak tutulur, sonra 13 ay arşivde kalır; tek tek log satırları değerli değildir.",
     wnote="R1 toplam 44: işin merkezi metin içinde aramadır (EY 16); değişen JSON alanları (VM 8), 30 günlük ömür (YD 10) ve panonun toplamları (DA 10). "
@@ -5814,7 +5814,7 @@ REDSHIFT_W.append(wusecase("logs", 7, sim="w_logs",
 REDSHIFT_W.append(wusecase("forecast", 8, sim="w_forecast",
     title="Stok tahmini girdileri: 7/24 düz bir yük",
     key="Fact table'lar: daily_sales (product_id, warehouse_id, day) ve stock (zero-ETL ile Aurora'dan). Materialized view: ürün ve depo başına 90 günlük hareketli ortalama.",
-    story="Lale Market'in otomatik stok yenileme servisi 6 depo ve 4.000 ürün için her beş dakikada bir aynı soruları soruyor: son 90 günün günlük satışları, hareketli ortalama, Aurora'daki anlık stok ve tedarikçi teslim süresi. "
+    story="TDS Academy Market'in otomatik stok yenileme servisi 6 depo ve 4.000 ürün için her beş dakikada bir aynı soruları soruyor: son 90 günün günlük satışları, hareketli ortalama, Aurora'daki anlık stok ve tedarikçi teslim süresi. "
           "Servis gece gündüz çalışıyor; depo planlamacıları da gün boyunca aynı ekranlara bakıyor. Yük yıllardır düz: haftada 7 gün, günde 24 saat, kabaca aynı sorgu sayısı. "
           "Veri 1,5 TB. Ekipte daha önce Redshift cluster'ı işletmiş iki DBA var. Finans müdürü üç yıllık bir bütçe planı yaptı ve öngörülebilir, en düşük aylık faturayı istiyor.",
     wnote="R1 toplam 46: 90 günlük pencerelerin taranması (DA 14) ve sorguların kendisi (EY 14), her beş dakikada yenilenen ara sonuçlar (AO 10) ve Aurora'dan gelen sürekli değişiklikler (OY 8). "
@@ -5890,7 +5890,7 @@ REDSHIFT_W.append(wusecase("forecast", 8, sim="w_forecast",
 REDSHIFT_W.append(wusecase("dashboards", 9,
     title="Yönetim panosu: 12 KPI kutusu, dakikada bir yenileme",
     key="Materialized view'lar: bugünün geliri ve dönüşümü (zero-ETL kopyası üzerinde), geçen yılın aynı günü ve 13 aylık eğilim (satış geçmişi üzerinde).",
-    story="Lale Market'in 25 yöneticisi telefonlarında bir pano açıyor: 12 KPI kutusu. Bugünün geliri ve geçen yılın aynı günü, saatlik dönüşüm oranı, en çok satan 10 kategori, 13 aylık gelir eğilimi. "
+    story="TDS Academy Market'in 25 yöneticisi telefonlarında bir pano açıyor: 12 KPI kutusu. Bugünün geliri ve geçen yılın aynı günü, saatlik dönüşüm oranı, en çok satan 10 kategori, 13 aylık gelir eğilimi. "
           "Pano mesai saatinde dakikada bir yenileniyor ve her kutu iki saniyenin altında açılmalı. Pazartesi 09:00'da herkes aynı anda açıyor: bir dakikada yaklaşık 300 kutu sorgusu. "
           "Bugünün verisi Aurora'dan zero-ETL ile gelir, geçmiş Redshift'teki satış table'ındadır. Ekipte bir BI geliştiricisi var; pano için ayrı bir sistem işletmek istemiyor. Pano verisi bir kopyadır.",
     wnote="R1 toplam 44: kutuların hızı en çok ön hesaplamaya bağlıdır (AO 14); sorguların kendisi (EY 12) ve 13 aylık tarama (DA 12), sürekli gelen değişiklikler (OY 6). "
@@ -5967,7 +5967,7 @@ REDSHIFT_W.append(wusecase("dashboards", 9,
 REDSHIFT_W.append(wusecase("adhoc", 10,
     title="S3'teki veri gölünde ara sıra sorulan analist soruları",
     key="Veri gölü: 40 TB Parquet, dt=YYYY-MM-DD partition'ları, table tanımları Glue Data Catalog'da. Kopya yok; sorgu dosyaların durduğu yerde.",
-    story="Lale Market'in veri gölünde 40 TB ham veri var: partner dosyaları, web olayları ve dışa aktarılmış sistem table'ları; hepsi S3'te Parquet ve tarihe göre partition'lı. "
+    story="TDS Academy Market'in veri gölünde 40 TB ham veri var: partner dosyaları, web olayları ve dışa aktarılmış sistem table'ları; hepsi S3'te Parquet ve tarihe göre partition'lı. "
           "Altı analist haftada yaklaşık 30 farklı soru soruyor ve her soru farklı: \"geçen salı Hamburg'daki partner iadeleri\", \"kampanya haftasında mobil oturum süresi\". Soruların çoğu bir ile üç günlük veriye bakıyor; ayda bir de bir çeyreği tarayan ağır bir soru var. "
           "Pano yok, cevabın bir dakikada gelmesi yeterli. Partnerler dosyalarına ara sıra yeni alan ekliyor. Veri ekibi 40 TB'ın ikinci bir kopyasını istemiyor ve bütçe küçük.",
     wnote="R1 toplam 42: serbest SQL (EY 14), dosyaların kolon kolon ve sadece gereken partition'larının okunması (DA 12), okurken uygulanan şema (ŞE 8) ve partition budama (AO 8). "
@@ -6086,11 +6086,11 @@ def _rows(src):
 
 INFLUXDB_W = []
 
-# ------------------------------------------------------------------ 1. Lale Market warehouses and stores
+# ------------------------------------------------------------------ 1. TDS Academy Market warehouses and stores
 INFLUXDB_W.append(wusecase("warehouse", 1, sim="w_warehouse",
-    title="Depo ve mağaza ortam izleme (Lale Market)",
+    title="Depo ve mağaza ortam izleme (TDS Academy Market)",
     key="Measurement: env. Tag'ler: site (40 değer) ve sensor (25 değer). Field: value. 10 saniyede bir point; 1.000 series.",
-    story="Lale Market bugün 4 deposunun sıcaklık ve nemini 5 dakikada bir Operations sayfasında çizer. Franchise planıyla 40 depo ve mağazaya, "
+    story="TDS Academy Market bugün 4 deposunun sıcaklık ve nemini 5 dakikada bir Operations sayfasında çizer. Franchise planıyla 40 depo ve mağazaya, "
           "her birinde 25 sensöre çıkıyor: 1.000 sensör 10 saniyede bir okuma gönderir, yani saniyede 100 point; mağaza başına iki kanalın (web, mobil) dakikalık sipariş "
           "sayıları da aynı ekrana gelir: 80 series daha. Operations sayfası ve Grafana \"son 6 saat, mağaza başına 1 dakikalık ortalama\" ve \"son 24 saat, 15 dakikalık\" "
           "sorularını sorar. Nem 30 dakika boyunca yüzde 70'in üstünde kalırsa (kitap ve elektronik rafları) 5 dakika içinde nöbetçiye haber gitmelidir. "
@@ -6697,7 +6697,7 @@ S3_W = []
 S3_W.append(wusecase("images", 1, sim="w_images",
     title="Ürün görselleri: bir kez yüklenir, milyonlarca kez gösterilir",
     key="Key: products/<ürün id>/<boyut>.jpg. Değer: görselin byte'ları, Content-Type ve kullanıcı metadata'sı. Önünde CloudFront.",
-    story="Lale Market'te 20.000 ürün var ve her ürünün 3 ile 8 arası fotoğrafı, her fotoğrafın dört boyutu bulunuyor: yaklaşık 600.000 dosya, toplam 120 GB. "
+    story="TDS Academy Market'te 20.000 ürün var ve her ürünün 3 ile 8 arası fotoğrafı, her fotoğrafın dört boyutu bulunuyor: yaklaşık 600.000 dosya, toplam 120 GB. "
           "Bir dosya 50 KB ile 5 MB arasıdır. Ürün sayfaları tepe anında saniyede 3.000 görsel ister; CloudFront bunların yüzde 95'ini kendi önbelleğinden verir, "
           "kaynağa saniyede yaklaşık 150 istek gelir. Satıcılar günde 2.000 yeni fotoğraf yükler ve her yüklemeden sonra küçük boyutları üreten bir iş çalışmalıdır. "
           "Satıcılar orijinal dosyalarını saklamıyor: kaybolan bir görsel yeniden çekim demektir. Yanlış bir görselin üstüne yazılırsa eski görsel 30 gün geri getirilebilmeli. "
@@ -6776,7 +6776,7 @@ S3_W.append(wusecase("images", 1, sim="w_images",
 S3_W.append(wusecase("backups", 2, sim="w_backups",
     title="Veritabanı yedek dosyaları: yedi yıllık saklama, hangi depolama sınıfı?",
     key="Key: backups/<database>/<yıl>/<ay>.dump. Aylık tam yedek, 1,2 TB. Aday satırları burada aynı bucket'ın üç depolama sınıfıdır.",
-    story="Lale Market her ayın son günü bütün veritabanlarının tam bir mantıksal yedeğini alır: tek bir 1,2 TB'lık dosya. Muhasebe kuralı bu dosyaları yedi yıl istiyor; "
+    story="TDS Academy Market her ayın son günü bütün veritabanlarının tam bir mantıksal yedeğini alır: tek bir 1,2 TB'lık dosya. Muhasebe kuralı bu dosyaları yedi yıl istiyor; "
           "yedi yıl dolunca silinmeleri de gerekiyor. Yedi yılın sonunda 84 dosya, yaklaşık 100 TB birikir. Günlük geri yükleme bu dosyalardan yapılmaz; "
           "onu veritabanının kendi sürekli yedeği karşılar. Bu dosyalar yılda bir ya da iki kez, bir denetim ya da hukuk talebi için açılır; talep yazılı gelir ve "
           "cevap için 48 saat vardır, bazen aynı gün istenir. Dosya yüklendikten sonra değişmez ve kimse onu süresinden önce silememeli. "
@@ -6855,7 +6855,7 @@ S3_W.append(wusecase("backups", 2, sim="w_backups",
 S3_W.append(wusecase("datalake", 3,
     title="Veri gölünün ham bölgesi: dosyalar geldiği gibi, yıllarca",
     key="Key: raw/<kaynak>/dt=YYYY-MM-DD/<dosya>. CSV, JSON, gzip ve Parquet olduğu gibi. Athena ve Redshift Spectrum yerinde okur.",
-    story="Lale Market'in veri gölünde 40 TB ham veri var ve her ay 2 TB büyüyor. Partnerler günde yaklaşık 3.000 dosya gönderiyor: CSV ve JSON, 1 KB ile 2 GB arası; "
+    story="TDS Academy Market'in veri gölünde 40 TB ham veri var ve her ay 2 TB büyüyor. Partnerler günde yaklaşık 3.000 dosya gönderiyor: CSV ve JSON, 1 KB ile 2 GB arası; "
           "web olayları beş dakikada bir gzip'li JSON dosyaları olarak geliyor. Ham dosyalar olduğu gibi kalmalı: bir dönüştürme işi hatalı çıkarsa her şey ham dosyadan yeniden üretilir. "
           "Bir dosya geldiğinde temizleme işi kendiliğinden başlamalı. Partnerler dosyalarına ara sıra yeni bir alan ekliyor. "
           "90 günden eski dosyalar nadiren okunur; beş yıl sonra silinmeleri gerekir. Analistler Athena ile, raporlar Redshift Spectrum ile aynı dosyaları yerinde okur "
@@ -6934,7 +6934,7 @@ S3_W.append(wusecase("datalake", 3,
 S3_W.append(wusecase("logs", 4, sim="w_logs",
     title="Uygulama log'larının iki yıllık arşivi: nadiren sorulan sorular",
     key="Key: logs/<servis>/yyyy/mm/dd/hh/<parça>.json.gz. Son 14 gün CloudWatch Logs'ta, arşiv iki yıl.",
-    story="Lale Market'in bütün servisleri günde yaklaşık 50 GB log üretir. Son 14 günün log'ları olay anında CloudWatch Logs'ta aranır; bu kısım bugün çalışıyor ve değişmeyecek. "
+    story="TDS Academy Market'in bütün servisleri günde yaklaşık 50 GB log üretir. Son 14 günün log'ları olay anında CloudWatch Logs'ta aranır; bu kısım bugün çalışıyor ve değişmeyecek. "
           "Yeni kural log'ların iki yıl saklanmasını istiyor: iki yılın sonunda yaklaşık 36 TB. Arşive ayda yaklaşık beş soru gelir: güvenlik ekibi "
           "\"14 Mart'ta bu request id'nin bütün satırları\" ya da \"mart ayında bu IP'nin bütün 5xx cevapları\" diye sorar; cevabın birkaç dakikada gelmesi yeterlidir. "
           "Log'lar sadece eklenir, hiç değiştirilmez; iki yıl dolunca silinmelidir. Platform ekibi iki kişidir ve arşiv için yeni bir cluster istemiyor.",
@@ -7090,7 +7090,7 @@ S3_W.append(wusecase("uploads", 5,
 S3_W.append(wusecase("shared", 6, sim="w_shared",
     title="Görsel düzenleme sunucularının ortak çalışma klasörü",
     key="Yol: /work/<iş id>/<dosya>. Dosya açılır, ortasından değiştirilir, sonuna eklenir, geçici adla yazılıp yeniden adlandırılır, kilitlenir.",
-    story="Lale Market eski bir görsel düzenleme uygulamasını devraldı: altı EC2 sunucusunda çalışan bir PHP ve ImageMagick programı. Program dosyaları bir yol ile açar, "
+    story="TDS Academy Market eski bir görsel düzenleme uygulamasını devraldı: altı EC2 sunucusunda çalışan bir PHP ve ImageMagick programı. Program dosyaları bir yol ile açar, "
           "büyük TIFF dosyalarının ortasındaki katmanları yerinde değiştirir, iş günlüğünü bir dosyanın sonuna ekler, sonucu geçici bir adla yazıp yeniden adlandırır "
           "ve iki sunucunun aynı dosyayı aynı anda düzenlemesini bir dosya kilidiyle önler. Çalışma kümesi 2 TB'tır; dosyalar 1 MB ile 200 MB arasıdır. "
           "Bir günün düzenlemeleri kaybolursa tasarım ekibi o günü yeniden yapar. Kodun yeniden yazılması için altı ay bütçe yok; ekip programı olduğu gibi taşımak istiyor.",
@@ -7167,7 +7167,7 @@ S3_W.append(wusecase("shared", 6, sim="w_shared",
 S3_W.append(wusecase("videos", 7,
     title="Ürün videoları: ilk ay çok izlenir, sonra soğur",
     key="Key: videos/<ürün id>/<çözünürlük>.mp4. Oynatıcı byte aralıklarıyla okur. Intelligent-Tiering ya da yaşa göre lifecycle; ürün silinince video silinir.",
-    story="Lale Market'te 15.000 ürün videosu var: her biri 30 MB ile 300 MB arası, toplam yaklaşık 1,8 TB; her ay 600 yeni video ekleniyor. "
+    story="TDS Academy Market'te 15.000 ürün videosu var: her biri 30 MB ile 300 MB arası, toplam yaklaşık 1,8 TB; her ay 600 yeni video ekleniyor. "
           "Bir video ilk 30 gün çok izlenir, 90 günden sonra nadiren açılır. Oynatıcı videoyu baştan sona indirmez; byte aralıklarıyla parça parça okur ve kullanıcı ileri sardığında ortadan başlar. "
           "Önünde CloudFront vardır; kampanya günlerinde izlenme on katına çıkar. Satıcının videosunun başka kopyası yoktur. "
           "Bir ürün katalogdan kaldırılınca videosu da silinmeli. Hangi videonun ne zaman soğuyacağı önceden bilinmiyor. Ekip sunucu işletmek istemiyor.",
@@ -7243,7 +7243,7 @@ S3_W.append(wusecase("videos", 7,
 S3_W.append(wusecase("compliance", 8,
     title="Denetim kayıtlarının değiştirilemez arşivi: yedi yıl, kimse silemez",
     key="Key: audit/dt=YYYY-MM-DD/<parça>.parquet. Object Lock compliance modu, yedi yıl. İlk yıl Keyspaces'te çevrim içi (Keyspaces sayfası kart 4).",
-    story="Lale Market'in denetim kayıtları ilk yıl Keyspaces'te çevrim içi tutulur ve denetçi \"bu hesabın son 90 günü\" sorusunu orada saniyeler içinde sorar (Keyspaces sayfasının 4. kartı). "
+    story="TDS Academy Market'in denetim kayıtları ilk yıl Keyspaces'te çevrim içi tutulur ve denetçi \"bu hesabın son 90 günü\" sorusunu orada saniyeler içinde sorar (Keyspaces sayfasının 4. kartı). "
           "Bir yılı geçen kayıtlar her gece bir Parquet dosyası olarak arşive taşınır: yılda yaklaşık 3 TB, yedi yılda 21 TB. Düzenleyici kurum yedi yıl boyunca kayıtların "
           "hiç kimse tarafından, yönetici hesabı dahil, silinememesini ve değiştirilememesini istiyor; yedi yıl dolunca silinmeleri gerekiyor. Bir soruşturma açılırsa ilgili günler "
           "soruşturma bitene kadar silinmemeli. Denetçi yılda yaklaşık on kez bir tarih aralığı ister, bazen içinde bir hesap id'si arar; cevap için 24 saat vardır.",
@@ -7320,7 +7320,7 @@ S3_W.append(wusecase("compliance", 8,
 S3_W.append(wusecase("training", 9, sim="w_training",
     title="Görsel arama modelinin eğitim verisi: 20 milyon küçük dosya, her epoch'ta yeniden",
     key="Key: train/<shard>/<görsel id>.jpg. Asıl kopya S3 Standard'da; eğitim kopyası GPU'larla aynı AZ'de. Checkpoint 30 dakikada bir.",
-    story="Lale Market'in ML ekibi her hafta bir görsel arama modelini yeniden eğitiyor: 64 GPU, tek bir Availability Zone'da. Eğitim verisi 20 milyon ürün görselidir, "
+    story="TDS Academy Market'in ML ekibi her hafta bir görsel arama modelini yeniden eğitiyor: 64 GPU, tek bir Availability Zone'da. Eğitim verisi 20 milyon ürün görselidir, "
           "ortalama 100 KB, toplam 2 TB. Her epoch bütün dosyaları rastgele sırayla okur ve bir eğitim 10 epoch sürer; tepe anında saniyede yaklaşık 60.000 küçük okuma yapılır. "
           "GPU'lar beklerse saatlik maliyet boşa gider. Verinin asıl kopyası zaten S3 Standard'dadır; eğitim kopyası kaybolursa oradan yeniden kopyalanır. "
           "Eğitim 30 dakikada bir 5 GB'lık bir checkpoint yazar ve her dakika bir eğitim günlüğüne satır ekler. Ekip AWS SDK ve PyTorch biliyor; sunucu işletmek istemiyor.",

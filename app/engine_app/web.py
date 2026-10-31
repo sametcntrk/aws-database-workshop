@@ -6,7 +6,7 @@ The DocumentDB Engine App is the default target of the load balancer. Paths that
 renders the site pages for all ten Engines (catalog.py has no database driver):
   /                                  Home hub with the three sections
   /e2etutorial, /e2etutorial/<e>     End-to-end tutorial of each Engine
-  /guided-e-commerce-app/...         Lale Market with a locked, step-by-step mission
+  /guided-e-commerce-app/...         TDS Academy Market with a locked, step-by-step mission
   /guided-e-commerce-app/perde-arkasi/<n>  the "Perde arkası" tab of Guided step n
 The old friendly paths (/cart, /search, ...) and the removed Free e-commerce app (/free-e-commerce-app/...) redirect to the
 Guided e-commerce app.
@@ -281,8 +281,9 @@ def create_app():
                 abort(404)
             spec = m["steps"][n - 1].get("panel", {}).get("app_code")
             code = [app_code(x) for x in (spec if isinstance(spec, list) else [spec])] if spec else None
+            meta = {e: {"name": x["name"], "auth": x.get("auth", ""), "via": x.get("via", "")} for e, x in catalog.META.items()}
             return render_template("site/perde.html", prefix=prefix, mission=m, n=n, step=m["steps"][n - 1], code=code,
-                                   modes=MODES, mode=MODES["guided"])
+                                   engines_meta=meta, modes=MODES, mode=MODES["guided"])
 
         for mode in MODES.values():
             for e in ENGINE_IDS:

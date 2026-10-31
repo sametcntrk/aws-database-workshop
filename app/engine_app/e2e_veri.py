@@ -137,7 +137,7 @@ CONNECT = [
 
 def connection(lang):
     rows = [[f"{a} → {b}", m] for a, b, m, _, _, _ in CONNECT]
-    steps = [{"say": T(lang, None, "Bir Java uygulaması bir ürünün adını ve fiyatını istiyor (Lale Market'in Python kodu psycopg ile aynı mesajları gönderir). Henüz açık bir bağlantı yok: her şey sıfırdan kurulacak. "
+    steps = [{"say": T(lang, None, "Bir Java uygulaması bir ürünün adını ve fiyatını istiyor (TDS Academy Market'in Python kodu psycopg ile aynı mesajları gönderir). Henüz açık bir bağlantı yok: her şey sıfırdan kurulacak. "
                                    "Sayaç gidiş-dönüşleri sayar: bir mesaj gider, cevabı beklenir."),
               "marks": {}, "count": {"gidiş-dönüş": 0}}]
     rt = 0

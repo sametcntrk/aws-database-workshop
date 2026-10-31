@@ -8,10 +8,10 @@
 <ol>
   <li><b>Bölüm A, Temel.</b> Raporlar için kurulan ayrı bir database nedir; satışların ve onları anlatan table'ların düzeni, verinin kolon kolon saklanması, sıkıştırma, okunmayacak blokları atlamak, işi birçok makineye bölmek, veriyi yüklemek ve değiştirmek, analitik SQL ve ön hesaplama, compute ile storage'ın ayrılması. Her kavram bütün durumlarıyla bir tabloda verilir ve bölüm sekiz özelliğin (Ö1–Ö8) listesi ve PostgreSQL / Athena / Redshift matrisiyle biter. Fikirler her columnar warehouse'ta aynıdır.</li>
   <li><b>Mimar gözüyle.</b> Böyle bir database ne zaman doğru seçimdir, ne zaman değildir: on use case, her birinde bu iş yüküne en uygun servis, iki alternatifin aynı gereksinimlere cevabı ve yine de Redshift seçersek artı ve eksilerimiz. Sonra AWS'teki analitik seçenekleri ve Redshift Serverless ile provisioned cluster arasındaki seçim. Kartlardan kurulmuş beş karar simülasyonu.</li>
-  <li><b>Bölüm B, İleri.</b> Pratikte Redshift: canlı Lale Market table'ı, rapor sorgusu ve planı, dağıtım ve join, yükleme, güncelleme ve VACUUM, maliyet.</li>
-  <li><b>Bölüm C, AWS servisi.</b> Bir warehouse'u kendin çalıştırdığında ne yapman gerekir, Redshift senin için neyi yapar ve Lale Market'te nasıl kurulu.</li>
+  <li><b>Bölüm B, İleri.</b> Pratikte Redshift: canlı TDS Academy Market table'ı, rapor sorgusu ve planı, dağıtım ve join, yükleme, güncelleme ve VACUUM, maliyet.</li>
+  <li><b>Bölüm C, AWS servisi.</b> Bir warehouse'u kendin çalıştırdığında ne yapman gerekir, Redshift senin için neyi yapar ve TDS Academy Market'te nasıl kurulu.</li>
 </ol>
-<p>Örnekler Lale Market'in satış raporlarından gelir: siparişler Aurora'dadır, bir kopyası Redshift'te raporlanır. Başka bir örnek bir fikri daha kolay gösteriyorsa tutorial onu kullanır: bir seçim gecesi oy sayımı, bir kütüphane rafı, bir sözlük.</p>
+<p>Örnekler TDS Academy Market'in satış raporlarından gelir: siparişler Aurora'dadır, bir kopyası Redshift'te raporlanır. Başka bir örnek bir fikri daha kolay gösteriyorsa tutorial onu kullanır: bir seçim gecesi oy sayımı, bir kütüphane rafı, bir sözlük.</p>
 <p>Bu tutorial'ın sonunda şunları yapabilirsin:</p>
 <ol>
   <li>Bir rapor sorgusunun neden checkout database'inde değil bir warehouse'ta çalışması gerektiğini sayılarla açıklamak.</li>
@@ -37,7 +37,7 @@
 <p>Bir mağazanın iki tür database işi vardır. Checkout her saniye birkaç row okur ve yazar: bu siparişi kaydet, bu ürünün stoğunu azalt. Buna {{ k.term("OLTP") }} (online transaction processing) denir; birçok küçük ve kısa işlem. Finans ekibinin sorusu farklıdır: "son üç yılda şehre ve kategoriye göre aylık gelir". Bu sorgu iki milyar row'a dokunur ama her row'un sadece üç dört kolonunu okur. Buna {{ k.term("OLAP") }} (online analytical processing) denir; az sayıda ama çok büyük okuma.</p>
 {{ k.concept("Data warehouse",
    "Analiz için kurulmuş ayrı bir database. Birçok kaynaktan gelen geçmişi tek yerde tutar ve çok sayıda row'u tarayıp gruplayan sorguları hızlı cevaplar. Veriyi kolon kolon saklar ve işi birçok makineye böler (A3, A6). Genellikle verinin kaynağı değil, bir kopyasıdır.",
-   "Lale Market'in siparişleri Aurora'dadır. Satış raporları Redshift'teki <code>sales</code> table'ında ve Aurora'nın <code>aurora_live</code> adlı kopyasında çalışır; checkout database'i rapor sorgusu görmez.",
+   "TDS Academy Market'in siparişleri Aurora'dadır. Satış raporları Redshift'teki <code>sales</code> table'ında ve Aurora'nın <code>aurora_live</code> adlı kopyasında çalışır; checkout database'i rapor sorgusu görmez.",
    "Bir şirketin arşiv ve istatistik birimi. Satış ekibi müşteriyle konuşur ve faturayı keser; istatistik birimi faturaların kopyalarından yıllık raporu hazırlar ve satış ekibini rahatsız etmez.") }}
 <table class="data">
   <caption>takas: data warehouse neyi verir, neyi alır</caption>
@@ -83,8 +83,8 @@
    "<code>rs_customers</code>: dört müşteri, şehirleri ve segmentleri. <code>sales</code> table'ı müşteriyi sadece <code>customer_id</code> ile ödünç alır.",
    "Fiş rulosunun yanındaki müşteri kartı dolabı: fişte sadece kart numarası yazar, kimin olduğu kartta yazar.") }}
 <p>Ortada fact table, etrafında dimension'lar: çizim bir yıldıza benzer ve bu yüzden düzene {{ k.term("star schema") }} denir.</p>
-{{ k.fig("redshift-star-schema.png", "bir star schema. Ortadaki turuncu kutu fact table'dır: Lale Market'te sales. Dört mavi kutu dimension'lardır: müşteri, ürün, tarih ve mağaza olabilir. Oklar fact table'ın key'lerinin dimension'lara gittiğini gösterir.") }}
-<p>Bu sayfanın simülasyonları aşağıdaki iki küçük table'ı kullanır. Sipariş, müşteri ve ürün id'leri gerçek Lale Market verisindendir. <code>sales</code> table'ında şehir ve kategori de vardır: Lale Market raporların çoğunu join'siz çalıştırmak için onları fact table'a kopyalar.</p>
+{{ k.fig("redshift-star-schema.png", "bir star schema. Ortadaki turuncu kutu fact table'dır: TDS Academy Market'te sales. Dört mavi kutu dimension'lardır: müşteri, ürün, tarih ve mağaza olabilir. Oklar fact table'ın key'lerinin dimension'lara gittiğini gösterir.") }}
+<p>Bu sayfanın simülasyonları aşağıdaki iki küçük table'ı kullanır. Sipariş, müşteri ve ürün id'leri gerçek TDS Academy Market verisindendir. <code>sales</code> table'ında şehir ve kategori de vardır: TDS Academy Market raporların çoğunu join'siz çalıştırmak için onları fact table'a kopyalar.</p>
 {{ k.sample("rs_sales", "sales: fact table'ın öğretici kopyası (8 row, 8 kolon)", key=["order_id", "product_id"], ref=["customer_id"]) }}
 {{ k.sample("rs_customers", "rs_customers: bir dimension table (4 müşteri)", key=["customer_id"]) }}
 <table class="data">
@@ -98,7 +98,7 @@
     <tr><td>Fact table'da kural (unique, foreign key) koruması</td><td>Database olmayan bir müşteri id'sini reddeder</td><td><b>Columnar warehouse'larda çoğunlukla yok:</b> key'ler sadece bilgi olarak tutulur, kontrol yükleme sürecindedir (A7)</td><td>Yanlış yükleme çift row ya da sahipsiz row bırakır</td></tr>
   </tbody>
 </table>
-<p>Lale Market ikisini birlikte kullanır: geçmiş için düz bir <code>sales</code> table'ı, canlı veri için Aurora table'larının olduğu gibi kopyası (B4).</p>
+<p>TDS Academy Market ikisini birlikte kullanır: geçmiş için düz bir <code>sales</code> table'ı, canlı veri için Aurora table'larının olduğu gibi kopyası (B4).</p>
 <table class="data">
   <thead><tr><th>Identifier</th><th>Sahibi kim</th><th>Kim ödünç alır</th></tr></thead>
   <tbody>
@@ -378,7 +378,7 @@
 <p>Klasik bir warehouse'ta her makine hem veriyi saklar hem sorguyu çalıştırır; daha çok veri daha çok makine demektir. Yeni nesil warehouse'larda veri ayrı, kalıcı bir storage katmanında durur ve compute bu katmanı okur.</p>
 {{ k.concept("Compute ile storage ayrımı",
    "Verinin saklandığı katman ile sorguyu çalıştıran işlemci ve belleğin ayrı ayrı büyüyebilmesi ve ayrı ödenmesi. Compute boştayken durabilir, yük gelince büyüyebilir; birden fazla compute aynı veriyi okuyabilir. Üç sonucu vardır: dışarıdaki dosyaları sorgulamak, veriyi kopyalamadan paylaşmak ve kapasiteyi yüke göre vermek.",
-   "Lale Market'in Redshift'i Serverless'tır: veri managed storage'dadır, compute sorgu gelince çalışır ve sorgu yokken ödenmez (B5).",
+   "TDS Academy Market'in Redshift'i Serverless'tır: veri managed storage'dadır, compute sorgu gelince çalışır ve sorgu yokken ödenmez (B5).",
    "Bir kütüphanenin arşivi ile okuma salonu: arşiv büyür ve salon ayrı genişler; boş bir salonun ışıkları kapanır; iki salon aynı arşivden okur.") }}
 {{ k.concept("External table",
    "Verisi warehouse'ta değil, dışarıdaki dosyalarda (örneğin S3'te Parquet) duran ama warehouse'ta bir table gibi sorgulanan tanım. Sorgu dosyaları yerinde okur; veri yüklenmez. Redshift'te bu katmanın adı Redshift <dfn>Spectrum</dfn>'dur.",
@@ -595,7 +595,7 @@
     <tr><td>Redshift provisioned, RA3 düğümü, rezervasyon, pause/resume, elastic resize</td><td>Düğüm tipi ve sayısı seçilen Redshift cluster'ı; düğüm saat başına ödenir. RA3 düğümleri veriyi managed storage'da tutar. Rezervasyon bir ya da üç yıllık taahhütle indirimli saat fiyatıdır. Pause/resume cluster'ı durdurur ve yeniden başlatır; elastic resize düğüm sayısını dakikalar içinde değiştirir (C2). Fiyatlar düğüm başınadır.</td></tr>
     <tr><td>Concurrency scaling</td><td>Provisioned cluster'da kuyruktaki sorgular için kısa süreli ek cluster'lar; her cluster için günde bir saatlik ücretsiz kredi, sonrası saniye başına ödenir. Serverless'ta dahildir.</td></tr>
     <tr><td>Managed storage, recovery point, snapshot</td><td>Redshift'in compute'tan ayrı storage katmanı (GB-ay başına ödenir). Serverless 30 dakikada bir recovery point alır ve 24 saat tutar; snapshot elle alınan ve istenen süre tutulan yedektir.</td></tr>
-    <tr><td><dfn>Zero-ETL</dfn>, aurora_live</td><td>Aurora'nın table'larını Redshift'e kod yazmadan kopyalayan yönetilen değişiklik aktarımı (Ö7). Lale Market'te kopyanın adı <code>aurora_live</code>'dır; yeni bir sipariş yaklaşık 30 saniyede görünür (B4).</td></tr>
+    <tr><td><dfn>Zero-ETL</dfn>, aurora_live</td><td>Aurora'nın table'larını Redshift'e kod yazmadan kopyalayan yönetilen değişiklik aktarımı (Ö7). TDS Academy Market'te kopyanın adı <code>aurora_live</code>'dır; yeni bir sipariş yaklaşık 30 saniyede görünür (B4).</td></tr>
     <tr><td>COPY, UNLOAD, CREATE TABLE AS</td><td>Dosyalardan paralel toplu yükleme; bir sorgunun sonucunu S3'e dosya olarak yazma; bir sorgunun sonucundan yeni table (B4).</td></tr>
     <tr><td>VACUUM</td><td>Silinmiş işaretli row'ları kaldıran ve row'ları yeniden sıralayan bakım işi; Redshift silme kısmını arka planda kendisi çalıştırır (A7, B4).</td></tr>
     <tr><td><dfn>Spectrum</dfn>, external table, Glue Data Catalog</td><td>Redshift'in S3'teki dosyaları yerinde sorgulayan katmanı; dosyaları table gibi gösteren tanım; table tanımlarının tutulduğu ortak katalog (A9).</td></tr>
@@ -657,7 +657,7 @@
 <table class="data">
   <thead><tr><th>Seçenek</th><th>Nedir</th><th>Ne zaman seç</th></tr></thead>
   <tbody>
-    <tr><td><b>Amazon Redshift Serverless</b></td><td>Düğüm seçmeden kullanılan columnar MPP warehouse. Kapasite RPU olarak yükle gelir; "you pay for the workloads you run in RPU-hours on a per-second basis (with a 60-second minimum charge)"; Spectrum ve concurrency scaling dahildir (<a href="https://aws.amazon.com/redshift/pricing/">Redshift pricing</a>). eu-central-1'de 0,451 USD/RPU-saat (Price List API, 2026-10-31).</td><td>Dalgalı ya da boşluklu yük, kapasite planlamak istemeyen ekip, birkaç ekibin ayrı compute'u. Lale Market bunu kullanır.</td></tr>
+    <tr><td><b>Amazon Redshift Serverless</b></td><td>Düğüm seçmeden kullanılan columnar MPP warehouse. Kapasite RPU olarak yükle gelir; "you pay for the workloads you run in RPU-hours on a per-second basis (with a 60-second minimum charge)"; Spectrum ve concurrency scaling dahildir (<a href="https://aws.amazon.com/redshift/pricing/">Redshift pricing</a>). eu-central-1'de 0,451 USD/RPU-saat (Price List API, 2026-10-31).</td><td>Dalgalı ya da boşluklu yük, kapasite planlamak istemeyen ekip, birkaç ekibin ayrı compute'u. TDS Academy Market bunu kullanır.</td></tr>
     <tr><td>Amazon Redshift provisioned (RA3)</td><td>Aynı engine; düğüm tipi ve sayısı seçilir, saat başına ödenir; bir ya da üç yıllık rezervasyon vardır. ra3.4xlarge (12 vCPU, 96 GiB) eu-central-1'de düğüm başına on demand 3,894 USD/saat, bir yıllık peşinatsız rezervasyonla 2,7258 USD/saat, üç yıllık peşinatsız rezervasyonla 1,6939 USD/saat. Price List API'da Serverless rezervasyonu yalnız bir yıllıktır (0,352 USD/RPU-saat).</td><td>7/24 düz ve öngörülebilir yük, üç yıllık taahhüt, cluster işletmeyi bilen ekip (kart 8). Bir yıllık vadede düz yükte de Serverless daha ucuzdur.</td></tr>
     <tr><td>Amazon Athena</td><td>S3'teki dosyalar üzerinde sunucusuz SQL; "$5 per TB of data scanned", sorgu başına en az 10 MB (<a href="https://docs.aws.amazon.com/whitepapers/latest/big-data-analytics-options/amazon-athena.html">Athena cost model</a>).</td><td>Veri S3'te bir veri gölünde, sorular seyrek ve farklı, warehouse işletmek istenmiyor (kart 10).</td></tr>
     <tr><td><a href="/e2etutorial/aurora?lang=tr">Aurora PostgreSQL</a> reader</td><td>Checkout database'inin okuma kopyası; aynı SQL, row store.</td><td>Raporlar son birkaç günle ya da haftayla sınırlı, veri küçük, ayrı bir sistem istenmiyor.</td></tr>
@@ -668,7 +668,7 @@
 <table class="data">
   <thead><tr><th>Seçenek</th><th>Ne yapar</th><th>Ne zaman seç</th></tr></thead>
   <tbody>
-    <tr><td>Base ve en fazla RPU</td><td>Base sorguların başladığı kapasitedir: "The default base capacity for Amazon Redshift Serverless is 128 RPUs", en az 4 RPU; her RPU 16 GB bellek (<a href="https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-capacity.html">Compute capacity</a>). En fazla RPU ve RPU-saat sınırları faturayı korur.</td><td>Küçük veride düşük base (Lale Market 8 RPU), büyük join'lerde yüksek base.</td></tr>
+    <tr><td>Base ve en fazla RPU</td><td>Base sorguların başladığı kapasitedir: "The default base capacity for Amazon Redshift Serverless is 128 RPUs", en az 4 RPU; her RPU 16 GB bellek (<a href="https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-capacity.html">Compute capacity</a>). En fazla RPU ve RPU-saat sınırları faturayı korur.</td><td>Küçük veride düşük base (TDS Academy Market 8 RPU), büyük join'lerde yüksek base.</td></tr>
     <tr><td>Zero-ETL entegrasyonu</td><td>Aurora (ve DynamoDB) table'larını kod yazmadan kopyalar; kaynak table'larda primary key şarttır (<a href="https://docs.aws.amazon.com/redshift/latest/mgmt/zero-etl.reqs-lims.html">zero-ETL considerations</a>). Aurora'dan "within seconds of being written" (<a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/zero-etl.html">Aurora zero-ETL</a>); bu workshop'ta yaklaşık 30 saniye. DynamoDB'den "every 15-30 minutes".</td><td>Raporlar OLTP verisinden gelir ve checkout bunu hissetmemelidir.</td></tr>
     <tr><td>Data sharing</td><td>Canlı veriyi workgroup'lar, hesaplar ve bölgeler arasında kopyasız paylaşır (<a href="https://docs.aws.amazon.com/redshift/latest/dg/datashare-overview.html">Data sharing</a>).</td><td>Birkaç ekip ya da hesap aynı veriyi kendi compute'uyla okur (kart 5).</td></tr>
     <tr><td>Spectrum (external table)</td><td>S3'teki dosyaları yerinde sorgular ve warehouse table'larıyla JOIN'ler.</td><td>Veri gölündeki ham veri ile warehouse'taki düzenli veri birlikte sorulur (kart 2, 10).</td></tr>
@@ -677,8 +677,8 @@
   </tbody>
 </table>
 
-<h2 id="lalemarket-arch" data-short="Lale Market'teki yeri"><span class="sec">M6</span>Lale Market'te Redshift'in yeri</h2>
-<p>Lale Market on engine kullanır ve her engine tek bir iş yapar. Redshift raporların yeridir: Admin sayfası "Sales reports" sadece Redshift'ten okur ve checkout database'ine hiçbir zaman rapor sorgusu göndermez. Siparişler Aurora'da yazılır (checkout transaction'ı); zero-ETL entegrasyonu Aurora'nın <code>shop</code> database'indeki dört table'ı Redshift'teki <code>aurora_live</code> database'ine kopyalar ve yeni bir sipariş orada yaklaşık 30 saniye sonra görünür (2026-10-31'de iki ölçüm). Geçmiş için Seed ayrıca düz bir <code>sales</code> table'ı yükler: iptal edilmemiş her sipariş satırı için bir row, 11.878 row. Redshift kendine ait ziyaretçi verisi tutmaz; Aurora ziyaretçi siparişlerini sildiğinde zero-ETL kopyadan da siler. Production'da aynı düzen ölçeklenir: tıklamalar S3'e ve oradan COPY ya da Spectrum ile gelir, panolar materialized view'lardan okur, ekipler data sharing ile kendi compute'larını kullanır.</p>
+<h2 id="lalemarket-arch" data-short="TDS Academy Market'teki yeri"><span class="sec">M6</span>TDS Academy Market'te Redshift'in yeri</h2>
+<p>TDS Academy Market on engine kullanır ve her engine tek bir iş yapar. Redshift raporların yeridir: Admin sayfası "Sales reports" sadece Redshift'ten okur ve checkout database'ine hiçbir zaman rapor sorgusu göndermez. Siparişler Aurora'da yazılır (checkout transaction'ı); zero-ETL entegrasyonu Aurora'nın <code>shop</code> database'indeki dört table'ı Redshift'teki <code>aurora_live</code> database'ine kopyalar ve yeni bir sipariş orada yaklaşık 30 saniye sonra görünür (2026-10-31'de iki ölçüm). Geçmiş için Seed ayrıca düz bir <code>sales</code> table'ı yükler: iptal edilmemiş her sipariş satırı için bir row, 11.878 row. Redshift kendine ait ziyaretçi verisi tutmaz; Aurora ziyaretçi siparişlerini sildiğinde zero-ETL kopyadan da siler. Production'da aynı düzen ölçeklenir: tıklamalar S3'e ve oradan COPY ya da Spectrum ile gelir, panolar materialized view'lardan okur, ekipler data sharing ile kendi compute'larını kullanır.</p>
 
 <h2 id="decide" data-short="Karar simülasyonları"><span class="sec">M7</span>Karar simülasyonları: M2'nin beş kartı adım adım</h2>
 <p>Her simülasyon M2'deki bir kartın verisini birebir kullanır: aynı iş yükü, aynı satırlar ve ağırlıklar, aynı üç aday, aynı puanlar ve aynı gerekçeler. Fark şudur: simülasyon her adımda bir satır açar. Önce satırın ağırlığını ve nedenini, sonra her adayın puanını ve ağırlıklı katkısını görürsün; puan tablosu ve toplamlar adım adım dolar. Sonunda en uygun servisi, ikinciyi, aradaki farkı ve kartın karar paragrafını görürsün. Oynat'a basmadan önce kartı okuyup sonucu tahmin et.</p>
@@ -701,7 +701,7 @@
    0, "Engine aynıdır ve R1 eşittir; kararı R5 verir (kart 8). Düz yükte saniye başına ödeme avantaj getirmez ve rezervasyonlu düğümler yaklaşık yüzde 20 ucuzdur. Boşluklu yükte Serverless boş saatleri ödemez (kart 3).") }}
 
 <div class="part"><b>Bölüm B</b><h2 id="partB" data-short="Bölüm B: İleri">İleri: pratikte Redshift</h2>
-<p>Bölüm A'daki fikirlerin Redshift'teki isimleri, canlı Lale Market table'ı, sorgular ve planları, dağıtım, yükleme, güncelleme ve maliyet.</p></div>
+<p>Bölüm A'daki fikirlerin Redshift'teki isimleri, canlı TDS Academy Market table'ı, sorgular ve planları, dağıtım, yükleme, güncelleme ve maliyet.</p></div>
 
 <h2 id="names" data-short="Canlı table ve isimler"><span class="sec">B1</span>Redshift'te isimler, canlı bir table ve gerçek tanımı</h2>
 <p>Bölüm A'nın terimleri Redshift'te aynen geçerlidir. Yeni isimler azdır ve çoğu servisin parçalarını anlatır. Diğer ürünlerdeki karşılıklar:</p>
@@ -718,7 +718,7 @@
     <tr><td>External table (A9)</td><td>Foreign data wrapper</td><td>Her table zaten dışarıdadır</td><td>Redshift Spectrum</td></tr>
   </tbody>
 </table>
-<p>Lale Market'in geçmiş table'ı canlı workgroup'ta durur. Workshop table'ın sistem bilgisini Redshift Data API ile okudu:</p>
+<p>TDS Academy Market'in geçmiş table'ı canlı workgroup'ta durur. Workshop table'ın sistem bilgisini Redshift Data API ile okudu:</p>
 {% call k.live("sales table'ının sistem bilgisi (SELECT \"table\", diststyle, sortkey1, encoded, tbl_rows, size, unsorted FROM svv_table_info WHERE \"table\" = 'sales', 2026-10-31)") %}
 <pre><code> table | diststyle        | sortkey1   | encoded         | tbl_rows | size | unsorted
 -------+------------------+------------+-----------------+----------+------+---------
@@ -782,14 +782,14 @@
 </table>
 {% endcall %}
 {% call k.ask("SORTKEY ve DISTKEY'i yazmasaydık ne olurdu?") %}
-<p>Redshift automatic table optimization ile ikisini de yönetirdi: küçük table için <code>AUTO(ALL)</code>, büyüdükçe KEY ya da EVEN; sort key'i de sorgu geçmişine bakarak seçerdi. Lale Market ikisini açıkça yazar, çünkü tutorial onları göstermek ister.</p>
+<p>Redshift automatic table optimization ile ikisini de yönetirdi: küçük table için <code>AUTO(ALL)</code>, büyüdükçe KEY ya da EVEN; sort key'i de sorgu geçmişine bakarak seçerdi. TDS Academy Market ikisini açıkça yazar, çünkü tutorial onları göstermek ister.</p>
 {% endcall %}
 {% call k.ask("Table'ın sütunlarını sonradan değiştirebilir miyim?") %}
 <p>Kolon eklemek bir ALTER TABLE'dır. Sort key ve distribution key de ALTER TABLE ile değiştirilebilir ama Redshift bunun için row'ları yeniden yazar; büyük bir table'da bu bir bakım işidir.</p>
 {% endcall %}
 
 <h2 id="reads" data-short="Rapor, plan, cache"><span class="sec">B2</span>Okumalar: rapor sorgusu, planı ve sonuç önbelleği</h2>
-<p>A3'teki kolon okuması, A5'teki blok atlama ve A8'deki result cache Redshift'te tek bir rapor sorgusunda birlikte görünür. Lale Market'in admin sayfası bu sorguyu çalıştırır:</p>
+<p>A3'teki kolon okuması, A5'teki blok atlama ve A8'deki result cache Redshift'te tek bir rapor sorgusunda birlikte görünür. TDS Academy Market'in admin sayfası bu sorguyu çalıştırır:</p>
 {% call k.sql("Q1", "Kategoriye göre gelir (admin sayfası \"Sales reports\")") %}
 <pre><code>SELECT category, count(DISTINCT order_id) AS orders, sum(qty) AS units, sum(amount) AS revenue
 FROM sales GROUP BY 1 ORDER BY revenue DESC LIMIT 24</code></pre>
@@ -868,7 +868,7 @@ GROUP  BY c.segment;</code></pre>
    0, "ALL küçük bir table'ın tam kopyasını her node'a koyar; hangi slice hangi sales row'unu tutarsa tutsun müşterisini yanında bulur. Bedeli storage'ın node sayısıyla çarpılmasıdır, küçük bir table'da önemsizdir.") }}
 
 <h2 id="load" data-short="Yükleme, zero-ETL, VACUUM"><span class="sec">B4</span>Yükleme ve değişiklik: COPY, zero-ETL, UPDATE ve VACUUM</h2>
-<p>A7'deki yazma yollarının Redshift'teki adları COPY, zero-ETL entegrasyonu, streaming ingestion, UPDATE ve DELETE'tir. Dosyalardan toplu yükleme şöyle görünür (örnek; Lale Market dosya yüklemez):</p>
+<p>A7'deki yazma yollarının Redshift'teki adları COPY, zero-ETL entegrasyonu, streaming ingestion, UPDATE ve DELETE'tir. Dosyalardan toplu yükleme şöyle görünür (örnek; TDS Academy Market dosya yüklemez):</p>
 {% call k.sql("Q4", "Gecelik tıklama dosyalarını yükle (M2 kart 2)") %}
 <pre><code>COPY ad_clicks
 FROM 's3://lale-ads/clicks/dt=2026-10-30/'
@@ -880,8 +880,8 @@ FORMAT AS PARQUET;</code></pre>
   <tr><td>FORMAT AS PARQUET</td><td>Kolon bazlı dosya; Redshift kolonları doğrudan kendi bloklarına alır.</td></tr>
 </table>
 {% endcall %}
-<p>Lale Market'in canlı verisi zero-ETL ile gelir. Entegrasyon bir kez oluşturulur (CloudFormation, C3); Redshift tarafında tek bir cümle onu bir database'e bağlar:</p>
-{% call k.sql("Q5", "Redshift'i entegrasyona bağla (Lale Market admin işlemi)") %}
+<p>TDS Academy Market'in canlı verisi zero-ETL ile gelir. Entegrasyon bir kez oluşturulur (CloudFormation, C3); Redshift tarafında tek bir cümle onu bir database'e bağlar:</p>
+{% call k.sql("Q5", "Redshift'i entegrasyona bağla (TDS Academy Market admin işlemi)") %}
 <pre><code>CREATE DATABASE aurora_live FROM INTEGRATION '&lt;integration id&gt;' DATABASE shop</code></pre>
 <table class="clause">
   <tr><td>CREATE DATABASE aurora_live</td><td>Redshift'te yeni bir database; table'ları Aurora table'larının kopyalarıdır.</td></tr>
@@ -889,7 +889,7 @@ FORMAT AS PARQUET;</code></pre>
   <tr><td>DATABASE shop</td><td>Kopyalanan Aurora database'i. Kaynak table'larda primary key şarttır; yoksa o table kopyalanmaz.</td></tr>
 </table>
 {% endcall %}
-{{ k.fig("redshift-zero-etl.png", "resmî AWS çizimi: soldaki Aurora cluster'ları yeşil oklarla (zero-ETL entegrasyonları) ortadaki Redshift warehouse'larına akar; sağda analistler ve ML modelleri warehouse'u okur. Lale Market'te bir Aurora cluster'ı ve bir Redshift namespace'i vardır.") }}
+{{ k.fig("redshift-zero-etl.png", "resmî AWS çizimi: soldaki Aurora cluster'ları yeşil oklarla (zero-ETL entegrasyonları) ortadaki Redshift warehouse'larına akar; sağda analistler ve ML modelleri warehouse'u okur. TDS Academy Market'te bir Aurora cluster'ı ve bir Redshift namespace'i vardır.") }}
 {% call k.live("entegrasyonun durumu ve kopyadaki en yeni sipariş (svv_integration ve aurora_live.public.orders, 2026-10-31)") %}
 <pre><code>SELECT integration_id, target_database, state, total_tables_replicated, total_tables_failed FROM svv_integration;
  integration_id                       | target_database | state           | total_tables_replicated | total_tables_failed
@@ -910,19 +910,19 @@ SELECT order_id, customer_id, order_date, status FROM aurora_live.public.orders 
 {% call k.ask("Zero-ETL kopyasına yazabilir miyim?") %}
 <p>Hayır: <code>aurora_live</code> entegrasyonun hedefidir ve kaynak Aurora'dır. Kopyanın üzerine view ve materialized view kurabilir, sonuçları başka bir database'e yazabilirsin. Sipariş değişikliği her zaman Aurora'da yapılır.</p>
 {% endcall %}
-{{ k.quiz("rs-q10", "Yeni bir checkout siparişi Lale Market'in canlı raporuna nasıl ulaşır?",
+{{ k.quiz("rs-q10", "Yeni bir checkout siparişi TDS Academy Market'in canlı raporuna nasıl ulaşır?",
    ["S3'ten gecelik bir COPY ile", "Zero-ETL entegrasyonu onu yaklaşık yarım dakika içinde Aurora'dan kopyalar", "Checkout onu doğrudan Redshift'e yazar", "Rapor doğrudan Aurora'yı okur"],
    1, "Checkout sadece Aurora'ya yazar. Entegrasyon değişikliği aurora_live'a kopyalar; bu workshop'ta yaklaşık 30 saniye sürer.") }}
 
 <h2 id="cost" data-short="Maliyet: RPU ve storage"><span class="sec">B5</span>Performans ve maliyet: RPU, 60 saniye, storage</h2>
 <p>A9'daki compute ile storage ayrımı Redshift Serverless'ın faturasında iki ayrı satırdır: compute RPU-saat olarak, storage GB-ay olarak ödenir. Kurallar (<a href="https://aws.amazon.com/redshift/pricing/">Redshift pricing</a>, <a href="https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-billing-on-demand.html">Billing for Serverless</a>):</p>
 <ul>
-  <li>"One RPU provides 16 GB of memory." Base RPU varsayılan 128'dir; en az 4 RPU seçilebilir. Lale Market 8 RPU kullanır.</li>
+  <li>"One RPU provides 16 GB of memory." Base RPU varsayılan 128'dir; en az 4 RPU seçilebilir. TDS Academy Market 8 RPU kullanır.</li>
   <li>"You pay for the workloads you run in RPU-hours on a per-second basis (with a 60-second minimum charge)." "When no queries are running, you aren't billed for compute capacity."</li>
   <li>eu-central-1'de on demand 0,451 USD/RPU-saat, bir yıllık rezervasyonla 0,352 USD/RPU-saat; managed storage 0,0256 USD/GB-ay (Price List API, 2026-10-31).</li>
   <li>Spectrum ve concurrency scaling Serverless'ta ayrıca ödenmez.</li>
 </ul>
-{% call k.live("Lale Market'in son üç günlük compute kullanımı (SELECT trunc(start_time), sum(charged_seconds), max(compute_capacity) FROM sys_serverless_usage …)") %}
+{% call k.live("TDS Academy Market'in son üç günlük compute kullanımı (SELECT trunc(start_time), sum(charged_seconds), max(compute_capacity) FROM sys_serverless_usage …)") %}
 <pre><code> day        | charged_seconds | max_capacity
 ------------+-----------------+-------------
  2026-10-29 |            1440 |           8
@@ -983,7 +983,7 @@ SELECT order_id, customer_id, order_date, status FROM aurora_live.public.orders 
 </table>
 <p>İki biçim arasında geçiş bir snapshot geri yüklemesidir: AWS bir Serverless snapshot'ını provisioned cluster'a ve tersine geri yüklemeye izin verir (<a href="https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-snapshots-recovery-points.html">Snapshots and recovery points</a>). Bu yüzden kart 3 ve kart 8'deki kararlar geri alınabilir.</p>
 
-<h2 id="lalemarket" data-short="Lale Market'te Redshift"><span class="sec">C3</span>Lale Market'te Redshift</h2>
+<h2 id="lalemarket" data-short="TDS Academy Market'te Redshift"><span class="sec">C3</span>TDS Academy Market'te Redshift</h2>
 <p>Gerçek yapılandırma <code>cloudformation/workshop.yaml</code> içindedir:</p>
 {% call k.sql("T2", "Namespace, workgroup ve zero-ETL entegrasyonu") %}
 <pre><code>RedshiftWorkgroup:

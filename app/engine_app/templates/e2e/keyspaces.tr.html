@@ -8,10 +8,10 @@
 <ol>
   <li><b>Bölüm A, Temel.</b> Wide-column database nedir; satırların sahibine göre gruplanması ve grubun içinde hazır bir sırayla durması, verinin birçok makineye ve kopyaya dağılması, okuma ve yazma yolları, koşullu yazma, silmenin ve süre sonunun bedeli, ikinci soru için ikinci bir yol ve değişiklik akışı. Her kavram bütün durumlarıyla bir tabloda verilir ve bölüm sekiz özelliğin (Ö1–Ö8) listesi ve Apache Cassandra / ScyllaDB / Amazon Keyspaces matrisiyle biter. Fikirler her wide-column database'te aynıdır.</li>
   <li><b>Mimar gözüyle.</b> Wide-column database ne zaman doğru seçimdir, ne zaman değildir: on use case, her birinde seçimin nedeni, iki alternatifin aynı gereksinimlere cevabı ve yine de wide-column seçersek artı ve eksilerimiz. Her kartta en uygun servis en üstte durur; Keyspaces dört kartta kaybeder. Sonra AWS'teki seçenekler ve hangi durumda Amazon Keyspaces'in seçileceği. Kartların beşinden yapılan beş karar simülasyonu: bir net kazanma, engine uyumunu başka bir engine'in kazandığı bir kart, bir yakın yarış, engine uyumunun eşit olduğu bir kart ve bir net kaybetme.</li>
-  <li><b>Bölüm B, İleri.</b> Pratikte Keyspaces: canlı Lale Market table'ından gerçek row'lar, CQL sorguları ve Keyspaces'in gerçek cevapları (bir reddetme dahil), okuma seviyesinin maliyeti, koşullu yazma, soru başına table tasarımı, süre sonu ve değişiklik akışı.</li>
+  <li><b>Bölüm B, İleri.</b> Pratikte Keyspaces: canlı TDS Academy Market table'ından gerçek row'lar, CQL sorguları ve Keyspaces'in gerçek cevapları (bir reddetme dahil), okuma seviyesinin maliyeti, koşullu yazma, soru başına table tasarımı, süre sonu ve değişiklik akışı.</li>
   <li><b>Bölüm C, AWS servisi.</b> Bir Cassandra cluster'ını kendin çalıştırdığında ne yapman gerekir ve Keyspaces senin için neyi yapar.</li>
 </ol>
-<p>Örnekler Lale Market'in aktivite geçmişinden gelir: her ürün görüntüleme, sepete ekleme ve satın alma bir satır olarak yazılır. Başka bir örnek bir fikri daha kolay gösteriyorsa tutorial onu kullanır: çekmeceli bir dosya dolabı, bir gemi seyir defteri, bir sinema gişesi.</p>
+<p>Örnekler TDS Academy Market'in aktivite geçmişinden gelir: her ürün görüntüleme, sepete ekleme ve satın alma bir satır olarak yazılır. Başka bir örnek bir fikri daha kolay gösteriyorsa tutorial onu kullanır: çekmeceli bir dosya dolabı, bir gemi seyir defteri, bir sinema gişesi.</p>
 <p>Bu tutorial'ın sonunda şunları yapabilirsin:</p>
 <ol>
   <li>Bir wide-column table tanımını okuyup verinin nerede durduğunu ve hangi sırayla durduğunu söylemek.</li>
@@ -63,7 +63,7 @@
 <h2 id="model" data-short="Keyspace, table, primary key"><span class="sec">A2</span>Keyspace, table, row ve column. Primary key: üç biçimi</h2>
 {{ k.concept("Keyspace",
    "Table'ların içinde durduğu bir ad alanı ve ayar kümesi. Apache Cassandra'da kopya sayısı (replication) keyspace'te tanımlanır; bir keyspace'in bütün table'ları aynı kopyalama ayarını kullanır. İlişkisel database'teki \"database\" ya da \"schema\" kelimesine yakındır.",
-   "Lale Market'in keyspace'i <code>dbws</code>'tir ve tek bir table'ı vardır: <code>dbws.activity_by_user</code>.",
+   "TDS Academy Market'in keyspace'i <code>dbws</code>'tir ve tek bir table'ı vardır: <code>dbws.activity_by_user</code>.",
    "Bir arşiv binası. Binanın kuralları (kaç kopya, hangi şehirde) içindeki bütün dolaplar için geçerlidir.") }}
 {{ k.concept("Table, row ve column",
    "Bir <b>table</b> aynı türden satırların listesidir; her <b>row</b> bir satırdır; her <b>column</b> bir bilgi türüdür ve bir type'ı vardır (metin, sayı, zaman, uuid, liste, map). Column listesi table oluşturulurken yazılır; yeni bir column sonradan eklenebilir. Bir row, değer verilmemiş column'lar için hiçbir şey saklamaz.",
@@ -384,7 +384,7 @@
     <tr><td>Süre doldu, okuma</td><td>Keyspaces süresi dolan veriyi okumada filtreler; uygulama bir şey yapmaz. Apache Cassandra'da sona eren hücre de okunmaz ama silinene kadar tombstone gibi okuma işini artırır.</td><td>8 gün önceki event "Aktivitem"de görünmez</td></tr>
     <tr><td>Süre doldu, storage</td><td>Keyspaces veriyi storage'dan "typically within 10 days" siler; storage ücreti o zaman biter. Cassandra'da compaction ve <code>gc_grace_seconds</code> sonrası.</td><td>Silinen event'in byte'ları birkaç gün daha sayılır</td></tr>
     <tr><td>Silmenin maliyeti</td><td>Keyspaces'te TTL silmesi ayrıca ölçülür: TTL'in sildiği her KB için bir TTL delete. TTL bir row'un yalnız bazı column'larını sona erdirdiğinde de, silinen o column'ların KB'ları TTL delete olarak sayılır. Uygulamanın row'u yeni bir TTL ile yeniden yazması TTL delete değil, normal bir yazmadır. Cassandra'da maliyet compaction işi ve diskteki tombstone'lardır.</td><td>3,5 KB'lık bir row'un silinmesi dört TTL delete</td></tr>
-    <tr><td>Verinin içindeki tarihe göre süre</td><td><b>Yapamaz.</b> TTL yazma anından sayılır. 30 günlük geçmişi tek seferde yazarsan hepsi aynı anda sona erer.</td><td>Lale Market'in seed verisi: 30 günlük event'ler bir anda yazıldı, hepsi 7 gün sonra birlikte kaybolur</td></tr>
+    <tr><td>Verinin içindeki tarihe göre süre</td><td><b>Yapamaz.</b> TTL yazma anından sayılır. 30 günlük geçmişi tek seferde yazarsan hepsi aynı anda sona erer.</td><td>TDS Academy Market'in seed verisi: 30 günlük event'ler bir anda yazıldı, hepsi 7 gün sonra birlikte kaybolur</td></tr>
   </tbody>
 </table>
 <div class="flow">
@@ -400,7 +400,7 @@
 {% call k.ask("Bir partition'ın tamamına tek bir süre verebilir miyim?") %}
 <p>Doğrudan hayır; TTL her yazılan değere aittir. Aynı ömrü istiyorsan partition'ın her row'una aynı TTL ile yazarsın ya da table varsayılanını kullanırsın. Partition'ı bir anda kaldırmak istiyorsan bir partition silmesi (A6) tek komuttur.</p>
 {% endcall %}
-{{ k.quiz("ks-q4", "Lale Market'in seed işi 30 günlük geçmişi bir anda yazdı. Table'ın varsayılan TTL'i 7 gün. Bu event'ler ne zaman kaybolur?",
+{{ k.quiz("ks-q4", "TDS Academy Market'in seed işi 30 günlük geçmişi bir anda yazdı. Table'ın varsayılan TTL'i 7 gün. Bu event'ler ne zaman kaybolur?",
    ["Her event kendi event_time'ından 7 gün sonra", "Hepsi seed'den 7 gün sonra, birlikte", "30 gün sonra", "Hiçbir zaman, çünkü seed TTL vermedi"],
    1, "TTL yazma anından sayılır, event_time'dan değil. Bütün seed row'ları aynı anda yazıldığı için aynı anda sona erer.") }}
 
@@ -448,7 +448,7 @@
 {% call k.ask("Materialized view ikinci table'ı otomatik yazmıyor mu?") %}
 <p>Apache Cassandra'da materialized view vardır ve ikinci table'ı database yazar, ama Cassandra'da deneysel bir özellik olarak işaretlenmiştir. ScyllaDB'de desteklenir. Amazon Keyspaces'te <code>CREATE MATERIALIZED VIEW</code> yoktur; ikinci table'ı uygulama yazar ya da CDC stream'ini (A9) okuyan bir tüketici doldurur.</p>
 {% endcall %}
-{{ k.quiz("ks-q5", "Lale Market \"bu ürüne son bir saatte kaç kişi baktı?\" sorusunu her ürün sayfasında göstermek istiyor. Keyspaces'te doğru tasarım hangisi?",
+{{ k.quiz("ks-q5", "TDS Academy Market \"bu ürüne son bir saatte kaç kişi baktı?\" sorusunu her ürün sayfasında göstermek istiyor. Keyspaces'te doğru tasarım hangisi?",
    ["activity_by_user üzerinde ALLOW FILTERING", "product_id üzerinde CREATE INDEX", "Partition key'i product_id olan ikinci bir table", "Her istekte bütün table'ı okumak"],
    2, "Soru ürün id'sini biliyor; o hâlde ürün id'si bir table'ın partition key'i olmalı. Keyspaces'te CREATE INDEX yoktur; ALLOW FILTERING her istekte bütün table'ı okur.") }}
 
@@ -669,7 +669,7 @@
   <tbody>
     <tr><td>On-demand ve provisioned mod</td><td>On-demand: her okuma ve yazma isteği ödenir, kapasite planı yoktur; table daha önce ulaştığı trafik seviyesine anında çıkar. Provisioned: saniyedeki kapasiteyi sen belirlersin, istersen auto scaling ile; düz trafikte daha ucuzdur (M5).</td></tr>
     <tr><td>Okuma ve yazma birimi (RRU, WRU, RCU, WCU)</td><td>Keyspaces'in ölçü birimi: 4 KB'a kadar bir LOCAL_QUORUM okuma 1 okuma birimi (LOCAL_ONE yarısı), 1 KB'a kadar bir yazma 1 yazma birimidir. On-demand modda read / write request unit (RRU, WRU), provisioned modda saniyedeki read / write capacity unit (RCU, WCU) denir (B2, B3).</td></tr>
-    <tr><td>Warm throughput (ön ısıtma)</td><td>Bir table'ın anında karşılayabildiği kapasite; ilk büyük tepeden önce yükseltilir. Lale Market'in table'ında saniyede 12.000 okuma ve 4.000 yazma birimidir (B5).</td></tr>
+    <tr><td>Warm throughput (ön ısıtma)</td><td>Bir table'ın anında karşılayabildiği kapasite; ilk büyük tepeden önce yükseltilir. TDS Academy Market'in table'ında saniyede 12.000 okuma ve 4.000 yazma birimidir (B5).</td></tr>
     <tr><td>TTL delete</td><td>Keyspaces'te TTL'in sildiği her KB için ödenen birim; süresi dolan veri silinene kadar (genellikle 10 gün içinde) storage'da da sayılır (A7).</td></tr>
     <tr><td>Point-in-time recovery</td><td>Table'ı son 35 gün içindeki herhangi bir saniyeye geri getiren sürekli yedek (C2).</td></tr>
     <tr><td>KCL, Streams API</td><td>Kinesis Client Library: CDC stream'ini okuyan bir tüketici programı yazmak için kütüphane; Streams API aynı işi daha alt seviyede yapar. Tüketiciyi ekip yazar ve işletir (A9, B5).</td></tr>
@@ -767,8 +767,8 @@
   </tbody>
 </table>
 
-<h2 id="lalemarket-arch" data-short="Lale Market'teki yeri"><span class="sec">M6</span>Lale Market'te Keyspaces'in yeri</h2>
-<p>Lale Market her ürün görüntülemeyi, sepete eklemeyi ve satın almayı <code>dbws.activity_by_user</code> table'ına bir row olarak yazar; ürün sayfası "Son baktıkların" şeridini ve "Aktivitem" sayfası geçmişi ziyaretçinin partition'ından okur. Row'lar 7 gün sonra table TTL'iyle kaybolur. Siparişin kendisi Aurora'da, sepet DynamoDB'de yaşar; Keyspaces sadece geçmişi tutar ve hiçbir rapor bu table'da çalışmaz. M2'nin birinci kartı dürüst bir not içerir: Keyspaces'i öne geçiren, veri ekibinin CQL ile yazılmış gece işidir (R4); o iş olmasaydı engine uyumu neredeyse eşit olan DynamoDB, ücretsiz TTL silmesi ve mağazada zaten çalışması sayesinde öne geçerdi. Workshop Keyspaces'i wide-column modelini öğretmek için kullanır. Bir production mağazasında "bu hafta en çok bakılan ürünler" gibi bir rapor gerekirse event'ler CDC stream'i ile S3'e ve Redshift'e akar (M2 kart 7).</p>
+<h2 id="lalemarket-arch" data-short="TDS Academy Market'teki yeri"><span class="sec">M6</span>TDS Academy Market'te Keyspaces'in yeri</h2>
+<p>TDS Academy Market her ürün görüntülemeyi, sepete eklemeyi ve satın almayı <code>dbws.activity_by_user</code> table'ına bir row olarak yazar; ürün sayfası "Son baktıkların" şeridini ve "Aktivitem" sayfası geçmişi ziyaretçinin partition'ından okur. Row'lar 7 gün sonra table TTL'iyle kaybolur. Siparişin kendisi Aurora'da, sepet DynamoDB'de yaşar; Keyspaces sadece geçmişi tutar ve hiçbir rapor bu table'da çalışmaz. M2'nin birinci kartı dürüst bir not içerir: Keyspaces'i öne geçiren, veri ekibinin CQL ile yazılmış gece işidir (R4); o iş olmasaydı engine uyumu neredeyse eşit olan DynamoDB, ücretsiz TTL silmesi ve mağazada zaten çalışması sayesinde öne geçerdi. Workshop Keyspaces'i wide-column modelini öğretmek için kullanır. Bir production mağazasında "bu hafta en çok bakılan ürünler" gibi bir rapor gerekirse event'ler CDC stream'i ile S3'e ve Redshift'e akar (M2 kart 7).</p>
 
 <h2 id="decide" data-short="Karar simülasyonları"><span class="sec">M7</span>Karar simülasyonları: M2'nin beş kartı adım adım</h2>
 <p>Her simülasyon M2'deki bir kartın verisini birebir kullanır: aynı iş yükü, aynı satırlar ve ağırlıklar, aynı üç aday, aynı puanlar ve aynı gerekçeler. Fark şudur: simülasyon her adımda bir satır açar. Önce satırın ağırlığını ve nedenini, sonra her adayın puanını ve ağırlıklı katkısını görürsün; puan tablosu ve toplamlar adım adım dolar. Sonunda en uygun servisi, ikinciyi, aradaki farkı ve kartın karar paragrafını görürsün. Oynat'a basmadan önce kartı okuyup sonucu tahmin et.</p>
@@ -791,10 +791,10 @@
    0, "R1 iki serviste neredeyse eşittir (partition key kullanıcı, sıra zaman, TTL, değişiklik akışı). Kararı servis tasarımı ve ekip verir: Streams'in Lambda'yı doğrudan tetiklemesi ve bilinen API (kart 6 ve 8). CQL bilgisi ve bir KCL tüketicisini işletecek bir ekip kararı Keyspaces'e çevirir.") }}
 
 <div class="part"><b>Bölüm B</b><h2 id="partB" data-short="Bölüm B: İleri">İleri: pratikte Amazon Keyspaces</h2>
-<p>Bölüm A'daki fikirlerin Keyspaces'teki adları, canlı Lale Market table'ından gerçek row'lar ve cevaplar, okuma ve yazma maliyeti, tasarım ve ek özellikler.</p></div>
+<p>Bölüm A'daki fikirlerin Keyspaces'teki adları, canlı TDS Academy Market table'ından gerçek row'lar ve cevaplar, okuma ve yazma maliyeti, tasarım ve ek özellikler.</p></div>
 
 <h2 id="names" data-short="İsimler ve canlı row"><span class="sec">B1</span>Keyspaces'te isimler, canlı bir partition ve gerçek table tanımı</h2>
-<p>A2'deki keyspace, table, row ve column ile A3'teki partition key ve clustering column Keyspaces'te aynı adlarla geçerlidir; bu bölüm onları canlı Lale Market table'ından gerçek row'ların üzerine koyar. Bölüm A'nın terimleri değişmez. Yeni adlar sadece iki tanedir: <b>static column</b> ve <b>okuma/yazma birimi</b> (B2). Diğer ürünlerdeki karşılıklar:</p>
+<p>A2'deki keyspace, table, row ve column ile A3'teki partition key ve clustering column Keyspaces'te aynı adlarla geçerlidir; bu bölüm onları canlı TDS Academy Market table'ından gerçek row'ların üzerine koyar. Bölüm A'nın terimleri değişmez. Yeni adlar sadece iki tanedir: <b>static column</b> ve <b>okuma/yazma birimi</b> (B2). Diğer ürünlerdeki karşılıklar:</p>
 <table class="data">
   <thead><tr><th>Genel fikir</th><th>Apache Cassandra</th><th>Amazon DynamoDB</th><th>Amazon Keyspaces</th></tr></thead>
   <tbody>
@@ -808,9 +808,9 @@
 </table>
 {{ k.concept("Static column",
    "Bir partition'ın bütün row'larının paylaştığı tek bir değer: partition başına bir kez saklanır, her row'da görünür. Sadece clustering column'u olan table'larda vardır. Keyspaces'te bir partition'ın static verisi en fazla 1 MB'tır.",
-   "Bir sohbet table'ında <code>title text STATIC</code>: sohbetin başlığı her mesaj row'unda tekrar saklanmaz. Lale Market'in table'ında static column yok.",
+   "Bir sohbet table'ında <code>title text STATIC</code>: sohbetin başlığı her mesaj row'unda tekrar saklanmaz. TDS Academy Market'in table'ında static column yok.",
    "Bir çekmecenin etiketine yazılan müşteri adresi: her evrakta değil, çekmecede bir kez.") }}
-<p>Bunlar gerçek row'lardır. Workshop canlı table'a Engine App üzerinden bir SELECT gönderdi (Engine App: Lale Market'in Keyspaces'e bağlanan küçük Python sunucusu, C3); cevap 369 milisaniyede geldi (ilk bağlantı dahil). Row'lar 26 Ekim'de seed işiyle yazıldı ve table'ın 7 günlük TTL'i nedeniyle 2 Kasım civarında kaybolur:</p>
+<p>Bunlar gerçek row'lardır. Workshop canlı table'a Engine App üzerinden bir SELECT gönderdi (Engine App: TDS Academy Market'in Keyspaces'e bağlanan küçük Python sunucusu, C3); cevap 369 milisaniyede geldi (ilk bağlantı dahil). Row'lar 26 Ekim'de seed işiyle yazıldı ve table'ın 7 günlük TTL'i nedeniyle 2 Kasım civarında kaybolur:</p>
 {% call k.live("C00005'in partition'ı, canlı Keyspaces'in döndürdüğü hâliyle (SELECT user_id, event_time, event_type, product_id, detail FROM dbws.activity_by_user WHERE user_id = 'C00005' LIMIT 10)") %}
 <pre><code>user_id | event_time          | event_type       | product_id | detail
 --------+---------------------+------------------+------------+------------------------------------------
@@ -844,7 +844,7 @@ detail      | regular       |       -1 | none             | text
 event_type  | regular       |       -1 | none             | text
 product_id  | regular       |       -1 | none             | text</code></pre>
 {% endcall %}
-<p><code>kind</code> column'u A2'nin üç rolünü adıyla verir: partition_key, clustering ve regular. <code>position</code> clustering column'ların sırasıdır: önce event_time, sonra event_id. Lale Market table'ının CQL karşılığı budur (table CloudFormation ile oluşturuldu, C3):</p>
+<p><code>kind</code> column'u A2'nin üç rolünü adıyla verir: partition_key, clustering ve regular. <code>position</code> clustering column'ların sırasıdır: önce event_time, sonra event_id. TDS Academy Market table'ının CQL karşılığı budur (table CloudFormation ile oluşturuldu, C3):</p>
 {% call k.sql("T1", "activity_by_user table'ı") %}
 <pre><code>CREATE TABLE dbws.activity_by_user (
   user_id    text,
@@ -947,7 +947,7 @@ C00005  | 2026-10-26T16:18:43 | wishlist   | P0161
    1, "Kısa bir gecikme bu şerit için kabul edilebilir, bu yüzden ucuz seviye yeter. Keyspaces EACH_QUORUM ve ALL'ı desteklemez.") }}
 
 <h2 id="writes" data-short="INSERT, LWT, silme"><span class="sec">B3</span>Yazmalar: upsert, lightweight transaction, silme ve batch</h2>
-<p>A6'daki yazma yolları Keyspaces'te CQL'in <code>INSERT</code>, <code>UPDATE</code>, <code>DELETE</code> ve <code>BATCH</code> komutlarıdır ve her yazma LOCAL_QUORUM ile yapılır. Lale Market'in ürün sayfasının gerçek yazması budur (<code>engines/keyspaces.py</code> içinden):</p>
+<p>A6'daki yazma yolları Keyspaces'te CQL'in <code>INSERT</code>, <code>UPDATE</code>, <code>DELETE</code> ve <code>BATCH</code> komutlarıdır ve her yazma LOCAL_QUORUM ile yapılır. TDS Academy Market'in ürün sayfasının gerçek yazması budur (<code>engines/keyspaces.py</code> içinden):</p>
 {% call k.sql("Q2", "Bir event yaz") %}
 <pre><code>INSERT INTO dbws.activity_by_user
   (user_id, event_time, event_id, event_type, product_id, detail)
@@ -960,8 +960,8 @@ VALUES (?, ?, ?, ?, ?, ?);
   <tr><td>Maliyet</td><td>1 KB'tan küçük bir row: 1 write request unit (WRU). Daha büyük row her KB için bir WRU.</td></tr>
 </table>
 {% endcall %}
-<p>Lale Market'in table'ı koşullu yazma kullanmaz; event'ler benzersiz key'lerle yazılır. Bir sepet table'ında "en fazla 5 adet" kuralı bir lightweight transaction olurdu:</p>
-{% call k.sql("Q3", "Sepet satırında koşullu güncelleme (örnek, Lale Market'in değil)") %}
+<p>TDS Academy Market'in table'ı koşullu yazma kullanmaz; event'ler benzersiz key'lerle yazılır. Bir sepet table'ında "en fazla 5 adet" kuralı bir lightweight transaction olurdu:</p>
+{% call k.sql("Q3", "Sepet satırında koşullu güncelleme (örnek, TDS Academy Market'in değil)") %}
 <pre><code>UPDATE shop.cart SET qty = 5
 WHERE cart_id = 'CART-7f3a' AND product_id = 'P0001'
 IF qty = 2;
@@ -982,7 +982,7 @@ IF qty = 2;
   <tbody>
     <tr><td><code>DELETE ... WHERE user_id = ? AND event_time = ? AND event_id = ?</code></td><td>Tek row; bir tombstone. Tombstone'lar Keyspaces tarafından "typically within 10 days" kaldırılır ve o zamana kadar storage ve kapasitede sayılır.</td></tr>
     <tr><td><code>DELETE ... WHERE user_id = 'C00005'</code> (range delete)</td><td>Bir partition'ın tamamı ya da bir dilimi; tek işlemde en fazla 1.000 row. İzole değildir: silme sürerken diğer okumalar tek tek silinen row'ları görebilir. 1 Temmuz 2026'dan beri asenkron: başarılı cevap isteğin kabul edildiğini söyler, bitip bitmediği bir okumayla kontrol edilir.</td></tr>
-    <tr><td><code>TRUNCATE</code></td><td><b>Desteklenmez.</b> Lale Market'in seed işi bu yüzden müşteri partition'larını tek tek siler ("Keyspaces has no TRUNCATE").</td></tr>
+    <tr><td><code>TRUNCATE</code></td><td><b>Desteklenmez.</b> TDS Academy Market'in seed işi bu yüzden müşteri partition'larını tek tek siler ("Keyspaces has no TRUNCATE").</td></tr>
     <tr><td><code>BEGIN BATCH ... APPLY BATCH</code></td><td>Logged batch en fazla 100, unlogged batch en fazla 30 komut; sadece INSERT, UPDATE ve DELETE.</td></tr>
     <tr><td><code>UPDATE ... SET views = views + 1</code></td><td>counter type'lı column ile çalışır; counter'lar kendi table'larında durur.</td></tr>
   </tbody>
@@ -995,7 +995,7 @@ IF qty = 2;
    1, "Keyspaces belgesine göre koşulu yanlış çıkan LWT de row boyutuna göre WCU ya da WRU tüketir. Yazma yapılmaz ve cevap [applied] = False ile mevcut değeri taşır.") }}
 
 <h2 id="design" data-short="Soru başına table"><span class="sec">B4</span>Table'ı sorulardan tasarla: partition boyutu ve ikinci table</h2>
-<p>A8'deki soru başına table kuralı Keyspaces'te tek yoldur, çünkü secondary index yoktur. İlişkisel bir database'te önce table'ları tasarlar, sorguyu sonra yazarsın; Keyspaces'te önce access pattern'leri listeler, sonra her biri tek partition okuması olacak şekilde table'ları tasarlarsın. Lale Market'in access pattern'leri:</p>
+<p>A8'deki soru başına table kuralı Keyspaces'te tek yoldur, çünkü secondary index yoktur. İlişkisel bir database'te önce table'ları tasarlar, sorguyu sonra yazarsın; Keyspaces'te önce access pattern'leri listeler, sonra her biri tek partition okuması olacak şekilde table'ları tasarlarsın. TDS Academy Market'in access pattern'leri:</p>
 <table class="data">
   <thead><tr><th>Access pattern</th><th>Uygulama ne biliyor</th><th>CQL</th></tr></thead>
   <tbody>
@@ -1061,11 +1061,11 @@ custom_properties    | capacity_mode:            throughput_mode = PAY_PER_REQUE
                      | ttl:                      status = enabled
                      | warm_throughput:          read_units_per_second = 12000, write_units_per_second = 4000, status = AVAILABLE</code></pre>
 {% endcall %}
-<p>Satır satır: <code>default_time_to_live</code> 7 gündür (A7). <code>ttl status = enabled</code> table'da TTL özelliğinin açık olduğunu söyler; Keyspaces'te bir table'ın row ya da column düzeyinde TTL kullanabilmesi için bu ayar gerekir. <code>PAY_PER_REQUEST</code> on-demand moddur. <code>point_in_time_recovery</code> açıktır ve table'ın oluşturulduğu andan geri dönülebilir. <code>warm_throughput</code> table'ın hemen karşılayabildiği kapasitedir: saniyede 12.000 okuma ve 4.000 yazma birimi. Lale Market'in yük simülasyonu satırlarını kısa ömürle yazar:</p>
+<p>Satır satır: <code>default_time_to_live</code> 7 gündür (A7). <code>ttl status = enabled</code> table'da TTL özelliğinin açık olduğunu söyler; Keyspaces'te bir table'ın row ya da column düzeyinde TTL kullanabilmesi için bu ayar gerekir. <code>PAY_PER_REQUEST</code> on-demand moddur. <code>point_in_time_recovery</code> açıktır ve table'ın oluşturulduğu andan geri dönülebilir. <code>warm_throughput</code> table'ın hemen karşılayabildiği kapasitedir: saniyede 12.000 okuma ve 4.000 yazma birimi. TDS Academy Market'in yük simülasyonu satırlarını kısa ömürle yazar:</p>
 <pre><code>INSERT INTO dbws.activity_by_user (user_id, event_time, event_id, event_type, product_id, detail)
 VALUES (?, ?, ?, ?, ?, ?) USING TTL 600;     -- sentetik alışverişçiler, 10 dakika sonra kaybolur</code></pre>
-<p>TTL'in maliyeti: Keyspaces "One TTL delete is consumed per KB of data per row that is deleted or updated"; 3,5 KB'lık bir row'un silinmesi dört TTL delete'tir ve süresi dolan veri storage'dan "typically within 10 days" silinir (<a href="https://docs.aws.amazon.com/keyspaces/latest/devguide/TTL.html">Time to Live</a>). Lale Market'in event'leri 1 KB'tan küçüktür: her event'in silinmesi bir TTL delete'tir.</p>
-<p>CDC stream'i bir table ayarıyla açılır; Lale Market onu kullanmaz. Açmak için:</p>
+<p>TTL'in maliyeti: Keyspaces "One TTL delete is consumed per KB of data per row that is deleted or updated"; 3,5 KB'lık bir row'un silinmesi dört TTL delete'tir ve süresi dolan veri storage'dan "typically within 10 days" silinir (<a href="https://docs.aws.amazon.com/keyspaces/latest/devguide/TTL.html">Time to Live</a>). TDS Academy Market'in event'leri 1 KB'tan küçüktür: her event'in silinmesi bir TTL delete'tir.</p>
+<p>CDC stream'i bir table ayarıyla açılır; TDS Academy Market onu kullanmaz. Açmak için:</p>
 {% call k.sql("Q5", "Bir table'da CDC stream'ini aç") %}
 <pre><code>ALTER TABLE dbws.activity_by_user
 WITH cdc = true
@@ -1087,7 +1087,7 @@ AND CUSTOM_PROPERTIES = {'cdc_specification': {'view_type': 'NEW_IMAGE'}};</code
 <p>Seed işi 26 Ekim'de çalıştı; TTL yazma anından sayıldığı için bütün seed row'ları 2 Kasım civarında birlikte sona erer (A7'deki checkpoint). O tarihten sonra B1'deki SELECT boş döner, ta ki eğitmen seed'i yeniden çalıştırana kadar. Bu sayfadaki çıktılar 29 Ekim'de alındı.</p>
 {% endcall %}
 {% call k.ask("Trafik warm throughput'u ya da bir partition'ın sınırını aşarsa client ne görür?") %}
-<p>Keyspaces Cassandra'nın hata kodlarını kullanır, çünkü driver'lar yalnız onları tanır: kapasite yetmediğinde istek <code>WriteTimeout</code> ya da <code>ReadTimeout</code> ile döner ve CloudWatch'ta <code>WriteThrottleEvents</code>, <code>ReadThrottleEvents</code> ya da bir partition için <code>StoragePartitionThroughputCapacityExceeded</code> metriği artar. Bağlantı başına 3.000 sorgu aşılırsa da aynı timeout'lar görülür. Çözüm uygulamanın retry policy'sidir: exponential backoff ile yeniden denemek. Yeniden deneme güvenlidir, çünkü bir event'in yazması aynı primary key'e upsert'tür (B3). Lale Market'in yük simülasyonu tam olarak bunu yapar (<a href="https://docs.aws.amazon.com/keyspaces/latest/devguide/connections.html">Connections</a>).</p>
+<p>Keyspaces Cassandra'nın hata kodlarını kullanır, çünkü driver'lar yalnız onları tanır: kapasite yetmediğinde istek <code>WriteTimeout</code> ya da <code>ReadTimeout</code> ile döner ve CloudWatch'ta <code>WriteThrottleEvents</code>, <code>ReadThrottleEvents</code> ya da bir partition için <code>StoragePartitionThroughputCapacityExceeded</code> metriği artar. Bağlantı başına 3.000 sorgu aşılırsa da aynı timeout'lar görülür. Çözüm uygulamanın retry policy'sidir: exponential backoff ile yeniden denemek. Yeniden deneme güvenlidir, çünkü bir event'in yazması aynı primary key'e upsert'tür (B3). TDS Academy Market'in yük simülasyonu tam olarak bunu yapar (<a href="https://docs.aws.amazon.com/keyspaces/latest/devguide/connections.html">Connections</a>).</p>
 {% endcall %}
 {{ k.quiz("ks-b5", "warm_throughput write_units_per_second = 4000 diyor. Bir kampanyada yazmalar saniyede 15.000'e çıkacak ve table bu seviyeye daha önce hiç ulaşmadı. Ne yaparsın?",
    ["Hiçbir şey; on-demand her trafiği anında karşılar", "Kampanyadan önce table'ı daha yüksek warm throughput ile ısıtırım ya da trafiği kademeli artırırım", "Table'ı provisioned moda alıp 4.000'de bırakırım", "Yazmaları LOCAL_ONE yaparım"],
@@ -1137,7 +1137,7 @@ AND CUSTOM_PROPERTIES = {'cdc_specification': {'view_type': 'NEW_IMAGE'}};</code
    ["Table oluşturma reddedilir", "Ayar yok sayılır; Keyspaces bu işleri kendisi yönetir", "Ayar sadece ilk gün uygulanır", "Ayar provisioned modu açar"],
    1, "Belgeye göre bu Cassandra ayarları Keyspaces'te uygulanmaz ve gönderilirse yok sayılır.") }}
 
-<h2 id="lalemarket" data-short="Lale Market'te Keyspaces"><span class="sec">C3</span>Lale Market'te Keyspaces</h2>
+<h2 id="lalemarket" data-short="TDS Academy Market'te Keyspaces"><span class="sec">C3</span>TDS Academy Market'te Keyspaces</h2>
 <p>Bu, workshop'un gerçek kurulumudur (<code>cloudformation/workshop.yaml</code> içinden ve canlı hesaptaki <code>aws keyspaces get-table</code> çıktısından):</p>
 {% call k.sql("T2", "dbws keyspace'i ve activity_by_user table'ı") %}
 <pre><code>ActivityKeyspace:

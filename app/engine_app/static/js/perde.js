@@ -118,9 +118,17 @@
     : /interface endpoint/i.test(via)
       ? "Bu, AWS'nin bölge çapında çalışan bir servisi. Uygulama ona internete çıkmadan, özel ağdaki bir interface endpoint (servise açılan özel bir ağ kartı) üzerinden ulaşıyor."
       : "Veritabanı internete kapalı veri alt ağında duruyor. Güvenlik grubu kuralı sadece bu veritabanının uygulama sunucusundan gelen bağlantıya izin veriyor.");
+  // Before the shop's request arrives the path is drawn from the engine's fixed facts (catalog.META): the stops are the same,
+  // only the private IP and the times come from the real request.
+  function staticEntry() {
+    const w = (step.wait && step.wait.path) || "", id = (/^\/([a-z0-9]+)\//.exec(w) || [])[1] || (step.engines || [])[0];
+    const x = (PA.engines || {})[id];
+    return x ? { engine: x.name, auth: x.auth, path: `EC2 - → ${x.via}`, ms: null } : null;
+  }
   function pathHtml(d) {
-    const trig = d && d.trig, e = entryOf(trig);
+    const trig = d && d.trig, live = entryOf(trig), e = (live && live.path) ? live : staticEntry();
     if (!e || !e.path) return `<p class="gp-wait">Yol, mağaza sekmesindeki istek bitince burada görünür.</p>`;
+    const wait = "istek bekleniyor";
     const m = /^EC2\s+(\S+)\s*→\s*(.+)$/.exec(e.path) || [];
     const auth = (AUTH.find(([re]) => re.test(e.auth || "")) || [null, e.auth || ""])[1];
     const box = (title, tech, text) => `<div class="pa-hop"><b>${esc(title)}</b>${tech ? `<code>${esc(tech)}</code>` : ""}<p>${esc(text)}</p></div>`;
@@ -129,15 +137,16 @@
         <span class="pa-arrow">HTTPS →</span>
         ${box("Yük dengeleyici (ALB)", location.host, "İsteği karşılayan kapı. İsteği hangi veritabanının uygulama sunucusuna göndereceğine adrese bakarak karar verir.")}
         <span class="pa-arrow">→</span>
-        ${box("Uygulama (EC2 sunucusu)", m[1] ? `özel ağdaki IP ${m[1]}` : "", "Mağazanın arka uç programı. İsteği alır, veritabanına komutu gönderir, cevabı hazırlar. İnternetten doğrudan erişilemeyen özel bir ağda çalışır.")}
+        ${box("Uygulama (EC2 sunucusu)", m[1] && m[1] !== "-" ? `özel ağdaki IP ${m[1]}` : "özel ağda", "Mağazanın arka uç programı. İsteği alır, veritabanına komutu gönderir, cevabı hazırlar. İnternetten doğrudan erişilemeyen özel bir ağda çalışır.")}
         <span class="pa-arrow">→</span>
         ${box(e.engine || "Veritabanı", m[2] || "", last(m[2] || ""))}
       </div>
       <dl class="pa-facts">
         <div><dt>Kimlik doğrulama</dt><dd>${esc(auth)}</dd></div>
-        <div><dt>Toplam süre (tarayıcıdan)</dt><dd>${esc(trig.ms)} ms</dd></div>
-        <div><dt>Veritabanında geçen süre</dt><dd>${esc(e.ms)} ms</dd></div>
+        <div><dt>Toplam süre (tarayıcıdan)</dt><dd>${trig && e === live ? `${esc(trig.ms)} ms` : wait}</dd></div>
+        <div><dt>Veritabanında geçen süre</dt><dd>${e.ms != null ? `${esc(e.ms)} ms` : wait}</dd></div>
       </dl>
+      ${e === live ? "" : `<p class="gp-wait">Duraklar her istekte aynı. Mağaza sekmesindeki istek bitince sunucunun özel IP'si ve gerçek süreler burada görünür.</p>`}
       <p class="gp-reading">Toplam süre, isteğin tarayıcından çıkıp cevabın geri gelmesine kadar geçen süre: internet, yük dengeleyici ve
         Uygulama da bu süreye dahil. Veritabanında geçen süre ise sadece uygulama ile veritabanı arasındaki kısım. Aradaki fark,
         çoğu zaman ağın ve uygulamanın payıdır.</p>`;
@@ -336,7 +345,7 @@
     return !!d;
   }
 
-  document.title = `Perde arkası · ${step.title} · Lale Market`;
+  document.title = `Perde arkası · ${step.title} · TDS Academy Market`;
   if (!step.panel) { root.innerHTML = `<p class="pa-status">Bu adımın perde arkası henüz hazırlanmadı.</p>`; return; }
   draw();
   if (!fill()) {

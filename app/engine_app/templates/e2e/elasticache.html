@@ -4,8 +4,8 @@
 
 <h2 id="goal" data-short="What you will learn"><span class="sec">00</span>What you will learn, and how to use this page</h2>
 <p>Section 01 gives the architect's decision: where Amazon ElastiCache fits and where it does not. Then the tutorial has two parts.
-   Part 1 teaches Valkey, the open-source in-memory data store that ElastiCache runs: keys, data types, atomic commands and expiry. Part 2 shows ElastiCache Serverless and how Lale Market uses it.</p>
-<p>The examples come from the flash deal, the sessions and the live leaderboard of Lale Market. When a different example makes an idea easier to see, the tutorial uses it.
+   Part 1 teaches Valkey, the open-source in-memory data store that ElastiCache runs: keys, data types, atomic commands and expiry. Part 2 shows ElastiCache Serverless and how TDS Academy Market uses it.</p>
+<p>The examples come from the flash deal, the sessions and the live leaderboard of TDS Academy Market. When a different example makes an idea easier to see, the tutorial uses it.
    Examples are the counter of a shop, a ticket office and a scoreboard in a stadium.</p>
 <p>After this tutorial, you can do these tasks:</p>
 <ol>
@@ -43,9 +43,9 @@
 <table class="data">
   <thead><tr><th>Use case</th><th>Data</th><th>Why in memory</th><th>The feature that does the work</th></tr></thead>
   <tbody>
-    <tr><td>Flash sale stock (Lale Market)</td><td>One counter per deal.</td><td>Hundreds of buyers change one value in the same second.</td><td>DECR, then INCR to give a piece back</td></tr>
-    <tr><td>Live leaderboard (Lale Market)</td><td>One member per customer, score = revenue.</td><td>The top 10 must be ready at every moment.</td><td>Sorted set, ZINCRBY, ZREVRANGE</td></tr>
-    <tr><td>Web sessions (Lale Market)</td><td>One hash per visitor.</td><td>Read on every page. Abandoned sessions must go away.</td><td>Hash, EXPIRE</td></tr>
+    <tr><td>Flash sale stock (TDS Academy Market)</td><td>One counter per deal.</td><td>Hundreds of buyers change one value in the same second.</td><td>DECR, then INCR to give a piece back</td></tr>
+    <tr><td>Live leaderboard (TDS Academy Market)</td><td>One member per customer, score = revenue.</td><td>The top 10 must be ready at every moment.</td><td>Sorted set, ZINCRBY, ZREVRANGE</td></tr>
+    <tr><td>Web sessions (TDS Academy Market)</td><td>One hash per visitor.</td><td>Read on every page. Abandoned sessions must go away.</td><td>Hash, EXPIRE</td></tr>
     <tr><td>Database cache</td><td>Copies of product pages, profiles, query results.</td><td>Most reads ask for the same few items.</td><td>GET, SET with EX (cache-aside)</td></tr>
     <tr><td>API rate limiting</td><td>One counter per user and minute.</td><td>Checked on every request, it must add almost no time.</td><td>INCR with EXPIRE</td></tr>
     <tr><td>Gaming: matchmaking and live scores</td><td>Players waiting, scores of a running match.</td><td>Changes many times per second, worthless after the match.</td><td>Sorted sets, lists, TTL</td></tr>
@@ -83,7 +83,7 @@
 <table class="data">
   <thead><tr><th>Option</th><th>What it is</th><th>Choose it when</th></tr></thead>
   <tbody>
-    <tr><td>ElastiCache Serverless (Valkey)</td><td>No nodes to select. One endpoint. AWS scales memory and compute, and replicates across Availability Zones.</td><td>The default for a new cache. Lale Market uses it.</td></tr>
+    <tr><td>ElastiCache Serverless (Valkey)</td><td>No nodes to select. One endpoint. AWS scales memory and compute, and replicates across Availability Zones.</td><td>The default for a new cache. TDS Academy Market uses it.</td></tr>
     <tr><td>ElastiCache node-based cluster</td><td>You select the node type and the number of shards and replicas.</td><td>You need fine control of the configuration or of the cost.</td></tr>
     <tr><td>Node-based Valkey with durability</td><td>For version 9.0 and higher, a Multi-AZ transactional log keeps the data recoverable "even if all cache nodes fail"
         (<a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.corecomponents.html">How ElastiCache works</a>).</td><td>In-memory speed, and the data must survive a failure of all nodes.</td></tr>
@@ -91,8 +91,8 @@
   </tbody>
 </table>
 
-<h3>Where ElastiCache sits in Lale Market</h3>
-<p>Lale Market uses one ElastiCache Serverless cache with the Valkey engine for four jobs:</p>
+<h3>Where ElastiCache sits in TDS Academy Market</h3>
+<p>TDS Academy Market uses one ElastiCache Serverless cache with the Valkey engine for four jobs:</p>
 <ul><li>the flash deal: a hash and a stock counter,</li><li>the session of each visitor: a hash with a TTL,</li><li>the live leaderboard: a sorted set,</li><li>two counters: orders today and active visitors.</li></ul>
 <p> Every piece can be rebuilt. The Seed of the Admin Console builds the leaderboard again from the orders in Aurora.
    The orders themselves never live only in memory.</p>
@@ -128,19 +128,19 @@
 
 <h2 id="model" data-short="Keys and types"><span class="sec">03</span>The model: keys and typed values</h2>
 <p>Valkey is a {{ k.term("key-value store") }}. Each entry has a key (a text) and a value. Unlike DynamoDB, each value has a data type, and each type has its own commands.
-   These are the real keys of Lale Market (the values are examples):</p>
-{{ k.sample("valkey_keys", "keys in the Lale Market cache (values are examples)", key=["key"]) }}
+   These are the real keys of TDS Academy Market (the values are examples):</p>
+{{ k.sample("valkey_keys", "keys in the TDS Academy Market cache (values are examples)", key=["key"]) }}
 <table class="data">
-  <thead><tr><th>Type</th><th>What it holds</th><th>Commands</th><th>Lale Market key</th></tr></thead>
+  <thead><tr><th>Type</th><th>What it holds</th><th>Commands</th><th>TDS Academy Market key</th></tr></thead>
   <tbody>
     <tr><td>string</td><td>One value. If the value is a whole number, INCR and DECR change it.</td><td>GET, SET, INCR, DECR</td><td><code>lm:deal:stock</code>, <code>lm:orders:today</code></td></tr>
     <tr><td>hash</td><td>Several fields under one key, like a small object.</td><td>HSET, HGETALL, HINCRBY</td><td><code>lm:deal</code>, <code>lm:session:&lt;visitor&gt;</code></td></tr>
     <tr><td>sorted set</td><td>Unique members, each with a score, always in score order.</td><td>ZADD, ZINCRBY, ZREVRANGE, ZCOUNT</td><td><code>lm:leaderboard</code>, <code>lm:active</code></td></tr>
-    <tr><td>list, set, stream</td><td>Queues, unique members, append-only logs.</td><td>LPUSH, SADD, XADD</td><td>Not used in Lale Market</td></tr>
+    <tr><td>list, set, stream</td><td>Queues, unique members, append-only logs.</td><td>LPUSH, SADD, XADD</td><td>Not used in TDS Academy Market</td></tr>
   </tbody>
 </table>
 <p>Who owns which identifier: the application owns the key names. Valkey has no tables, so the colon in <code>lm:deal:stock</code> is only a naming convention.
-   <code>lm:</code> marks the keys of Lale Market. The session key borrows the visitor id from the cookie of the shop: <code>lm:session:7f3a</code>.
+   <code>lm:</code> marks the keys of TDS Academy Market. The session key borrows the visitor id from the cookie of the shop: <code>lm:session:7f3a</code>.
    The leaderboard borrows the customer ids from the customers table of Aurora. Valkey does not check either of them.</p>
 {{ k.fig("elasticache-hash-table.png", "a hash function turns each key into a slot, and the slot holds the value. Valkey finds a key in the same way, so a GET takes about the same time with 100 keys or 100 million keys.") }}
 {% call k.sql("Q1", "Read the flash deal: a hash and a counter") %}
@@ -165,7 +165,7 @@ GET lm:deal:stock</code></pre>
 {% endcall %}
 {{ k.sim("race_naive", "Read, then write: two buyers, one piece") }}
 {{ k.sim("race_atomic", "DECR: two buyers, one piece") }}
-<p>The real flash deal page of Lale Market has a Load Simulation with 300 buyers and 10 pieces. In the "Read, then write" mode, it usually sells more than 10.
+<p>The real flash deal page of TDS Academy Market has a Load Simulation with 300 buyers and 10 pieces. In the "Read, then write" mode, it usually sells more than 10.
    The number changes from run to run, because it depends on the timing. That is the nature of a {{ k.term("race condition") }}: a test can pass and production can fail.</p>
 {{ k.quiz("ec-q1", "Why is DECR safe for the deal stock, but GET then SET is not?",
    ["DECR is faster than two commands", "DECR stores the value on a disk", "DECR reads and writes in one command", "DECR locks the key for one second"],
@@ -179,7 +179,7 @@ GET lm:deal:stock</code></pre>
 <pre><code>ZINCRBY lm:leaderboard 20000 C00003
 ZREVRANGE lm:leaderboard 0 2 WITHSCORES</code></pre>
 <table class="clause">
-  <tr><td>ZINCRBY lm:leaderboard 20000 C00003</td><td>Add 20000 to the score of the member C00003. If the member does not exist, Valkey creates it with that score. The checkout of Lale Market sends this command with the order total.</td></tr>
+  <tr><td>ZINCRBY lm:leaderboard 20000 C00003</td><td>Add 20000 to the score of the member C00003. If the member does not exist, Valkey creates it with that score. The checkout of TDS Academy Market sends this command with the order total.</td></tr>
   <tr><td>ZREVRANGE lm:leaderboard 0 2</td><td>Return the members at positions 0 to 2, from the highest score down. <code>REV</code> means reverse: highest first.</td></tr>
   <tr><td>WITHSCORES</td><td>Return the score after each member.</td></tr>
 </table>
@@ -204,7 +204,7 @@ ZREVRANGE lm:leaderboard 0 2 WITHSCORES</code></pre>
    The application can also delete the cache key when it changes the database. Either way, the architect decides how old the data may be, and writes it down.</p>
 
 <h2 id="ttl" data-short="TTL"><span class="sec">07</span>TTL: data that deletes itself</h2>
-<p>Each key can have a {{ k.term("TTL") }} (time to live) in seconds. When it gets to zero, Valkey deletes the key. The session of each Lale Market visitor is a hash with a TTL of 1,800 seconds (30 minutes).
+<p>Each key can have a {{ k.term("TTL") }} (time to live) in seconds. When it gets to zero, Valkey deletes the key. The session of each TDS Academy Market visitor is a hash with a TTL of 1,800 seconds (30 minutes).
    Each page view sends EXPIRE again, so an active session stays, and an abandoned session goes away with no cleanup job.</p>
 {% call k.sql("Q3", "Write a session and give it 30 minutes to live") %}
 <pre><code>HSET lm:session:7f3a persona C00001 last_page /cart
@@ -216,7 +216,7 @@ TTL lm:session:7f3a</code></pre>
   <tr><td>TTL lm:session:7f3a</td><td>Return the seconds that are left. -2 means that the key does not exist.</td></tr>
 </table>
 {% endcall %}
-{{ k.quiz("ec-q3", "What makes an abandoned session go away in Lale Market?",
+{{ k.quiz("ec-q3", "What makes an abandoned session go away in TDS Academy Market?",
    ["A nightly cleanup job", "The browser deletes the key", "A Lambda function scans the keys", "The TTL on the session key"],
    3, "Each page view sets EXPIRE again. With no page view, the TTL gets to zero, and Valkey deletes the key.") }}
 
@@ -240,9 +240,9 @@ TTL lm:session:7f3a</code></pre>
   </tbody>
 </table>
 <p>ElastiCache Serverless runs Valkey in cluster mode, and only clients with TLS can connect. In cluster mode, the keys spread over shards by a hash of the key name.
-   A command that uses several keys works only when all its keys are in one shard. That is why each Lale Market command uses one key.</p>
+   A command that uses several keys works only when all its keys are in one shard. That is why each TDS Academy Market command uses one key.</p>
 
-<h2 id="lalemarket" data-short="ElastiCache in Lale Market"><span class="sec">09</span>ElastiCache in Lale Market</h2>
+<h2 id="lalemarket" data-short="ElastiCache in TDS Academy Market"><span class="sec">09</span>ElastiCache in TDS Academy Market</h2>
 <ul>
   <li>One ElastiCache Serverless cache with the Valkey engine.</li>
   <li>The ElastiCache Engine App connects with TLS on port 6379. It uses an ACL user and a password from AWS Secrets Manager, and the Python cluster client <code>RedisCluster</code>.</li>

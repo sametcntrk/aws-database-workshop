@@ -1,4 +1,4 @@
-/* Lale Market 101: reads the clicked call from localStorage, gives small helpers to the lesson script. */
+/* TDS Academy Market 101: reads the clicked call from localStorage, gives small helpers to the lesson script. */
 (function () {
   "use strict";
   const $ = (sel, root = document) => root.querySelector(sel);

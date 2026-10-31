@@ -9,10 +9,10 @@
 <ol>
   <li><b>Bölüm A, Temel.</b> Bir search engine metni nasıl bulur: kaydın ve alanlarının tanımı, metni kelimelere bölme, kelimeden kayda giden dizin, en uygun sonucu öne koyan skor, yazım hatası toleransı, sayım, konum, veriyi makinelere bölme ve yazmanın aranabilir olma süresi. Her kavram bütün durumlarıyla bir tabloda verilir ve bölüm dokuz özelliğin (Ö1–Ö9) listesi ve PostgreSQL / Elasticsearch / OpenSearch matrisiyle biter. Fikirler her search engine'de aynıdır.</li>
   <li><b>Mimar gözüyle.</b> Search engine ne zaman doğru seçimdir, ne zaman değildir: on use case, her birinde bu iş yüküne en uygun servis, ağırlıklı puanlarla iki alternatif ve yine de OpenSearch seçersek artı ve eksilerimiz. Sonra AWS'teki seçenekler ve hangi durumda OpenSearch Service'in yönetilen domain'inin, hangi durumda OpenSearch Serverless'ın seçileceği. Beş karar simülasyonu kartların puanlarını adım adım oynatır.</li>
-  <li><b>Bölüm B, İleri.</b> Pratikte OpenSearch: canlı Lale Market aramasından gerçek kayıtlar, analiz, arama, skorun açıklaması, sayım, konum, boyutlandırma, maliyet ve doğruluk.</li>
+  <li><b>Bölüm B, İleri.</b> Pratikte OpenSearch: canlı TDS Academy Market aramasından gerçek kayıtlar, analiz, arama, skorun açıklaması, sayım, konum, boyutlandırma, maliyet ve doğruluk.</li>
   <li><b>Bölüm C, AWS servisi.</b> Bir search engine'i kendin çalıştırdığında ne yapman gerekir ve Amazon OpenSearch Service senin için neyi yapar.</li>
 </ol>
-<p>Örnekler Lale Market'in arama kutusundan ve mağaza bulucusundan gelir. Başka bir örnek bir fikri daha kolay gösteriyorsa tutorial onu kullanır: bir kitabın arkasındaki dizin, bir kütüphane kartoteği, bir telefon klavyesinin kelime önerisi.</p>
+<p>Örnekler TDS Academy Market'in arama kutusundan ve mağaza bulucusundan gelir. Başka bir örnek bir fikri daha kolay gösteriyorsa tutorial onu kullanır: bir kitabın arkasındaki dizin, bir kütüphane kartoteği, bir telefon klavyesinin kelime önerisi.</p>
 <p>Bu tutorial'ın sonunda şunları yapabilirsin:</p>
 <ol>
   <li>Bir search engine'in "kulaklk" yazan ziyaretçiye "Kablosuz Kulaklık"ı nasıl bulduğunu adım adım anlatmak.</li>
@@ -45,7 +45,7 @@
   </tbody>
 </table>
 {% call k.ask("Search engine bir database mi?") %}
-<p>Veri saklar ve sorgu cevaplar, bu anlamda evet. Ama "kayıt sistemi" olarak, yani bir bilginin tek ve doğru kaynağı olarak tasarlanmamıştır: birkaç kaydı birlikte değiştiren transaction'ı yoktur ve yeni bir yazma bir an sonra aranabilir. Bu yüzden Lale Market'te ürünlerin kaydı DocumentDB'dedir; search engine onların aranabilir bir kopyasını tutar. Loglar gibi kaybı bir yeniden yükleme olan verilerde ise search engine verinin tek aranabilir yeri olabilir (M2 kart 5).</p>
+<p>Veri saklar ve sorgu cevaplar, bu anlamda evet. Ama "kayıt sistemi" olarak, yani bir bilginin tek ve doğru kaynağı olarak tasarlanmamıştır: birkaç kaydı birlikte değiştiren transaction'ı yoktur ve yeni bir yazma bir an sonra aranabilir. Bu yüzden TDS Academy Market'te ürünlerin kaydı DocumentDB'dedir; search engine onların aranabilir bir kopyasını tutar. Loglar gibi kaybı bir yeniden yükleme olan verilerde ise search engine verinin tek aranabilir yeri olabilir (M2 kart 5).</p>
 {% endcall %}
 {% call k.ask("Dizini kim hazırlıyor, ben mi?") %}
 <p>Hayır. Sen bir kaydı yazarsın; search engine metni kelimelere böler ve dizini kendisi günceller. Senin kararın, metnin <b>nasıl</b> bölüneceğidir: Türkçe harfler sadeleşsin mi, kelimeler köklerine insin mi (A3).</p>
@@ -59,7 +59,7 @@
    "Kütüphane kartoteğindeki tek bir kart: kartın numarası (kimlik) ve üzerindeki satırlar (yazar, başlık, yıl).") }}
 {{ k.concept("Index",
    "Aynı türden document'ların toplandığı ve birlikte arandığı yer; bir database'teki table'ın karşılığı. Bir index'in iki parçası vardır: document'ların kendisi ve onların field'larından hazırlanan arama yapıları (A4). Bir index'in her field'ının type'ı <dfn>mapping</dfn> denen tanımda yazılıdır.",
-   "<code>products</code> index'i Lale Market'in 200 ürününü tutar, <code>stores</code> index'i mağazaları.",
+   "<code>products</code> index'i TDS Academy Market'in 200 ürününü tutar, <code>stores</code> index'i mağazaları.",
    "Kütüphanenin \"kitaplar\" kartoteği ve \"dergiler\" kartoteği: iki ayrı çekmece, her biri kendi kartlarıyla.") }}
 <p>Dikkat: "index" kelimesi burada bir database'teki "index" ile aynı şey değildir. Bir database'te index bir table'ın yanında duran ek bir yapıdır. Search engine'de index document'ların <b>kabının adıdır</b>: table'ın kendisidir; arama yapıları onun içindedir.</p>
 {{ k.anatomy([
@@ -71,7 +71,7 @@
    labels={"primary": "Kimlik ve aranan metin", "pk": "_id (kimlik)", "sk": "Metin field'ı", "attrs": "Diğer field'lar", "note": "type'ları mapping'de yazılı", "items": "Document'lar"}) }}
 <p>Şemayı satır satır oku:</p>
 <ul>
-  <li><code>_id</code> document'ın kimliğidir. İki document aynı <code>_id</code>'ye sahip olamaz; aynı <code>_id</code> ile ikinci yazma ilkinin yerine geçer. Lale Market ürün id'sini (<code>P0001</code>) <code>_id</code> olarak kullanır.</li>
+  <li><code>_id</code> document'ın kimliğidir. İki document aynı <code>_id</code>'ye sahip olamaz; aynı <code>_id</code> ile ikinci yazma ilkinin yerine geçer. TDS Academy Market ürün id'sini (<code>P0001</code>) <code>_id</code> olarak kullanır.</li>
   <li><code>name</code> bir metin field'ıdır: kelimelerine bölünür ve kelimeyle aranır (A3).</li>
   <li><code>category</code> ve <code>brand</code> tam değerdir: "Elektronik" bir bütündür, kelimelerine bölünmez; filtre ve sayım içindir.</li>
   <li><code>price</code> ve <code>rating</code> sayıdır: aralıkla filtrelenir ve sıralanır.</li>
@@ -99,20 +99,20 @@
 <p>Benzerler: ikisi de tek bir kayıttır. Fark şudur: row'un column'ları table'da sabittir, document'ın field'ları bir JSON nesnesidir ve iç içe olabilir. Ama mapping'den sonra bir field'ın type'ı da sabittir; "şemasız" demek yanlış olur. Doğrusu "yeni field eklenebilir, var olanın type'ı değişmez"dir.</p>
 {% endcall %}
 {% call k.ask("Aynı ürün hem name hem name.std olarak nasıl iki kez saklanıyor?") %}
-<p>Bir field'ın birden fazla biçimi olabilir (multi-field). Lale Market <code>name</code>'i Türkçe harfleri sadeleştiren kurallarla, <code>name.std</code>'yi standart kurallarla iki kez dizine işler. Document'ın kendisi bir kez saklanır; dizin iki tanedir. A3 farkı gösterir.</p>
+<p>Bir field'ın birden fazla biçimi olabilir (multi-field). TDS Academy Market <code>name</code>'i Türkçe harfleri sadeleştiren kurallarla, <code>name.std</code>'yi standart kurallarla iki kez dizine işler. Document'ın kendisi bir kez saklanır; dizin iki tanedir. A3 farkı gösterir.</p>
 {% endcall %}
 {% call k.ask("Kimliği ben vermezsem ne olur?") %}
-<p>Search engine rastgele bir <code>_id</code> üretir. O zaman aynı ürünü ikinci kez yazmak ikinci bir document yaratır. Lale Market gibi bir kayıt sisteminin kopyasını tutuyorsan, kaynaktaki id'yi <code>_id</code> olarak vermek kopyayı tekrar edilebilir yapar.</p>
+<p>Search engine rastgele bir <code>_id</code> üretir. O zaman aynı ürünü ikinci kez yazmak ikinci bir document yaratır. TDS Academy Market gibi bir kayıt sisteminin kopyasını tutuyorsan, kaynaktaki id'yi <code>_id</code> olarak vermek kopyayı tekrar edilebilir yapar.</p>
 {% endcall %}
 {{ k.quiz("os-q0", "Bir alışveriş sitesi kategori adına göre sayım göstermek ve ürün adında kelime aramak istiyor. Field type'ları hangisi olmalı?",
    ["category text, name keyword", "category keyword, name text", "İkisi de keyword", "İkisi de text"],
-   1, "Sayım ve tam eşitlik keyword ister; kelimeyle arama text ister. Lale Market'in mapping'i tam olarak böyledir (B1).") }}
+   1, "Sayım ve tam eşitlik keyword ister; kelimeyle arama text ister. TDS Academy Market'in mapping'i tam olarak böyledir (B1).") }}
 
 <h2 id="analysis" data-short="Analyzer ve token (Ö1)"><span class="sec">A3</span>Metni kelimelere bölmek: analyzer ve token</h2>
 <p>Ziyaretçi "kulaklik" yazıyor, ürünün adında "Kulaklık" var. Bir bilgisayar için bu iki farklı metindir: büyük K ve ı harfi farklıdır. Search engine bu farkı ürün yazılırken, bir kez, ortadan kaldırır: metni kelimelere böler ve her kelimeyi bir kurala göre sadeleştirir. Aynı kural aramada da uygulanır; iki taraf aynı sade kelimeye vardığında eşleşirler.</p>
 {{ k.concept("Analyzer",
    "Metni kelimelere bölen ve her kelimeyi değiştiren kurallar zinciri. Üç parçası vardır: metni temizleyen <dfn>character filter</dfn>, metni kelimelere bölen <dfn>tokenizer</dfn> ve her kelimeyi değiştiren <dfn>token filter</dfn>'lar (küçük harf, harf sadeleştirme, kök bulma). Analyzer hem yazmada hem aramada çalışır.",
-   "Lale Market'in <code>tr_folded</code> analyzer'ı: standard tokenizer, Türkçe kuralla küçük harf (<code>lowercase</code>, language: turkish) ve <code>asciifolding</code> (ı ⇒ i, ş ⇒ s, ğ ⇒ g, ü ⇒ u, ö ⇒ o, ç ⇒ c).",
+   "TDS Academy Market'in <code>tr_folded</code> analyzer'ı: standard tokenizer, Türkçe kuralla küçük harf (<code>lowercase</code>, language: turkish) ve <code>asciifolding</code> (ı ⇒ i, ş ⇒ s, ğ ⇒ g, ü ⇒ u, ö ⇒ o, ç ⇒ c).",
    "Kitabın dizinini hazırlayan editörün kuralları: \"büyük harfleri küçült\", \"Türkçe harfleri sadeleştir\", \"ve, ile gibi kelimeleri dizine yazma\".") }}
 {{ k.concept("Token",
    "Analyzer'ın çıkardığı her bir sade kelime. Dizin token'larla çalışır: aranan şey ekrandaki kelime değil, onun token'ıdır. Her token metindeki yerini (pozisyon ve karakter aralığı) da taşır.",
@@ -132,7 +132,7 @@
   <tbody>
     <tr><td>Büyük ve küçük harf</td><td>lowercase token filter küçültür. Türkçe kuralı İ ⇒ i ve I ⇒ ı yapar; dil verilmezse I ⇒ i olur ve "IŞIK" yanlış küçülür.</td><td>Kulaklık ⇒ kulaklık</td></tr>
     <tr><td>Türkçe harfsiz yazım</td><td>asciifolding ı, ş, ğ, ü, ö, ç harflerini ASCII karşılıklarına çevirir. İki yazım aynı token olur.</td><td>kulaklık ve kulaklik ⇒ kulaklik</td></tr>
-    <tr><td>Ekler ve kökler</td><td>Bir stemmer token filter'ı kelimeyi köküne indirir. Lale Market bunu kullanmaz; "kulaklıklar" ayrı bir token kalır ve bulunmak için yazım toleransına (A6) güvenilir.</td><td>kulaklıklar ⇒ kulaklık (stemmer ile)</td></tr>
+    <tr><td>Ekler ve kökler</td><td>Bir stemmer token filter'ı kelimeyi köküne indirir. TDS Academy Market bunu kullanmaz; "kulaklıklar" ayrı bir token kalır ve bulunmak için yazım toleransına (A6) güvenilir.</td><td>kulaklıklar ⇒ kulaklık (stemmer ile)</td></tr>
     <tr><td>Çok sık kelimeler</td><td>Bir stop filter "ve", "ile" gibi kelimeleri atabilir.</td><td>"kılıf ve kapak" ⇒ kılıf, kapak</td></tr>
     <tr><td>Eş anlamlılar</td><td>Bir synonym filter bir token'a eşlerini ekler.</td><td>powerbank ⇒ powerbank, taşınabilir şarj</td></tr>
     <tr><td>keyword field'ı</td><td>Analyzer çalışmaz; değer bir bütün olarak tek token'dır.</td><td>"Ev & Yaşam" tek token</td></tr>
@@ -146,7 +146,7 @@
 <p>Çünkü dizinde token'lar var, kelimeler değil. "Kulaklık" aranırsa ve aramaya analyzer uygulanmazsa, dizinde "Kulaklık" diye bir token yoktur; "kulaklik" vardır. Bu yüzden match sorgusu metni aynı analyzer'dan geçirir. Term sorgusu geçirmez: değeri olduğu gibi arar ve keyword field'lar için doğrudur.</p>
 {% endcall %}
 {% call k.ask("Türkçe harfleri sadeleştirmenin bir bedeli var mı?") %}
-<p>Var: farklı kelimeler aynı token'a düşebilir. "kaşık" ve "kasık" ikisi de "kasik" olur. Lale Market'te bu nadir ve zararsızdır; bir sözlük uygulamasında zarar verir. Çözüm iki field'dır: biri sadeleştirilmiş, biri Türkçe harfli (<code>name</code> ve <code>name.std</code>); sorgu ikisini birden sorar ve tam yazım daha yüksek skor alır.</p>
+<p>Var: farklı kelimeler aynı token'a düşebilir. "kaşık" ve "kasık" ikisi de "kasik" olur. TDS Academy Market'te bu nadir ve zararsızdır; bir sözlük uygulamasında zarar verir. Çözüm iki field'dır: biri sadeleştirilmiş, biri Türkçe harfli (<code>name</code> ve <code>name.std</code>); sorgu ikisini birden sorar ve tam yazım daha yüksek skor alır.</p>
 {% endcall %}
 {{ k.quiz("os-q1", "Ürün adı \"Çelik Termos\". tr_folded analyzer'ı (Türkçe lowercase ve asciifolding) hangi token'ları üretir?",
    ["Çelik, Termos", "çelik, termos", "celik, termos", "celiktermos"],
@@ -364,11 +364,11 @@
 <p>Tek bir makine, yani search engine'i çalıştıran bir <dfn>node</dfn>, bir yere kadar büyür. 200.000 ürün tek makineye sığar; günde 40 GB log bir ayda 1,2 TB eder ve sığmaz. Search engine bir index'i parçalara böler ve parçaları makinelere dağıtır.</p>
 {{ k.concept("Shard",
    "Bir index'in parçası; kendi document'larını ve kendi inverted index'ini taşıyan, kendi başına çalışan küçük bir arama birimi. Bir index kurulurken kaç <b>primary shard</b>'a bölüneceği seçilir. Her document'ın shard'ını <code>_id</code>'sinin hash'i seçer. Bir arama bütün shard'lara gider ve sonuçlar birleştirilir.",
-   "Lale Market'in <code>products</code> index'i 5 primary shard'a bölünmüştür (OpenSearch Service'in varsayılanı). Simülasyonda 3 shard ve öğretici bir hash kullanılır.",
+   "TDS Academy Market'in <code>products</code> index'i 5 primary shard'a bölünmüştür (OpenSearch Service'in varsayılanı). Simülasyonda 3 shard ve öğretici bir hash kullanılır.",
    "Bir kütüphanenin kartoteği beş çekmeceye bölünmüş: her çekmecenin kendi kartları ve kendi alfabetik dizini var. Bir soru beş çekmeceye birden sorulur.") }}
 {{ k.concept("Replica",
    "Bir primary shard'ın tam kopyası; başka bir makinede durur. İki işi vardır: o makine bozulursa kopya primary olur ve veri kaybolmaz; aramaları paylaşır ve okuma kapasitesini artırır. Replica sayısı her an değişebilir.",
-   "<code>products</code> index'inde her primary shard'ın 1 replica'sı vardır: toplam 10 shard. Lale Market domain'i üç Availability Zone'a yayılır.",
+   "<code>products</code> index'inde her primary shard'ın 1 replica'sı vardır: toplam 10 shard. TDS Academy Market domain'i üç Availability Zone'a yayılır.",
    "Kartoteğin her çekmecesinin fotokopisi başka bir binada durur: bina yanarsa kartlar kaybolmaz; iki binada aynı anda iki kişi arayabilir.") }}
 <p>Shard'ları taşıyan makineler node'lardır; birlikte çalışan node'ların hepsi bir <dfn>cluster</dfn>'dır. AWS yönetilen bir cluster'a domain der (Bölüm C).</p>
 {{ k.fig("opensearch-index-shards.png", "bir index iki shard'a bölünmüş; her shard iki document taşıyor. Document 1 ve 2 shard 1'de, 3 ve 4 shard 2'de. Bir arama iki shard'a birden gider.") }}
@@ -389,7 +389,7 @@
   </tbody>
 </table>
 {% call k.ask("Kaç primary shard seçmeliyim?") %}
-<p>Verinin büyüklüğünden başla: (veri + büyüme payı) × 1,1 / hedef shard boyutu. AWS'in örneğinde 66 GiB veri ve 30 GiB'lık hedefle sonuç 3 shard'dır. Lale Market'in 200 ürünlük index'i 72 KB'tır; ona tek bir shard yeterdi. 5 shard, OpenSearch Service'in varsayılanıdır ve büyümeye yer bırakır.</p>
+<p>Verinin büyüklüğünden başla: (veri + büyüme payı) × 1,1 / hedef shard boyutu. AWS'in örneğinde 66 GiB veri ve 30 GiB'lık hedefle sonuç 3 shard'dır. TDS Academy Market'in 200 ürünlük index'i 72 KB'tır; ona tek bir shard yeterdi. 5 shard, OpenSearch Service'in varsayılanıdır ve büyümeye yer bırakır.</p>
 {% endcall %}
 {% call k.ask("Shard ile partition aynı şey mi?") %}
 <p>Fikir aynıdır: veriyi bir key'in hash'iyle parçalara bölmek (bkz. <a href="/e2etutorial/dynamodb?lang=tr">DynamoDB tutorial'ı</a>, A4). Fark sorudadır: key-value bir database bir isteği tek partition'a gönderir; search engine bir aramayı bütün shard'lara gönderir, çünkü kelime her shard'da olabilir.</p>
@@ -406,7 +406,7 @@
    "Bir defterde yanlış satırı silmek yerine üstünü çizip yeni sayfaya doğrusunu yazmak; ay sonunda defteri temize çekmek.") }}
 {{ k.concept("Refresh",
    "Bellekte biriken yeni yazmaları yeni bir segment'e çeviren ve aramaya açan işlem. Varsayılan olarak saniyede bir çalışır: bir yazma en geç bir refresh aralığı sonra aranabilir. Bu davranışın adı <dfn>near-real-time</dfn> (neredeyse gerçek zamanlı) aramadır. Aralık uzatılabilir; daha seyrek refresh yazma hızını artırır.",
-   "Lale Market'te bir ürün değişikliği en geç bir saniye sonra aramada görünür. OpenSearch Serverless'ta bu aralık yaklaşık 10 saniyedir ve değiştirilemez.",
+   "TDS Academy Market'te bir ürün değişikliği en geç bir saniye sonra aramada görünür. OpenSearch Serverless'ta bu aralık yaklaşık 10 saniyedir ve değiştirilemez.",
    "Bir gazetenin baskısı: haber yazıldığı anda değil, bir sonraki baskıda okunur. Baskı ne kadar sık olursa haber o kadar taze olur, ama matbaa o kadar çok çalışır.") }}
 <div class="flow">
   <div class="box">yazma<small>P0001 yeni fiyat</small></div><span class="arrow">→</span>
@@ -463,7 +463,7 @@
   <caption>özellik × ürün matrisi: ✓ var · ½ kısmen ya da farklı biçimde · ✗ yok</caption>
   <thead><tr><th>Özellik</th><th>PostgreSQL tam metin araması</th><th>Elasticsearch</th><th>Amazon OpenSearch Service</th></tr></thead>
   <tbody>
-    <tr><td><b>Ö1</b> Metin analizi</td><td class="p">½ Text search configuration (parser ve sözlükler, Türkçe kök bulma); Türkçe harf sadeleştirme unaccent ile ayrıca</td><td class="y">✓ Analyzer'lar, dil analyzer'ları, custom zincirler</td><td class="y">✓ Aynı analyzer modeli; Lale Market'in tr_folded'ı</td></tr>
+    <tr><td><b>Ö1</b> Metin analizi</td><td class="p">½ Text search configuration (parser ve sözlükler, Türkçe kök bulma); Türkçe harf sadeleştirme unaccent ile ayrıca</td><td class="y">✓ Analyzer'lar, dil analyzer'ları, custom zincirler</td><td class="y">✓ Aynı analyzer modeli; TDS Academy Market'in tr_folded'ı</td></tr>
     <tr><td><b>Ö2</b> Inverted index</td><td class="y">✓ tsvector üzerinde GIN index (Generalized Inverted Index)</td><td class="y">✓ Lucene segment'leri</td><td class="y">✓ Lucene segment'leri</td></tr>
     <tr><td><b>Ö3</b> Relevance skoru</td><td class="p">½ ts_rank ve ts_rank_cd; BM25 değil, her eşleşen row için ayrı hesaplanır</td><td class="y">✓ BM25, boost, function_score</td><td class="y">✓ BM25, boost, function_score, _rank_eval</td></tr>
     <tr><td><b>Ö4</b> Yazım hatası ve önek</td><td class="p">½ pg_trgm benzerliği ve tsquery'de önek (:*); ikisi ayrı mekanizma</td><td class="y">✓ fuzziness, search_as_you_type, completion</td><td class="y">✓ fuzziness, search_as_you_type, completion</td></tr>
@@ -517,7 +517,7 @@
 </table>
 <p>Her kartta her satırın bir <b>ağırlığı</b> vardır ve ağırlıkların toplamı 100'dür. Ağırlık puanlardan önce, iş yükünün önceliğinden belirlenir ve kartta tek cümlelik nedeniyle yazılır. Çoğu kartta R1 en ağır gereksinimdir; R2–R5'in her biri en az 5 alır. Bir aday her satırda 0–10 puan alır ve katkısı puan × ağırlık / 10'dur. Zorunlu satır ve eleme yoktur: bir iş yükünün önceliği olan satırda zayıf kalan aday, toplamda kendiliğinden geride kalır. Puan ile ağırlığın işi ayrıdır: <b>puan</b> satırdaki "ne istiyoruz" cümlesinin ne kadar karşılandığını ölçer, <b>ağırlık</b> o satırın bu iş yükü için ne kadar önemli olduğunu. Bir eksik yalnız bir satırda sayılır: güncellemenin yeniden dizine işlenmesi R1 · OY'de, node boyutu seçmek R4'te, tepeyi karşılamak R2'de, fiyat yalnız R5'te. Kartların gerekçelerinde puan kaybına kısaca "kırılım" denir: "3 puan kırıldı" o satırda 10'dan 3 puan düşüldüğü demektir.</p>
 {% call k.callout("why", "Kartların başlangıç durumu: var olan domain hangi kartta sayılır?") %}
-<p>Kartlar iki başlangıç durumu kullanır ve her hikâye hangisinde olduğunu söyler. Kart 1, 3, 4, 9 ve 10 aynı Lale Market sistemini adım adım büyütür: kart 1 arama domain'ini kurar, sonraki kartlar onun üzerine bir index ekler ve R4, R5'te "var olan domain'e eklemek" olarak puanlanır. Kart 2, 5, 6, 7 ve 8 kendi ekibiyle ve sıfırdan başlar: kart 2 DocumentDB sayfasının hikâyesidir ve kart 1'den önceki durumdur (domain yoktur, ekip OpenSearch bilmez); kart 5–8 başka ekiplerin ve başka verinin işidir. Var olan bir domain'in bu kartlarda sayılması, kart 8'in kafa kafaya paragrafındaki gibi "bir koşul değişseydi" sorusudur.</p>
+<p>Kartlar iki başlangıç durumu kullanır ve her hikâye hangisinde olduğunu söyler. Kart 1, 3, 4, 9 ve 10 aynı TDS Academy Market sistemini adım adım büyütür: kart 1 arama domain'ini kurar, sonraki kartlar onun üzerine bir index ekler ve R4, R5'te "var olan domain'e eklemek" olarak puanlanır. Kart 2, 5, 6, 7 ve 8 kendi ekibiyle ve sıfırdan başlar: kart 2 DocumentDB sayfasının hikâyesidir ve kart 1'den önceki durumdur (domain yoktur, ekip OpenSearch bilmez); kart 5–8 başka ekiplerin ve başka verinin işidir. Var olan bir domain'in bu kartlarda sayılması, kart 8'in kafa kafaya paragrafındaki gibi "bir koşul değişseydi" sorusudur.</p>
 {% endcall %}
 <p>OpenSearch'ün R3 puanı tek bir kurala uyar. Search engine bir kopyayı tutuyorsa (kayıt sistemi DocumentDB, Aurora ya da S3'teki arşiv) bir domain'in kaybı veri kaybı değil bir yeniden yüklemedir: yükleme dakikalar sürüyorsa 1, bir saat ve üstü sürüyorsa 2 puan kırılır. Yönetilen domain replica shard'larla ve saatlik otomatik snapshot'larla korunur; OpenSearch Serverless veriyi managed storage'da tuttuğu için 10 alır. Kayıt sistemi olan Aurora ve DocumentDB üç AZ'de altı kopyayla 10 alır; Aurora bir kopyayı tutsa bile (kart 1, 9) kopya üç AZ'de altı kopya olarak saklanır ve bir AZ ya da node arızasında yeniden yükleme gerekmez, bu yüzden 10 alır. ElastiCache'te bellekteki kopya ElastiCache sayfasının kuralıyla puanlanır: bir arızadan sonra yeniden yüklenene kadar soğuk ya da boş bir liste, 2 puan. Aynı kural, OpenSearch'ün tek veri yeri olduğu ama verinin dışarıdaki bir kaynaktan yeniden yüklenebildiği kartlarda da geçerlidir (Aurora ve DocumentDB sayfalarının katalog kartlarında satıcı beslemeleri: bir saat ve üstü, 2 puan).</p>
 <p>OpenSearch'ün diğer mekanizmaları da her sayfada aynı kırılımı alır. Yeni bir alan (R1 · ŞE): dynamic mapping yeni alanı tanır ama type'ı ilk yazmada sabitler; yalnız yeni alanlar geliyorsa yanlış tahmin edilen bir type'ın reindex'i için 2, var olan alanların type'ı ya da analizi değişiyorsa 4 puan kırılır. Refresh gecikmesi (Ö8): hikâye yeni bir yazmanın bir sonraki aramada görünmesini istiyorsa kartta bir kez, erişim yolu satırında (R1 · EY) 1 puan kırar; saniyeler ya da bir dakika kabul ediliyorsa kırmaz. Güncelleme (R1 · OY): her güncelleme document'ın yeni bir sürümü ve yeniden index'lenmesidir; saniyede birkaç güncelleme 1, onlarca güncelleme ya da birçok düzleştirilmiş document'a dokunan bir değişiklik 3, saniyede yüzlerce sürekli güncelleme 6 puan kırar. Sabit kapasite (R2): yönetilen domain'de tepe ya da büyüme için node'lar önceden eklenir ve bu 1 puan kırar; node tipi ve shard planı R4'te sayılır. Aramalar ile yoğun yazmalar aynı node'larda yarışıyorsa (log'lar, kurye konumları) R2'nin kırılımı daha büyüktür ve gerekçe bunu söyler.</p>
@@ -622,7 +622,7 @@
 </table>
 
 <h2 id="usecases" data-short="Use case'ler, alternatifleriyle"><span class="sec">M2</span>Use case'ler: hangi servis en uygun, OpenSearch nerede kazanır, nerede kaybeder</h2>
-<p>Her kart bir iş yükünü anlatır ve altı parçadan oluşur. (1) <b>Bu iş yüküne en uygun servis:</b> kartın en üstünde, ağırlıklı toplamı en yüksek olan aday durur. Bu aday OpenSearch olmayabilir; OpenSearch her kartta tabloda kalır ve "bu sayfanın servisi" işaretini taşır. Kartlardaki "OpenSearch" adayı OpenSearch Service'in yönetilen domain'idir (Lale Market'in kullandığı biçim); aynı engine'in sunucusuz biçimi "OpenSearch Serverless" adıyla ayrı bir adaydır. (2) <b>Gerçek projede:</b> iş yükü kim için, hangi ekranda, hangi sayılarla. (3) <b>Gereksinimler ve ağırlıklar:</b> R1'in alt maddeleri (R1.1, R1.2, …) ve R2–R5; her satırda ağırlık ve nedeni, "ne istiyoruz" ve "neden önemli, karşılanmazsa ne olur". (4) <b>Puan tablosu:</b> bu iş yüküne gerçekten uyan üç servis; her hücrede 10 üzerinden puan ve ağırlıklı katkı, R1'in toplamı ve 100 üzerinden toplam. (5) <b>Her adayın gerekçesi:</b> satır satır nasıl karşıladığı (OpenSearch için A11'deki Ö-numarasıyla), kaç puan aldığı ve puanın neden kırıldığı; en uygun servisin dışındaki her aday için uzun bir <b>kafa kafaya</b> paragrafı: nerede ayrışır, bu iş yükünde neden geride kalır, hangi koşul değişseydi o seçilirdi. (6) <b>Karar:</b> toplamların okunuşu ve "OpenSearch seçersek" artı ve eksilerimiz. Simülasyonu olan beş kart M7'de aynı puanlarla adım adım oynar. Başlığa tıklayarak kartı aç.</p>
+<p>Her kart bir iş yükünü anlatır ve altı parçadan oluşur. (1) <b>Bu iş yüküne en uygun servis:</b> kartın en üstünde, ağırlıklı toplamı en yüksek olan aday durur. Bu aday OpenSearch olmayabilir; OpenSearch her kartta tabloda kalır ve "bu sayfanın servisi" işaretini taşır. Kartlardaki "OpenSearch" adayı OpenSearch Service'in yönetilen domain'idir (TDS Academy Market'in kullandığı biçim); aynı engine'in sunucusuz biçimi "OpenSearch Serverless" adıyla ayrı bir adaydır. (2) <b>Gerçek projede:</b> iş yükü kim için, hangi ekranda, hangi sayılarla. (3) <b>Gereksinimler ve ağırlıklar:</b> R1'in alt maddeleri (R1.1, R1.2, …) ve R2–R5; her satırda ağırlık ve nedeni, "ne istiyoruz" ve "neden önemli, karşılanmazsa ne olur". (4) <b>Puan tablosu:</b> bu iş yüküne gerçekten uyan üç servis; her hücrede 10 üzerinden puan ve ağırlıklı katkı, R1'in toplamı ve 100 üzerinden toplam. (5) <b>Her adayın gerekçesi:</b> satır satır nasıl karşıladığı (OpenSearch için A11'deki Ö-numarasıyla), kaç puan aldığı ve puanın neden kırıldığı; en uygun servisin dışındaki her aday için uzun bir <b>kafa kafaya</b> paragrafı: nerede ayrışır, bu iş yükünde neden geride kalır, hangi koşul değişseydi o seçilirdi. (6) <b>Karar:</b> toplamların okunuşu ve "OpenSearch seçersek" artı ve eksilerimiz. Simülasyonu olan beş kart M7'de aynı puanlarla adım adım oynar. Başlığa tıklayarak kartı aç.</p>
 <table class="data">
   <caption>puan ölçeği: her satırda ve her kartta aynı</caption>
   <thead><tr><th>Puan</th><th>Anlamı</th></tr></thead>
@@ -700,7 +700,7 @@
 <table class="data">
   <thead><tr><th>Servis</th><th>Nedir</th><th>Ne zaman seç</th></tr></thead>
   <tbody>
-    <tr><td><b>OpenSearch Service, yönetilen domain</b></td><td>OpenSearch engine'i yönetilen node'larda. Node tipi ve sayısı, shard'lar, master node'lar, depolama katmanları (sıcak, UltraWarm, cold) ve eklentiler (Alerting, Anomaly Detection, Security Analytics, ISM) senin kararındır. Node-saat ve disk başına ödeme; reserved instance indirimi. Lale Market bunu kullanır.</td><td>Trafik gün boyu vardır ve tahmin edilebilir; eklentiler şarttır; ince ayar (refresh, shard, node tipi) gerekir; büyük veride UltraWarm ile fiyat düşürülecek.</td></tr>
+    <tr><td><b>OpenSearch Service, yönetilen domain</b></td><td>OpenSearch engine'i yönetilen node'larda. Node tipi ve sayısı, shard'lar, master node'lar, depolama katmanları (sıcak, UltraWarm, cold) ve eklentiler (Alerting, Anomaly Detection, Security Analytics, ISM) senin kararındır. Node-saat ve disk başına ödeme; reserved instance indirimi. TDS Academy Market bunu kullanır.</td><td>Trafik gün boyu vardır ve tahmin edilebilir; eklentiler şarttır; ince ayar (refresh, shard, node tipi) gerekir; büyük veride UltraWarm ile fiyat düşürülecek.</td></tr>
     <tr><td><b>OpenSearch Serverless</b></td><td>Aynı engine, node ve shard olmadan. Index'ler collection'larda; indexing ve search OCU'ları ayrı ölçeklenir; veri managed storage'da. NextGen collection'lar boşta sıfıra iner. Refresh yaklaşık 10 saniye, shard ve refresh değiştirilemez; bazı API'lar ve eklentiler desteklenmez; bir index en fazla 1 TB.</td><td>Ekip node işletmek istemiyor; trafik dalgalı ya da gece sıfır; eklentiler gerekmiyor; vektör araması için Bedrock Knowledge Bases ile birlikte.</td></tr>
     <tr><td>OpenSearch Ingestion</td><td>Yönetilen veri boru hattı: DocumentDB, DynamoDB, Aurora, RDS, S3 ve log kaynaklarından domain'e ya da collection'a akış; OCU-saat başına ödeme.</td><td>Kayıt sistemi başka bir database'tir ve kopya kod yazmadan güncel tutulacaktır (zero-ETL).</td></tr>
     <tr><td><a href="/e2etutorial/aurora?lang=tr">Aurora PostgreSQL</a> (tsvector, pg_trgm, pgvector)</td><td>İlişkisel database'in içinde tam metin, trigram ve vektör araması.</td><td>Veri zaten orada, arama küçük ve hafif, ekip ikinci bir servis istemiyor (M2 kart 8).</td></tr>
@@ -715,7 +715,7 @@
         (<a href="https://docs.aws.amazon.com/opensearch-service/latest/developerguide/bp-sharding.html">Choosing the number of shards</a>).</td><td>Veri boyutundan hesapla: arama için 10–30 GiB, log için 30–50 GiB'lık shard'lar.</td></tr>
     <tr><td>Refresh aralığı</td><td>"The default refresh interval is one second"; AWS ağır yazan index'lerde 30 saniye ya da üstünü önerir
         (<a href="https://docs.aws.amazon.com/opensearch-service/latest/developerguide/bp.html">Operational best practices</a>).</td><td>Ürün aramasında 1 saniye; log index'lerinde 30 saniye.</td></tr>
-    <tr><td>Multi-AZ ve dedicated master</td><td>Data node'lar ve replica'lar iki ya da üç Availability Zone'a yayılır; üç ayrı master node cluster'ın durumunu yönetir.</td><td>Üretimde her zaman; Lale Market üç AZ ve üç master kullanır.</td></tr>
+    <tr><td>Multi-AZ ve dedicated master</td><td>Data node'lar ve replica'lar iki ya da üç Availability Zone'a yayılır; üç ayrı master node cluster'ın durumunu yönetir.</td><td>Üretimde her zaman; TDS Academy Market üç AZ ve üç master kullanır.</td></tr>
     <tr><td>Otomatik snapshot</td><td>Domain saatlik otomatik snapshot alır ve "retains up to 336 of them for 14 days"; ücretsiz bir S3 bucket'ında durur
         (<a href="https://docs.aws.amazon.com/opensearch-service/latest/developerguide/managedomains-snapshots.html">Index snapshots</a>).</td><td>Domain'i bir arızadan geri getirmek için; kayıt sistemi yerine geçmez.</td></tr>
     <tr><td>UltraWarm ve cold, ISM</td><td>Eski index'leri ucuz katmanlara taşır ve siler; UltraWarm S3 tabanlıdır ve salt okunurdur
@@ -724,8 +724,8 @@
   </tbody>
 </table>
 
-<h2 id="lalemarket-arch" data-short="Lale Market'teki yeri"><span class="sec">M6</span>Lale Market'te OpenSearch'ün yeri</h2>
-<p>Lale Market'in bir OpenSearch Service domain'i vardır: <code>dbws-search</code>. İki index tutar: <code>products</code> (200 ürün, arama kutusu ve kategori sayıları) ve <code>stores</code> (mağaza bulucu). Arama kutusu Türkçe harfsiz ve yazım hatalı aramaları bulur; mağaza bulucu en yakın mağazaları mesafeye göre sıralar.</p>
+<h2 id="lalemarket-arch" data-short="TDS Academy Market'teki yeri"><span class="sec">M6</span>TDS Academy Market'te OpenSearch'ün yeri</h2>
+<p>TDS Academy Market'in bir OpenSearch Service domain'i vardır: <code>dbws-search</code>. İki index tutar: <code>products</code> (200 ürün, arama kutusu ve kategori sayıları) ve <code>stores</code> (mağaza bulucu). Arama kutusu Türkçe harfsiz ve yazım hatalı aramaları bulur; mağaza bulucu en yakın mağazaları mesafeye göre sıralar.</p>
 <ul>
   <li><b>Kayıt sistemi DocumentDB'dir.</b> Ürünlerin kaydı orada yaşar; <code>products</code> index'i onun aranabilir kopyasıdır. Workshop kopyayı Admin Console'daki Seed işiyle baştan kurar; bir üretim sisteminde değişiklikler OpenSearch Ingestion ile DocumentDB'nin change stream'inden saniyeler içinde akar (M2 kart 1).</li>
   <li><b>Siparişler hiçbir zaman yalnız OpenSearch'te yaşamaz.</b> Sipariş ve stok Aurora'dadır, çünkü birlikte değişen kurallar ister (M3'ün ilk satırı).</li>
@@ -754,10 +754,10 @@
    1, "Seri modeli, pencere sorguları ve özetleme bir zaman serisi engine'inin işidir (kart 7: Timestream for InfluxDB 84,8, CloudWatch 76,6, OpenSearch 66,4). Metrikler logların içinden geliyor ve aynı panoda log araması isteniyorsa OpenSearch yarışa girer.") }}
 
 <div class="part"><b>Bölüm B</b><h2 id="partB" data-short="Bölüm B: İleri">İleri: pratikte OpenSearch</h2>
-<p>Bölüm A'daki fikirlerin OpenSearch'teki isimleri, canlı Lale Market index'inden gerçek kayıtlar ve cevaplar, boyutlandırma, maliyet ve doğruluk.</p></div>
+<p>Bölüm A'daki fikirlerin OpenSearch'teki isimleri, canlı TDS Academy Market index'inden gerçek kayıtlar ve cevaplar, boyutlandırma, maliyet ve doğruluk.</p></div>
 
 <h2 id="names" data-short="İsimler ve canlı document"><span class="sec">B1</span>OpenSearch'te isimler, canlı bir document ve gerçek mapping</h2>
-<p>A2'deki document, field ve index OpenSearch'te aynı adları taşır. Bu bölüm bu adları canlı Lale Market index'inden gerçek bir kaydın üzerine koyar. Bölüm A'nın terimleri aynen geçerlidir; diğer ürünlerdeki karşılıklar:</p>
+<p>A2'deki document, field ve index OpenSearch'te aynı adları taşır. Bu bölüm bu adları canlı TDS Academy Market index'inden gerçek bir kaydın üzerine koyar. Bölüm A'nın terimleri aynen geçerlidir; diğer ürünlerdeki karşılıklar:</p>
 <table class="data">
   <thead><tr><th>Genel fikir</th><th>PostgreSQL</th><th>Elasticsearch</th><th>Amazon OpenSearch Service</th></tr></thead>
   <tbody>
@@ -787,7 +787,7 @@
 {% endcall %}
 <p>Cevabı satır satır oku:</p>
 <ul>
-  <li><code>_index</code> document'ın index'idir; <code>_id</code> kimliğidir ve Lale Market'in ürün id'sidir. DocumentDB'deki kaydın <code>_id</code>'si de P0001'dir: kopya ile kayıt aynı kimliği paylaşır.</li>
+  <li><code>_index</code> document'ın index'idir; <code>_id</code> kimliğidir ve TDS Academy Market'in ürün id'sidir. DocumentDB'deki kaydın <code>_id</code>'si de P0001'dir: kopya ile kayıt aynı kimliği paylaşır.</li>
   <li><code>_source</code> document'ın yazıldığı JSON'un kendisidir. Arama sonucu sayfası bu JSON'u gösterir; arama ise <code>_source</code>'u değil, field'lardan hazırlanan dizinleri okur.</li>
   <li><code>name</code> ve <code>description</code> text field'lardır; <code>category</code> ve <code>brand</code> keyword; <code>price</code> ve <code>rating</code> sayı. Type'ları aşağıdaki mapping'de yazılıdır.</li>
 </ul>
@@ -803,7 +803,7 @@ rating        float
 Index products: 5 primary shard(s), 1 replica(s) of each.
 200 document, 71.807 byte (primary)</code></pre>
 {% endcall %}
-<p>Lale Market index'i şu istekle kurar (<code>engines/opensearch.py</code> içinden, Seed işi):</p>
+<p>TDS Academy Market index'i şu istekle kurar (<code>engines/opensearch.py</code> içinden, Seed işi):</p>
 {% call k.sql("I1", "products index'ini Türkçe harf kuralıyla kurmak") %}
 <pre><code>PUT products
 {
@@ -916,13 +916,13 @@ total: 5        OpenSearch took 4 ms.</code></pre>
   <tr><td>"boost_mode": "multiply"</td><td>Metin skoru ile sinyaller çarpılır.</td></tr>
 </table>
 {% endcall %}
-<p>Bu bir örnektir: Lale Market index'inde <code>in_stock</code> ve <code>sales_30d</code> field'ları yoktur. Bir değişikliğin sıralamayı iyileştirip iyileştirmediği <code>_rank_eval</code> ile ölçülür: işaretlenmiş örnek aramalar ve her birinin doğru sonuçları verilir, API bir başarı ölçüsü döndürür.</p>
+<p>Bu bir örnektir: TDS Academy Market index'inde <code>in_stock</code> ve <code>sales_30d</code> field'ları yoktur. Bir değişikliğin sıralamayı iyileştirip iyileştirmediği <code>_rank_eval</code> ile ölçülür: işaretlenmiş örnek aramalar ve her birinin doğru sonuçları verilir, API bir başarı ölçüsü döndürür.</p>
 <p>Hybrid arama (A5, M2 kart 8) iki sorguyu tek bir istekte çalıştırır ve bir search pipeline'daki normalization processor skorları birleştirir:</p>
 <pre><code>GET help/_search?search_pipeline=hybrid-norm
 { "query": { "hybrid": { "queries": [
     { "match": { "text": "kargom nerede" } },
     { "knn":   { "embedding": { "vector": [0.012, -0.044, …], "k": 10 } } } ] } } }</code></pre>
-<p>Pipeline <code>hybrid-norm</code> iki skoru 0–1 aralığına getirir (min-max) ve örneğin 0,3 / 0,7 ağırlıklarla toplar. Bu da bir örnektir; Lale Market'te yardım merkezi index'i yoktur.</p>
+<p>Pipeline <code>hybrid-norm</code> iki skoru 0–1 aralığına getirir (min-max) ve örneğin 0,3 / 0,7 ağırlıklarla toplar. Bu da bir örnektir; TDS Academy Market'te yardım merkezi index'i yoktur.</p>
 
 <h2 id="aggsb" data-short="Aggregation pratikte"><span class="sec">B4</span>Aggregation pratikte: tek istekte sonuç ve sayılar</h2>
 <p>A7'deki kovalar canlı index'te böyle görünür. Sorgu açıklamasında "hafif" geçen ve 2.000 TL'nin altındaki ürünleri arar, aynı istekte kategori ve fiyat kovalarını ister:</p>
@@ -1057,8 +1057,8 @@ OpenSearch took 6 ms.</code></pre>
 </table>
 <p>Bir yönetilen domain'den Serverless'a otomatik geçiş yoktur; AWS'e göre veri bir domain'den collection'a yeniden yazılır (reindex). İki biçim aynı engine'i çalıştırdığı için sorgular ve mapping'ler aynıdır; değişen işletme ve fiyattır. M2'nin üç kartı bu farkı puanlar.</p>
 
-<h2 id="lalemarket" data-short="Lale Market'te OpenSearch"><span class="sec">C3</span>Lale Market'te OpenSearch</h2>
-<p>Lale Market domain'inin gerçek tanımı budur (<code>cloudformation/workshop.yaml</code> içinden):</p>
+<h2 id="lalemarket" data-short="TDS Academy Market'te OpenSearch"><span class="sec">C3</span>TDS Academy Market'te OpenSearch</h2>
+<p>TDS Academy Market domain'inin gerçek tanımı budur (<code>cloudformation/workshop.yaml</code> içinden):</p>
 {% call k.sql("T1", "dbws-search domain'i") %}
 <pre><code>SearchDomain:
   Type: AWS::OpenSearchService::Domain

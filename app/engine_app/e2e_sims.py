@@ -13,7 +13,7 @@ Mark classes: read, match, skip, lock, new, bad, done.
 import re
 from copy import deepcopy
 
-# A small teaching copy of the Lale Market shop. Names and prices come from the real data; the stock values and
+# A small teaching copy of the TDS Academy Market shop. Names and prices come from the real data; the stock values and
 # the orders after O000001 are examples.
 CUSTOMERS = {
     "cols": ["customer_id", "name", "email", "city", "segment"],
@@ -1296,7 +1296,7 @@ EXTRA_TABLES["cart"] = CART
 
 
 # ================================================================ DocumentDB
-DOCS = [  # real product documents of Lale Market (subset of fields)
+DOCS = [  # real product documents of TDS Academy Market (subset of fields)
     {"_id": "P0001", "name": "Alpen Kablosuz Kulaklık 1", "category": "Elektronik", "price": 3373.84, "rating": 4.8, "attributes": {"renk": "siyah", "garanti_ay": 12}, "tags": ["hızlı kargo", "çevreci"]},
     {"_id": "P0005", "name": "Toros Güneş Gözlüğü 5", "category": "Moda", "price": 3884.10, "rating": 3.9, "attributes": {"renk": "lacivert", "garanti_ay": 12}, "tags": ["yeni", "çok satan"]},
     {"_id": "P0026", "name": "Bosphorus Mekanik Klavye 26", "category": "Elektronik", "price": 84.61, "rating": 3.0, "attributes": {"renk": "yeşil", "garanti_ay": 24}, "tags": ["yeni", "indirim"]},
@@ -1653,7 +1653,7 @@ EXTRA_TABLES["valkey_slots"] = {"cols": ["key", "hash slot", "shard"],
 
 
 def vk_slots(lang):
-    """Six real Lale Market keys go to their hash slots and shards. Then a two-key command fails across slots, and works with a hash tag."""
+    """Six real TDS Academy Market keys go to their hash slots and shards. Then a two-key command fails across slots, and works with a hash tag."""
     rows, steps = [], []
     shards = lambda: [[f"shard {i + 1}", f"{lo}–{hi}", ", ".join(r[0] for r in rows if r[2] == i + 1) or "–"] for i, (lo, hi) in enumerate(EC_SHARDS)]
     steps.append({"say": T(lang, "Cluster mode splits the key space into 16,384 hash slots. Here three shards own one third each. The client calculates CRC16(key) mod 16384 for each key.",
@@ -2875,8 +2875,8 @@ def s3_prefix(lang):
     steps.append({"say": T(lang, "ListObjectsV2(Delimiter='/') with no prefix: S3 groups the keys up to the first slash. Each group comes back once, as a CommonPrefixes element. This is how the console shows \"folders\".",
                            "Prefix olmadan ListObjectsV2(Delimiter='/'): S3 key'leri ilk slash'e kadar gruplar. Her grup bir kez, bir CommonPrefixes elemanı olarak döner. Konsol \"klasörleri\" böyle gösterir."),
                   "marks": {"k": {i: ("read" if k.startswith("products/") else "new") for i, (k, _, _) in enumerate(S3_KEYS)}}, "out": [[g, "CommonPrefixes"] for g in groups], "count": {"keys returned": 0, "common prefixes": len(groups)}})
-    steps.append({"say": T(lang, "Result: a \"folder\" is only the common start of some keys. To delete a folder, you delete every key with that prefix. The Lale Market reset does this for uploads/.",
-                           "Sonuç: bir \"klasör\" sadece bazı key'lerin ortak başlangıcıdır. Bir klasörü silmek için o prefix'e sahip her key'i silersin. Lale Market'in reset'i bunu uploads/ için yapar."),
+    steps.append({"say": T(lang, "Result: a \"folder\" is only the common start of some keys. To delete a folder, you delete every key with that prefix. The TDS Academy Market reset does this for uploads/.",
+                           "Sonuç: bir \"klasör\" sadece bazı key'lerin ortak başlangıcıdır. Bir klasörü silmek için o prefix'e sahip her key'i silersin. TDS Academy Market'in reset'i bunu uploads/ için yapar."),
                   "marks": {"k": {i: ("match" if k.startswith("uploads/") else "skip") for i, (k, _, _) in enumerate(S3_KEYS)}}, "out": [[g, "CommonPrefixes"] for g in groups], "count": {"keys returned": 0, "common prefixes": len(groups)}})
     return {"tables": [{"id": "k", "name": T(lang, "keys in the bucket (sorted)", "bucket'taki key'ler (sıralı)"), "cols": ["key", "size", "Content-Type"], "rows": S3_KEYS, "key": [0], "ref": []}],
             "out": {"name": T(lang, "response", "cevap"), "cols": ["Key / Prefix", T(lang, "size or type", "boyut ya da tür")]}, "steps": steps}
@@ -2901,8 +2901,8 @@ def s3_versions(lang):
     steps.append({"say": T(lang, "DELETE without a version id: S3 deletes nothing. It adds a delete marker as the newest version. A normal GET now returns 404 Not Found.",
                            "Sürüm id'siz DELETE: S3 hiçbir şey silmez. En yeni sürüm olarak bir silme işareti (delete marker) ekler. Normal bir GET artık 404 Not Found döndürür."),
                   "marks": {"v": {0: "bad"}}, "rows": {"v": deepcopy(v)}, "out": [["GET " + key, "404 Not Found"]], "count": {"versions": 3}})
-    steps.append({"say": T(lang, "GET with versionId=3HL4kqtJ still returns the first photo. To restore it, copy that version to the same key, or delete the delete marker. In Lale Market, a lifecycle rule deletes a version 1 day after it stops being the current version.",
-                           "versionId=3HL4kqtJ ile GET hâlâ ilk fotoğrafı döndürür. Onu geri getirmek için o sürümü aynı key'e kopyala ya da silme işaretini sil. Lale Market'te bir lifecycle kuralı, bir sürümü güncel olmaktan çıktıktan 1 gün sonra siler."),
+    steps.append({"say": T(lang, "GET with versionId=3HL4kqtJ still returns the first photo. To restore it, copy that version to the same key, or delete the delete marker. In TDS Academy Market, a lifecycle rule deletes a version 1 day after it stops being the current version.",
+                           "versionId=3HL4kqtJ ile GET hâlâ ilk fotoğrafı döndürür. Onu geri getirmek için o sürümü aynı key'e kopyala ya da silme işaretini sil. TDS Academy Market'te bir lifecycle kuralı, bir sürümü güncel olmaktan çıktıktan 1 gün sonra siler."),
                   "marks": {"v": {0: "bad", 2: "match"}}, "rows": {"v": deepcopy(v)}, "out": [["GET " + key, "404 Not Found"], ["GET ...?versionId=3HL4kqtJ", "3HL4kqtJ, 194,002 bytes"]], "count": {"versions": 3}})
     return {"tables": [{"id": "v", "name": T(lang, f"versions of {key} (newest first)", f"{key} sürümleri (en yeni önce)"), "cols": ["VersionId", T(lang, "request", "istek"), T(lang, "size", "boyut"), "IsLatest"], "rows": [], "key": [0], "ref": []}],
             "out": {"name": T(lang, "what a reader gets", "bir okuyucunun aldığı"), "cols": [T(lang, "request", "istek"), T(lang, "response", "cevap")]}, "steps": steps}
@@ -2941,7 +2941,7 @@ SVC.setdefault("s3gfr", "S3 Glacier Flexible Retrieval")    # storage class of S
 SVC.setdefault("s3x", "S3 Express One Zone")                # directory bucket, not a twin (S3 page, cards 5, 6, 7, 9)
 SVC.setdefault("s3t", "S3 Tables")                          # table bucket (Apache Iceberg), not a twin (S3 page, card 3)
 
-# The teaching data of the Turkish S3 page (model 2): eight objects of the Lale Market bucket. The sizes of products/P0001
+# The teaching data of the Turkish S3 page (model 2): eight objects of the TDS Academy Market bucket. The sizes of products/P0001
 # and the scratch object are live values (HeadObject and PutObject, 2026-10-31); the other rows are short examples.
 S3_OBJECTS = [["products/P0001.jpg", 49156, "image/jpeg", "STANDARD", "name, category, author, license"],
               ["products/P0002.jpg", 41333, "image/jpeg", "STANDARD", "name, category, author, license"],

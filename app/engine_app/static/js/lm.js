@@ -1,4 +1,4 @@
-/* Lale Market core: Visitor and Persona, API calls with the Behind-the-Scenes Panel, shop links of the current app,
+/* TDS Academy Market core: Visitor and Persona, API calls with the Behind-the-Scenes Panel, shop links of the current app,
  * and the locked Mission (Guided e-commerce app, mission.js). */
 (function () {
   "use strict";

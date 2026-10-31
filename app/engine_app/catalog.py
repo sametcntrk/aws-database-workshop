@@ -22,7 +22,7 @@ META["docdb"] = {
              "Indexes: { category: 1, rating: -1 }, { \"attributes.renk\": 1 }",
 }
 PAGES["docdb"] = [
-    page("home", "home", "Lale Market", "/"),
+    page("home", "home", "TDS Academy Market", "/"),
     page("category", "category", "Category", "/c/<category>"),
     page("product", "product", "Product", "/p/<pid>"),
     page("admin", "admin", "Admin Console", "/admin"),
