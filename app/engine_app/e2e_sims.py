@@ -1860,7 +1860,8 @@ def keyspaces(lang):
         "partition": ks_partition(lang), "nokey": ks_nokey(lang), "consistency": ks_consistency(lang), "lwt": ks_lwt(lang),
         # the Turkish page: five scorecard simulations built from the M2 cards (e2e_usecases.KS_USECASES); decide_feed and decide_report
         # above are the legacy 2/1/0 decisions of the old English page only
-        **{uc["sim"]: usecase_scorecard(lang, uc) for uc in _uc.KS_USECASES if uc["sim"]},
+        **{uc["sim"]: usecase_scorecard(lang, uc) for uc in _uc.KS_USECASES if uc["sim"]},   # model 1 (KS_USECASES), legacy
+        **({uc["sim"]: weighted_scorecard(lang, uc) for uc in _ucw.KEYSPACES_W if uc["sim"]} if lang == "tr" else {}),   # model 2, Turkish page
     }
     for v in spec.values():          # color language of the page: partition key yellow, clustering column blue
         for t in v.get("tables", []):
