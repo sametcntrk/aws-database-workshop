@@ -1,214 +1,992 @@
 {% extends "e2e/_base.html" %}
 {% import "e2e/_macros.html" as k with context %}
-{# Turkish version of neptune.html. Terms stay in English; the explanations are Turkish. Keep both files in step. #}
+{# Turkish page of the Neptune tutorial (model 2). The old English page neptune.html is a separate, older page. Terms stay in English; the explanations are Turkish.
+   Cards: e2e_usecases_w.NEPTUNE_W. Simulations: e2e_sims.neptune(). Scope: docs/neptune.scope.md. #}
 {% block body %}
 
-<h2 id="goal" data-short="Ne öğreneceksin"><span class="sec">00</span>Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
-<p>Bölüm 01 mimarın kararını verir: Amazon Neptune nereye oturur, nereye oturmaz. Sonra tutorial iki bölümden oluşur.
-   Bölüm 1, property graph modelini ve query dili openCypher'ı öğretir: vertex'ler, edge'ler, pattern'ler, hop'lar ve path'ler. Bölüm 2, AWS servisini ve Lale Market'in onu nasıl kullandığını gösterir.</p>
-<p>Örnekler Lale Market'in "birlikte alınanlar" önerilerinden gelir. Bazen başka bir örnek bir fikri daha kolay gösterir. O zaman tutorial onu kullanır: bir metro haritası, bir soy ağacı, arkadaşlarının arkadaşları.</p>
+<h2 id="goal" data-short="Ne öğreneceksin" data-group="Başlarken">Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
+<p>Bu sayfa genel fikirden AWS servisine dört adımda gider:</p>
+<ol>
+  <li><b>Bölüm A, Temel.</b> Bağlantıları saklayan ve takip eden bir database nasıl çalışır: şeylerin ve aralarındaki bağlantıların aynı önemde veri olarak saklanması, bir sorgunun nereden başladığı, bağlantı bağlantı nasıl yürüdüğü, aranan bir şeklin nasıl yazıldığı, uzunluğu bilinmeyen yollar, yazmalar ve kuralları, verinin yaşamı ve bütün veri üzerinde çalışan hesaplar. Her kavram bütün durumlarıyla bir tabloda verilir; yapılamayan durum da tablodadır. Bölüm sekiz özelliğin (Ö1–Ö8) listesi ve Neo4j / JanusGraph / Neptune matrisiyle biter.</li>
+  <li><b>Mimar gözüyle.</b> Bağlantıları takip eden bir database ne zaman doğru seçimdir, ne zaman değildir: on use case, her birinde en uygun servis (bazen Neptune değil), en yakın iki alternatifin (Aurora, DynamoDB, Neptune Analytics ve diğerleri) aynı gereksinimlere cevabı ve yine de Neptune seçersek artı ve eksilerimiz. Sonra AWS'teki seçenekler ve hangi durumda Neptune'ün seçileceği. Beş karar simülasyonu: Neptune'ün engine'iyle kazandığı bir kart, engine uyumunun eşit olduğu ve kararı servisin verdiği bir kart, bir yakın yarış, engine uyumunu kazanıp toplamı kaybettiği bir kart ve net bir kayıp.</li>
+  <li><b>Bölüm B, İleri.</b> Pratikte Neptune: canlı Lale Market kayıtları, openCypher sorguları ve cevapları, uzunluğu bilinmeyen yollar, yazmaların yeniden denenmesi, maliyet ve ek özellikler.</li>
+  <li><b>Bölüm C, AWS servisi.</b> Böyle bir database'i kendin çalıştırdığında ne yapman gerekir ve Neptune senin için neyi yapar.</li>
+</ol>
+<p>Örnekler Lale Market'in "bunu alanlar şunları da aldı" önerilerinden gelir: müşteriler, ürünler ve kimin neyi aldığı. Başka bir örnek bir fikri daha kolay gösteriyorsa tutorial onu kullanır: bir metro haritası, bir arkadaşlık ağı, bir dolandırıcılık halkası.</p>
 <p>Bu tutorial'ın sonunda şunları yapabilirsin:</p>
 <ol>
-  <li>Bir graph database'in hangi iş yükleri için doğru seçim olduğunu ve hangileri için olmadığını söylemek.</li>
-  <li>Vertex'ler, edge'ler, label'lar ve property'lerle küçük bir property graph çizmek.</li>
-  <li>Bir openCypher pattern'ini okuyup bir çizim üzerinde hop hop takip etmek.</li>
-  <li>Bir traversal'ın maliyetinin neden graph'ın boyutuna değil, komşulara bağlı olduğunu açıklamak.</li>
-  <li>Bir graph traversal'ını aynı sorunun SQL hâliyle karşılaştırmak.</li>
-  <li>Neptune'ün senin için neyi çalıştırdığını açıklamak: storage, replica'lar ve query endpoint'leri.</li>
+  <li>Bir sorunun bağlantıların kendisiyle ilgili olup olmadığını söylemek ve bağlantıları takip eden bir database'in ne zaman doğru, ne zaman gereksiz olduğunu savunmak.</li>
+  <li>Kendi verinden küçük bir graph çizmek: neyin bir şey, neyin bir bağlantı, neyin bir özellik olduğunu ayırmak.</li>
+  <li>Bir openCypher sorgusunu okuyup bir çizim üzerinde adım adım takip etmek ve kaç bağlantı okuduğunu tahmin etmek.</li>
+  <li>Bir graph sorgusunun maliyetinin neden graph'ın boyutuna değil, yolun üzerindeki komşulara bağlı olduğunu açıklamak.</li>
+  <li>Neptune'ü Aurora, DynamoDB ve Neptune Analytics ile gereksinim gereksinim karşılaştırmak ve bir yakın yarışta seçimi savunmak.</li>
+  <li>Neptune'ün senin için neyi çalıştırdığını ve neyi senin kararına bıraktığını açıklamak.</li>
 </ol>
 <p>Dört tür kutu sana yardım eder. <b>Simülasyon</b>: Oynat'a ya da Sonraki adım'a bas. <b>Önce tahmin et</b>: cevabı açmadan önce kendi cevabını yaz.
    <b>Checkpoint</b>: tek doğru cevabı olan bir soru. <b>Analoji</b>: günlük hayattan bir resim.</p>
 
-<h2 id="architect" data-short="Mimar gözüyle: ne zaman"><span class="sec">01</span>Mimar gözüyle: Neptune nereye oturur</h2>
-<p><b>Önce bu bölümü oku.</b> Kararı bu bölüm verir. Sonraki bölümler bir graph'ın nasıl çalıştığını öğretir.</p>
-<p><b>Kısaca:</b> Amazon Neptune yönetilen bir graph database'dir. Şeyleri (vertex'ler) ve aralarındaki ilişkileri (edge'ler) aynı önemde veri olarak saklar.
-   İlişkileri takip eden soruları cevaplar: "kim ne aldı", "kim kimi tanıyor", "bu iki hesap nasıl bağlantılı". Soru ilişkilerin kendisiyse ve hop sayısı büyük ya da bilinmiyorsa onu seç.</p>
-<p>Anahtar fikir {{ k.term("traversal") }}'dır: bir query bir vertex'ten başlar ve onun edge'leri boyunca yürür. Graph'ın sadece içinden geçtiği kısmını okur.</p>
+<div class="part"><b>Bölüm A</b><h2 id="partA" data-short="Bölüm A: Temel">Temel: graph fikri, bütün durumlarıyla</h2>
+<p>Bağlantıları bir kolondaki değer olarak değil, takip edilen bir çizgi olarak saklayan bir database'in neyi hızlı yaptığı ve bunun karşılığında nelerden vazgeçtiği. Bu bölüm her kavramı önce tanımlar, sonra o kavramın <b>bütün durumlarını</b> bir tabloda gösterir; yapılamayan durum da tablodadır. Fikirler Neo4j'de, JanusGraph'ta ve Neptune'de aynıdır; isimler standarttır ve sayfanın sonuna kadar değişmez.</p></div>
 
-<h3>Bir iş yükünde Neptune'ü işaret eden sinyaller</h3>
+<h2 id="why" data-short="Neden graph?"><span class="sec">A1</span>Neden graph database? Metro haritası</h2>
+<p>Bir şehrin metro haritası istasyonları noktalar, hatları çizgiler olarak gösterir. Kadıköy'den Şişli'ye nasıl gidileceğini bulmak için istasyonların alfabetik listesini okumazsın: parmağını Kadıköy'e koyar ve çizgileri takip edersin. Bir aktarma, bir çizgiden diğerine geçmektir. Harita ne kadar büyük olursa olsun, sen yalnız yolunun üzerindeki istasyonlara bakarsın.</p>
+{% call k.callout("analogy", "Analoji") %}
+<p>İstasyon bir şeydir, hat iki istasyon arasındaki bağlantıdır. Bir graph database veriyi bu harita gibi saklar: bağlantılar, bir sorgunun araması gereken değerler değil, takip edebileceği çizgilerdir. Haritada "en çok yolcu taşıyan hat hangisi?" gibi bir soru ise bütün haritayı saymayı ister; bu soru haritanın güçlü yanı değildir. A9 bu farkı ayrıca anlatır.</p>
+{% endcall %}
+{{ k.concept("Graph database",
+   "Şeyleri ve aralarındaki bağlantıları <b>aynı önemde veri</b> olarak saklayan bir database. Şeylerin adı <dfn>vertex</dfn>tir (bazı ürünlerde node), bağlantıların adı <dfn>edge</dfn>dir. İkisinin de bir türü (<dfn>label</dfn>) ve özellikleri (<dfn>property</dfn>) vardır. Bir sorgu bir vertex'ten başlar ve edge'leri takip ederek komşu vertex'lere yürür. A2 dördünü ayrıntılı tanımlar.",
+   "Lale Market'te her müşteri ve her ürün bir vertex'tir. \"Ayşe Yılmaz, P0001 kulaklığını aldı\" bir edge'tir: Ayşe'den kulaklığa giden bir çizgi.",
+   "Metro haritası: istasyonlar vertex, hatlar edge. Ya da bir soy ağacı: kişiler vertex, \"annesi\" ve \"babası\" edge.") }}
+<p>İlişkisel bir database (bkz. <a href="/e2etutorial/aurora?lang=tr">Aurora tutorial'ı</a>) bir bağlantıyı bir kolondaki değer olarak saklar: sipariş satırında bir <code>customer_id</code> ve bir <code>product_id</code> vardır. Bağlantıyı takip etmek için database değeri bir index'te arar ve iki row'u birleştirir (JOIN). Bir birleştirme ucuzdur. "Bana benzeyen müşterilerin aldıkları" aynı büyük table'ın üç birleştirmesini, "herhangi bir adım sayısıyla bağlantılı mı?" ise kendini tekrar eden (recursive) bir sorgu ister. Graph database farklı bir takas yapar:</p>
 <table class="data">
-  <thead><tr><th>Sinyal</th><th>Gerçek bir projede nasıl görünür</th><th>Onu cevaplayan özellik</th></tr></thead>
+  <caption>takas: graph database neyi verir, neyi alır</caption>
+  <thead><tr><th>Graph database'in verdiği</th><th>Karşılığında aldığı</th><th>Bu sayfada nerede</th></tr></thead>
   <tbody>
-    <tr><td>Soru ilişkileri takip eder</td><td>"Bunu alanlar şunları da aldı", "arkadaşların arkadaşları".</td><td>Vertex ve edge'ler üzerinde pattern'ler (bölüm 03 ve 04)</td></tr>
-    <tr><td>Hop sayısı bilinmiyor</td><td>"Bu hesap, herhangi bir adım sayısıyla, bilinen bir dolandırıcılık hesabına bağlı mı?"</td><td>Değişken uzunlukta path'ler (bölüm 06)</td></tr>
-    <tr><td>İstek başına, milisaniyelerde cevap</td><td>Her ürün sayfasında bir öneri, bir ödeme sırasında dolandırıcılık kontrolü.</td><td>Bir traversal sadece komşuları okur (bölüm 04)</td></tr>
-    <tr><td>Birçok ilişki türü</td><td>Bir kişi bir karta sahiptir, bir cihaz kullanır, bir adreste yaşar, bir şirkette çalışır.</td><td>Edge label'ları ve property'leri (bölüm 03)</td></tr>
-    <tr><td>Şema sık değişir</td><td>Her ay yeni şey ve ilişki türleri.</td><td>Yeni bir label table değişikliği gerektirmez</td></tr>
-    <tr><td>Anlamı olan bilgi</td><td>Bir tıbbi sözlük, bir ürün taksonomisi, linked open data.</td><td>RDF ve SPARQL (bölüm 08)</td></tr>
+    <tr><td>Bir bağlantıyı takip etmenin maliyeti graph'ın boyutuna değil, yolun üzerindeki komşulara bağlıdır</td><td>Çok bağlantılı tek bir vertex (binlerce komşu) bir sorguyu pahalı yapar</td><td>A4</td></tr>
+    <tr><td>Uzunluğu bilinmeyen yollar ("herhangi bir adımda bağlı mı?") tek bir sorgudur</td><td>Sınırsız bir yol bütün graph'a yayılabilir; uzunluk sınırlanır</td><td>A6</td></tr>
+    <tr><td>Yeni bir bağlantı türü bir şema değişikliği istemez</td><td>Şema ve kısıt yoktur: zorunlu alan ve tip kontrolü uygulamanındır</td><td>A2, A7</td></tr>
+    <tr><td>Bağlantının kendisinin özellikleri olabilir (ne zaman, kaç adet)</td><td>Bütün kayıtlar üzerinde toplam ve rapor zayıftır; metin araması yoktur</td><td>A2, A9, M3</td></tr>
+  </tbody>
+</table>
+<p>Bu takasın ne zaman işe yaradığını tek bir soru belirler: <b>sorduğun şey bağlantıların kendisi mi?</b> Bütün durumlar şöyledir:</p>
+<table class="data">
+  <caption>bütün durumlar: bağlantı ne zaman sorgunun kendisidir?</caption>
+  <thead><tr><th>Sorunun şekli</th><th>Örnek</th><th>İlişkisel database'te</th><th>Graph database'te</th></tr></thead>
+  <tbody>
+    <tr><td>Bir kaydın tek adım ötesindeki kayıtlar</td><td>"Bu müşterinin siparişleri"</td><td>Tek bir JOIN; ucuz ve doğal</td><td>Tek adımlık bir yol; ucuz ama bir kazanç yok</td></tr>
+    <tr><td>Sabit iki üç adımlık bir zincir</td><td>"Bu ürünü alanların aldıkları"</td><td>Table'ın kendisiyle iki üç kez birleştirilmesi; ara sonuç her adımda büyür</td><td>İki üç adımlık bir yol; yalnız yolun üzerindeki komşular okunur</td></tr>
+    <tr><td>Uzunluğu bilinmeyen bir zincir</td><td>"Bu hesap herhangi bir adımda işaretli bir hesaba bağlı mı?"</td><td>Recursive sorgu ve döngü kontrolü elle yazılır</td><td>Değişken uzunlukta bir yol, tek sorgu (A6)</td></tr>
+    <tr><td>Bağlantının kendisinin özellikleri var</td><td>"Ne zaman ve kaç adet aldı?"</td><td>Bağlantı table'ında kolonlar</td><td>Edge'in üzerinde property'ler (A2)</td></tr>
+    <tr><td>Bütün kayıtlar üzerinde toplam</td><td>"Kategoriye göre aylık gelir"</td><td>GROUP BY; güçlü</td><td><b>Zayıf.</b> Sorgu bir başlangıç noktasından yayılmak için tasarlanmıştır; bütün vertex'leri saymak onun işi değildir (M3)</td></tr>
+    <tr><td>Metnin içinde kelime arama</td><td>"Adında 'kulaklık' geçen ürünler"</td><td>Full-text index</td><td><b>Yapamaz</b> (çekirdekte); metin araması bir search engine'e kopyalanarak yapılır (B6)</td></tr>
+  </tbody>
+</table>
+{{ k.fig("neptune-social-graph.png", "üç kişi (Justin, Anna, Alana) ve iki ilgi alanı. Justin'den Anna'ya ve Alana'ya giden \"Friend\" okları bağlantıdır; kitaplara ve filmlere giden \"Likes\" okları da. \"Justin'in arkadaşlarının sevdikleri\" iki ok takip etmektir: Justin'den Anna'ya, Anna'dan Books'a. Bu sayfanın sorularının hepsi bu iki adımlık yürüyüşün bir çeşididir.") }}
+{% call k.ask("\"Customer 360 bir graph use case'idir\" diye okudum. Her müşteri ekranı bir graph mı?") %}
+<p>Hayır. Bir müşterinin profili, siparişleri ve adresleri tek adımlık bağlantılardır; ilişkisel bir database onları tek bir JOIN ile verir ve graph bir kazanç sağlamaz. Cümle, müşterinin kayıtları arasında çok adımlı sorular varsa doğrudur: "bu müşteriyle aynı adresi ya da kartı paylaşan diğer müşteriler ve onların iadeleri". M2'deki kart 9 bu farkı puanlarla gösterir: tek adımlık ekranda Neptune üçüncüdür.</p>
+{% endcall %}
+{% call k.ask("Graph database ilişkisel database'in yerine mi geçer?") %}
+<p>Çoğu zaman yanına gelir. Siparişin, ödemenin ve faturanın kuralları (stok düşmesi, toplamlar, raporlar) ilişkisel database'te kalır. Graph, bu kayıtlardan kopyalanan bağlantılar üzerinde çok adımlı soruları cevaplar. Lale Market'te de durum budur: siparişler Aurora'da, "birlikte alınanlar" Neptune'dedir (M6).</p>
+{% endcall %}
+{{ k.quiz("npt-q0", "Hangi soru bir graph database'e en çok uyar?",
+   ["Son iki yılın kategoriye göre aylık geliri", "Bu kart, en fazla dört adımda, işaretli bir hesapla ortak bir cihaz ya da adres üzerinden bağlı mı?", "Adında 'kablosuz' geçen bütün ürünler", "C00001 müşterisinin e-posta adresi"],
+   1, "İkinci soru bağlantıların kendisini ve uzunluğu bilinmeyen bir yolu sorar. Birincisi bütün kayıtlar üzerinde bir toplamdır, üçüncüsü metin aramasıdır, dördüncüsü tek bir kaydın okunmasıdır.") }}
+
+<h2 id="model" data-short="Vertex, edge, label, property"><span class="sec">A2</span>Vertex, edge, label ve property: graph'ın birimi</h2>
+<p>Bir graph'ın iki tür kaydı vardır ve ikisi de kendi başına bir kayıttır. Bu, ilişkisel modelden gelen okuyucuyu en çok şaşırtan noktadır: bağlantı, bir row'daki iki id değil, kendi kimliği ve özellikleri olan bir kayıttır.</p>
+{{ k.concept("Vertex",
+   "Graph'taki bir şey: bir müşteri, bir ürün, bir cihaz, bir adres. Her vertex'in benzersiz bir kimliği (<code>~id</code>), bir türü (label) ve özellikleri (property) vardır. Bazı ürünler ve openCypher dili ona <b>node</b> der; aynı şeydir.",
+   "<code>C00001</code> kimlikli, label'ı <code>Customer</code> olan, <code>name</code> = Ayşe Yılmaz ve <code>city</code> = İstanbul property'leri taşıyan vertex.",
+   "Metro haritasında bir istasyon: Kadıköy. Adı, hangi hatlarda olduğu ve asansörü olup olmadığı onun özellikleridir.") }}
+{{ k.concept("Edge",
+   "İki vertex arasındaki bir bağlantı. Bir başlangıç vertex'i (<code>~from</code>), bir bitiş vertex'i (<code>~to</code>), bir türü (label) ve özellikleri vardır, yani bir yönü vardır. Kendi kimliği (<code>~id</code>) olan ayrı bir kayıttır. openCypher ona <b>relationship</b> der; aynı şeydir.",
+   "<code>e1</code>: <code>C00001</code>'den <code>P0001</code>'e giden, label'ı <code>BOUGHT</code> olan, <code>order_id</code> = O000003 ve <code>qty</code> = 1 property'leri taşıyan edge.",
+   "İki istasyon arasındaki bir hat parçası. Hattın adı (M4), yönü ve süresi (2 dakika) onun özellikleridir.") }}
+{{ k.concept("Label",
+   "Bir vertex'in ya da edge'in türünü söyleyen ad. Sorgu bir türü seçmek için label'ı kullanır: <code>(:Customer)</code> \"Customer türündeki vertex'ler\", <code>[:BOUGHT]</code> \"BOUGHT türündeki edge'ler\" demektir. Bir vertex'in birden fazla label'ı olabilir; bir edge'in tam olarak bir label'ı vardır.",
+   "Vertex label'ları <code>Customer</code> ve <code>Product</code>, edge label'ı <code>BOUGHT</code>.",
+   "Haritadaki semboller: metro istasyonu, tren istasyonu, vapur iskelesi. Hatların renkleri de türlerini söyler.") }}
+{{ k.concept("Property",
+   "Bir vertex'e ya da edge'e bağlı bir ad ve bir değer, yani key-value çifti. Değerin bir tipi vardır (metin, sayı, tarih, boolean). Property'ler kayıttan kayda değişebilir; database bir şema tutmaz.",
+   "Vertex'te <code>name</code> = Ayşe Yılmaz; edge'te <code>qty</code> = 2.",
+   "İstasyonun asansörü var mı, hattın kaç dakika sürdüğü.") }}
+<p>Bu dört kavramın birlikte adı <b>property graph</b>'tır: vertex'ler ve edge'ler, label'larıyla ve property'leriyle. Graph modelinin ikinci bir biçimi daha vardır; bir ürün ikisini birden ya da yalnız birini sunar:</p>
+<table class="data">
+  <caption>bütün durumlar: graph modelinin biçimleri</caption>
+  <thead><tr><th>Biçim</th><th>Birimi</th><th>Sorgu dili</th><th>Örnek</th><th>Hangi üründe</th></tr></thead>
+  <tbody>
+    <tr><td><b>Property graph</b></td><td>Vertex ve edge, ikisinin de label'ı ve property'leri var</td><td>openCypher, Gremlin</td><td><code>(C00001:Customer {name: 'Ayşe'})-[:BOUGHT {qty: 1}]-&gt;(P0001:Product)</code></td><td>Neo4j (Cypher), JanusGraph (Gremlin), Neptune (ikisi de)</td></tr>
+    <tr><td><b>RDF</b> (Resource Description Framework)</td><td>Üçlü (triple): özne, yüklem, nesne; her şey bir IRI (web adresi biçiminde kimlik)</td><td>SPARQL</td><td><code>&lt;lm:C00001&gt; &lt;lm:bought&gt; &lt;lm:P0001&gt; .</code></td><td>Neptune, RDF store'ları (Apache Jena). Neo4j ve JanusGraph'ta çekirdekte yok</td></tr>
+    <tr><td>İkisi aynı veride</td><td>—</td><td>—</td><td>—</td><td><b>Hayır.</b> Bir Neptune cluster'ı iki tür veriyi de saklayabilir, ama openCypher ve Gremlin yalnız property graph verisini, SPARQL yalnız RDF verisini okur</td></tr>
+  </tbody>
+</table>
+<p>Bu sayfa property graph ile öğretir, çünkü Lale Market onu kullanır. RDF, paylaşılan sözlüklerin ve ontolojilerin dilidir; M2'deki kart 10 (ilaç etkileşimleri) onu bir use case olarak puanlar.</p>
+<p>Bu şema öğretici graph'ın iki vertex'ini ve bir edge'ini parçalarıyla gösterir. Renkler bütün sayfada aynı kalır: <b>sarı</b> bir kaydın başladığı kimlik (vertex'te <code>~id</code>, edge'te başlangıç vertex'i <code>~from</code>), <b>mavi</b> ikinci parça (vertex'te label, edge'te bitiş vertex'i <code>~to</code>), <b>gri</b> property'ler.</p>
+{{ k.anatomy([
+   {"pk": "C00001", "sk": "Customer", "attrs": [["name", "Ayşe Yılmaz"], ["city", "İstanbul"]]},
+   {"pk": "P0001", "sk": "Product", "attrs": [["name", "Alpen Kablosuz Kulaklık 1"], ["category", "Elektronik"]]}],
+   "İki vertex. Her biri kendi kimliğini, label'ını ve property'lerini taşır; ürünün property'leri müşterininkinden farklıdır ve database buna itiraz etmez.",
+   pk_name="~id", sk_name="~label",
+   labels={"primary": "Vertex'in kimliği ve türü", "pk": "Kimlik", "sk": "Label", "attrs": "Property'ler", "note": "alanlar vertex'ten vertex'e farklı olabilir", "items": "Vertex'ler"}) }}
+{{ k.anatomy([
+   {"pk": "C00001", "sk": "P0001", "attrs": [["~id", "e1"], ["~label", "BOUGHT"], ["order_id", "O000003"], ["qty", "1"]]},
+   {"pk": "C00002", "sk": "P0001", "attrs": [["~id", "e3"], ["~label", "BOUGHT"], ["order_id", "O000017"], ["qty", "1"]]}],
+   "İki edge. Bir edge müşteriyi kopyalamaz: başlangıç vertex'inin kimliğini ~from'da, bitiş vertex'ininkini ~to'da tutar. Kendi kimliği (e1) ve label'ı (BOUGHT) vardır; order_id ve qty onun property'leridir.",
+   pk_name="~from", sk_name="~to",
+   labels={"primary": "Edge'in iki ucu", "pk": "Başlangıç vertex'i", "sk": "Bitiş vertex'i", "attrs": "Edge'in kimliği, label'ı ve property'leri", "note": "edge de bir kayıttır", "items": "Edge'ler"}) }}
+<p>Şemayı satır satır oku:</p>
+<ul>
+  <li>İlk vertex'in kimliği <code>C00001</code>'dir; label'ı <code>Customer</code> olduğu için bir müşteridir. Adı ve şehri property'leridir.</li>
+  <li>İkinci vertex'in label'ı <code>Product</code>'tır ve şehir yerine kategori taşır. Aynı graph'ta farklı alanlı vertex'ler yan yana durur.</li>
+  <li><code>e1</code> edge'i C00001'den P0001'e gider. Yönü "müşteri ürünü aldı" demektir; ürünün alıcılarını bulmak için aynı edge ters yönde okunur (A4).</li>
+  <li><code>e3</code> aynı ürüne başka bir müşteriden gelir. P0001'in iki gelen edge'i iki alıcısıdır; "bunu alanlar" sorusunun ilk adımı tam olarak budur.</li>
+</ul>
+{{ k.fig("neptune-property-graph.png", "dört Person ve iki Book vertex'i. Her vertex'in yanındaki kutu label'ıdır (Person, Author, Book); bir vertex iki label taşıyabilir (Person ve Author). Okların üzerindeki WROTE ve PURCHASED edge label'larıdır; altlarındaki date bir edge property'sidir. Resmin kendi renkleri yoktur: ovaller vertex'tir ve içindeki name ya da title onun property'sidir, beyaz kutular label'dır, oklar edge'tir.") }}
+<p>Bir edge'in de durumları vardır:</p>
+<table class="data">
+  <caption>bütün durumlar: bir edge'in biçimleri</caption>
+  <thead><tr><th>Durum</th><th>Mümkün mü</th><th>Ne olur</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Yönlü edge</td><td>Evet, her edge'in bir yönü vardır</td><td>~from'dan ~to'ya gider</td><td>e1: C00001 → P0001</td></tr>
+    <tr><td>Yönsüz okuma</td><td>Evet</td><td>Edge yine yönlü saklanır; sorgu yön vermezse iki yönde de okunur</td><td>Arkadaşlık: tek bir FRIEND edge'i iki yönde okunur (M2 kart 1)</td></tr>
+    <tr><td>Aynı iki vertex arasında birden çok edge</td><td>Evet</td><td>Her biri ayrı kayıttır, kendi ~id'si vardır</td><td>Canlı graph'ta Ayşe P0195'i üç ayrı siparişte almış: üç BOUGHT edge'i (B1)</td></tr>
+    <tr><td>Bir vertex'ten kendisine edge</td><td>Evet</td><td>Bir döngüdür; yol sorgularında hesaba katılır (A6)</td><td>"Bu servis kendisini yeniden başlatır"</td></tr>
+    <tr><td>Edge'in property'leri</td><td>Evet</td><td>Bağlantının ne zaman ve nasıl olduğu edge'te durur</td><td>order_id, qty</td></tr>
+    <tr><td>Uçlarından biri olmayan edge</td><td><b>Hayır</b></td><td>Bir edge her zaman var olan iki vertex'i bağlar; bir vertex silinince edge'leri de silinmelidir (A7)</td><td>Silinen bir ürüne BOUGHT edge'i kalamaz</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Bir edge'e neden kendi kimliği ve property'leri veriliyor? İlişkisel modelde bu sadece bir satırdaki iki id.") %}
+<p>Çünkü bağlantının kendisi soruların konusudur. "Ayşe P0001'i hangi siparişte, kaç adet aldı?" sorusu edge'e sorulur. İlişkisel modelde de bunun için ayrı bir bağlantı table'ı (order_items) kurarsın; graph modelinde o table'ın her row'u bir edge'tir ve iki ucu doğrudan vertex'lere bağlıdır. Fark saklamada değil, yürümededir: bir sonraki adım bir index araması değil, edge'in ucundaki vertex'tir (A4).</p>
+{% endcall %}
+{% call k.ask("Bir vertex'in property'si mi olmalı, yoksa ayrı bir vertex ve edge mi? Örneğin şehir.") %}
+<p>Soru bir karar kuralıdır: o değer üzerinden <b>yürüyecek</b> misin? "Ayşe'nin şehri" yalnız gösterilecekse <code>city</code> bir property'dir. "Aynı şehirdeki müşterilerin aldıkları" gibi bir yol sorusu sorulacaksa şehir bir vertex olur ve müşteriler ona <code>LIVES_IN</code> edge'iyle bağlanır. Dolandırıcılık graph'larında adres ve telefon bu yüzden vertex'tir: halkayı onlar kurar (A6'daki resim).</p>
+{% endcall %}
+
+<h2 id="start" data-short="Başlangıç noktası, index"><span class="sec">A3</span>Bir sorgu nereden başlar: kimlik, label ve index</h2>
+<p>Bir graph sorgusu her zaman bir ya da birkaç vertex'ten başlar ve oradan yürür. Bu yüzden ilk soru şudur: database başlangıç vertex'ini nasıl bulur? Cevap sorgunun elinde ne olduğuna bağlıdır.</p>
+{{ k.concept("Başlangıç noktası (anchor)",
+   "Bir graph sorgusunun yürümeye başladığı vertex ya da vertex'ler. Database onu bir index ile bulur: kimlikle, label ve bir property değeriyle ya da yalnız label ile. Başlangıç noktası olmayan bir sorgu bütün vertex'leri okumak zorundadır.",
+   "Ürün sayfası sorgusu <code>P0001</code> kimlikli vertex'ten başlar: tek bir index araması.",
+   "Metro haritasında parmağını koyduğun istasyon. Nereden başlayacağını bilmiyorsan bütün istasyonlara bakarsın.") }}
+<p>Bir graph database bir index'i bir kaydın parçalarından kurar. Neptune her bilgiyi dört parçalı bir kayıt olarak saklar: özne (S), yüklem (P), nesne (O) ve graph (G). Bir edge'te S başlangıç vertex'i, P edge label'ı, O bitiş vertex'idir; bir property'de S vertex, P property adı, O değerdir. Neptune bu parçaları üç farklı sırayla üç index'te tutar (B1 ayrıntıyı gösterir). Sonuç şudur:</p>
+<table class="data">
+  <caption>bütün durumlar: başlangıç noktası nasıl bulunur?</caption>
+  <thead><tr><th>Sorgunun elinde ne var</th><th>Database ne yapar</th><th>Maliyet</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Vertex'in kimliği</td><td>Kimlik index'inde doğrudan bulur</td><td>En düşük: tek vertex</td><td><code>MATCH (p:Product {`~id`: 'P0001'})</code></td></tr>
+    <tr><td>Label ve bir property değeri</td><td>Property adı ve değeri ile index'te arar</td><td>Düşük: eşleşen vertex'ler kadar</td><td><code>MATCH (c:Customer {city: 'İstanbul'})</code></td></tr>
+    <tr><td>Bir property aralığı</td><td>Property adı ile index'te arar, değerleri karşılaştırır</td><td>Aralığın büyüklüğü kadar</td><td><code>WHERE p.price &lt; 500</code></td></tr>
+    <tr><td>Yalnız label</td><td>O türdeki bütün vertex'leri okur</td><td>Türün büyüklüğü kadar</td><td><code>MATCH (p:Product)</code>: 200 ürün</td></tr>
+    <tr><td>Hiçbir şey</td><td>Bütün vertex'leri okur</td><td>En yüksek: bütün graph</td><td><code>MATCH (n) RETURN count(n)</code></td></tr>
+    <tr><td>Bir property'nin içindeki kelime</td><td><b>Yapamaz</b> (çekirdekte); metin index'i yoktur. <code>CONTAINS</code> çalışır ama bir aramadır, index değildir</td><td>Türün büyüklüğü kadar</td><td>"Adında 'kulaklık' geçenler": Neptune'de OpenSearch'e kopyalanarak (B6)</td></tr>
+    <tr><td>Kendi tanımladığın bir index</td><td><b>Yok</b> (Neptune). Neo4j'de <code>CREATE INDEX</code> vardır; Neptune üç sabit index'i her şey için tutar</td><td>—</td><td>Bileşik bir "müşteri + tarih" index'i kurulamaz</td></tr>
+  </tbody>
+</table>
+<div class="flow">
+  <div class="box pk">istek<small>P0001'in önerileri</small></div><span class="arrow">→</span>
+  <div class="box">kimlik index'i<small>~id = P0001</small></div><span class="arrow">→</span>
+  <div class="box hit">başlangıç vertex'i<small>tek vertex okundu</small></div><span class="arrow">→</span>
+  <div class="box">yürüyüş başlar<small>A4: yalnız komşular</small></div>
+</div>
+<p class="flow-cap">Bir graph sorgusunun ilk adımı her zaman bir index aramasıdır; ikinci adımdan itibaren yürüyüş başlar. Başlangıç noktası olmayan bir sorguda ilk kutu "bütün vertex'ler" olur.</p>
+<h3>Öğretici veri ve identifier'ları</h3>
+<p>Bu sayfanın simülasyonları bu küçük graph'ı kullanır: dört müşteri, beş ürün ve on BOUGHT edge'i. Müşteri isimleri ve ürünler gerçek Lale Market kayıtlarıdır; edge'ler ve sipariş numaraları örnektir.</p>
+{{ k.sample("np_customers", "Customer vertex'leri (öğretici)", key=["~id"], pk="~id", sk="~label") }}
+{{ k.sample("np_products", "Product vertex'leri (öğretici)", key=["~id"], pk="~id", sk="~label") }}
+{{ k.sample("np_bought", "BOUGHT edge'leri (öğretici): her row bir edge", key=["~id"], ref=["~from", "~to"], pk="~from", sk="~to") }}
+{{ k.fig("neptune-teaching-graph.svg", "aynı on edge bir resim olarak. Soldaki sarı vertex'ler müşterilerdir, sağdaki mavi vertex'ler ürünlerdir; her ok bir BOUGHT edge'idir ve yanındaki etiket edge table'ındaki ~id'dir. P0001'e üç ok gelir (e1, e3, e6): üç alıcı. Zeynep Şahin (C00005) yalnız P0044 ve P0179'a bağlıdır.") }}
+<p>Her identifier'ın sahipliğini bir cümle olarak oku:</p>
+<table class="data">
+  <thead><tr><th>Identifier</th><th>Sahibi kim</th><th>Kim ödünç alır</th></tr></thead>
+  <tbody>
+    <tr><td>Müşteri id'si (<code>C00001</code>)</td><td>Sahibi mağazanın müşteri table'ıdır (Aurora).</td><td>Graph onu Customer vertex'inin <code>~id</code>'si olarak ödünç alır; edge'ler onu <code>~from</code>'da kullanır.</td></tr>
+    <tr><td>Ürün id'si (<code>P0001</code>)</td><td>Sahibi katalogdur.</td><td>Product vertex'inin <code>~id</code>'si ve edge'lerin <code>~to</code>'su.</td></tr>
+    <tr><td>Edge id'si (<code>e1</code>)</td><td>Sahibi graph'tır; başka hiçbir sistem onu bilmez.</td><td>Kimse ödünç almaz. Bir satın almayı dışarıdan bulmak için edge'in <code>order_id</code> property'si kullanılır.</td></tr>
+    <tr><td>Sipariş id'si (<code>O000003</code>)</td><td>Sahibi sipariş database'idir.</td><td>Edge onu <code>order_id</code> property'si olarak ödünç alır. Graph siparişin var olduğunu kontrol etmez; bunu kopyalayan iş yapar.</td></tr>
+  </tbody>
+</table>
+{% call k.ask("~id'yi ben mi seçerim, database mi verir?") %}
+<p>İkisi de olur. Neptune bir kimlik verilmezse kendisi bir UUID üretir. Lale Market kimliği kendisi verir (müşteri ve ürün id'leri), çünkü kaynak sistemdeki kimlikle aynı olması aramayı ve kopyalamayı kolaylaştırır. Aynı kimlikle ikinci bir vertex oluşturulamaz: <code>~id</code> benzersizdir.</p>
+{% endcall %}
+{% call k.ask("Neptune bir property'nin benzersiz olmasını sağlayabilir mi, örneğin e-posta?") %}
+<p>Hayır. Neptune'de property'ler için UNIQUE gibi bir kısıt yoktur; benzersiz olan yalnız <code>~id</code>'dir. E-postanın tek olması gerekiyorsa ya kimlik olarak kullanılır ya da yazma bir koşulla yapılır (MERGE, A7). Neo4j'de property kısıtları vardır; bu fark A10'daki matriste görünür.</p>
+{% endcall %}
+{{ k.quiz("npt-q1", "Hangi sorgu başlangıç noktasını en ucuz bulur?",
+   ["MATCH (n) WHERE n.name = 'Ayşe Yılmaz'", "MATCH (c:Customer {`~id`: 'C00001'})", "MATCH (c:Customer) WHERE c.name CONTAINS 'Ayşe'", "MATCH (p:Product)"],
+   1, "Kimlik index'i tek bir vertex verir. Birinci sorgu label vermediği için bütün türlerde arar, üçüncüsü bütün müşterileri okuyup metni karşılaştırır, dördüncüsü bütün ürünleri okur.") }}
+
+<h2 id="traversal" data-short="Traversal ve hop"><span class="sec">A4</span>Traversal: komşudan komşuya yürümek ve neden graph'ın boyutuna bağlı olmadığı</h2>
+{{ k.concept("Traversal",
+   "Bir başlangıç vertex'inden başlayıp edge'leri takip ederek komşu vertex'lere, oradan onların komşularına yürümek. Her adıma bir <dfn>hop</dfn> denir: bir edge'i bir kez takip etmek. Traversal yalnız yürüdüğü yolun üzerindeki edge'leri okur.",
+   "P0001'den başla, gelen BOUGHT edge'lerini takip et (hop 1: alıcılar), onların giden BOUGHT edge'lerini takip et (hop 2: aldıkları diğer ürünler).",
+   "Metroda Kadıköy'den Ayrılık Çeşmesi'ne, oradan aktarma ile Üsküdar'a: iki hop. Haritanın geri kalanına bakmazsın.") }}
+{{ k.concept("Komşuluk (adjacency)",
+   "Bir vertex'in edge'leriyle doğrudan bağlı olduğu vertex'ler. Bir vertex'in edge sayısına <b>derece</b> (degree) denir: giden edge'ler (out-degree) ve gelen edge'ler (in-degree). Graph database bir vertex'in edge'lerini o vertex'in yanında, tek bir index aralığı olarak tutar; bir sonraki hop bir aramadır, birleştirme değildir.",
+   "P0001'in gelen derecesi öğretici graph'ta 3'tür (e1, e3, e6). Canlı graph'ta 73'tür (B1).",
+   "Bir istasyondan geçen hatların listesi: Ayrılık Çeşmesi'nde metro ve Marmaray. İstasyonun panosunda yazar; bütün şehrin hat listesine bakmazsın.") }}
+<p>Traversal'ın maliyetini tek bir şey belirler: yolun üzerindeki vertex'lerin derecesi. Graph'ta 10 müşteri de olsa 10 milyon müşteri de olsa, P0001'den iki hop yürümek P0001'in alıcılarının ve onların edge'lerinin sayısı kadar iş yapar. Bu şema öğretici graph'ta bunu gösterir:</p>
+<div class="flow">
+  <div class="box pk">P0001<small>başlangıç (A3)</small></div><span class="arrow">→</span>
+  <div class="box">hop 1: gelen BOUGHT<small>e1, e3, e6: 3 edge</small></div><span class="arrow">→</span>
+  <div class="box">C00001, C00002, C00003<small>3 alıcı</small></div><span class="arrow">→</span>
+  <div class="box">hop 2: giden BOUGHT<small>e2, e4, e5, e7, e8 (+ P0001'e dönen 3)</small></div><span class="arrow">→</span>
+  <div class="box hit">P0016, P0175, P0044<small>okunan: 11 edge</small></div>
+</div>
+<p class="flow-cap">İki hop 11 edge okudu. Zeynep Şahin'in e9 ve e10 edge'leri hiç okunmadı, çünkü P0001'den hiçbir yol ona ulaşmaz. B2'deki simülasyon aynı yürüyüşü adım adım hesaplar ve aynı sayıyı verir.</p>
+<table class="data">
+  <caption>bütün durumlar: bir traversal ne kadar okur?</caption>
+  <thead><tr><th>Durum</th><th>Ne olur</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Küçük dereceli vertex'ler</td><td>Her hop birkaç edge okur; iki üç hop milisaniyelerdir</td><td>Bir kullanıcının 30 arkadaşı</td></tr>
+    <tr><td>Graph büyür, yolun üzerindeki dereceler aynı kalır</td><td>Maliyet değişmez</td><td>10 milyon müşteride de P0001'den iki hop aynı işi yapar</td></tr>
+    <tr><td>Her hop'ta derece çarpılır</td><td>İki hop yaklaşık d × d, üç hop d × d × d edge okur</td><td>30 arkadaş: iki hop 900, üç hop 27.000 edge</td></tr>
+    <tr><td>Yolun üzerinde çok yüksek dereceli bir vertex (supernode)</td><td>O vertex'ten geçen her sorgu onun bütün edge'lerini okur</td><td>50.000 takipçili bir yazar hesabı</td></tr>
+    <tr><td>Edge'i olmayan bir vertex</td><td>Hop hiçbir şey bulmaz; sorgu boş döner, hata vermez</td><td>Canlı graph'ta C00003 (Elif Kaya) henüz hiçbir şey almamış: kişisel öneri boş döner (B2). Öğretici graph'taki e6, e7 ve e8 edge'leri örnektir</td></tr>
+    <tr><td>Edge'i ters yönde takip etmek</td><td>Mümkündür ve edge label'ı verildiğinde aynı ucuzluktadır: Neptune edge'i iki ucundan da index'ler. Label verilmeyen ters hop, graph'ta çok sayıda farklı label varsa yavaşlar (B1)</td><td>Ürünün alıcıları: P0001'e gelen edge'ler</td></tr>
+    <tr><td>Bütün graph'ı bir kez gezmek</td><td><b>Traversal'ın işi değil</b>; bütün vertex'lerden başlamak bir taramadır. Bu iş için graph algoritmaları vardır (A9)</td><td>"Her ürünün alıcı sayısı"</td></tr>
+  </tbody>
+</table>
+{{ k.concept("Supernode",
+   "Çok yüksek dereceli bir vertex: binlerce ya da milyonlarca edge'i olan. Bir traversal'ın yolu ondan geçerse onun bütün edge'lerini okur ve maliyet bir anda büyür. Graph'ın sıcak noktasıdır, key-value database'teki hot partition'a benzer.",
+   "Canlı graph'ta en çok satan ürünlerin alıcı sayısı diğerlerinin birkaç katıdır. M2'deki örneklerde: 50.000 takipçili bir yazar, on binlerce kartın bağlı olduğu bir alışveriş merkezi adresi, milyonlarca kişinin kullandığı bir test@ e-postası.",
+   "Bir metro hattının bütün hatlarla kesiştiği büyük aktarma istasyonu: oradan geçen her yolcu en kalabalık koridora girer.") }}
+<table class="data">
+  <caption>bütün durumlar: supernode ile ne yapılır?</caption>
+  <thead><tr><th>Durum</th><th>Çözüm</th><th>Bedeli</th></tr></thead>
+  <tbody>
+    <tr><td>Supernode önceden biliniyor ve sorunun cevabına katkısı yok</td><td>Bir label ya da property ile işaretle ve sorguda dışarıda bırak</td><td>Küçük: bir koşul (M2 kart 1, 2, 8)</td></tr>
+    <tr><td>Supernode sorunun ta kendisi (en çok satan ürün)</td><td>Hop başına bir sınır (LIMIT) ya da örnekleme; ya da sonucu önceden hesaplayıp sakla</td><td>Cevap yaklaşık olur ya da eskir (M2 kart 3)</td></tr>
+    <tr><td>Supernode önceden bilinmiyor</td><td>Derecesini bir property olarak tut ve sorgu bir sınırın üstündeki vertex'te dursun</td><td>Her yazmada derece güncellenir (M2 kart 5)</td></tr>
+    <tr><td>Supernode'u database'in kendisinin yönetmesi</td><td><b>Yok.</b> Hiçbir graph database onu senin yerine dışarıda bırakmaz; model kararıdır</td><td>—</td></tr>
+  </tbody>
+</table>
+{% call k.predict("Öğretici graph'a bak. C00005'ten (Zeynep Şahin) başlayan iki hop'luk \"benim ürünlerimi alanlar\" sorusu kaç edge okur ve kime ulaşır?") %}
+<p>Hop 1: Zeynep'in iki giden edge'i (e9, e10), P0044 ve P0179'a. Hop 2: bu ürünlerin gelen edge'leri: P0044'e e8 ve e9, P0179'a yalnız e10. Toplam 5 edge okunur ve yeni bir müşteriye, Elif Kaya'ya (C00003, e8 üzerinden) ulaşılır. Ayşe ve Mert'in edge'leri okunmaz.</p>
+{% endcall %}
+{% call k.ask("Bir vertex'in edge'leri fiziksel olarak nerede? \"Yanında\" ne demek?") %}
+<p>Neptune'de her edge bir index'te başlangıç vertex'inin kimliğiyle başlayan bir key olarak durur, aynı edge ikinci bir index'te label'ıyla ve bitiş vertex'iyle başlayan bir key olarak da durur (B1 bu index'leri adlarıyla gösterir). Bu yüzden "P0001'in gelen edge'leri" de "C00001'in giden edge'leri" de tek bir index aralığıdır. Bazı ürünler (Neo4j) edge'leri vertex'e doğrudan işaretçilerle bağlar; adı farklıdır, sonuç aynıdır: bir sonraki hop bir birleştirme değil, bir aralık okumasıdır (B1).</p>
+{% endcall %}
+{% call k.ask("İlişkisel database de index ile hızlı değil mi? Fark nerede?") %}
+<p>İki hop için fark küçüktür; doğru index'lerle SQL de hızlıdır (B5 aynı soruyu SQL ile yazar). Fark derinlik ve dağılımla büyür: her hop bir birleştirmedir ve ara sonuç her birleştirmede çoğalır; bir supernode'da bu bir anda on binlerce row'dur ve "herhangi bir sayıda hop" recursive bir sorgu ister. Mimar gözüyle bölümündeki kartlarda bu fark, engine'in sorulara ve depolama biçimine uyumunu ölçen satırlarda puan olarak görünür.</p>
+{% endcall %}
+{{ k.quiz("npt-q2", "Lale Market'in graph'ı 10 kat büyüyor, ama P0001'in alıcı sayısı ve onların aldıkları aynı kalıyor. P0001'den iki hop'luk öneri sorgusunun okuduğu edge sayısına ne olur?",
+   ["10 kat artar", "Aynı kalır", "Yarıya iner", "Sorgu bütün graph'ı okumaya başlar"],
+   1, "Traversal yalnız yolun üzerindeki vertex'lerin edge'lerini okur. Graph'ın geri kalanı büyüse de P0001'in komşuları değişmediyse iş değişmez.") }}
+
+<h2 id="pattern" data-short="Pattern ve sorgu dilleri"><span class="sec">A5</span>Pattern: aradığın şekli çizmek</h2>
+{{ k.concept("Pattern",
+   "Sorgunun graph'ta aradığı şeklin bir çizimi: vertex'ler parantez, edge'ler köşeli parantez ve okla yazılır. Database başlangıç noktasından yürür ve bu şekle uyan her yolu bulur. openCypher ve Gremlin property graph'ın, SPARQL RDF'in sorgu dilleridir.",
+   "<code>(p:Product {`~id`: 'P0001'})&lt;-[:BOUGHT]-(c:Customer)-[:BOUGHT]-&gt;(rec:Product)</code>: P0001'i alan bir müşteri ve onun aldığı başka bir ürün.",
+   "Bir dedektifin panosundaki çizim: \"bu kişi, bir telefonla, şu kişiye bağlı\". Pano bir şekil arar; kimin olduğu sonra bulunur.") }}
+<p>Aynı soru üç dilde şöyle görünür. openCypher bir çizimdir, Gremlin bir adımlar zinciridir, SPARQL üçlü kalıplarıdır:</p>
+<table class="data">
+  <caption>bütün durumlar: graph sorgu dilleri</caption>
+  <thead><tr><th>Dil</th><th>Biçimi</th><th>"P0001'i alanlar"</th><th>Hangi veri</th><th>Hangi üründe</th></tr></thead>
+  <tbody>
+    <tr><td>openCypher</td><td>Bildirimsel: şekli çiz, database yolu seçer</td><td><code>MATCH (p {`~id`:'P0001'})&lt;-[:BOUGHT]-(c) RETURN c</code></td><td>Property graph</td><td>Neo4j (Cypher), Neptune, Neptune Analytics</td></tr>
+    <tr><td>Gremlin</td><td>Adım adım: her adım bir hop ya da bir filtre</td><td><code>g.V('P0001').in('BOUGHT')</code></td><td>Property graph</td><td>JanusGraph, Neptune</td></tr>
+    <tr><td>SPARQL</td><td>Üçlü kalıpları: <code>?c lm:bought lm:P0001</code></td><td><code>SELECT ?c WHERE { ?c lm:bought lm:P0001 }</code></td><td>RDF</td><td>Neptune, RDF store'ları</td></tr>
+    <tr><td>SQL</td><td>Graph dili değil; aynı soru birleştirme ile</td><td><code>SELECT customer_id FROM bought WHERE product_id = 'P0001'</code></td><td>Table</td><td>İlişkisel database'ler</td></tr>
+  </tbody>
+</table>
+<p>Bir pattern'in de durumları vardır. Bütün durumlar, Lale Market'in graph'ı üzerinde:</p>
+<table class="data">
+  <caption>bütün durumlar: bir pattern ne sorabilir?</caption>
+  <thead><tr><th>Pattern</th><th>Ne bulur</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Tek hop</td><td>Bir vertex'in komşuları</td><td><code>(c {`~id`:'C00001'})-[:BOUGHT]-&gt;(p)</code>: Ayşe'nin aldıkları</td></tr>
+    <tr><td>İki ya da üç hop</td><td>Komşuların komşuları</td><td>"Bunu alanlar şunları da aldı" (iki hop), kişisel öneri (üç hop, B2)</td></tr>
+    <tr><td>Edge property'si üzerinde koşul</td><td>Yalnız koşula uyan edge'lerden geçen yollar</td><td><code>-[b:BOUGHT]-&gt; WHERE b.qty &gt;= 2</code></td></tr>
+    <tr><td>Olmayan bir bağlantı (NOT pattern)</td><td>Bir yolun yokluğu bir koşuldur</td><td><code>WHERE NOT (me)-[:BOUGHT]-&gt;(rec)</code>: zaten aldıklarımı önerme</td></tr>
+    <tr><td>Toplam</td><td>Bulunan yolları sayar ve gruplar</td><td><code>count(DISTINCT c) AS score</code></td></tr>
+    <tr><td>Başlangıç noktası olmayan pattern</td><td>Çalışır, ama bütün eşleşmeleri aramak için bütün vertex'lerden başlar</td><td><code>MATCH (a)-[:BOUGHT]-&gt;(b) RETURN count(*)</code></td></tr>
+    <tr><td>Database içinde bir prosedür çağırmak (<code>CALL</code>)</td><td><b>Yapamaz</b> (Neptune Database openCypher'ında <code>CALL</code> desteklenmez); Neptune Analytics algoritmaları prosedür olarak çağırır (A9)</td><td><code>CALL algo.pageRank(...)</code></td></tr>
+  </tbody>
+</table>
+{{ k.fig("neptune-fraud-graph.png", "üç kişi ve paylaştıkları bilgiler. Justin ve Anna aynı hesaba (#12345) ve aynı adrese (1234 Elm St) bağlıdır; Matt, Justin ile aynı SSN'yi (111-11-1111) taşır. \"Justin'le bir bilgi üzerinden bağlı kişiler\" bir pattern'dir: kişi, bir bilgi vertex'i, başka bir kişi. Matt ile Anna arasında doğrudan bir ok yoktur, ama dört hop'luk bir yol vardır: Matt'ten SSN 111-11-1111'e, oradan Justin'e, Justin'den #12345 hesabına, oradan Anna'ya. A6 böyle bir yolu uzunluğu bilinmeden arar.") }}
+{% call k.ask("Pattern'i çizdim. Yolu hangi sırayla yürüyeceğine kim karar verir?") %}
+<p>openCypher ve SPARQL'de database karar verir: sorgu planlayıcısı başlangıç noktasını ve yönü seçer. Gremlin'de yazdığın adımların sırası büyük ölçüde yürüyüşün sırasıdır. Bu yüzden openCypher sorgusunda başlangıç noktasını açıkça vermek (bir <code>~id</code>) planlayıcının işini kolaylaştırır.</p>
+{% endcall %}
+{% call k.ask("Bir pattern bir yolu iki kez bulabilir mi?") %}
+<p>Evet. Ayşe P0001'i ve P0016'yı ikişer kez almışsa, "P0001'i alanların aldıkları" pattern'i Ayşe üzerinden dört yol bulur. Bu yüzden öneri sorgusu <code>count(DISTINCT c)</code> ile müşterileri sayar, yolları değil. Canlı graph'ta iki sayı çok farklıdır: B2 ikisini yan yana gösterir.</p>
+{% endcall %}
+{{ k.quiz("npt-q3", "Öğretici graph'ta \"P0001'i alanların aldığı diğer ürünler, alıcı sayısına göre\" sorusu hangi sonucu verir?",
+   ["P0016: 2, P0175: 2, P0044: 1", "P0016: 1, P0175: 1, P0044: 1, P0179: 1", "P0044: 2, P0179: 1", "P0001: 3"],
+   0, "P0001'in alıcıları C00001, C00002 ve C00003'tür. P0016'yı C00001 ve C00002, P0175'i C00002 ve C00003, P0044'ü yalnız C00003 almış. P0179'a P0001'den bir yol yoktur.") }}
+
+<h2 id="paths" data-short="Değişken uzunlukta path"><span class="sec">A6</span>Path: uzunluğu bilinmeyen yollar</h2>
+{{ k.concept("Path",
+   "Bir vertex'ten başka bir vertex'e giden vertex ve edge dizisi. Uzunluğu edge sayısıdır. <dfn>Değişken uzunlukta path</dfn>, hop sayısı bir aralıkla verilen yoldur: openCypher'da <code>-[:BOUGHT*1..6]-</code> \"1 ile 6 arasında BOUGHT edge'i\" demektir.",
+   "Zeynep Şahin'den Ayşe Yılmaz'a: C00005 → P0044 → C00003 → P0001 → C00001, dört hop.",
+   "Metroda iki istasyon arasındaki güzergâh. Kaç aktarma olacağını önceden bilmezsin; harita en kısa olanı gösterir.") }}
+<p>Uzunluk bilinmediğinde database yolu nasıl arar? Genel yöntem <b>genişlik öncelikli arama</b>dır (breadth-first search, BFS): önce bir hop uzaktaki bütün vertex'ler, sonra iki hop uzaktakiler, hedef bulunana ya da sınır dolana kadar. Bir vertex ikinci kez ziyaret edilmez; böylece döngüler sonsuz bir aramaya dönüşmez.</p>
+{{ k.fig("neptune-bfs-tree.png", "numaralar ziyaret sırasıdır. 1 başlangıçtır; önce bir seviye aşağıdaki 2, 3 ve 4, sonra iki seviye aşağıdaki 5, 6, 7 ve 8 ziyaret edilir. Değişken uzunlukta bir path araması bu sırayla yürür: hedef 3. seviyede bulunursa 4. seviyeye hiç inilmez. B3'teki simülasyon aynı sırayı öğretici graph'ta gösterir.") }}
+<table class="data">
+  <caption>bütün durumlar: yolun uzunluğu</caption>
+  <thead><tr><th>Durum</th><th>openCypher</th><th>Ne olur</th></tr></thead>
+  <tbody>
+    <tr><td>Sabit uzunluk</td><td><code>-[:BOUGHT]-&gt;()&lt;-[:BOUGHT]-</code></td><td>Tam olarak iki hop; maliyet A4'teki gibi</td></tr>
+    <tr><td>Aralık</td><td><code>-[:BOUGHT*1..6]-</code></td><td>1 ile 6 hop arasındaki bütün yollar; sınır işi sınırlar</td></tr>
+    <tr><td>Sınırsız</td><td><code>-[:BOUGHT*]-</code></td><td>Çalışır, ama bağlı olan bütün graph'a yayılabilir; bir supernode'a değerse milyonlarca yol. Her zaman bir üst sınır ver</td></tr>
+    <tr><td>Döngü (bir yol aynı vertex'e geri döner)</td><td>—</td><td>openCypher bir çözümde her edge'i en fazla bir kez geçer; sonsuz döngü olmaz</td></tr>
+    <tr><td>Yolun kendisini döndürmek</td><td><code>MATCH p = (...) RETURN p, length(p)</code></td><td>Vertex'ler ve edge'ler sırayla döner; bir analist "neden" sorusunu görür</td></tr>
+    <tr><td>En kısa yol (<code>shortestPath()</code>)</td><td><code>shortestPath(...)</code></td><td><b>Yapamaz</b> (Neptune Database openCypher'ında desteklenmez). Gremlin'de <code>repeat()…until()</code>, Neptune Analytics'te en kısa yol algoritmaları ya da kısa bir aralık ve <code>ORDER BY length(p) LIMIT 1</code> kullanılır (B3)</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Sınırsız bir path neden tehlikeli? Döngü engelleniyor.") %}
+<p>Döngü engellenir, ama yol sayısı engellenmez. İyi bağlı bir graph'ta her vertex birkaç hop'ta neredeyse her vertex'e ulaşır: arkadaşlık ağlarında "altı derece" fikri budur. Sınırsız bir arama bütün bağlı graph'ı gezebilir ve bir supernode'dan geçerse milyonlarca yol üretir. Neptune'de sorgunun bir süre sınırı vardır ve aşınca sonlandırılır (B5); doğru tasarım sınırı sorguya yazmaktır.</p>
+{% endcall %}
+{% call k.ask("İlişkisel database'te bu soru hiç sorulamaz mı?") %}
+<p>Sorulabilir: PostgreSQL'in <code>WITH RECURSIVE</code>'i bir seviyeyi bulur, sonra onu kullanarak bir sonrakini bulur. Yolun dizisini ve döngü kontrolünü sen yazarsın; her seviye bir index araması ve birleştirmedir. Küçük bir graph'ta ve az sorguda bu yeterlidir; M2'deki kart 6 (ağ topolojisi) tam olarak bu yüzden Aurora'yla kazanılır.</p>
+{% endcall %}
+{{ k.quiz("npt-q4", "Bir dolandırıcılık ekibi \"bu kart, herhangi bir sayıda adımda, işaretli bir hesaba bağlı mı?\" diye soruyor. En iyi sorgu tasarımı hangisi?",
+   ["-[*]- ile sınırsız bir path, bütün sonuçlar", "-[*1..4]- ile bir aralık ve LIMIT 1, yolla birlikte", "shortestPath() ile en kısa yol", "Bütün kartları okuyup uygulamada aramak"],
+   1, "Bir üst sınır işi sınırlar, LIMIT 1 ilk yolu bulunca durur ve yol inceleme için döner. Sınırsız arama bütün bağlı graph'a yayılabilir; shortestPath() Neptune Database openCypher'ında desteklenmez.") }}
+
+<h2 id="writes" data-short="Yazmalar ve transaction"><span class="sec">A7</span>Yazmalar ve kurallar: vertex, edge ve MERGE</h2>
+<p>Bir graph'a yazmak iki tür kayda yazmaktır: vertex'ler ve edge'ler. Bir edge'in iki ucu var olmak zorunda olduğu için (A2), sıra önemlidir: önce vertex'ler, sonra edge. Bütün durumlar şöyledir:</p>
+<table class="data">
+  <caption>bütün durumlar: yazma yolları</caption>
+  <thead><tr><th>Durum</th><th>openCypher</th><th>Ne olur</th></tr></thead>
+  <tbody>
+    <tr><td>Yeni bir vertex</td><td><code>CREATE (:Customer {`~id`:'C01001', name:'Deniz'})</code></td><td>Yazar. Aynı <code>~id</code> varsa hata verir</td></tr>
+    <tr><td>Yeni bir edge</td><td><code>MATCH (c {`~id`:$c}), (p {`~id`:$p}) CREATE (c)-[:BOUGHT {order_id:$o}]-&gt;(p)</code></td><td>İki ucu bulur ve edge'i yazar. Her CREATE yeni bir edge'tir; aynı iki vertex arasında ikinci bir edge de olur</td></tr>
+    <tr><td>Yoksa oluştur (upsert)</td><td><code>MERGE (c)-[:BOUGHT {order_id:$o}]-&gt;(p)</code></td><td>Önce arar; varsa bir şey yazmaz, yoksa oluşturur. Yeniden denenen bir istek ikinci bir edge bırakmaz</td></tr>
+    <tr><td>Property değiştirmek</td><td><code>SET c.city = 'Ankara'</code></td><td>Yalnız o property değişir</td></tr>
+    <tr><td>Edge silmek</td><td><code>MATCH ()-[b:BOUGHT {order_id:'W000017'}]-&gt;() DELETE b</code></td><td>Yalnız edge gider; vertex'ler kalır. (W ile başlayan sipariş numaraları mağazada ziyaretçinin verdiği siparişlerdir, C3.)</td></tr>
+    <tr><td>Edge'leri olan bir vertex'i silmek</td><td><code>DELETE c</code></td><td><b>Yapamaz</b>: edge'leri varken vertex silinemez, çünkü uçsuz edge kalırdı. <code>DETACH DELETE c</code> önce edge'leri, sonra vertex'i siler</td></tr>
+    <tr><td>Bir pattern'e uyan her şeyi değiştirmek</td><td><code>MATCH (...) SET ...</code> ya da <code>DELETE</code></td><td>Yapar: bir graph database'te toplu yazma bir pattern'dir. Lale Market'in Reset'i ziyaretçi siparişlerinin bütün edge'lerini tek sorguyla siler (C3)</td></tr>
+    <tr><td>Bir property için kısıt (UNIQUE, NOT NULL)</td><td>—</td><td><b>Yok</b> (Neptune). Benzersiz olan yalnız <code>~id</code>'dir; kurallar MERGE ve uygulama ile korunur</td></tr>
+  </tbody>
+</table>
+{{ k.concept("Transaction",
+   "Birkaç yazmanın ya hepsinin ya hiçbirinin uygulanması. Tek bir openCypher sorgusu bir transaction'dır: sorgunun oluşturduğu vertex'ler ve edge'ler birlikte commit edilir ya da birlikte geri alınır. Okuma ve yazmaların birbirini nasıl gördüğünü <dfn>izolasyon</dfn> belirler.",
+   "Bir siparişin üç satırı tek bir <code>UNWIND</code> sorgusuyla üç BOUGHT edge'i olarak yazılır: üçü birlikte görünür ya da hiçbiri.",
+   "Bir bankada iki hesap arasında havale: para bir hesaptan çıkar ve diğerine girer, arada bir yerde kaybolmaz.") }}
+<p>İki istek aynı anda aynı şeyi yazmak isterse ne olur? Bu şema iki yeniden denemenin iki biçimini gösterir: koşulsuz CREATE ve MERGE.</p>
+<div class="flow">
+  <div class="box pk">istek 1: CREATE<small>C00001 → P0044, W000017</small></div><span class="arrow">→</span>
+  <div class="box">commit<small>e101 yazıldı, cevap kayboldu</small></div><span class="arrow">→</span>
+  <div class="box">istek 2: aynı CREATE<small>uygulama tekrar dener</small></div><span class="arrow">→</span>
+  <div class="box miss">ikinci edge<small>e102: aynı satın alma iki kez</small></div>
+</div>
+<div class="flow">
+  <div class="box pk">istek 1: MERGE<small>C00001 → P0044, W000017</small></div><span class="arrow">→</span>
+  <div class="box">commit<small>e101 yazıldı, cevap kayboldu</small></div><span class="arrow">→</span>
+  <div class="box">istek 2: aynı MERGE<small>önce arar, e101'i bulur</small></div><span class="arrow">→</span>
+  <div class="box hit">tek edge<small>yeniden deneme güvenli</small></div>
+</div>
+<p class="flow-cap">Aynı yeniden denemenin iki sonucu. MERGE bir okuma ve bir yazmadır; yazan sorgu okuduğu aralığı kilitler, böylece aynı anda gelen iki MERGE edge'i iki kez oluşturamaz. B4'teki iki simülasyon bunu adım adım oynatır.</p>
+<table class="data">
+  <caption>bütün durumlar: eşzamanlı okuma ve yazma (Neptune Database)</caption>
+  <thead><tr><th>Durum</th><th>Ne olur</th><th>Mekanizmanın adı</th></tr></thead>
+  <tbody>
+    <tr><td>Okuma sorgusu bir yazmayla aynı anda</td><td>Okuma, başladığı andaki tutarlı bir görüntüyü (snapshot) okur; yarım yazılmış veriyi görmez ve yazmayı bekletmez</td><td>snapshot isolation</td></tr>
+    <tr><td>Yazan sorgu bir şeyi okuyor</td><td>Okuduğu index aralığını kilitler; başka bir yazma o aralığa ekleme ya da silme yapamaz</td><td>READ COMMITTED + range lock</td></tr>
+    <tr><td>İki yazma aynı aralığa</td><td>İkincisi bekler; AWS'e göre en fazla 60 saniye. Kilit açılmazsa geri alınır ve uygulama yeniden dener</td><td>lock-wait timeout</td></tr>
+    <tr><td>İki yazma birbirini bekliyor (deadlock)</td><td>Neptune birini hemen geri alır</td><td>deadlock</td></tr>
+    <tr><td>Bir read replica'dan okuma</td><td>Writer'ın birkaç milisaniye gerisinde olabilir; az önceki yazmayı görmek zorunluysa writer endpoint'inden okunur</td><td>replica lag (C2)</td></tr>
+  </tbody>
+</table>
+<p>Kaynak: <a href="https://docs.aws.amazon.com/neptune/latest/userguide/transactions-neptune.html">Transaction Isolation Levels in Neptune</a>. Neptune Analytics'te yazan sorguların okumaları da snapshot üzerindedir, yani bir derece daha gevşektir. Pratik anlamı: "stok 0'dan büyükse 1 düş" gibi okunan bir değere bağlı bir yazmada iki eşzamanlı sorgu aynı snapshot'ı görüp ikisi de yazabilir; Neptune Database'te okunan aralık kilitlendiği için ikinci sorgu bekler. MERGE ve silme gibi adımlar eşzamanlı yazmaları ayrıca kontrol eder; bu yüzden M2'de bir koşula bağlı yazma olmayan kartlarda (kart 2, 5) fark puana yansımaz (<a href="https://docs.aws.amazon.com/neptune-analytics/latest/userguide/query-isolation-level.html">Neptune Analytics isolation</a>).</p>
+{% call k.ask("MERGE her zaman CREATE'ten iyi mi?") %}
+<p>Hayır. MERGE önce okur, sonra yazar; okuma bir bedeldir ve kilit alır. Yeni olduğundan emin olduğun kayıtlar (ilk yükleme, yeni bir siparişin kendi id'siyle) CREATE ile yazılır. Bir isteğin tekrar gelebileceği her yerde (ağ hatası, kuyruktan tekrar okunan mesaj) MERGE ile ve iş kimliğiyle (order_id) yazılır.</p>
+{% endcall %}
+{% call k.ask("Bir yazma çakışma hatası alırsa veri bozulur mu?") %}
+<p>Hayır. Geri alınan transaction'ın hiçbir parçası görünmez. Uygulama hatayı alır ve aynı isteği tekrar gönderir; bu yüzden yeniden denenebilir yazmalar MERGE ile yazılır. M2'deki kart 5'te (identity graph) aynı identifier'ı aynı anda gören iki olay bu durumu yaşar.</p>
+{% endcall %}
+{{ k.quiz("npt-q5", "Bir müşteriyi silmek istiyorsun; onun 92 BOUGHT edge'i var. Hangi sorgu çalışır?",
+   ["MATCH (c {`~id`:'C00001'}) DELETE c", "MATCH (c {`~id`:'C00001'}) DETACH DELETE c", "DELETE FROM Customer WHERE id = 'C00001'", "MATCH (c {`~id`:'C00001'}) SET c = NULL"],
+   1, "Edge'leri olan bir vertex DELETE ile silinemez, çünkü uçsuz edge kalırdı. DETACH DELETE önce 92 edge'i, sonra vertex'i tek bir transaction'da siler.") }}
+
+<h2 id="lifecycle" data-short="Yükleme, akış, süre sonu"><span class="sec">A8</span>Verinin yaşamı: toplu yükleme, değişiklik akışı ve süre sonu</h2>
+<p>Bir graph çoğu zaman başka bir sistemin kayıtlarından kurulur (siparişler, envanter, ontoloji) ve onunla birlikte yaşar. Üç soru vardır: veri ilk kez nasıl girer, değişiklik nasıl dışarı çıkar, eski veri nasıl gider?</p>
+{{ k.concept("Toplu yükleme (bulk load)",
+   "Milyonlarca vertex ve edge'i tek tek sorgu göndermek yerine dosyalardan bir iş olarak yüklemek. Dosyalar bir sözleşmeye uyar: vertex dosyasında <code>~id</code> ve <code>~label</code>, edge dosyasında <code>~id</code>, <code>~from</code>, <code>~to</code> ve <code>~label</code> kolonları.",
+   "Öğretici edge table'ının kolon adları (<code>~id</code>, <code>~from</code>, <code>~to</code>, <code>~label</code>) Neptune bulk loader'ının CSV kolon adlarıdır.",
+   "Bir kütüphaneye kitapları tek tek getirmek yerine bir kamyonla ve bir listeyle teslim etmek.") }}
+{{ k.fig("neptune-bulk-load.png", "üç adım: istemci veriyi bir S3 bucket'ına kopyalar (Copy Data to Bucket), Neptune'e bir yükleme komutu gönderir (Load Command), Neptune da graph verisini bir IAM role ile S3'ten okur. Veri istemciden Neptune'e doğrudan akmaz; S3 üzerinden gelir.") }}
+{{ k.concept("Değişiklik akışı (change stream)",
+   "Graph'taki her yazmanın (vertex ve edge ekleme, değiştirme, silme) sırayla kaydedildiği ve dışarıdan okunabilen bir liste. Başka bir program bu listeyi okur ve tepki verir: bir arama index'ini günceller, bir analitik kopyayı besler.",
+   "Ziyaretçi bir ürün aldığında yazılan BOUGHT edge'i akışa bir kayıt düşürür; bir program onu okuyup bir arama index'ini güncelleyebilir.",
+   "Bir bankanın hesap hareketleri listesi: her işlem sırayla yazılır ve başka bir uygulama okuyabilir.") }}
+{{ k.fig("neptune-streams.png", "writer ve reader instance'larının her birinde iki endpoint var: sorgular için Query Endpoint, akış için Streams Endpoint. Writer Application yalnız sorgu endpoint'ini kullanır; Streams Consumer Application akış endpoint'lerinden değişiklikleri okur. Yazan program akışı bilmez; okuyan program ayrıdır.") }}
+<table class="data">
+  <caption>bütün durumlar: verinin yaşamı</caption>
+  <thead><tr><th>Durum</th><th>Graph database'te</th><th>Neptune'de</th></tr></thead>
+  <tbody>
+    <tr><td>İlk yükleme, milyonlarca kayıt</td><td>Dosyalardan toplu yükleme</td><td>Bulk loader, S3'ten CSV (property graph) ya da RDF dosyaları</td></tr>
+    <tr><td>Sürekli küçük yazmalar</td><td>Sorgularla</td><td>openCypher <code>CREATE</code>/<code>MERGE</code>, çoğu zaman <code>UNWIND</code> ile gruplar hâlinde</td></tr>
+    <tr><td>Değişikliği dışarı vermek</td><td>Değişiklik akışı</td><td>Neptune Streams; açılınca kayıtlar 1 ile 90 gün arası (varsayılan 7) tutulur</td></tr>
+    <tr><td>Kendini silen veri (süre sonu, TTL)</td><td>Bazı ürünlerde var</td><td><b>Yok.</b> Neptune'de TTL yoktur; eski edge'leri zamanlanmış bir silme işi siler (AWS blogundaki desende silinecek her vertex ya da edge'in kimliği TTL'li bir DynamoDB item'ına yazılır; DynamoDB item'ı süresi dolunca silince değişiklik akışı bir Lambda fonksiyonunu tetikler ve Lambda aynı kaydı Neptune'den siler. Aşağıdaki "Aklına şu gelebilir" kutusu daha basit bir deseni gösterir: zamanlanmış bir silme işi)</td></tr>
+    <tr><td>Geçmişe dönmek</td><td>Yedek ve geri yükleme</td><td>Otomatik yedekler, 35 güne kadar point-in-time restore (C2)</td></tr>
+    <tr><td>Metin aramasına kopyalamak</td><td>Ayrı bir search engine</td><td>Neptune'den OpenSearch'e akış üzerinden kopya (B6)</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Graph bir kopyaysa (siparişlerden kurulmuşsa), kaynak ile graph nasıl aynı kalır?") %}
+<p>Kopyalayan bir iş gerekir: Lale Market'te seed graph'ı baştan kurar, mağazadaki her satın alma ise yeni edge'leri hemen yazar (C3). Gerçek bir sistemde bu iş, sipariş database'inin değişiklik akışından beslenir. Bu iş bir bakım yüküdür ve Mimar gözüyle bölümündeki kartlarda operasyon satırında puan olarak sayılır: "kopyalama hattı kurulur ve izlenir".</p>
+{% endcall %}
+{% call k.ask("TTL yoksa geçici bağlantılar (bir oturumun cihazı, bir haftalık kampanya) nasıl gider?") %}
+<p>Edge'e bir son kullanma zamanı property'si yazılır ve zamanlanmış bir iş süresi geçenleri siler: <code>MATCH ()-[s:SEEN_WITH]-() WHERE s.expires_at &lt; $now DELETE s</code>. Okuyan sorgular da aynı koşulu kullanır, böylece silme gecikse bile süresi geçmiş edge sayılmaz. Bu, key-value database'lerin TTL'inden fazla iştir; Mimar gözüyle bölümünde süre sonu isteyen bir kart olsaydı, engine'in veri yaşam döngüsünü ölçen satırda puan kaybettirirdi.</p>
+{% endcall %}
+
+<h2 id="algorithms" data-short="Graph algoritmaları"><span class="sec">A9</span>Bütün graph üzerinde hesaplar: algoritmalar ve vector araması</h2>
+<p>Buraya kadarki her soru bir başlangıç noktasından yayıldı. Bazı sorular ise bütün graph'ı ister: "en etkili müşteri kim?", "graph kaç ayrı topluluktan oluşuyor?", "hangi tedarikçi en çok ürünün tek kaynağı?". Bunlar bir traversal değil, bütün vertex'leri birkaç tur gezen bir hesaptır.</p>
+{{ k.concept("Graph algoritması",
+   "Bütün graph'ın yapısından bir sonuç hesaplayan, çoğu zaman her vertex'i ve edge'i birkaç tur gezen bir yöntem. Örnekler: <b>PageRank</b> (bir vertex'in kendisine gelen bağlantılara göre önemi), <b>bağlı bileşenler</b> (birbirine bir yolla bağlı vertex grupları), <b>topluluk bulma</b> (Louvain), <b>benzerlik</b> (Jaccard: ortak komşu oranı).",
+   "\"Her ürünün PageRank'i\" ya da \"müşterileri birlikte aldıklarına göre topluluklara ayır\". Lale Market bunları kullanmaz; M2'deki kart 7 (tedarik zinciri) bir use case olarak puanlar.",
+   "Bir şehrin bütün metro haritasına bakıp \"en çok aktarma alan istasyon hangisi?\" diye sormak: bir yolculuk değil, haritanın bir analizi.") }}
+{{ k.fig("neptune-pagerank.png", "her dairenin büyüklüğü ve yüzdesi PageRank'idir. B'ye çok sayıda ok gelir ve en büyüktür (%38,4); C'ye yalnız bir ok gelir, ama o ok çok önemli B'den geldiği için C de büyüktür (%34,3). Bir vertex'in önemi yalnız gelen edge sayısından değil, onları gönderenlerin öneminden gelir; bunu hesaplamak için bütün graph birkaç tur gezilir.") }}
+<table class="data">
+  <caption>bütün durumlar: yerel sorgu mu, bütün graph hesabı mı?</caption>
+  <thead><tr><th>Soru</th><th>Türü</th><th>Neptune Database</th><th>Neptune Analytics</th></tr></thead>
+  <tbody>
+    <tr><td>"P0001'i alanların aldıkları"</td><td>Yerel: bir başlangıçtan yayılır</td><td>Güçlü (A4, A5)</td><td>Güçlü</td></tr>
+    <tr><td>"Bu kart işaretli bir hesaba bağlı mı?"</td><td>Yerel, değişken uzunlukta</td><td>Güçlü (A6)</td><td>Güçlü</td></tr>
+    <tr><td>"Her ürünün PageRank'i"</td><td>Bütün graph, birkaç tur</td><td><b>Yok</b>: algoritma engine'de değildir; veri dışarı taşınır</td><td>Hazır algoritma (openCypher prosedürü)</td></tr>
+    <tr><td>"Graph kaç topluluktan oluşur?"</td><td>Bütün graph</td><td><b>Yok</b></td><td>Bağlı bileşenler, Louvain, Label Propagation</td></tr>
+    <tr><td>"Bu metne anlamca en yakın 10 vertex"</td><td>Vector araması (embedding)</td><td><b>Yok</b></td><td>Vector index'i (HNSW), graph başına bir tane</td></tr>
+    <tr><td>Saniyede binlerce kısa sorgu</td><td>Yerel, yoğun</td><td>Replica'larla ölçeklenir</td><td>Tek instance; replica'lar yalnız yedektir</td></tr>
+  </tbody>
+</table>
+<p>Neptune bu iki işi iki ayrı engine'le sunar. <b>Neptune Database</b> disk üzerinde, altı kopyalı bir volume'da, bir vertex'ten başlayan çok sayıda kısa sorgu için tasarlanmıştır. <b>Neptune Analytics</b> graph'ı tek bir instance'ın belleğine yükler ve 25'ten fazla algoritmayı ve vector aramasını openCypher prosedürleri olarak sunar (<a href="https://docs.aws.amazon.com/neptune-analytics/latest/userguide/algorithms.html">Neptune Analytics algorithms</a>). Aynı veri modeli ve aynı sorgu dili, ama farklı engine'ler: bu yüzden M2'deki kartlarda ikisinin engine uyumu (R1) ayrı puanlanır ve iş yüküne göre biri ya da öteki kazanır.</p>
+{% call k.ask("Neptune Database ile Neptune Analytics aynı servisin iki boyutu mu?") %}
+<p>Hayır, iki ayrı engine'dir. Ortak olan property graph modeli ve openCypher'dır. Farklı olan engine'in çalışma biçimidir: veri nerede durur (disk ve buffer cache ya da bellek), hangi araçlar vardır (üç index ya da algoritmalar ve vector index), yazmalar nasıl izole edilir (A7) ve nasıl ölçeklenir (replica'lar ya da tek instance). AWS'in tarifi: Neptune Database 100.000 sorgu/saniyeye ölçeklenen, Multi-AZ bir graph database'tir; Neptune Analytics büyük graph'ları bellekte analiz eden bir analitik engine'dir (<a href="https://docs.aws.amazon.com/neptune-analytics/latest/userguide/neptune-analytics-vs-neptune-database.html">When to use Neptune Analytics</a>). Neptune Serverless ise Neptune Database'in bir kapasite biçimidir, ayrı bir engine değildir.</p>
+{% endcall %}
+{% call k.ask("İkisini birlikte kullanmak mantıklı mı?") %}
+<p>Çoğu zaman en doğru cevap budur. Ödeme anındaki dolandırıcılık kontrolü Neptune Database'te, gece bütün graph'ta halka (topluluk) taraması Neptune Analytics'te çalışır; Analytics'in bulduğu halkalar Database'teki vertex'lere bir property olarak yazılır. M2'deki kart 2 ve kart 7 bu ayrımı puanlarla gösterir.</p>
+{% endcall %}
+
+<h2 id="summary" data-short="Ö1–Ö8 özeti ve matris"><span class="sec">A10</span>Özet: graph'ın sekiz özelliği ve hangi üründe olduğu</h2>
+<p>Bölüm A'nın her kavramı bir özelliğe karşılık gelir. Bu sekiz özellik sayfanın geri kalanının ortak dilidir: Mimar gözüyle bölümü her use case'i bu numaralarla anlatır ve M1 bu listeyi sinyaller ve sınırlarıyla genişletir.</p>
+<table class="data">
+  <caption>Ö1–Ö8: graph database'in özellikleri</caption>
+  <thead><tr><th>No</th><th>Özellik</th><th>Tek cümleyle</th><th>Tanım</th></tr></thead>
+  <tbody>
+    <tr><td><b>Ö1</b></td><td>Property graph: vertex, edge, label, property (ve RDF)</td><td>Şeyler ve bağlantılar ayrı kayıtlardır; ikisinin de türü ve özellikleri vardır.</td><td>A2</td></tr>
+    <tr><td><b>Ö2</b></td><td>Başlangıç noktası: kimlik ve property index'leri</td><td>Sorgu ilk vertex'i bir index'le bulur; başlangıç yoksa bütün vertex'leri okur.</td><td>A3</td></tr>
+    <tr><td><b>Ö3</b></td><td>Traversal: komşudan komşuya</td><td>Her hop yalnız yolun üzerindeki edge'leri okur; maliyet komşulara bağlıdır, graph'ın boyutuna değil.</td><td>A4</td></tr>
+    <tr><td><b>Ö4</b></td><td>Pattern ile sorgu (openCypher, Gremlin, SPARQL)</td><td>Aranan şekil çizilir; database ona uyan bütün yolları bulur.</td><td>A5</td></tr>
+    <tr><td><b>Ö5</b></td><td>Değişken uzunlukta path</td><td>Uzunluğu bilinmeyen yollar tek sorguda, döngüye girmeden aranır.</td><td>A6</td></tr>
+    <tr><td><b>Ö6</b></td><td>Transaction'lar</td><td>Bir sorgunun yazmaları birlikte uygulanır; okumalar tutarlı bir görüntü görür.</td><td>A7</td></tr>
+    <tr><td><b>Ö7</b></td><td>Toplu yükleme ve değişiklik akışı</td><td>Graph dosyalardan kurulur ve değişiklikleri sırayla dışarı verir.</td><td>A8</td></tr>
+    <tr><td><b>Ö8</b></td><td>Bütün graph algoritmaları ve vector araması</td><td>PageRank, topluluklar, benzerlik ve embedding araması bütün graph üzerinde çalışır.</td><td>A9</td></tr>
+  </tbody>
+</table>
+<p>Bu sekiz özellik her graph database'te aynı biçimde yoktur. Matris A2'deki "hangi üründe" sütununu genelleştirir:</p>
+<table class="data fmatrix">
+  <caption>özellik × ürün matrisi: ✓ var · ½ kısmen ya da farklı biçimde · ✗ yok</caption>
+  <thead><tr><th>Özellik</th><th>Neo4j</th><th>JanusGraph (Apache TinkerPop)</th><th>Amazon Neptune (Database / Analytics)</th></tr></thead>
+  <tbody>
+    <tr><td><b>Ö1</b> Property graph (ve RDF)</td><td class="p">½ Property graph; RDF çekirdekte yok (eklentiyle)</td><td class="p">½ Property graph; RDF yok</td><td class="y">✓ Property graph ve RDF, aynı cluster'da ayrı veriler</td></tr>
+    <tr><td><b>Ö2</b> Başlangıç noktası, index'ler</td><td class="y">✓ Kendi tanımladığın index'ler ve kısıtlar (UNIQUE)</td><td class="p">½ Index'ler var; büyük aramalar için dışarıda bir search engine kullanılır</td><td class="p">½ Üç sabit index her şeyi kapsar; kendi index'in ve kısıtın yok</td></tr>
+    <tr><td><b>Ö3</b> Traversal</td><td class="y">✓ Vertex'ler edge'lere doğrudan işaretçilerle bağlı</td><td class="y">✓ Edge'ler vertex'in yanında, altta Cassandra ya da HBase</td><td class="y">✓ Edge'ler index aralıkları olarak, iki yönde</td></tr>
+    <tr><td><b>Ö4</b> Pattern ile sorgu</td><td class="y">✓ Cypher</td><td class="p">½ Gremlin (adım adım; bildirimsel pattern değil)</td><td class="y">✓ openCypher, Gremlin ve SPARQL</td></tr>
+    <tr><td><b>Ö5</b> Değişken uzunlukta path</td><td class="y">✓ Değişken uzunluk ve shortestPath()</td><td class="y">✓ Gremlin repeat()</td><td class="p">½ Değişken uzunluk var; Database openCypher'ında shortestPath() yok (Gremlin ve Analytics'te var)</td></tr>
+    <tr><td><b>Ö6</b> Transaction'lar</td><td class="y">✓ ACID</td><td class="p">½ Altındaki storage'a bağlı; dağıtık çalışmada zayıflar</td><td class="y">✓ Snapshot okuma, range lock'lu yazma (Database)</td></tr>
+    <tr><td><b>Ö7</b> Toplu yükleme ve akış</td><td class="p">½ Toplu yükleme aracı; değişiklik akışı ayrı bir bileşen</td><td class="p">½ Toplu yükleme kütüphanesi; akış yok</td><td class="y">✓ S3'ten bulk loader ve Neptune Streams (1–90 gün)</td></tr>
+    <tr><td><b>Ö8</b> Algoritmalar ve vector</td><td class="y">✓ Graph Data Science kütüphanesi ve vector index'i</td><td class="p">½ Spark ile dışarıda (OLAP)</td><td class="p">½ Database'te yok; Analytics'te 25+ algoritma ve vector araması</td></tr>
+  </tbody>
+</table>
+<p>Matris bir ürünün "iyi" ya da "kötü" olduğunu söylemez. Neptune'ün sabit üç index'i kendi index'ini kuramamak demektir, ama aynı zamanda index tasarlamak zorunda olmamak demektir. Ö8'in Neptune'de iki ayrı engine'de olması, M2'de Neptune Database'in iki kartı kardeşine kaybetmesinin nedenidir. Soru her zaman şudur: iş yükü hangi özelliği istiyor?</p>
+{{ k.quiz("npt-q6", "Bir ekip her gece bütün müşteri graph'ını topluluklara ayırmak, gündüz ise her ödemede üç hop'luk bir kontrol yapmak istiyor. Matrise göre Neptune'de doğru yerleşim hangisi?",
+   ["İkisi de Neptune Database'te", "İkisi de Neptune Analytics'te", "Gece hesabı Neptune Analytics'te (Ö8), gündüz kontrolü Neptune Database'te (Ö5)", "Gece hesabı Neptune Database'te, gündüz kontrolü Neptune Analytics'te"],
+   2, "Topluluk bulma bütün graph'ı gezen bir algoritmadır ve Neptune'de Analytics'tedir. Ödeme anındaki kontrol bir vertex'ten başlayan kısa bir yoldur ve replica'larla ölçeklenen Database'e uyar.") }}
+
+<div class="part"><b>Mimar gözüyle</b><h2 id="architect" data-short="Mimar gözüyle">Mimar gözüyle: ne zaman graph, ne zaman Neptune</h2>
+<p>Önce kategori: bir graph database ne zaman doğru seçimdir, alternatifleri neyi daha iyi yapar ve yine de graph seçersek ne kazanıp ne kaybederiz. Sonra AWS'teki seçenekler ve Neptune'ün ne zaman seçileceği.</p></div>
+
+<p><b>Kısaca:</b> bir graph database, sorusu bağlantıların kendisi olan iş yükleri içindir: bir başlangıç noktasından iki, üç ya da bilinmeyen sayıda hop. Bu hızı yalnız soruların bir başlangıç noktası varsa alırsın; bütün kayıtlar üzerinde toplam, metin araması ve tek adımlık okumalar başka engine'lerin işidir.</p>
+<p>Önemli kelime yine {{ k.term("access pattern") }}'dir: uygulamanın sorduğu bir soru, o anda bildiği değerlerle birlikte. Graph'ta ikinci bir kelime de aynı ağırlıktadır: <b>derinlik</b>. "Bu müşterinin siparişleri" bir hop'tur ve bir JOIN ile cevaplanır; "bu kart herhangi bir adımda işaretli bir hesaba bağlı mı?" bilinmeyen sayıda hop'tur ve graph'ın asıl işidir.</p>
+<p>Bu bölümdeki her karar aynı beş gereksinimle anlatılır. M2'deki kartlar ve M7'deki simülasyonlar aynı beş başlığı kullanır. Son sütun her gereksinimin cevabının nereden geldiğini söyler:</p>
+<table class="data">
+  <caption>R1–R5: her iş yükünün beş gereksinimi</caption>
+  <thead><tr><th>No</th><th>Gereksinim</th><th>Sorusu</th><th>Kaynağı</th></tr></thead>
+  <tbody>
+    <tr><td><b>R1</b></td><td>Engine uyumu: veri, erişim ve garanti modeli</td><td>İş yükünün verisi, soruları ve kuralları engine'in çalışma prensibine, algoritmasına ve sunduğu araçlara ne kadar uyuyor? Access pattern bu gereksinimin bir parçasıdır (R1 · EY).</td><td>engine'in doğası</td></tr>
+    <tr><td><b>R2</b></td><td>Ölçek ve trafik şekli</td><td>Saniyede kaç istek, ne kadar veri, trafik düz mü dalgalı mı, tepe anında ne kadar gecikme kabul edilir?</td><td>ikisi birlikte: engine'in ölçeklenme modeli ve servisin kapasite yönetimi</td></tr>
+    <tr><td><b>R3</b></td><td>Dayanıklılık</td><td>Bir arızada bu verinin kaybı ne demek: yeniden yüklenen bir kopya mı, kaybolan bir denetim kanıtı mı?</td><td>üreticinin servis tasarımı</td></tr>
+    <tr><td><b>R4</b></td><td>Operasyon ve ekip</td><td>Kim işletecek, ekip hangi sorgu dilini biliyor, kaynak sistemden bir kopyalama hattı gerekiyor mu, sistemde zaten çalışan bir database var mı?</td><td>üreticinin servis tasarımı</td></tr>
+    <tr><td><b>R5</b></td><td>Maliyet modeli</td><td>İstek başına mı, saat başına mı, bellek başına mı ödenir ve bu trafik şekline uyar mı?</td><td>üreticinin servis tasarımı</td></tr>
+  </tbody>
+</table>
+{% call k.callout("why", "Neden R1 en ağır, R3–R5 neden daha hafif ama silinmez?") %}
+<p>R1'in cevabı platformdan bağımsızdır. R1 satırları yalnız engine'in kendisini puanlar; bir kırılım servisin paketlemesinden geliyorsa (replica'ların okuma ölçeklemesi, serverless kapasite, saat başı fiyat, kopyalama hattı) R2–R5'e yazılır ve R1'de sayılmaz. Bir graph engine'inin bir vertex'ten başlayıp yalnız komşuları okuması, PostgreSQL'in her hop'u bir index araması ve birleştirme olarak çalıştırması, DynamoDB'nin yalnız partition key ile bir grubu okuması, engine hangi bulutta ya da hangi makinede çalışırsa çalışsın aynıdır. Bu yüzden bir iş yüküne hangi engine'in uyduğu en çok R1'de görünür.</p>
+<p>R3–R5'in cevabı ise büyük ölçüde üreticinin tasarım kararıdır. AWS graph için iki engine sunar: Neptune Database'i altı kopyalı bir volume ve okuma replica'larıyla, Neptune Analytics'i tek bir bellek odaklı instance ve hazır algoritmalarla. Aynı property graph modelini ve aynı openCypher'ı kullanırlar, ama engine'leri farklıdır; bu yüzden R1'leri her kartta ayrı puanlanır ve bazı kartlarda eşit çıkar. Eşit çıktıklarında kararı tam olarak R2–R5 verir (kart 2). Neptune Serverless ve provisioned instance'lar ise aynı Neptune Database engine'inin iki kapasite biçimidir; aralarındaki fark yalnız R2, R4 ve R5'tedir. Bu sayfanın kartlarında R3–R5 hiçbir kartta silinmez: kart 6'da ve kart 9'da Neptune engine uyumunda iyi olduğu hâlde, verinin zaten Aurora'da olması (R4) ve küçük trafiğin sabit bir faturayla karşılanması (R5) kararı çevirir.</p>
+{% endcall %}
+<p>R1 tek bir puan değildir. Bir iş yükünde engine'e sorulan birkaç soru vardır ve her kart bu soruları aşağıdaki sabit katalogdan seçer: katalog üç ile beş arası alt maddeye izin verir; bu sayfanın kartlarında dört alt madde vardır. Kartta alt maddeler sırayla numaralanır ve katalog kodunu taşır, örneğin "R1.1 · EY Erişim yolu". Katalog bütün database sayfalarında aynıdır; böylece bu sayfanın kartlarını DynamoDB, Aurora ve ElastiCache sayfalarının kartlarıyla aynı dille karşılaştırabilirsin.</p>
+<table class="data">
+  <caption>R1 kataloğu: Engine uyumunun sekiz alt maddesi (database'ler için)</caption>
+  <thead><tr><th>Kod</th><th>Alt madde</th><th>Ne sorar</th><th>Neptune'de örnek</th></tr></thead>
+  <tbody>
+    <tr><td><b>VM</b></td><td>Veri modeli ve value tipi</td><td>Value'nun yapısı ne: structured, semi-structured, iç içe, blob, graph, zaman serisi? Bir value ne kadar büyük?</td><td>Property graph (vertex, edge, label, property) ve RDF üçlüleri; bağlantının kendisi bir kayıttır (Ö1, A2)</td></tr>
+    <tr><td><b>ŞE</b></td><td>Şema elverişliliği</td><td>Şema yazarken mi okurken mi uygulanır? Alanlar kayıttan kayda değişebilir mi, şema nasıl evrilir?</td><td>Şema yoktur: yeni bir label ya da predicate bir değişiklik istemez; tip ve zorunlu alan kontrolü uygulamanındır (A2, A7)</td></tr>
+    <tr><td><b>EY</b></td><td>Erişim yolu</td><td>Soru hangi değerle sorulur: key, aralık, ikincil alan, join ve toplam, metin, coğrafya, ilişki, zaman penceresi?</td><td>Bir başlangıç noktasından pattern ve değişken uzunlukta path; metin araması ve bütün kayıtlar üzerinde toplam zayıf (Ö2, Ö4, Ö5)</td></tr>
+    <tr><td><b>OY</b></td><td>Okuma/yazma şekli</td><td>Hacim değil, işlemin biçimi: yerinde güncelleme mi, ekleme mi, oku-değiştir-yaz mı, sayaç mı, toplu yazma mı?</td><td>Edge ekleme ve silme tek yazma; MERGE oku-yoksa-yaz; DETACH DELETE; pattern ile toplu yazma (A7)</td></tr>
+    <tr><td><b>TA</b></td><td>Tutarlılık ve atomiklik</td><td>Engine hangi garantileri verir: okuma tutarlılığı, koşullu yazma, transaction kapsamı, izolasyon?</td><td>Okumalar snapshot isolation; yazmalar range lock'lu READ COMMITTED; çakışmada yeniden deneme (Ö6, A7)</td></tr>
+    <tr><td><b>DA</b></td><td>Depolama algoritması</td><td>Engine'in çalışma algoritması bu erişime uyuyor mu: bellek içi hash, B-tree, LSM, columnar, inverted index?</td><td>Her bilgi dört parçalı bir kayıt (quad) olarak üç sıralı index'te; bir hop bir index aralığıdır; supernode bütün edge'lerini okutur (Ö3, A4, B1)</td></tr>
+    <tr><td><b>YD</b></td><td>Veri yaşam döngüsü</td><td>Veri nasıl sona erer, değişikliği nasıl dışarı yayılır: TTL, sürüm, değişiklik akışı?</td><td>TTL yok; Neptune Streams değişiklikleri 1–90 gün tutar; bulk loader (Ö7, A8)</td></tr>
+    <tr><td><b>AO</b></td><td>Ayar ve optimizasyon araçları</td><td>Engine geliştiriciye hangi sıkılaştırma araçlarını verir: index tipleri, projection, sparse index, sıkıştırma, script?</td><td>Kendi index'in yok, üç sabit index (OSGP yalnız boş cluster'da); sorgu ipuçları ve süre sınırı; algoritmalar ve vector yalnız Neptune Analytics'te (Ö2, Ö8)</td></tr>
+  </tbody>
+</table>
+<p>Her kartta her satırın bir <b>ağırlığı</b> vardır ve ağırlıkların toplamı 100'dür. Ağırlık puanlardan önce, iş yükünün önceliğinden belirlenir ve kartta tek cümlelik nedeniyle yazılır. Çoğu kartta R1 en ağır gereksinimdir; R2–R5'in her biri en az 5 alır. Bir aday her satırda 0–10 puan alır ve katkısı puan × ağırlık / 10'dur. Zorunlu satır ve eleme yoktur: bir iş yükünün önceliği olan satırda zayıf kalan aday, toplamda kendiliğinden geride kalır. Puan ile ağırlığın işi ayrıdır: <b>puan</b> satırdaki "ne istiyoruz" cümlesinin ne kadar karşılandığını ölçer, <b>ağırlık</b> o satırın bu iş yükü için ne kadar önemli olduğunu. Bir eksik yalnız bir satırda sayılır: bir supernode'un maliyeti R1 · DA'dadır; bütün yazmaların tek writer'dan geçmesi ve replica'ların birkaç milisaniye geride olması R2'dedir; replica sayısı ve NCU aralığı seçmek, yeni bir sorgu dili öğrenmek ve kaynak sistemden bir kopyalama hattı kurmak R4'tür; fiyat yalnız R5'tedir. Kartların gerekçelerinde puan kaybına kısaca "kırılım" denir: "3 puan kırıldı" o satırda 10'dan 3 puan düşüldüğü demektir.</p>
+<p>Neptune'ün kırılımları her kartta aynı kurala uyar. Supernode önceden biliniyor ve sorgudan çıkarılabiliyorsa R1 · DA'da 1, sorunun kendisiyse ya da önceden bilinmiyorsa 2 puan kırılır. Tek writer ve replica gecikmesi R2'de, hikâye yeni bir yazmanın bir sonraki okumada görünmesini istiyorsa 1 (kart 1, 3, 8), saniyede binlerce yazma varsa 2 puan kırar (kart 2, 5); yazmalar seyrekse ve gecikme önemsizse kırmaz (kart 4, 6, 7, 9, 10) (AWS tek bir writer için bir yazma sayısı vermez; o hız bir yük testiyle doğrulanır). Ekip graph dili bilmiyorsa R4'te openCypher için 2, kopyalama hattı için 2, kapasite ayarı için 1 puan kırılır. R5'te sürekli trafikte 2, akşamla gece arasında büyük fark olan trafikte 3, var olan bir database'in yanında ikinci bir database olarak 4, deneme döneminde ya da haftada birkaç saat kullanılan bir iş için 4, var olan bir database'in yanında yalnız küçük bir iş için (saniyede birkaç on istek) 6, günde birkaç yüz soru için 7 puan kırılır: Neptune'ün kapasitesi sıfıra inmez. Neptune Analytics için aynı kurallar geçerlidir; onun okuma ölçeklemeyen tek instance'ı saniyede binlerce istekte R2'de 5, küçük yükte 1 puan kırar.</p>
+
+<h2 id="signals" data-short="Ö1–Ö8: sinyal ve sınır"><span class="sec">M1</span>Graph'ın sekiz özelliği: hangi sinyal çağırır, sınırı nedir</h2>
+<p>Bu tablo M2'deki kartların referansıdır. Bir kart "Ö5 ile çözer" dediğinde buraya dönersin. Her satır A10'daki özelliği iş yükündeki sinyaliyle ve sınırıyla, yani yapamadığı şeyle birleştirir. Sınırlar, alternatiflerin neden bazen daha iyi olduğunu da açıklar.</p>
+<table class="data">
+  <thead><tr><th>Özellik</th><th>Ne sağlar</th><th>İş yükünde onu çağıran sinyal</th><th>Sınırı: ne yapamaz</th><th>Tanım</th></tr></thead>
+  <tbody>
+    <tr><td><b>Ö1</b> Property graph (ve RDF)</td><td>Bağlantı kendi kimliği ve özellikleriyle bir kayıttır</td><td>Birçok tür şey ve birçok tür bağlantı; bağlantının kendisi soruluyor (ne zaman, kaç adet)</td><td>Şema ve kısıt yok; sabit alanlı kayıtlar için bir güvence değil</td><td>A2</td></tr>
+    <tr><td><b>Ö2</b> Başlangıç noktası, index'ler</td><td>İlk vertex kimlikle ya da property ile tek aramada bulunur</td><td>Uygulama her istekte bir kimlik biliyor: bu ürün, bu kart, bu kullanıcı</td><td>Kendi index'in yok; metin araması yok; başlangıcı olmayan sorgu bütün vertex'leri okur</td><td>A3</td></tr>
+    <tr><td><b>Ö3</b> Traversal</td><td>Maliyet komşulara bağlı, graph'ın boyutuna değil</td><td>Graph büyük ve büyüyor ama bir sorgunun dokunduğu kısım küçük</td><td>Supernode bir sorguyu pahalı yapar</td><td>A4</td></tr>
+    <tr><td><b>Ö4</b> Pattern ile sorgu</td><td>Çok hop'lu soru tek bir çizimdir</td><td>"Arkadaşların arkadaşları", "bunu alanların aldıkları"</td><td>Neptune Database'te CALL ve kullanıcı fonksiyonu yok</td><td>A5</td></tr>
+    <tr><td><b>Ö5</b> Değişken uzunlukta path</td><td>Uzunluğu bilinmeyen yol tek sorgudur</td><td>"Herhangi bir adımda bağlı mı?", "bu switch düşerse ne düşer?"</td><td>Sınırsız arama yayılır; Database openCypher'ında shortestPath() yok</td><td>A6</td></tr>
+    <tr><td><b>Ö6</b> Transaction'lar</td><td>Bir sorgunun yazmaları birlikte, okumalar tutarlı</td><td>Bir olay birkaç vertex ve edge yazıyor; aynı kimlik aynı anda iki kez geliyor</td><td>Çakışmada yeniden deneme; replica'lar birkaç milisaniye geride</td><td>A7</td></tr>
+    <tr><td><b>Ö7</b> Toplu yükleme ve akış</td><td>Graph dosyalardan kurulur, değişiklikleri dışarı verir</td><td>Graph başka bir sistemin kopyası; bir arama index'i beslenecek</td><td>TTL yok; kopyalama hattı bir bakım yüküdür</td><td>A8</td></tr>
+    <tr><td><b>Ö8</b> Algoritmalar ve vector</td><td>Bütün graph üzerinde önem, topluluk, benzerlik, embedding araması</td><td>"Tek nokta riskleri", "halkalar", "anlamca en yakın"</td><td>Neptune Database'te yok; Neptune Analytics tek instance'tır</td><td>A9</td></tr>
   </tbody>
 </table>
 
-<h3>Use case'ler, nedeni ve özelliğiyle</h3>
-<table class="data">
-  <thead><tr><th>Use case</th><th>Vertex'ler ve edge'ler</th><th>Neden bir graph</th><th>İşi yapan özellik</th></tr></thead>
-  <tbody>
-    <tr><td>Öneriler (Lale Market)</td><td>Customer, Product, BOUGHT.</td><td>Her sayfa görüntülemesinde bir üründen ya da müşteriden 2 veya 3 hop.</td><td>Score olarak count() kullanan openCypher pattern'i</td></tr>
-    <tr><td>Dolandırıcılık tespiti</td><td>Person, Card, Device, Address, USES, LIVES_AT.</td><td>Bir telefonu ya da adresi paylaşan hesap halkaları.</td><td>Path'ler ve ortak komşular (aşağıdaki görseller)</td></tr>
-    <tr><td>Sosyal ağlar</td><td>Person, FRIEND, FOLLOWS.</td><td>"Tanıyor olabileceğin kişiler" arkadaşların arkadaşlarıdır.</td><td>2-hop pattern'ler</td></tr>
-    <tr><td>Identity graph ve customer 360</td><td>Cookie, Device, Email, Account.</td><td>Bir kişinin birçok sistemdeki identifier'larını birleştir.</td><td>Connected component'ler</td></tr>
-    <tr><td>Knowledge graph</td><td>Kavramlar ve adlandırılmış ilişkiler.</td><td>Anlam hakkında sorular: "bu türdeki hastalıkları tedavi eden ilaçlar".</td><td>RDF ve SPARQL</td></tr>
-    <tr><td>Ağ ve IT operasyonları</td><td>Server, Switch, Service, DEPENDS_ON.</td><td>"Bu switch arızalanırsa hangi servisler çöker?"</td><td>Değişken uzunlukta path'ler</td></tr>
-    <tr><td>Tedarik zinciri</td><td>Supplier, Part, Product, SUPPLIES.</td><td>Geciken bir parçanın dokunduğu bütün ürünleri bul.</td><td>Çok hop'lu traversal'lar</td></tr>
-    <tr><td>Erişim hakları</td><td>User, Group, Role, Resource, MEMBER_OF.</td><td>"Bu kullanıcı herhangi bir grup üzerinden bu dosyaya ulaşabilir mi?"</td><td>İç içe gruplardan geçen path'ler</td></tr>
-  </tbody>
-</table>
-{{ k.fig("neptune-social-graph.png", "Neptune User Guide'dan bir sosyal graph. Justin, Anna'nın ve Alana'nın arkadaşıdır. Kitaplara ve filmlere giden edge'ler her kişinin neyi sevdiğini gösterir.") }}
-{{ k.fig("neptune-fraud-graph.png", "Neptune User Guide'dan bir dolandırıcılık graph'ı. Kişiler ortak kişisel bilgilerle bağlanır, örneğin bir adres ya da bir telefon numarası.") }}
+<p>Tablo özettir. Aşağıdaki sekiz blok her özelliği dört başlıkla açar: ne sağlar, hangi sinyal çağırır, sınırı nedir ve alternatif ne zaman daha iyidir.</p>
 
-<h3>Neptune'den uzaklaştıran sinyaller</h3>
-<table class="data">
-  <thead><tr><th>İş yükündeki sinyal</th><th>Neptune neden zayıf bir seçim</th><th>Daha iyi seçim</th></tr></thead>
+<table class="data feat"><caption>Ö1 · Property graph: vertex, edge, label, property (ve RDF)</caption>
   <tbody>
-    <tr><td>Bütün kayıtları tarayıp toplayan raporlar</td><td>Bir graph query'si vertex'lerden başlar. Bütün vertex'lerin taranması yavaştır.</td><td><a href="/e2etutorial/redshift">Redshift</a></td></tr>
-    <tr><td>Belirli table'lar ve kurallarla siparişler ve ödemeler</td><td>İlişkiler basittir ve değişmez. SQL bunu iyi yapar.</td><td><a href="/e2etutorial/aurora">Aurora</a></td></tr>
-    <tr><td>Sadece key ile tek bir kaydı okuma</td><td>Takip edilecek ilişki yok.</td><td><a href="/e2etutorial/dynamodb">DynamoDB</a></td></tr>
-    <tr><td>Serbest metin arama</td><td>Analyzer ya da relevance score yok.</td><td><a href="/e2etutorial/opensearch">OpenSearch</a></td></tr>
-    <tr><td>Zaman içinde metrikler</td><td>Zaman pencereleri ya da downsampling yok.</td><td><a href="/e2etutorial/influxdb">Timestream for InfluxDB</a></td></tr>
+    <tr><td><b>Ne sağlar</b></td><td>Şeyler (vertex) ve bağlantılar (edge) ayrı kayıtlardır; ikisinin de türü (label) ve özellikleri (property) vardır. Bir satın alma, bir arkadaşlık ya da bir bağımlılık kendi kimliği, yönü ve özellikleriyle saklanır. Yeni bir bağlantı türü yeni bir label'dır; şema değişikliği yoktur. Aynı cluster RDF üçlülerini de saklar ve paylaşılan ontolojiler olduğu gibi yüklenir.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Birçok tür şey ve birçok tür bağlantı: kişi, kart, cihaz, adres ve aralarında "kullandı", "yaşıyor", "sahibi". Bağlantının kendisi sorgunun konusu: "ne zaman ve hangi siparişte aldı?". Bir ontoloji ya da sözlük RDF olarak geliyor.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Şema ve kısıt yoktur: tutarın sayı olması, bir alanın zorunlu olması, bir e-postanın tek olması uygulamanın işidir. Sabit alanlı kayıtlar (fatura, sipariş) için bu bir güvence eksikliğidir. openCypher ve Gremlin RDF'i, SPARQL property graph'ı okumaz.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Kayıtların alanları sabit ve kuralları sıkıysa ilişkisel database. Bağlantılar tek adımlıksa (bir müşterinin siparişleri) JOIN yeterlidir ve graph bir şey kazandırmaz (M2 kart 9). Kayıt iç içe bir belgeyse document database.</td></tr>
   </tbody>
 </table>
 
-<h3>Bir mimarın sorduğu sorular, bu sırayla</h3>
+<table class="data feat"><caption>Ö2 · Başlangıç noktası: kimlik ve property index'leri</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Bir sorgu ilk vertex'ini kimliğiyle ya da bir property değeriyle tek bir index aramasında bulur. Neptune her bilgiyi üç farklı sırada üç index'te tutar; bu yüzden "bu kimlik", "bu label ve bu değer", "bu edge label'ı ve bu bitiş vertex'i" soruları index tasarlamadan ucuzdur.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Uygulama her istekte bir kimlik biliyor: ürün sayfasındaki ürün, ödemedeki kart, oturumdaki cookie, belgeyi açan kullanıcı. Soru bir kimlikle başlıyorsa sinyal buradadır.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Kendi index'in yoktur: bileşik bir "müşteri + tarih" index'i ya da bir property kısıtı kurulamaz. Metin araması yoktur. Başlangıcı olmayan bir sorgu bütün vertex'leri okur. Çok sayıda farklı label'lı graph'larda label vermeden ters yönde yürümek yavaşlar; bunu düzelten dördüncü index (OSGP) yalnız boş bir cluster'da açılır.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Sorular kimlikle değil metinle başlıyorsa search engine (Neptune'ün OpenSearch entegrasyonu ya da doğrudan OpenSearch). Sorular bir tarih aralığı ve sıralamayla başlıyorsa (son 20 sipariş) ilişkisel database'in bileşik index'i.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö3 · Traversal: komşudan komşuya</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Her hop yalnız yolun üzerindeki vertex'lerin edge'lerini okur. Graph 10 kat büyüse de bir sorgunun yaptığı iş, yolunun üzerindeki komşular aynı kaldıkça aynıdır. Bir sonraki hop bir birleştirme değil, bir index aralığıdır; ara sonuç bir birleştirme planındaki gibi çoğalmaz.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Graph büyük ve büyüyor ama her soru onun küçük bir köşesine dokunuyor: 60 milyon arkadaşlık ama bir kullanıcının 30 arkadaşı; 120 milyon edge ama bir ödemenin birkaç komşusu. Her istek milisaniyelerle cevaplanmalı.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Yolun üzerindeki bir supernode bütün edge'lerini okutur; derece her hop'ta çarpılır (30 arkadaş: üç hop 27.000 edge). Supernode'u database senin yerine dışarıda bırakmaz; bir label, bir derece sınırı ya da hop başına bir LIMIT model kararıdır.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Graph küçük ve sorular azsa (günde birkaç yüz) var olan ilişkisel database birleştirmeyle yeterlidir (M2 kart 6). Sonuç önceden hesaplanabiliyorsa (gece hesaplanan öneri listeleri) key-value ya da bellek içi store ile tek bir okuma.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö4 · Pattern ile sorgu (openCypher, Gremlin, SPARQL)</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Çok hop'lu bir soru tek bir çizimdir: <code>(me)-[:FRIEND]-()-[:FRIEND]-(fof) WHERE NOT (me)-[:FRIEND]-(fof)</code>. Üçüncü bir hop eklemek pattern'e bir parça eklemektir. Olmayan bir bağlantı (NOT pattern) bir koşuldur; sayma ve gruplama yolların üzerinde çalışır. Neptune üç dili de sunar.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"Arkadaşların arkadaşları, zaten arkadaş olanlar hariç", "bunu alanların aldıkları", "bu kullanıcı bir grup ve bir klasör üzerinden bu belgeye ulaşıyor mu?". Soru cümlesi "X'ten Y'ye, oradan Z'ye" diye okunuyorsa sinyal buradadır.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Bir pattern aynı yolu birkaç kez bulabilir (aynı iki vertex arasında birden çok edge): DISTINCT ile sayılır. Neptune Database openCypher'ında CALL ve kullanıcı fonksiyonları yoktur. Ekip yeni bir dil öğrenir.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Soru tek hop ise SQL'in JOIN'i aynı işi tanıdık dille yapar. Soru sabit iki hop ve trafik küçükse SQL'de iki self-join yeterlidir; fark derinlik, supernode ve trafikle büyür (M2 kart 3).</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö5 · Değişken uzunlukta path</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Uzunluğu bilinmeyen yol tek bir sorgudur: <code>-[:USED|LIVES_AT*1..4]-</code>. Database genişlik öncelikli yürür, bir edge'i bir çözümde bir kez geçer ve yolun kendisini döndürebilir; bir analist "neden reddedildi?" sorusunun cevabını görür.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"Bu kart herhangi bir adımda işaretli bir hesaba bağlı mı?", "bu switch düşerse hangi servisler düşer?", "bu kullanıcı iç içe gruplar üzerinden bu belgeye ulaşıyor mu?", "bu ilaç hangi üst sınıflara ait?". Derinlik kayıttan kayda değişiyorsa sinyal buradadır.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Sınırsız bir arama bütün bağlı graph'a yayılabilir; her zaman bir üst sınır ve gerekiyorsa LIMIT verilir. Neptune Database openCypher'ında shortestPath() yoktur (Gremlin'de ve Neptune Analytics'te var). Uzun aramalar sorgu süre sınırına çarpar.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Graph küçük, sorgu seyrek ve veri zaten ilişkisel database'teyse WITH RECURSIVE yeterlidir. Derinlik en fazla bir ya da iki seviyeyse ve hak değişiklikleri nadirse sonucu önceden düzleştirip key ile okumak daha hızlıdır.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö6 · Transaction'lar</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Bir sorgunun yazmaları ya hep ya hiç uygulanır. Okuma sorguları snapshot isolation ile tutarlı bir görüntü görür ve yazmaları bekletmez. Yazan sorgular okudukları aralığı kilitler; bu yüzden aynı anda gelen iki MERGE aynı vertex'i iki kez oluşturamaz.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Bir olay birkaç vertex ve edge yazıyor (bir ödeme: cihaz, kart, bağlantı). Aynı kimlik aynı anda iki olayda ilk kez görülebiliyor. Bir istek ağ hatasından sonra yeniden denenebiliyor.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Çakışan iki yazmadan biri bekler (en fazla 60 saniye) ya da geri alınır; uygulama yeniden dener. Read replica'lar writer'ın birkaç milisaniye gerisindedir. Kısıt (UNIQUE) yoktur; kurallar MERGE ile ve kimlikle korunur.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Kural birkaç table'ı ve toplamları kapsıyorsa (stok ve sipariş birlikte) ilişkisel database'in transaction'ı ve kısıtları. Kural tek bir kaydın içinde kalıyorsa key-value database'in koşullu yazması daha basittir.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö7 · Toplu yükleme ve değişiklik akışı</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Milyonlarca vertex ve edge S3'teki dosyalardan bir iş olarak yüklenir. Neptune Streams her değişikliği sırayla kaydeder; bir program onları okuyup bir arama index'ini ya da bir analitik kopyayı besler. Kayıtlar 1 ile 90 gün arasında (varsayılan 7) tutulur.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Graph başka bir sistemin kopyası (siparişler, envanter) ya da her ay gelen bir ontoloji. Graph'taki değişiklikler bir arama index'ine ya da başka bir sisteme yansıtılacak.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>TTL yoktur; süresi geçen bağlantıları bir iş siler. Graph bir kopyaysa kaynağı izleyen bir hat kurulur ve bozulduğunda graph sessizce eskir; bu bir bakım yüküdür (R4).</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Veri kısa ömürlüyse ve kendiliğinden gitmeliyse TTL'i olan bir store (DynamoDB, ElastiCache). Veri zaten bir ilişkisel database'teyse ve sorular onu orada cevaplayabiliyorsa kopyalamamak en ucuz hattır.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö8 · Bütün graph algoritmaları ve vector araması</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>PageRank, merkezilik, bağlı bileşenler, topluluk bulma, benzerlik ve embedding ile en yakın komşu araması bütün graph üzerinde çalışır. Neptune'de bunlar Neptune Analytics'te, openCypher prosedürleri olarak ve bellekte çalışır.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"Tek nokta riskleri hangi tedarikçiler?", "müşteri graph'ı kaç halkadan oluşuyor?", "bu soruya anlamca en yakın metin parçaları ve onlardan iki hop uzaktaki ürünler" (GraphRAG).</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Neptune Database'te yoktur. Neptune Analytics tek bir instance'tır: replica'lar yalnız yedektir ve okuma ölçeklemez; graph'ın belleği açık olduğu sürece saat başına ödenir; graph başına tek bir vector index'i vardır.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Saniyede binlerce kısa sorgu ve okuma ölçeği gerekiyorsa Neptune Database. Yalnız vector araması ve metin araması isteniyorsa, ilişkiler cevaba girmiyorsa search engine (OpenSearch). Soru bir toplam ise (tedarikçi başına harcama) data warehouse.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="usecases" data-short="Use case'ler, alternatifleriyle"><span class="sec">M2</span>Use case'ler: hangi servis en uygun, Neptune nerede kazanır, nerede kaybeder</h2>
+<p>Her kart bir iş yükünü anlatır ve altı parçadan oluşur. (1) <b>Bu iş yüküne en uygun servis:</b> kartın en üstünde, ağırlıklı toplamı en yüksek olan aday durur. Bu aday Neptune olmayabilir; Neptune her kartta tabloda kalır ve "bu sayfanın servisi" işaretini taşır. Kartlarda <b>"Neptune" Neptune Database demektir</b>; "Neptune Analytics" ayrı bir adaydır. (2) <b>Gerçek projede:</b> iş yükü kim için, hangi ekranda, hangi sayılarla. (3) <b>Gereksinimler ve ağırlıklar:</b> R1'in alt maddeleri (R1.1, R1.2, …) ve R2–R5; her satırda ağırlık ve nedeni, "ne istiyoruz" ve "neden önemli, karşılanmazsa ne olur". (4) <b>Puan tablosu:</b> bu iş yüküne gerçekten uyan üç servis; her hücrede 10 üzerinden puan ve ağırlıklı katkı, R1'in toplamı ve 100 üzerinden toplam. (5) <b>Her adayın gerekçesi:</b> satır satır nasıl karşıladığı (Neptune için A10'daki Ö-numarasıyla), kaç puan aldığı ve puanın neden kırıldığı; en uygun servisin dışındaki her aday için uzun bir <b>kafa kafaya</b> paragrafı: nerede ayrışır, bu iş yükünde neden geride kalır, hangi koşul değişseydi o seçilirdi. (6) <b>Karar:</b> toplamların okunuşu ve "Neptune seçersek" artı ve eksilerimiz. Simülasyonu olan beş kart M7'de aynı puanlarla adım adım oynar. Başlığa tıklayarak kartı aç.</p>
+<table class="data">
+  <caption>puan ölçeği: her satırda ve her kartta aynı</caption>
+  <thead><tr><th>Puan</th><th>Anlamı</th></tr></thead>
+  <tbody>
+    <tr><td class="y">10</td><td>Satırı doğrudan, ek iş olmadan ve sayıları aşarak karşılar.</td></tr>
+    <tr><td class="y">8–9</td><td>Karşılar; küçük bir ek iş ya da küçük bir maliyet vardır.</td></tr>
+    <tr><td class="p">4–7</td><td>Karşılar, ama uygulama tarafında belirgin ek iş, boyutlandırma ya da bir sınırla.</td></tr>
+    <tr><td class="n">0–3</td><td>Kısmen ya da hiç: satırın bir parçası karşılanmaz ya da ciddi bir bedelle karşılanır.</td></tr>
+  </tbody>
+</table>
+<p>Kartlar Neptune'ün servis terimlerini ve alternatiflerin terimlerini Bölüm B ve C'den önce kullanır. Kısa anlamları bu tablodadır; alternatiflerin ayrıntısı kendi tutorial'larındadır.</p>
+<table class="data">
+  <caption>kartlarda geçen servis terimleri (ayrıntısı Bölüm B, Bölüm C ve M5'te)</caption>
+  <thead><tr><th>Terim</th><th>Ne demek</th></tr></thead>
+  <tbody>
+    <tr><td>Writer (primary) ve read replica</td><td>Neptune Database cluster'ında bütün yazmaları alan tek instance ve 15'e kadar okuma instance'ı; hepsi aynı storage volume'unu kullanır. Replica'lar writer'ın birkaç milisaniye gerisinde olabilir (C2).</td></tr>
+    <tr><td>Cluster volume, altı kopya</td><td>Neptune'ün verisi instance'larda değil, üç Availability Zone'a yayılmış ortak bir volume'dadır; her 10 GB'lık parça altı kopya olarak tutulur (C2).</td></tr>
+    <tr><td>Neptune Serverless, NCU</td><td>Instance'ın kapasitesinin yükle büyüyüp küçüldüğü biçim. Birim NCU'dur (Neptune Capacity Unit); en düşük ve en yüksek NCU sen seçersin ve kapasite sıfıra inmez. eu-central-1'de NCU-saat 0,1941 USD (Price List API, 2026-10-31): 1 NCU'luk bir instance ayda yaklaşık 142 USD (C2).</td></tr>
+    <tr><td>Neptune Analytics, m-NCU, standby</td><td>Graph'ı tek bir bellek odaklı instance'a yükleyen ayrı engine. Boyutu m-NCU ile seçilir (1 m-NCU yaklaşık 1 GB bellek) ve açıkken saat başına ödenir (32 m-NCU saatte 1,162 USD); durdurulan graph fiyatın onda birini öder. Replica (standby) başka bir AZ'de bekleyen bir yedektir, okuma almaz (A9, M5).</td></tr>
+    <tr><td>MERGE, DETACH DELETE, UNWIND</td><td>openCypher: yoksa oluştur; vertex'i edge'leriyle birlikte sil; bir listenin her elemanı için aynı yazmayı yap (A7, B4).</td></tr>
+    <tr><td>Kopyalama hattı</td><td>Kaynak sistemdeki kayıtları (siparişler, envanter) graph'a taşıyan ve güncel tutan iş: ilk yükleme ve her değişiklikte bir yazma (A8, C3).</td></tr>
+    <tr><td>Aurora: WITH RECURSIVE, self-join, reader, ACU, MVCC</td><td>Kendini tekrar eden SQL sorgusu; bir table'ın kendisiyle birleştirilmesi; okuma kopyası; Serverless v2'nin kapasite birimi; PostgreSQL'in her UPDATE'te row'un yeni bir sürümünü yazması (<a href="/e2etutorial/aurora?lang=tr">Aurora tutorial'ı</a>).</td></tr>
+    <tr><td>DynamoDB: adjacency list, item collection, hot partition, Query, GetItem, BatchGetItem, on-demand</td><td>Bir graph'ı partition key (vertex) ve sort key (komşu) çiftleri olarak saklama deseni; aynı partition key'li item'lar; çok trafik alan tek partition; bir partition key'in item'larını okuma; key ile tek okuma; birçok key'i tek istekte okuma; istek başına ödeme (<a href="/e2etutorial/dynamodb?lang=tr">DynamoDB tutorial'ı</a>).</td></tr>
+    <tr><td>OpenSearch: k-NN, HNSW, hibrit arama</td><td>Embedding ile en yakın komşu araması; bunun yaklaşık index'i; metin ve vector'ü birlikte kullanan arama (<a href="/e2etutorial/opensearch?lang=tr">OpenSearch tutorial'ı</a>).</td></tr>
+    <tr><td>DocumentDB: document, $lookup</td><td>İç içe JSON kayıt; iki collection'ı birleştiren aggregation adımı (<a href="/e2etutorial/docdb?lang=tr">DocumentDB tutorial'ı</a>).</td></tr>
+    <tr><td>Redshift: recursive CTE, RPU</td><td>Redshift'te kendini tekrar eden SQL; Redshift Serverless'ın kapasite birimi (<a href="/e2etutorial/redshift?lang=tr">Redshift tutorial'ı</a>).</td></tr>
+    <tr><td>GraphRAG, embedding</td><td>Bir dil modeline cevap vermeden önce bir graph'tan bağlam getirmek; bir metnin anlamını temsil eden sayı listesi (A9).</td></tr>
+  </tbody>
+</table>
+<p>Toplam 100 üzerindendir: her hücrenin katkısı puan × ağırlık / 10'dur. İlk iki aday arasındaki fark 5 puan ya da daha azsa kart "yakın yarış" işaretini taşır; bu bir bilgidir, karar yine toplamdır.</p>
+{% for uc in usecases %}{{ k.wusecase(uc) }}
+{% endfor %}
+<table class="data">
+  <caption>on kartın özeti: en uygun servis, ikinciyle farkı ve Neptune'ün yeri</caption>
+  <thead><tr><th>Kart</th><th>En uygun servis</th><th class="num">Fark</th><th>Neptune</th></tr></thead>
+  <tbody>{% for uc in usecases %}
+    <tr><td><a href="#uc-{{ uc.id }}">{{ uc.no }}. {{ uc.title }}</a></td><td>{{ uc.best.name }} ({{ uc.best.total }}){% if uc.race %} · yakın yarış{% endif %}</td><td class="num">{{ uc.gap }}</td>
+      <td>{% for c in uc.cands %}{% if c.page %}{{ loop.index }}. sıra, {{ c.total }}{% endif %}{% endfor %}</td></tr>{% endfor %}
+  </tbody>
+</table>
+<p>Özetin okunuşu: Neptune, sorusu bir kimlikle başlayan ve iki, üç ya da bilinmeyen sayıda hop yürüyen, saniyede yüzlerce ya da binlerce kez sorulan iş yüklerinde öndedir: arkadaş önerisi, ödeme anında halka kontrolü, öneri, identity graph, iç içe erişim hakları ve RDF ontolojisi (kart 1, 2, 3, 5, 8, 10). Dört kartta kaybeder ve nedenleri farklıdır. Kart 4'te (GraphRAG) ve kart 7'de (tedarik zinciri riski) kardeşi Neptune Analytics kazanır: vector araması ve bütün graph algoritmaları Neptune Database'in engine'inde yoktur; bu bir R1 kaybıdır. Kart 6'da (ağ topolojisi) Neptune engine uyumunda 13,5 puan öndedir, ama envanter zaten Aurora'dadır ve günde 200 soru için ikinci bir database'in sabit faturası kararı çevirir. Kart 9'da (customer 360) bağlantılar tek hop'tur ve Neptune net kaybeder: bu kart "her müşteri ekranı bir graph'tır" yanılgısının cevabıdır. İki kartta Neptune Analytics R1'de Neptune'e eşit ya da öndedir, ama servis tasarımı kararı Neptune'e verir: kart 2'de eşit, kart 5'te bir puan önde. Doğru mimari birçok kartta "ikisi birlikte"dir: kayıt Aurora'da, öneri Neptune'de (kart 3); ödeme anı Neptune'de, gece halka taraması Neptune Analytics'te (kart 2); günlük kontroller Neptune Database'te, haftalık analiz Neptune Analytics'te (kart 7); ontoloji Neptune'de, çok yüksek hızda okunan genişletilmiş çiftler DynamoDB'de (kart 10). Diğer sayfaların kartlarında Neptune hiçbir kartta aday değildir, bu yüzden puan kopyalanması gereken ortak bir iş yükü yoktur; en yakın iş yükleri DynamoDB ve ElastiCache sayfalarındaki önceden hesaplanmış öneri listeleridir (kart 3 onları anar). İki yönetilen servis bilerek aday değildir, çünkü database değildir ve bu sayfanın R1'i bir database engine'ini puanlar: Amazon Personalize öneriyi bir makine öğrenmesi modeliyle üretir (kural tabanlı "birlikte alınanlar" yerine model istenirse kart 3'ün sorusu değişir); Amazon Verified Permissions erişim kurallarını değerlendirir, ama grup ve klasör hiyerarşisini saklayan bir database'e yine ihtiyaç vardır (kart 8'in graph'ı tam olarak o hiyerarşidir). İkisi de bu sayfada puanlanmadı.</p>
+
+<h2 id="away" data-short="Uzaklaştıran sinyaller"><span class="sec">M3</span>Graph database'ten uzaklaştıran sinyaller</h2>
+<table class="data">
+  <thead><tr><th>İş yükündeki sinyal</th><th>Graph neden zayıf bir seçim</th><th>Daha iyi seçim</th></tr></thead>
+  <tbody>
+    <tr><td>Bağlantılar tek hop (bir müşterinin siparişleri, adresleri)</td><td>JOIN aynı işi yapar; graph bir kazanç vermez ve şema güvencesi yoktur (M2 kart 9).</td><td><a href="/e2etutorial/aurora?lang=tr">İlişkisel database (Aurora)</a></td></tr>
+    <tr><td>Birçok table arasında kurallar ve toplamlar (stok, sipariş, ödeme)</td><td>Kısıt ve şema yok; toplam tutarlar ve stok kuralları uygulamaya kalır.</td><td><a href="/e2etutorial/aurora?lang=tr">İlişkisel database (Aurora)</a></td></tr>
+    <tr><td>Yılların verisini tarayıp gruplayan raporlar</td><td>Sorgu bir başlangıç noktasından yayılmak için tasarlanmıştır; bütün vertex'leri saymak onun işi değildir.</td><td><a href="/e2etutorial/redshift?lang=tr">Data warehouse (Redshift)</a></td></tr>
+    <tr><td>Metinle, yazım hatasıyla ve relevance ile arama</td><td>Çekirdekte metin index'i yok; Neptune bunu OpenSearch'e kopyalayarak yapar.</td><td><a href="/e2etutorial/opensearch?lang=tr">Search engine (OpenSearch)</a></td></tr>
+    <tr><td>Yalnız key ile tek kayıt okuma (oturum, sepet)</td><td>Takip edilecek bir bağlantı yok; graph'ın sabit kapasitesi boşa ödenir.</td><td><a href="/e2etutorial/dynamodb?lang=tr">Key-value database (DynamoDB)</a></td></tr>
+    <tr><td>Kendiliğinden silinmesi gereken kısa ömürlü veri</td><td>TTL yok; silme işi uygulamanındır.</td><td><a href="/e2etutorial/dynamodb?lang=tr">DynamoDB</a> ya da <a href="/e2etutorial/elasticache?lang=tr">ElastiCache</a></td></tr>
+    <tr><td>Zaman içinde metrikler ve pencereler</td><td>Zaman penceresi ve downsampling yok.</td><td><a href="/e2etutorial/influxdb?lang=tr">Time series (Timestream for InfluxDB)</a></td></tr>
+  </tbody>
+</table>
+
+<h2 id="questions" data-short="Mimarın soruları"><span class="sec">M4</span>Bir mimarın sorduğu sorular, bu sırayla</h2>
 <ol>
-  <li><b>Soru ilişkilerin kendisi mi?</b> Cevap "X'ten Y'ye, oradan Z'ye git" diye okunuyorsa bir graph yardım eder. "Bütün X'leri topla" diye okunuyorsa etmez.</li>
-  <li><b>Kaç hop, ve sayı biliniyor mu?</b> Bilinen tek bir join SQL'de kolaydır. Üç ya da daha fazlası, ya da "herhangi bir sayı", bir graph'ı işaret eder.</li>
-  <li><b>Property graph mı, RDF mi?</b> Property'li uygulama verisi genellikle bir property graph kullanır (openCypher, Gremlin). Paylaşılan sözlükler RDF kullanır (SPARQL).</li>
-  <li><b>Source of truth nerede?</b> Bir öneri graph'ı çoğunlukla sipariş database'inin bir kopyasıdır. Bir dolandırıcılık graph'ı kaynağın kendisi olabilir.</li>
-  <li><b>İstek başına query'ler mi, bütün graph üzerinde algoritmalar mı?</b> İstek başına query'ler Neptune Database kullanır. Bütün graph üzerinde algoritmalar (PageRank, community'ler) Neptune Analytics'e oturur.</li>
-  <li><b>Trafik ne kadar sabit?</b> Sabit trafik provisioned instance'lar kullanır. Değişken trafik Neptune Serverless kullanabilir.</li>
+  <li><b>Soru bağlantıların kendisi mi?</b> Cevap "X'ten Y'ye, oradan Z'ye git" diye okunuyorsa graph yardım eder; "bütün X'leri topla" diye okunuyorsa etmez (Ö3, Ö4).</li>
+  <li><b>Kaç hop ve sayı biliniyor mu?</b> Tek hop bir JOIN'dir. Sabit iki üç hop ve yüksek trafik graph'ı, bilinmeyen sayıda hop graph'ı açıkça işaret eder (Ö5).</li>
+  <li><b>Sorunun başlangıç noktası var mı?</b> Bir kimlikle başlıyorsa Neptune Database; bütün graph'tan başlıyorsa bir algoritmadır ve Neptune Analytics'tir (Ö2, Ö8).</li>
+  <li><b>Yolun üzerinde supernode var mı?</b> Önceden biliniyor mu, sorunun kendisi mi? Label, derece sınırı ya da LIMIT kararını şimdi ver (Ö3).</li>
+  <li><b>Property graph mı, RDF mi?</b> Uygulama verisi genellikle property graph'tır (openCypher, Gremlin); paylaşılan sözlükler ve ontolojiler RDF'tir (SPARQL) (Ö1).</li>
+  <li><b>Kaydın asıl yeri neresi?</b> Graph bir kopyaysa kopyalama hattını, gecikmesini ve kim izleyeceğini planla; kaynak Neptune ise yedeği ve geri dönüşü (Ö7).</li>
+  <li><b>Aynı kimlik aynı anda iki kez yazılabilir mi, istek yeniden denenebilir mi?</b> Evet ise MERGE ve iş kimliği (Ö6).</li>
+  <li><b>Trafik ne kadar ve nasıl?</b> Okuma yoğunsa replica'lar; dalgalıysa Serverless; günde birkaç yüz soruysa sabit bir kapasitenin bedelini var olan bir database'le karşılaştır.</li>
 </ol>
 
-<h3>AWS'te Neptune ve akrabaları</h3>
+<h2 id="aws" data-short="AWS'te graph"><span class="sec">M5</span>AWS'te graph ve ne zaman Neptune</h2>
+<p>AWS'te bir graph'ı saklamanın ve sorgulamanın birkaç yolu var. Engine'de, ölçeklenmede ve fiyat biriminde farklılaşırlar
+   (<a href="https://docs.aws.amazon.com/neptune-analytics/latest/userguide/neptune-analytics-vs-neptune-database.html">Neptune Database ve Neptune Analytics</a>):</p>
 <table class="data">
   <thead><tr><th>Seçenek</th><th>Nedir</th><th>Ne zaman seç</th></tr></thead>
   <tbody>
-    <tr><td>Neptune Database</td><td>Ortak bir storage volume üzerinde bir writer ve en fazla 15 read replica'lı bir cluster.</td><td>İstek başına query'ler: öneriler, dolandırıcılık kontrolleri. Lale Market bunu kullanır.</td></tr>
-    <tr><td>Neptune Serverless</td><td>Kapasitesi yükle birlikte artıp azalan instance'larla Neptune Database.</td><td>Değişken ya da bilinmeyen trafik.</td></tr>
-    <tr><td>Neptune Analytics</td><td>Büyük graph'lar üzerinde algoritmalar ve vector search için bellek odaklı bir graph engine'i.</td><td>Bütün graph algoritmaları, GraphRAG.</td></tr>
-    <tr><td>Aurora'da recursive SQL</td><td>Bir edge table'ı üzerinde WITH RECURSIVE.</td><td>Küçük bir graph ve az sayıda derin query, ikinci bir sistem olmadan.</td></tr>
+    <tr><td><b>Neptune Database (provisioned)</b></td><td>Bir writer ve 15'e kadar read replica, altı kopyalı ortak bir volume; property graph (openCypher, Gremlin) ve RDF (SPARQL). Instance-saat başına ödeme.</td><td>Bir kimlikle başlayan, saniyede yüzlerce ya da binlerce kez sorulan kısa graph sorguları ve öngörülebilir trafik.</td></tr>
+    <tr><td><b>Neptune Serverless</b></td><td>Aynı Neptune Database; instance'ların kapasitesi NCU olarak, seçtiğin aralıkta yükle büyür ve küçülür. NCU-saat başına ödeme; en düşük kapasite sıfır değildir. Lale Market bunu kullanır (1–8 NCU).</td><td>Dalgalı ya da yeni, tahmini zor trafik.</td></tr>
+    <tr><td><b>Neptune Analytics</b></td><td>Graph'ı tek bir bellek odaklı instance'a yükleyen ayrı engine; 25'ten fazla algoritma ve vector araması openCypher prosedürleri olarak. m-NCU-saat başına ödeme; durdurulabilir.</td><td>Bütün graph üzerinde analiz (topluluk, merkezilik, benzerlik), GraphRAG ve vector araması, ara sıra çalışan analizler.</td></tr>
+    <tr><td>Neptune Global Database</td><td>Bir Region'daki birincil cluster ve beş Region'a kadar ikincil cluster'lar; düşük gecikmeli yerel okumalar ve Region kaybına karşı kurtarma.</td><td>Kullanıcılar birkaç Region'da ya da Region kaybına karşı bir plan gerekiyor.</td></tr>
+    <tr><td><a href="/e2etutorial/aurora?lang=tr">Aurora</a>'da edge table'ı ve WITH RECURSIVE</td><td>Bağlantılar bir table'da, yollar recursive SQL ile.</td><td>Küçük bir graph, az sorgu ve verinin zaten Aurora'da olması (M2 kart 6).</td></tr>
+    <tr><td><a href="/e2etutorial/dynamodb?lang=tr">DynamoDB</a>'de adjacency list</td><td>Vertex partition key, komşu sort key; bir hop bir Query.</td><td>Sorular tek hop ve çok yüksek ölçek; ya da sonuçlar önceden hesaplanıp key ile okunuyor.</td></tr>
+  </tbody>
+</table>
+<p>Neptune'ün içinde birkaç seçenek bir tasarımı değiştirir:</p>
+<table class="data">
+  <thead><tr><th>Seçenek</th><th>Ne yapar</th><th>Ne zaman seç</th></tr></thead>
+  <tbody>
+    <tr><td>Read replica'lar ve failover önceliği</td><td>Okumaları dağıtır ve writer düşerse devralır. AWS iki sayı verir: Well-Architected kılavuzu replica'lı bir cluster'da kesintiyi "generally less than 30 seconds" olarak (<a href="https://docs.aws.amazon.com/prescriptive-guidance/latest/neptune-well-architected-framework/reliability-pillar.html">Neptune reliability pillar</a>), User Guide ise "typically restored in less than 120 seconds, and often less than 60 seconds" olarak verir (C2). Bir plan için büyük olanı, yani iki dakikayı varsay.</td><td>Okuma yoğun iş yükleri ve yüksek erişilebilirlik; en az bir replica başka bir AZ'de.</td></tr>
+    <tr><td>Standard ya da I/O-Optimized storage</td><td>Standard'da storage GB-ay 0,119 USD ve her milyon I/O 0,22 USD; I/O-Optimized'da I/O ücreti yoktur, storage GB-ay 0,267 USD ve instance fiyatı daha yüksektir (eu-central-1, Price List API, 2026-10-31).</td><td>I/O faturanın büyük bir parçasıysa I/O-Optimized.</td></tr>
+    <tr><td>Neptune Streams</td><td>Her değişikliği 1–90 gün (varsayılan 7) tutar (<a href="https://docs.aws.amazon.com/neptune/latest/userguide/streams-using-enabling.html">Enabling Neptune Streams</a>).</td><td>Değişiklikler bir arama index'ine ya da başka bir sisteme yansıtılacaksa.</td></tr>
+    <tr><td>OpenSearch ile full-text search</td><td>Streams üzerinden OpenSearch'e kopyalar; Gremlin ve SPARQL sorguları metin araması yapabilir (<a href="https://docs.aws.amazon.com/neptune/latest/userguide/full-text-search.html">Full text search</a>).</td><td>Graph sorgusunun başlangıç noktası bir metinse.</td></tr>
+    <tr><td>Sorgu süre sınırı</td><td><code>neptune_query_timeout</code> ve sorgu başına ipucu; aşan sorgu sonlandırılır. AWS, serverless'ta uzun sorgunun kapasiteyi ve faturayı büyütebileceğini hatırlatır (<a href="https://docs.aws.amazon.com/neptune/latest/userguide/best-practices-gremlin-java-per-query-timeout.html">Per-query timeouts</a>).</td><td>Her zaman: beklenen süreye uygun bir sınır.</td></tr>
   </tbody>
 </table>
 
-<h3>Lale Market'te Neptune'ün yeri</h3>
-<p>Siparişler sipariş database'inde yaşar. Seed her müşteriyi ve her ürünü Neptune'e bir vertex olarak kopyalar. Her sipariş satırını da müşteriden ürüne giden bir BOUGHT edge'i olarak kopyalar.
-   Ürün sayfası "birlikte alınanlar" ürünlerini Neptune'den okur. Admin sayfası "Customer graph" bir müşterinin komşularını çizer.
-   Bir ziyaretçi mağazada bir ürün aldığında Neptune Engine App hemen yeni BOUGHT edge'leri ekler. Sonraki öneri onları zaten içerir.</p>
+<h2 id="lalemarket-arch" data-short="Lale Market'teki yeri"><span class="sec">M6</span>Lale Market'te Neptune'ün yeri</h2>
+<p>Lale Market'in siparişleri Aurora'dadır. Seed işi her müşteriyi ve her ürünü Neptune'e bir vertex olarak, iptal edilmemiş her sipariş satırını müşteriden ürüne bir BOUGHT edge'i olarak kopyalar. Ürün sayfası "bunu alanlar şunları da aldı" kutusunu iki hop'luk bir sorguyla, persona önerisini üç hop'luk bir sorguyla Neptune'den okur; Admin Console'daki "Customer graph" ekranı bir müşterinin komşularını çizer. Ziyaretçi mağazada bir ürün aldığında Neptune Engine App yeni BOUGHT edge'lerini hemen yazar; bir sonraki öneri onları zaten içerir.</p>
+<ul>
+  <li><b>Kayıt Aurora'da, öneri Neptune'de.</b> Graph siparişlerin bir kopyasıdır; kaybolursa Seed onu yeniden kurar. Bu, M2'deki kart 3'ün "ikisi birlikte" mimarisidir.</li>
+  <li><b>Bugünkü boyut küçüktür</b>: 200 ürün ve 11.887 BOUGHT edge'i (canlı sistem, 2026-10-31). Bu boyutta Aurora'daki iki self-join de yeterli olurdu; mağaza Neptune'ü öğretmek için ve büyüdüğündeki hâli için kullanır. Kart 3 bu büyümüş hâli puanlar ve yakın bir yarışı Neptune kazanır.</li>
+  <li><b>Üretim deseni</b>: bir mağaza graph'ı seed işiyle değil, sipariş database'inin değişiklik akışından beslenen bir kopyalama hattıyla güncel tutar ve yeniden denenebilecek yazmaları MERGE ve order_id ile yazar (B4).</li>
+</ul>
 
-<h3>Simülasyon: gereksinimler seçsin</h3>
-{{ k.sim("decide_recs", "İş yükü 1: ürün sayfasındaki öneriler") }}
-{{ k.sim("decide_report", "İş yükü 2: aylık gelir raporu") }}
+<h2 id="decide" data-short="Karar simülasyonları"><span class="sec">M7</span>Karar simülasyonları: M2'nin beş kartı adım adım</h2>
+<p>Her simülasyon M2'deki bir kartın verisini birebir kullanır: aynı iş yükü, aynı satırlar ve ağırlıklar, aynı üç aday, aynı puanlar ve aynı gerekçeler. Fark şudur: simülasyon her adımda bir satır açar. Önce satırın ağırlığını ve nedenini, sonra her adayın puanını ve ağırlıklı katkısını görürsün; puan tablosu ve toplamlar adım adım dolar. Sonunda en uygun servisi, ikinciyi, aradaki farkı ve kartın karar paragrafını görürsün. Oynat'a basmadan önce kartı okuyup sonucu tahmin et.</p>
+<p>Beş simülasyon öğrettikleri şeye göre seçildi. Sosyal graph'ta Neptune'ün engine'i iş yükünün kendisidir: R1'de Aurora'nın 8,5, DynamoDB'nin 21,5 puan önündedir. Dolandırıcılık kontrolünde Neptune ile Neptune Analytics R1'de 48,5 ile eşittir ve kararı yalnız servis tasarımı verir: okuma ölçekleyen replica'lar, altı kopyalı volume ve fiyat. Öneride Neptune, siparişleri zaten tutan Aurora'ya karşı 2 puanla kazanır (yakın yarış). Ağ topolojisinde Neptune R1'i 44,5'e 31 kazanır, ama toplamı Aurora alır: veri zaten oradadır ve trafik çok küçüktür. Customer 360'ta Neptune üçüncüdür: bağlantılar tek hop'tur ve Aurora net kazanır. Simülasyonun puan tablosunda "R1 ara toplam" sütunu R1.1–R1.4 katkılarının toplamını gösterir.</p>
+{{ k.sim("w_social", "Kart 1: tanıyor olabileceğin kişiler (Neptune engine'iyle kazanır)") }}
+{{ k.sim("w_fraud", "Kart 2: ödeme anında halka kontrolü (R1 eşit, kararı servis verir: Neptune mi Neptune Analytics mi?)") }}
+{{ k.sim("w_reco", "Kart 3: graph ile öneri, Neptune mi Aurora mı? (yakın yarış)") }}
+{{ k.sim("w_network", "Kart 6: ağ topolojisi (R1'i Neptune kazanır, toplamı Aurora)") }}
+{{ k.sim("w_c360", "Kart 9: customer 360 (Aurora en uygun, Neptune net kaybeder)") }}
+<p>Her kararın son cümlesine bak: "Bir koşul değişseydi". İyi bir mimar bu cümleyi karar kaydına yazar. Koşul daha sonra değişirse ekip kararın yeniden kontrol edilmesi gerektiğini bilir. Graph'ta bu koşul çoğunlukla derinlik ve trafiktir: "soru tek hop olsaydı" ya da "günde birkaç yüz soru olsaydı".</p>
+{{ k.quiz("npt-a1", "Bir banka her ödemede kartın, en fazla dört adımda ortak cihazlar ya da adresler üzerinden işaretli bir hesaba bağlı olup olmadığını 50 ms içinde soruyor. Saniyede 2.000 ödeme var. Ne en iyi oturur ve hangi koşul cevabı değiştirir?",
+   ["Neptune Database ve değişken uzunlukta bir pattern. Kontrol gece bir kez yapılsaydı Neptune Analytics seçilirdi.", "Neptune Analytics. Ödeme sayısı artsaydı DynamoDB seçilirdi.", "Aurora ve WITH RECURSIVE. Graph büyüseydi Redshift seçilirdi.", "DynamoDB ve kart başına bir item. Adres sayısı artsaydı OpenSearch seçilirdi."],
+   0, "Soru bir kimlikten başlayan, uzunluğu değişen kısa bir yoldur ve saniyede binlerce kez sorulur; Neptune Database replica'larla okuma ölçekler (kart 2: Neptune 91,5, Neptune Analytics 80,5). R1'leri eşittir; soru gece bütün graph üzerinde bir topluluk taraması olsaydı Neptune Analytics'in algoritmaları ve durdurulabilen graph'ı öne geçerdi.") }}
+{{ k.quiz("npt-a2", "Bir platform ekibinin 50 MB'lık envanteri zaten Aurora'da. Günde 200 kez \"bu switch düşerse ne düşer?\" soruluyor. Ne dersin?",
+   ["Neptune: değişken uzunlukta path onun işidir, başka bir şeye bakmaya gerek yok", "Aurora ve WITH RECURSIVE: engine uyumunda Neptune önde, ama veri orada ve trafik ikinci bir database'in sabit faturasını taşımaz", "DynamoDB: her switch bir item", "Neptune Analytics: algoritmalar hazır"],
+   1, "Kart 6: Neptune R1'de 44,5'e 31 öndedir, ama envanter Aurora'dadır ve günde 200 soru için ikinci bir cluster ayda yaklaşık 283 USD'dir (R4, R5). Toplam Aurora 86, Neptune 75,5. Altyapı on kat büyüseydi ve soru saniyede birçok kez sorulsaydı Neptune kazanırdı.") }}
+{{ k.quiz("npt-a3", "Bir alışveriş asistanı soruya anlamca en yakın metin parçalarını bulup onlardan iki hop uzaktaki ürünleri getirmek istiyor. Hangisi en iyi oturur?",
+   ["Neptune Database, çünkü hop'lar onun işi", "Neptune Analytics: vector araması ve hop'lar aynı engine'de, aynı sorguda", "DynamoDB, çünkü ürün kimlikleri key", "Redshift, çünkü veri büyük"],
+   1, "Neptune Database'te vector araması yoktur; ilk adım başka bir sistemde yapılır (kart 4: Neptune Analytics 87,5, OpenSearch 77,5, Neptune 73,5). Asistan yalnız ilişkileri sorsaydı ve saniyede binlerce soru gelseydi Neptune Database öne geçerdi.") }}
 
-{{ k.quiz("np-a1", "Bir banka her ödeme sırasında kartın bilinen bir dolandırıcılık hesabına en fazla dört adımda bağlı olup olmadığını bilmek istiyor. Adımlar ortak cihazlardan ya da adreslerden geçer. En iyi ne oturur?",
-   ["Kartlar, cihazlar ve adresler vertex olan Neptune", "Ortak cihazların gecelik raporuyla Redshift", "Kart numarası key olan DynamoDB", "Kart başına bir document ile OpenSearch"],
-   0, "Soru birkaç hop boyunca ilişkileri takip eder ve ödeme sırasında cevaplanmalıdır. Bu bir graph database'de bir traversal'dır.") }}
-{{ k.quiz("np-a2", "Bir ekip son iki yılın her ayı için kategori başına toplam satışları istiyor. Neptune neden zayıf bir seçim?",
-   ["Neptune sayı saklayamaz", "Rapor bütün kayıtları tarar ve toplar, bir graph query'si ise vertex'lerden başlar", "Neptune veriyi sadece yedi gün tutar", "Neptune'ün query dili yok"],
-   1, "Bir traversal az vertex okuduğu için hızlıdır. Her siparişi okuyan bir rapor bir taramadır. Bir columnar warehouse bunu iyi yapar.") }}
+<div class="part"><b>Bölüm B</b><h2 id="partB" data-short="Bölüm B: İleri">İleri: pratikte Amazon Neptune</h2>
+<p>Bölüm A'daki fikirlerin Neptune'deki adları, canlı Lale Market kayıtları, openCypher sorguları ve cevapları, uzunluğu bilinmeyen yollar, güvenli yeniden deneme, maliyet ve ek özellikler.</p></div>
 
-<div class="part"><b>Bölüm 1</b><h2 id="part1" data-short="BÖLÜM 1: Property graph'lar">Property graph ve openCypher</h2>
-<p>Vertex'ler, edge'ler, pattern'ler, hop'lar ve path'ler.</p></div>
+<h2 id="names" data-short="İsimler ve canlı vertex"><span class="sec">B1</span>Neptune'de isimler, canlı bir vertex ve verinin saklanma biçimi</h2>
+<p>A2'deki vertex, edge, label ve property Neptune'de aynı adlarla geçerlidir; bu bölüm onları canlı Lale Market graph'ından gerçek bir kaydın üzerine koyar. Bölüm A'nın terimleri değişmez. Diğer ürünlerdeki karşılıklar:</p>
+<table class="data">
+  <thead><tr><th>Genel fikir</th><th>Neo4j (Cypher)</th><th>JanusGraph (Gremlin)</th><th>Amazon Neptune</th></tr></thead>
+  <tbody>
+    <tr><td>Vertex (A2)</td><td>node</td><td>vertex</td><td>vertex (openCypher'da node)</td></tr>
+    <tr><td>Edge (A2)</td><td>relationship</td><td>edge</td><td>edge (openCypher'da relationship)</td></tr>
+    <tr><td class="c-pk">Vertex'in kimliği (A3)</td><td>elementId, ya da senin bir property'n</td><td>id</td><td><code>~id</code> (sorguda <code>`~id`</code>, Gremlin'de <code>id</code>)</td></tr>
+    <tr><td class="c-sk">Label (A2)</td><td>label, relationship type</td><td>label</td><td><code>~label</code></td></tr>
+    <tr><td>Edge'in iki ucu (A2)</td><td>start node, end node</td><td>outV, inV</td><td><code>~from</code>, <code>~to</code> (bulk loader CSV'sinde)</td></tr>
+    <tr><td>RDF üçlüsü (A2)</td><td>yok (eklentiyle)</td><td>yok</td><td>quad: subject, predicate, object, graph</td></tr>
+  </tbody>
+</table>
+<p>Bu canlı bir vertex'tir. Workshop Lale Market'in canlı graph'ından Ayşe Yılmaz'ın vertex'ini ve ilk on giden edge'ini okudu (Neptune Engine App'in öğrenme API'ı; sorgu aşağıda):</p>
+{% call k.live("Customer C00001 ve BOUGHT edge'leri, canlı graph (GET /neptune/api/learn/item?id=C00001, 2026-10-31)") %}
+<pre><code>MATCH (c:Customer {`~id`: $id}) OPTIONAL MATCH (c)-[b:BOUGHT]-&gt;(p:Product)
+RETURN c.name AS name, c.city AS city,
+       collect({product: p.`~id`, name: p.name, order_id: b.order_id})[0..10] AS bought, count(b) AS n
 
-<h2 id="why" data-short="Neden bir graph?"><span class="sec">02</span>Neden bir graph? Metro haritası</h2>
-<p>Bir table şeyleri row'larda saklar. İki row arasındaki bir ilişki bir kolondaki değerdir: sipariş satırında bir <code>customer_id</code> ve bir <code>product_id</code> vardır.
-   Bir ilişkiyi takip etmek için database değeri bir index'te arar ve iki row'u join'ler. Bir join ucuzdur. "Bana benzeyen müşteriler" gibi sorular aynı büyük table'ın üç join'ini ister, "herhangi bir adım sayısıyla bağlantılı" ise recursive bir query ister.</p>
-{% call k.callout("analogy", "Analoji") %}
-<p>Bir metro haritası istasyonları noktalar olarak, aralarındaki hatları da çizgiler olarak gösterir. Bir istasyondan diğerine gitmek için bütün istasyonların listesini okumazsın. Parmağını kendi istasyonuna koyar ve hatları takip edersin.
-   Bir graph database veriyi bu harita gibi saklar. İlişkiler, bir query'nin araması gereken değerler değil, takip edebileceği çizgilerdir.</p>
+{ "~id": "C00001", "~label": "Customer", "name": "Ayşe Yılmaz", "city": "İstanbul",
+  "BOUGHT edges (outgoing, 92, first 10)": [
+    { "→ Product": "P0200", "name": "Kapadokya Deri Ceket 200",    "order_id": "O000002" },
+    { "→ Product": "P0198", "name": "Anadolu Yoga Matı 198",       "order_id": "O000003" },
+    { "→ Product": "P0195", "name": "Bosphorus Güneş Gözlüğü 195", "order_id": "O000006" },
+    { "→ Product": "P0195", "name": "Bosphorus Güneş Gözlüğü 195", "order_id": "O000009" },
+    { "→ Product": "P0195", "name": "Bosphorus Güneş Gözlüğü 195", "order_id": "O002212" },
+    { "→ Product": "P0192", "name": "Anadolu Robot Süpürge 192",   "order_id": "O000011" },
+    ... ] }</code></pre>
+{% endcall %}
+<p>Cevabı satır satır oku:</p>
+<ul>
+  <li><code>~id</code> = C00001 ve <code>~label</code> = Customer vertex'in kimliği ve türüdür; <code>name</code> ve <code>city</code> property'leridir.</li>
+  <li>Ayşe'nin 92 giden BOUGHT edge'i var: bu vertex'in out-degree'si 92'dir (A4). Sorgu yalnız ilk 10'unu döndürdü.</li>
+  <li>P0195'e üç ayrı edge gider, her biri başka bir siparişten: aynı iki vertex arasında birden çok edge (A2). Her biri kendi <code>order_id</code> property'sini taşır.</li>
+  <li>Edge'ler müşterinin adını ya da şehrini kopyalamaz; ucundaki ürüne kimliğiyle bağlanır ve ürünün adı ürün vertex'inden okunur.</li>
+</ul>
+{{ k.anatomy([
+   {"pk": "C00001", "sk": "P0195", "attrs": [["~label", "BOUGHT"], ["order_id", "O000006"]]},
+   {"pk": "C00001", "sk": "P0195", "attrs": [["~label", "BOUGHT"], ["order_id", "O000009"]]},
+   {"pk": "C00001", "sk": "P0192", "attrs": [["~label", "BOUGHT"], ["order_id", "O000011"]]}],
+   "Canlı vertex'in üç edge'i, Neptune'ün adlarıyla. İlk ikisi aynı iki vertex'i bağlar ama ayrı kayıtlardır; onları ayıran order_id'dir. Neptune her edge'e kendi ~id'sini verir (bu API onu göstermiyor).",
+   pk_name="~from", sk_name="~to",
+   labels={"primary": "Edge'in iki ucu", "pk": "~from (müşteri)", "sk": "~to (ürün)", "attrs": "Label ve property'ler", "note": "aynı çift, farklı siparişler", "items": "Edge'ler"}) }}
+<p>Aynı graph'ın ürün tarafı. P0001'in 73 gelen edge'i var; sorgu ayrıca iki hop uzaktaki ürünleri sayar:</p>
+{% call k.live("Product P0001: gelen edge'ler ve iki hop uzaktaki ürünler (GET /neptune/api/learn/item?id=P0001, 2026-10-31)") %}
+<pre><code>{ "~id": "P0001", "~label": "Product", "name": "Alpen Kablosuz Kulaklık 1", "category": "Elektronik",
+  "BOUGHT edges (incoming, 73), first 5 customers": [ "C00190 Mia Weber", "C00125 Tolga Fischer", ... ],
+  "2 hops away: bought together": [
+    { "Product": "P0125", "name": "Ege Güneş Gözlüğü 125",       "shared customers": 42 },
+    { "Product": "P0195", "name": "Bosphorus Güneş Gözlüğü 195", "shared customers": 34 },
+    { "Product": "P0014", "name": "Nordwind Python ile Veri 14",  "shared customers": 27 }, ... ] }</code></pre>
+{% endcall %}
+<p>Buradaki "shared customers" sayısı <code>count(*)</code> ile hesaplanır, yani yolları sayar. B2'deki öneri sorgusu ise <code>count(DISTINCT c)</code> ile müşterileri sayar ve aynı ürün için çok farklı bir sonuç verir; iki sayının farkı canlı graph'taki çoklu edge'lerdir.</p>
+<h3>Neptune veriyi nasıl saklar: quad'lar ve üç index</h3>
+<p>Neptune property graph'ı da RDF'i de aynı birimle saklar: dört parçalı bir kayıt, <b>quad</b>. Parçalar subject (S), predicate (P), object (O) ve graph'tır (G). AWS'e göre bir edge'te S başlangıç vertex'i, P edge label'ı, O bitiş vertex'idir; bir property'de S vertex, P property adı, O değerdir; Gremlin edge'lerinde G edge'in kimliğini tutar (<a href="https://docs.aws.amazon.com/neptune/latest/userguide/feature-overview-data-model.html">Neptune Graph Data Model</a>). Öğretici e1 edge'i ve C00001'in bir property'si:</p>
+<table class="data">
+  <caption>öğretici veri quad olarak (örnek)</caption>
+  <thead><tr><th class="c-pk">S (subject)</th><th>P (predicate)</th><th class="c-sk">O (object)</th><th>G (graph)</th><th>Ne anlatır</th></tr></thead>
+  <tbody>
+    <tr><td class="c-pk mono">C00001</td><td class="mono">BOUGHT</td><td class="c-sk mono">P0001</td><td class="mono">e1</td><td>e1 edge'i: Ayşe P0001'i aldı</td></tr>
+    <tr><td class="c-pk mono">e1</td><td class="mono">order_id</td><td class="c-sk mono">"O000003"</td><td class="mono">—</td><td>e1'in bir property'si</td></tr>
+    <tr><td class="c-pk mono">C00001</td><td class="mono">name</td><td class="c-sk mono">"Ayşe Yılmaz"</td><td class="mono">—</td><td>Vertex'in bir property'si</td></tr>
+    <tr><td class="c-pk mono">C00001</td><td class="mono">~label</td><td class="c-sk mono">Customer</td><td class="mono">—</td><td>Vertex'in label'ı</td></tr>
+  </tbody>
+</table>
+<p>Neptune bu kayıtları üç index'te üç farklı sırayla tutar; bir sorgu bildiği parçaları bir index'in key önekine koyar ve bir aralık okur (<a href="https://docs.aws.amazon.com/neptune/latest/userguide/feature-overview-storage-indexing.html">How Statements Are Indexed</a>):</p>
+<table class="data">
+  <caption>Neptune'ün üç varsayılan index'i ve onları kullanan sorular</caption>
+  <thead><tr><th>Index</th><th>Key sırası</th><th>Hangi soruyu ucuz yapar</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td><b>SPOG</b></td><td>Subject, Predicate, Object, Graph</td><td>Bir vertex'in bütün property'leri ve giden edge'leri</td><td>"C00001'in aldıkları" (S = C00001, P = BOUGHT)</td></tr>
+    <tr><td><b>POGS</b></td><td>Predicate, Object, Graph, Subject</td><td>Bir label ve bir hedef: gelen edge'ler; bir property değeri</td><td>"P0001'i alanlar" (P = BOUGHT, O = P0001); "city = İstanbul olanlar"</td></tr>
+    <tr><td><b>GPSO</b></td><td>Graph, Predicate, Subject, Object</td><td>Bir edge'in kimliğiyle ya da RDF'te bir adlandırılmış graph'la</td><td>"e1 edge'inin property'leri"</td></tr>
+    <tr><td>OSGP (isteğe bağlı)</td><td>Object, Subject, Graph, Predicate</td><td>Label vermeden ters yönde yürümek</td><td><b>Yalnız boş bir cluster'da açılabilir</b>; AWS'e göre yazmayı %23'e kadar yavaşlatır, storage'ı %20'ye kadar artırır</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Neden ben bir index tanımlayamıyorum?") %}
+<p>Çünkü bu üç index her quad'ı zaten üç sırada tutar: vertex'ten başlayan, label ve değerden başlayan ve edge kimliğinden başlayan sorular index'lidir. Bedeli şudur: bir property'nin değeriyle bir tarihi birleştiren bileşik bir index (müşteri + tarih) yoktur ve sıralama sorgu anında yapılır. M2'deki kart 9'da (customer 360) bu fark puan olarak görünür.</p>
+{% endcall %}
+{% call k.ask("Property'lerin tipleri var mı?") %}
+<p>Evet: String, Int, Long, Double, Boolean ve tarih (DateTime) gibi tipler vardır ve bulk loader CSV başlığında kolon tipini <code>name:String</code> biçiminde alır. Ama bir şema yoktur: aynı property bir vertex'te sayı, başka bir vertex'te metin olabilir. Tipin tutarlı olmasını yazan uygulama sağlar.</p>
+{% endcall %}
+<p>Lale Market'in Neptune cluster'ının gerçek tanımı budur (<code>cloudformation/workshop.yaml</code> içinden):</p>
+{% call k.sql("T1", "Neptune cluster'ı ve iki Serverless instance") %}
+<pre><code>NeptuneCluster:
+  Type: AWS::Neptune::DBCluster
+  Properties:
+    DBClusterIdentifier: dbws-neptune
+    DBSubnetGroupName: !Ref NeptuneSubnetGroup
+    VpcSecurityGroupIds: [!Ref DbSgNeptune]
+    IamAuthEnabled: true
+    StorageEncrypted: true
+    BackupRetentionPeriod: 1
+    ServerlessScalingConfiguration:
+      MinCapacity: 1
+      MaxCapacity: 8
+NeptuneWriter:
+  Type: AWS::Neptune::DBInstance
+  Properties:
+    DBClusterIdentifier: !Ref NeptuneCluster
+    DBInstanceClass: db.serverless
+    AvailabilityZone: !Sub ${AWS::Region}b
+NeptuneReader:
+  Type: AWS::Neptune::DBInstance
+  Properties:
+    DBClusterIdentifier: !Ref NeptuneCluster
+    DBInstanceClass: db.serverless
+    AvailabilityZone: !Sub ${AWS::Region}c</code></pre>
+<table class="clause">
+  <tr><td>DBClusterIdentifier: dbws-neptune</td><td>Cluster'ın adı. Storage volume ve endpoint'ler cluster'a aittir; instance'lar ona bağlanır.</td></tr>
+  <tr><td>IamAuthEnabled: true</td><td>Şifre yok: her istek bir IAM role ile imzalanır (SigV4, servis adı <code>neptune-db</code>).</td></tr>
+  <tr><td>StorageEncrypted: true</td><td>Volume diskte şifrelidir.</td></tr>
+  <tr><td>BackupRetentionPeriod: 1</td><td>Otomatik yedekler 1 gün tutulur (35 güne kadar ayarlanabilir).</td></tr>
+  <tr><td>ServerlessScalingConfiguration: 1–8</td><td>Her Serverless instance 1 ile 8 NCU arasında büyür ve küçülür; en az 1 NCU her zaman ödenir.</td></tr>
+  <tr><td>NeptuneWriter, db.serverless, AZ b</td><td>Yazmaları alan instance.</td></tr>
+  <tr><td>NeptuneReader, db.serverless, AZ c</td><td>Okuma replica'sı, başka bir AZ'de; writer düşerse onun yerine geçer.</td></tr>
+</table>
 {% endcall %}
 
-<h2 id="model" data-short="Vertex'ler ve edge'ler"><span class="sec">03</span>Property graph: vertex'ler, edge'ler, label'lar ve property'ler</h2>
-<p>Bir {{ k.term("property graph") }}'ın iki tür elemanı vardır:</p>
-<ul>
-  <li>Bir {{ k.term("vertex") }} (ya da "node") bir şeydir: bir müşteri, bir ürün. Bir label'ı vardır, örneğin <code>Customer</code>, ve property'leri vardır, örneğin <code>name</code>.</li>
-  <li>Bir {{ k.term("edge") }}, iki vertex arasındaki bir ilişkidir. Bir yönü, bir label'ı (örneğin <code>BOUGHT</code>) ve property'leri (örneğin <code>order_id</code> ve <code>qty</code>) vardır.</li>
-</ul>
-{{ k.fig("neptune-property-graph.png", "label'lı bir property graph. Person vertex'lerinin Book vertex'lerine WROTE ve PURCHASED edge'leri var. Her edge'in bir date property'si var.") }}
-<p>Bu sayfanın öğretici graph'ı budur. Dört müşteri ve beş ürün Lale Market'in gerçek kayıtlarıdır. On BOUGHT edge'i örnektir.</p>
-{{ k.sample("g_customers", "Customer vertex'leri", key=["~id"]) }}
-{{ k.sample("g_products", "Product vertex'leri", key=["~id"]) }}
-{{ k.sample("g_bought", "BOUGHT edge'leri", key=["~id"], ref=["~from", "~to"]) }}
-<p>Identifier'lar: her vertex'in ve her edge'in kendi <code>~id</code>'si vardır. Müşteri id'sinin sahibi mağazanın müşteri table'ıdır, ürün id'sinin sahibi ise katalogdur. Seed bu id'leri vertex'lerin <code>~id</code>'si olarak ödünç alır.
-   Bir edge müşteriyi kopyalamaz. Başlangıç vertex'inin <code>~id</code>'sini <code>~from</code>'da, bitiş vertex'inin <code>~id</code>'sini <code>~to</code>'da saklar. e1 edge'i C00001 müşterisine aittir ve P0001 ürününü gösterir.
-   <code>~id</code>, <code>~from</code>, <code>~to</code> ve <code>~label</code> kolon isimleri, Neptune bulk loader'ın CSV dosyalarında kullandığı isimlerdir.</p>
-{{ k.quiz("np-q1", "Edge table'ını kullan. P0175'i hangi müşteriler aldı?",
-   ["C00001 ve C00002", "C00002 ve C00003", "C00003 ve C00005", "Sadece C00002"],
-   1, "e5 ve e7 edge'lerinde ~to = P0175'tir. ~from değerleri C00002 ve C00003'tür.") }}
-
-<h2 id="pattern" data-short="Pattern'ler ve 2 hop"><span class="sec">04</span>openCypher pattern'leri: bir üründen iki hop</h2>
-<p>openCypher aradığı pattern'i parantezler ve oklarla çizer: <code>(a)-[:BOUGHT]->(b)</code>, "b vertex'ine BOUGHT edge'i olan bir a vertex'i" demektir.
-   Ürün sayfasının gerçek query'si budur (<code>engines/neptune.py</code> içinden):</p>
-{% call k.sql("Q1", "Bunu alanlar şunları da aldı") %}
+<h2 id="reads" data-short="openCypher okumaları"><span class="sec">B2</span>Okumalar: iki ve üç hop'luk öneri, canlı cevaplarıyla</h2>
+<p>A5'teki pattern'ler Neptune'de openCypher sorgularıdır; A4'teki traversal bu sorguların çalışma biçimidir. Ürün sayfasının gerçek sorgusu budur (<code>engines/neptune.py</code> içinden):</p>
+{% call k.sql("Q1", "Bunu alanlar şunları da aldı (iki hop)") %}
 <pre><code>MATCH (p:Product {`~id`: $pid})&lt;-[:BOUGHT]-(c:Customer)-[:BOUGHT]-&gt;(rec:Product)
 WHERE rec &lt;&gt; p
 RETURN rec.`~id` AS product_id, rec.name AS name, rec.category AS category, count(DISTINCT c) AS score
 ORDER BY score DESC, product_id LIMIT 6</code></pre>
 <table class="clause">
-  <tr><td>MATCH (p:Product {`~id`: $pid})</td><td>Bir Product vertex'inden başla. <code>$pid</code> bir parametredir, örneğin P0001. Id araması bir index kullanır, bu yüzden tek bir vertex okur.</td></tr>
-  <tr><td>&lt;-[:BOUGHT]-(c:Customer)</td><td>Hop 1. Ürüne gelen BOUGHT edge'lerini takip et. Her biri onu alan bir <code>c</code> müşterisine götürür.</td></tr>
-  <tr><td>-[:BOUGHT]-&gt;(rec:Product)</td><td>Hop 2. Bu müşterilerin her birinden çıkan BOUGHT edge'lerini takip et. Her biri bir <code>rec</code> ürününe götürür.</td></tr>
+  <tr><td>MATCH (p:Product {`~id`: $pid})</td><td>Başlangıç noktası (A3): kimlik index'iyle tek bir vertex. <code>$pid</code> bir parametredir, örneğin P0001.</td></tr>
+  <tr><td>&lt;-[:BOUGHT]-(c:Customer)</td><td>Hop 1: ürüne gelen BOUGHT edge'leri, yani alıcılar (POGS index'i, B1).</td></tr>
+  <tr><td>-[:BOUGHT]-&gt;(rec:Product)</td><td>Hop 2: her alıcının giden BOUGHT edge'leri (SPOG index'i).</td></tr>
   <tr><td>WHERE rec &lt;&gt; p</td><td>Başlangıç ürününü önerme.</td></tr>
-  <tr><td>count(DISTINCT c) AS score</td><td>Her <code>rec</code> ürünü için ona ulaşan farklı müşterileri say. Daha çok ortak alıcı daha yüksek score verir.</td></tr>
-  <tr><td>ORDER BY score DESC, product_id LIMIT 6</td><td>En iyi altı ürünü döndür. Eşit score'larda sırayı ürün id'si belirler.</td></tr>
+  <tr><td>count(DISTINCT c) AS score</td><td>Her öneri için ona ulaşan <b>farklı</b> müşterileri say; aynı müşterinin çoklu edge'leri bir kez sayılır.</td></tr>
+  <tr><td>ORDER BY score DESC, product_id LIMIT 6</td><td>En iyi altı ürün; eşitlikte ürün id'si.</td></tr>
 </table>
 {% endcall %}
-{% call k.predict("Edge table'ını kullan. Q1, P0001 için hangi ürünleri, hangi score'larla döndürür?") %}
-<p>P0001'in alıcıları C00001, C00002 ve C00003'tür. Diğer ürünleri P0016 (C00001 ve C00002), P0175 (C00002 ve C00003) ve P0044'tür (C00003). Yani P0016 ve P0175 score 2, P0044 score 1 alır.</p>
+{% call k.live("canlı graph'ta Q1, P0001 için (GET /neptune/api/recs?product=P0001, 2026-10-31)") %}
+<pre><code>POST /openCypher   (EC2 10.20.11.11 → Neptune cluster endpoint, HTTPS 8182, IAM role SigV4)
+[ { "product_id": "P0041", "name": "Rhein Oyuncu Mouse 41",         "category": "Elektronik", "score": 10 },
+  { "product_id": "P0123", "name": "Kapadokya Koşu Ayakkabısı 123", "category": "Spor",       "score": 10 },
+  { "product_id": "P0147", "name": "Nordwind Kahve Makinesi 147",   "category": "Ev & Yaşam", "score": 10 },
+  { "product_id": "P0014", "name": "Nordwind Python ile Veri 14",   "category": "Kitap",      "score": 9 },
+  { "product_id": "P0065", "name": "Rhein Güneş Gözlüğü 65",        "category": "Moda",       "score": 9 },
+  { "product_id": "P0076", "name": "Nordwind Oyuncu Mouse 76",      "category": "Elektronik", "score": 9 } ]
+items: 6   ms: 205.2   (o sabahın ilk çağrısı: 14838.3 ms)</code></pre>
+{% endcall %}
+<p>Cevabı oku. P0041'i P0001'in alıcılarından 10 farklı müşteri almış. B1'deki öğrenme API'ı ise P0125'i 42 ile en üste koymuştu: o sorgu <code>count(*)</code> ile yolları sayar ve birkaç müşterinin aynı ürünleri tekrar tekrar alması (çoklu edge) sayıyı şişirir. Öneri için doğru ölçü farklı müşterilerdir. Süreye de bak: aynı sorgu 205 ms sürdü; o sabahın ilk çağrısı ise 14,8 saniye sürmüştü. Bu ölçüm nedenini göstermez; en olası açıklama, uzun bir boşluktan sonra Serverless instance'ların en düşük kapasitede olması ve sık okunan verinin henüz bellekte (buffer cache) bulunmamasıdır. İkinci ve üçüncü çağrı 205 ve 273 ms sürdü. Workshop'un sorgu süresi, Engine App'ten Neptune'e giden ağ ve SigV4 imzası dahil, uçtan uca ölçümdür.</p>
+{% call k.predict("Öğretici graph'ı kullan (A3). Q1, P0001 için kaç edge okur ve hangi ürünleri, hangi score'larla döndürür?") %}
+<p>Hop 1: P0001'e gelen e1, e3 ve e6 (3 edge): alıcılar C00001, C00002, C00003. Hop 2: bu üç müşterinin giden edge'leri, P0001'e dönenler dahil 8 edge. Toplam 11 edge. Sonuç: P0016 score 2 (C00001, C00002), P0175 score 2 (C00002, C00003), P0044 score 1 (C00003). Zeynep Şahin'in edge'leri okunmaz.</p>
 {% endcall %}
 {{ k.sim("hop2", "P0001'den iki hop") }}
-<p>"Okunan edge" sayacına bak. Traversal başlangıç vertex'inin yakınındaki edge'leri okur. Zeynep Şahin'in edge'lerini okumaz, çünkü P0001'den hiçbir yol ona ulaşmaz.
-   Graph büyüdüğünde bir graph query'sinin hızlı kalmasının nedeni budur. Maliyeti ziyaret ettiği komşulara bağlıdır, toplam vertex sayısına değil.</p>
-
-<h2 id="hop3" data-short="Üç hop, kişisel"><span class="sec">05</span>Üç hop: kişisel bir öneri</h2>
-<p>Ürün sayfası her ziyaretçi için çalışır. Kişisel bir öneri ise müşteriden başlar ve bir hop daha ileri gider: benim ürünlerim, ürünlerimin diğer alıcıları ve onların diğer ürünleri.</p>
-{% call k.sql("Q2", "Bana benzeyen müşterilerin aldığı ürünler") %}
+<p>"Okunan edge" sayacına bak: 11. Simülasyon A4'teki şemanın aynısını adım adım hesaplar. Graph 10 milyon müşteriye büyüse de P0001'in komşuları aynıysa sayı aynı kalır.</p>
+<p>Kişisel öneri bir hop daha yürür: benim aldıklarım, onları alan diğer müşteriler ve onların aldıkları, benim almadıklarım.</p>
+{% call k.sql("Q2", "Bana benzeyen müşterilerin aldıkları (üç hop)") %}
 <pre><code>MATCH (me:Customer {`~id`: $cid})-[:BOUGHT]-&gt;(:Product)&lt;-[:BOUGHT]-(o:Customer)-[:BOUGHT]-&gt;(rec:Product)
 WHERE o &lt;&gt; me AND NOT (me)-[:BOUGHT]-&gt;(rec)
 RETURN rec.`~id` AS product_id, rec.name AS name, rec.category AS category, count(DISTINCT o) AS score
 ORDER BY score DESC, product_id LIMIT 6</code></pre>
 <table class="clause">
-  <tr><td>(me:Customer {`~id`: $cid})-[:BOUGHT]-&gt;(:Product)</td><td>Hop 1. Benim aldığım ürünler. Query onu döndürmediği için product vertex'inin query'de bir ismi yok.</td></tr>
-  <tr><td>&lt;-[:BOUGHT]-(o:Customer)</td><td>Hop 2. Aynı ürünleri alan diğer <code>o</code> müşterileri.</td></tr>
-  <tr><td>-[:BOUGHT]-&gt;(rec:Product)</td><td>Hop 3. Bu müşterilerin aldığı ürünler.</td></tr>
+  <tr><td>(me:Customer {`~id`: $cid})-[:BOUGHT]-&gt;(:Product)</td><td>Hop 1: benim aldığım ürünler. Ürün döndürülmediği için ona bir ad verilmez.</td></tr>
+  <tr><td>&lt;-[:BOUGHT]-(o:Customer)</td><td>Hop 2: aynı ürünleri alan diğer müşteriler.</td></tr>
+  <tr><td>-[:BOUGHT]-&gt;(rec:Product)</td><td>Hop 3: onların aldıkları.</td></tr>
   <tr><td>WHERE o &lt;&gt; me</td><td>Ben "bana benzeyen bir müşteri" değilim.</td></tr>
-  <tr><td>AND NOT (me)-[:BOUGHT]-&gt;(rec)</td><td>Zaten aldığım bir ürünü önerme. Bu, koşul olarak kullanılan bir pattern'dir.</td></tr>
+  <tr><td>AND NOT (me)-[:BOUGHT]-&gt;(rec)</td><td>Zaten aldığım ürünü önerme: koşul olarak bir pattern (A5).</td></tr>
   <tr><td>count(DISTINCT o) AS score</td><td>Ürünü alan benzer müşterilerin sayısı.</td></tr>
 </table>
 {% endcall %}
-{{ k.sim("hop3", "Ayşe Yılmaz'dan (C00001) üç hop") }}
-{{ k.quiz("np-q2", "Yeni bir ziyaretçinin hiç BOUGHT edge'i yok. Q2 bu ziyaretçi için ne döndürür?",
-   ["En çok satan altı ürünü", "Hiçbir şey, çünkü hop 1 hiçbir ürün bulamaz", "Graph'taki bütün ürünleri", "Bir hata, çünkü vertex'in edge'i yok"],
-   1, "Pattern ilk hop'tan itibaren eşleşmelidir. BOUGHT edge'i olmadan hop 1 hiçbir şey bulmaz, bu yüzden hiçbir row çıkmaz. Mağaza bu ziyaretçiler için Q1'i kullanır.") }}
-
-<h2 id="paths" data-short="Her uzunlukta path'ler"><span class="sec">06</span>Her uzunlukta path'ler</h2>
-<p>Bazı sorular hop sayısını bilmez. "Bu hesap bir dolandırıcılık hesabına bağlı mı?" iki hop da isteyebilir, altı hop da. openCypher değişken bir uzunluğu bir yıldızla yazar:</p>
-{% call k.sql("Q3", "İki müşteri arasındaki en kısa bağlantı") %}
-<pre><code>MATCH path = shortestPath((a:Customer {`~id`: 'C00005'})-[:BOUGHT*..6]-(b:Customer {`~id`: 'C00001'}))
-RETURN [n IN nodes(path) | n.`~id`] AS ids, length(path) AS hops</code></pre>
-<table class="clause">
-  <tr><td>-[:BOUGHT*..6]-</td><td>1'den 6'ya kadar BOUGHT edge'i takip et. Ok başı yok, bu yüzden query edge'leri iki yönde de takip eder.</td></tr>
-  <tr><td>shortestPath(...)</td><td>En az hop'lu path'i döndür.</td></tr>
-  <tr><td>nodes(path), length(path)</td><td>Path üzerindeki vertex'ler ve edge sayısı.</td></tr>
-</table>
+{% call k.live("canlı graph'ta Q2, persona C00001 için (GET /neptune/api/recs?mode=persona, 2026-10-31)") %}
+<pre><code>[ { "product_id": "P0063", "name": "Alpen Spor Çantası 63",       "score": 71 },
+  { "product_id": "P0114", "name": "Rhein Bulut Mimarisi 114",    "score": 71 },
+  { "product_id": "P0148", "name": "Nordwind Yoga Matı 148",      "score": 70 },
+  { "product_id": "P0110", "name": "Ege Kot Pantolon 110",        "score": 69 }, ... ]
+items: 6   ms: 953.1</code></pre>
 {% endcall %}
-<p>Simülasyon en kısa path'in arkasındaki fikri gösterir: bir breadth-first search. Önce 1 uzaklıktaki bütün vertex'leri, sonra 2 uzaklıktakileri ziyaret eder ve hedefi bulduğu seviyede durur.</p>
-{{ k.sim("path", "Zeynep Şahin'den Ayşe Yılmaz'a") }}
-<p>Aynı query, Neptune'ün diğer property-graph dili Gremlin'de bir adımlar zinciridir. Neptune, Gremlin'i ve openCypher'ı aynı property-graph verisi üzerinde çalıştırır
-   (<a href="https://docs.aws.amazon.com/neptune/latest/userguide/get-started-access-graph.html">Accessing graph data in Neptune</a>):</p>
-{% call k.sql("Q4", "Gremlin'de Q1") %}
-<pre><code>g.V('P0001').as('p').in('BOUGHT').out('BOUGHT').
+<p>Üç hop iki hop'tan yaklaşık beş kat uzun sürdü (953 ms ve 205 ms): Ayşe'nin 92 edge'i, o ürünlerin bütün alıcıları ve onların bütün edge'leri. A4'teki kural burada görünür: her hop'ta derece çarpılır. Canlı graph küçük ve yoğun bağlıdır (200 ürün, 11.887 edge); üç hop graph'ın büyük kısmına değer. Gerçek bir mağazada bu sorgu bir sınırla (LIMIT ya da örnekleme) yazılır.</p>
+{{ k.sim("hop3", "Ayşe Yılmaz'dan (C00001) üç hop") }}
+<p>Q1'in Gremlin'deki yakın bir karşılığı bir adımlar zinciridir (sayımı biraz farklıdır, tabloya bak). Neptune iki dili aynı veri üzerinde çalıştırır:</p>
+{% call k.sql("Q3", "Gremlin'de Q1'e yakın bir sorgu") %}
+<pre><code>g.V('P0001').as('p').in('BOUGHT').dedup().out('BOUGHT').
   where(neq('p')).groupCount().by(id).
   order(local).by(values, desc).limit(local, 6)</code></pre>
 <table class="clause">
-  <tr><td>g.V('P0001').as('p')</td><td>P0001 id'li vertex'ten başla ve ona <code>p</code> step label'ını ver.</td></tr>
-  <tr><td>.in('BOUGHT').out('BOUGHT')</td><td>Edge yönünün tersine hop 1, sonra edge yönünde hop 2.</td></tr>
-  <tr><td>.where(neq('p'))</td><td><code>p</code> step label'ına, yani başlangıç ürününe eşit olan vertex'i at.</td></tr>
-  <tr><td>.groupCount().by(id)</td><td>Her ürünün kaç kez göründüğünü say. Bu farklı müşterileri değil, path'leri sayar. Bir müşteri bir ürünü iki kez aldıysa Q1 müşteriyi bir kez sayar, bu query ise iki path sayar.</td></tr>
-  <tr><td>.order(local)...limit(local, 6)</td><td>Sayıları en yüksek önce sırala ve altısını tut.</td></tr>
+  <tr><td>g.V('P0001').as('p')</td><td>P0001 kimlikli vertex'ten başla ve ona <code>p</code> adını ver.</td></tr>
+  <tr><td>.in('BOUGHT').dedup()</td><td>Hop 1: gelen BOUGHT edge'leri; aynı müşteri bir kez kalsın.</td></tr>
+  <tr><td>.out('BOUGHT').where(neq('p'))</td><td>Hop 2: giden BOUGHT edge'leri; başlangıç ürünü hariç.</td></tr>
+  <tr><td>.groupCount().by(id)</td><td>Her ürüne ulaşan yolları say. Bir müşteri aynı ürünü iki kez aldıysa iki yol sayılır; bu yüzden Gremlin hâli Q1'in DISTINCT'ini yalnız alıcı tarafında verir.</td></tr>
+  <tr><td>.order(local)...limit(local, 6)</td><td>En yüksek altı sayı.</td></tr>
 </table>
 {% endcall %}
+{% call k.ask("Hiç alışveriş yapmamış bir ziyaretçi için Q2 ne döndürür?") %}
+<p>Hiçbir şey: hop 1 hiçbir ürün bulmaz ve pattern eşleşmez. Hata da olmaz. Canlı graph'ta Elif Kaya (C00003) henüz hiçbir şey almamış; onun için kişisel öneri boştur. Mağaza böyle ziyaretçilere ürün sayfasındaki Q1'i (üründen başlayan iki hop) gösterir.</p>
+{% endcall %}
+{{ k.quiz("npt-q7", "Q1'de count(DISTINCT c) yerine count(*) yazılsaydı ne değişirdi?",
+   ["Hiçbir şey, ikisi aynı sayıyı verir", "Aynı ürünü tekrar tekrar alan birkaç müşteri bir ürünü yukarı taşırdı, çünkü yollar sayılırdı", "Sorgu daha az edge okurdu", "Sorgu hata verirdi"],
+   1, "count(*) yolları sayar. Bir müşterinin P0001'e ve P0125'e giden birden çok edge'i her kombinasyon için ayrı bir yoldur; canlı graph'ta bu P0125'e 42 verdi, oysa farklı müşteri sayısı ilk altıya girmeyecek kadar küçüktü.") }}
 
-<h2 id="sql" data-short="Aynı soru SQL'de"><span class="sec">07</span>Aynı soru SQL'de</h2>
-<p>Bir relational database Q1'i sipariş satırlarının bir self-join'i ile cevaplayabilir. Her hop, FROM clause'unda table'ın bir kopyası daha demektir:</p>
-{% call k.sql("Q5", "SQL'de Q1") %}
+<h2 id="pathsb" data-short="Path'ler pratikte"><span class="sec">B3</span>Path'ler pratikte: shortestPath() yoksa ne yapılır?</h2>
+<p>A6'daki değişken uzunlukta path Neptune openCypher'ında bir aralıkla yazılır. Neptune Database'in openCypher uygulamasında <code>shortestPath()</code> ve <code>allShortestPaths()</code> desteklenmez (<a href="https://docs.aws.amazon.com/neptune/latest/userguide/feature-opencypher-compliance.html">openCypher compliance</a>). En kısa bağlantı için üç yol vardır:</p>
+{% call k.sql("Q4", "İki müşteri arasındaki en kısa bağlantı, openCypher'da") %}
+<pre><code>MATCH p = (a:Customer {`~id`: 'C00005'})-[:BOUGHT*1..6]-(b:Customer {`~id`: 'C00001'})
+RETURN [n IN nodes(p) | n.`~id`] AS ids, length(p) AS hops
+ORDER BY hops LIMIT 1</code></pre>
+<table class="clause">
+  <tr><td>-[:BOUGHT*1..6]-</td><td>1 ile 6 arasında BOUGHT edge'i; ok başı olmadığı için iki yönde de yürür.</td></tr>
+  <tr><td>ORDER BY hops LIMIT 1</td><td>Bulunan yollardan en kısasını döndür. Bedeli: sınır içindeki bütün yollar bulunur, sonra sıralanır; bu yüzden aralık kısa tutulur.</td></tr>
+  <tr><td>nodes(p), length(p)</td><td>Yolun vertex'leri ve edge sayısı.</td></tr>
+</table>
+{% endcall %}
+<table class="data">
+  <caption>bütün durumlar: Neptune'de en kısa yol</caption>
+  <thead><tr><th>Yol</th><th>Nasıl</th><th>Ne zaman</th></tr></thead>
+  <tbody>
+    <tr><td>openCypher, aralık + ORDER BY</td><td>Q4</td><td>Kısa bir aralık (en fazla birkaç hop) ve az sorgu</td></tr>
+    <tr><td>Gremlin, repeat()</td><td><code>g.V('C00005').repeat(both('BOUGHT').simplePath()).until(hasId('C00001')).limit(1).path()</code></td><td>Bulunan ilk yol yeterliyse; en kısayı garanti etmek için yollar uzunluğa göre seçilir</td></tr>
+    <tr><td>Neptune Analytics</td><td>En kısa yol algoritmaları (Single-Source, Source-Target) openCypher prosedürü olarak</td><td>Birçok çift için ya da büyük graph'larda (A9)</td></tr>
+    <tr><td>openCypher <code>shortestPath()</code></td><td>—</td><td><b>Yapamaz</b> (Neptune Database)</td></tr>
+  </tbody>
+</table>
+<p>Simülasyon en kısa yolun arkasındaki fikri gösterir: genişlik öncelikli arama. Önce 1 uzaklıktaki bütün vertex'ler, sonra 2 uzaklıktakiler; hedef bulunduğu seviyede durur.</p>
+{{ k.sim("path", "Zeynep Şahin'den Ayşe Yılmaz'a") }}
+{% call k.ask("Simülasyondaki yol \"Zeynep ve Elif ikisi de P0044 aldı\" diyor. Bu bir dolandırıcılık halkası olabilir mi?") %}
+<p>Aynı mekanizmadır. Dolandırıcılık graph'ında ürün yerine bir cihaz, bir adres ya da bir telefon vardır; iki hesabın ortak bir cihazı onları iki hop'ta bağlar. M2'deki kart 2 aynı yürüyüşü en fazla üç hop ve dört edge türüyle her ödemede sorar.</p>
+{% endcall %}
+
+<h2 id="writesb" data-short="Yazmalar ve yeniden deneme"><span class="sec">B4</span>Yazmalar pratikte: satın alma, yeniden deneme ve MERGE</h2>
+<p>A7'deki yazma yolları Neptune'de openCypher sorgularıdır ve her sorgu bir transaction'dır. Mağazadaki bir satın alma bu sorguyla yeni edge'ler yazar (<code>engines/neptune.py</code> içinden):</p>
+{% call k.sql("W1", "Bir satın almanın edge'leri (canlı mağaza)") %}
+<pre><code>UNWIND $rows AS r
+MATCH (c {`~id`: r.c}) MATCH (p {`~id`: r.p})
+CREATE (c)-[:BOUGHT {order_id: r.o, qty: 1}]-&gt;(p)</code></pre>
+<table class="clause">
+  <tr><td>UNWIND $rows AS r</td><td>Sepetteki her ürün için bir satır: <code>{c: müşteri, p: ürün, o: sipariş}</code>.</td></tr>
+  <tr><td>MATCH (c {`~id`: r.c}) MATCH (p {`~id`: r.p})</td><td>İki ucu kimlik index'iyle bulur. Biri yoksa o satır için edge yazılmaz.</td></tr>
+  <tr><td>CREATE (c)-[:BOUGHT {...}]-&gt;(p)</td><td>Yeni bir edge yazar. Sepetin bütün edge'leri tek transaction'dır: hepsi görünür ya da hiçbiri.</td></tr>
+</table>
+{% endcall %}
+<p>Bu sorgu her çağrıda yeni edge'ler yazar. Workshop'ta istek yeniden denenmez; gerçek bir sistemde ağ zaman aşımı ya da kuyruktan tekrar okunan bir mesaj aynı isteği ikinci kez gönderir. İki simülasyon farkı gösterir: önce CREATE, sonra MERGE.</p>
+{{ k.sim("retry_create", "Cevap kayboldu, istek yeniden denendi: CREATE") }}
+{{ k.sim("retry_merge", "Aynı yeniden deneme: MERGE ve order_id") }}
+{% call k.sql("W2", "Yeniden denenebilir yazma") %}
+<pre><code>UNWIND $rows AS r
+MATCH (c:Customer {`~id`: r.c}) MATCH (p:Product {`~id`: r.p})
+MERGE (c)-[b:BOUGHT {order_id: r.o}]-&gt;(p)
+  ON CREATE SET b.qty = r.q</code></pre>
+<table class="clause">
+  <tr><td>MERGE (c)-[b:BOUGHT {order_id: r.o}]-&gt;(p)</td><td>Bu iki vertex arasında bu order_id'li bir BOUGHT edge'i varsa onu kullanır, yoksa oluşturur.</td></tr>
+  <tr><td>ON CREATE SET b.qty = r.q</td><td>Yalnız yeni oluşturulduğunda adedi yazar; yeniden deneme adedi değiştirmez.</td></tr>
+</table>
+{% endcall %}
+<p>Eşzamanlı yazmalarda Neptune'ün kuralları A7'deki tablodur: okuma sorguları snapshot görür; yazan sorgular okudukları aralığı kilitler; çakışan yazma en fazla 60 saniye bekler, sonra geri alınır; deadlock'ta biri hemen geri alınır. Geri alınan istek uygulamaya bir hata olarak döner ve uygulama aynı sorguyu tekrar gönderir; W2 gibi yazılmış bir sorgu için bu güvenlidir.</p>
+{% call k.ask("Okumayı replica'dan yapıyorum. Az önce yazdığım edge'i görmezsem?") %}
+<p>Replica'lar writer ile aynı volume'u okur ama writer'ın birkaç milisaniye gerisinde olabilir; AWS bu gecikmeyi bir CloudWatch metriğiyle gösterir. Bir yazmanın sonucunu hemen görmek zorunlu olan okuma (aynı cihazla art arda iki ödeme) writer endpoint'ine gönderilir; geri kalan okumalar replica'lara gider. M2'deki kartlar bunu (kart 1, 2, 3, 5 ve 8) R2'de sayar.</p>
+{% endcall %}
+{{ k.quiz("npt-q8", "Bir ödeme servisi aynı olayı kuyruktan iki kez okuyabiliyor. Graph'a \"kart bu cihazı kullandı\" edge'ini nasıl yazmalı?",
+   ["CREATE ile, iki kez gelirse iki edge olur ama zararı yok", "MERGE ile ve olayın kimliğini edge property'si olarak vererek", "Önce bir okuma sorgusu, sonra ayrı bir CREATE sorgusu", "Edge'i hiç yazmamak, yalnız vertex'leri yazmak"],
+   1, "MERGE aynı kimlikli edge'i bulur ve ikinci kez yazmaz; yazan sorgu okuduğu aralığı kilitlediği için aynı anda gelen iki deneme de tek edge bırakır. Ayrı okuma ve yazma arasında başka bir istek araya girebilir.") }}
+
+<h2 id="cost" data-short="Performans ve maliyet"><span class="sec">B5</span>Performans ve maliyet: aynı soru SQL'de, supernode, süre sınırı ve NCU</h2>
+<p>A4'teki traversal maliyetini SQL ile karşılaştırmak için Q1'in ilişkisel hâline bak. Bir sipariş satırları table'ı (<code>bought</code>) aynı bilgiyi taşır:</p>
+{% call k.sql("Q5", "SQL'de Q1 (Aurora PostgreSQL)") %}
 <pre><code>SELECT b.product_id, count(DISTINCT b.customer_id) AS score
 FROM   bought a
 JOIN   bought b ON b.customer_id = a.customer_id
@@ -216,66 +994,121 @@ WHERE  a.product_id = 'P0001' AND b.product_id &lt;&gt; 'P0001'
 GROUP  BY b.product_id
 ORDER  BY score DESC, b.product_id LIMIT 6;</code></pre>
 <table class="clause">
-  <tr><td>FROM bought a ... WHERE a.product_id = 'P0001'</td><td>Hop 1: P0001 alıcılarının row'ları.</td></tr>
-  <tr><td>JOIN bought b ON b.customer_id = a.customer_id</td><td>Hop 2: bu alıcıların bütün row'ları. Bu bir self-join'dir, yani bir table'ın kendisiyle join'i.</td></tr>
-  <tr><td>GROUP BY ... count(DISTINCT ...)</td><td>Q1'deki gibi score.</td></tr>
+  <tr><td>FROM bought a … WHERE a.product_id = 'P0001'</td><td>Hop 1: P0001'in alıcılarının row'ları (product_id index'i).</td></tr>
+  <tr><td>JOIN bought b ON b.customer_id = a.customer_id</td><td>Hop 2: bu alıcıların bütün row'ları; table'ın kendisiyle birleştirilmesi (self-join, customer_id index'i).</td></tr>
+  <tr><td>GROUP BY … count(DISTINCT …)</td><td>Q1'deki score.</td></tr>
 </table>
 {% endcall %}
-<p>İki hop için bu SQL iyidir ve doğru index'lerle hızlıdır. Fark derinlikle büyür. Üç hop table'ın üçüncü bir kopyasını, "herhangi bir sayıda hop" ise WITH RECURSIVE ister.
-   Her ek hop planın ortasındaki row'ları çoğaltır. Bir graph database edge'leri öyle saklar ki bir sonraki hop doğrudan son hop'un ulaştığı vertex'ten başlar.</p>
-{{ k.quiz("np-q3", "Bir graph traversal'ının maliyeti neden graph'ın toplam boyutuyla büyümez?",
-   ["Neptune bütün graph'ları bellekte tutar", "Bir traversal sadece ulaştığı vertex'lerin edge'lerini okur", "Neptune her graph'ı bir milyon edge ile sınırlar", "openCypher query'leri edge okumaz"],
-   1, "Traversal bir vertex'ten başlar ve onun edge'lerini takip eder. Hiçbir path'in ulaşmadığı vertex'lerin maliyeti yoktur.") }}
+<p>İki hop için bu SQL doğru index'lerle hızlıdır. Fark üç yerden büyür: her ek hop FROM'da bir kopya daha ister; birleştirmenin ara sonucu her hop'ta çoğalır ve bir supernode'da (on binlerce alıcı) bir anda büyür; "herhangi bir sayıda hop" WITH RECURSIVE ister. Graph'ta bir sonraki hop doğrudan son hop'un ulaştığı vertex'lerin index aralığıdır.</p>
+<table class="data">
+  <caption>Neptune'de neye ödersin (eu-central-1, Price List API, 2026-10-31)</caption>
+  <thead><tr><th>Kalem</th><th>Birim</th><th>Fiyat</th><th>Ne zaman büyür</th></tr></thead>
+  <tbody>
+    <tr><td>Serverless kapasite</td><td>NCU-saat</td><td>0,1941 USD; en az 1 NCU her instance için sürekli (ayda yaklaşık 142 USD)</td><td>Yük, uzun sorgular, supernode'lar kapasiteyi büyütür</td></tr>
+    <tr><td>Provisioned instance</td><td>Instance-saat</td><td>Örneğin db.t3.medium 0,115 USD, db.r6g.large 0,3967 USD</td><td>Instance sayısı ve boyutu</td></tr>
+    <tr><td>Storage (Standard)</td><td>GB-ay</td><td>0,119 USD</td><td>Graph büyüdükçe</td></tr>
+    <tr><td>I/O (Standard)</td><td>Milyon istek</td><td>0,22 USD</td><td>Buffer cache'e sığmayan okumalar ve yazmalar</td></tr>
+    <tr><td>Storage (I/O-Optimized)</td><td>GB-ay</td><td>0,267 USD, I/O ücreti yok</td><td>I/O faturanın büyük parçasıysa</td></tr>
+    <tr><td>Neptune Analytics</td><td>m-NCU-saat</td><td>32 m-NCU 1,162 USD, 128 m-NCU 4,647 USD; durdurulan graph %10</td><td>Graph'ın bellekteki boyutu ve açık kaldığı süre</td></tr>
+  </tbody>
+</table>
+<p>Uzun ya da yanlışlıkla sınırsız bir sorgu için Neptune'de bir süre sınırı vardır: cluster genelinde <code>neptune_query_timeout</code> ve sorgu başına bir ipucu (<code>USING QUERY:TIMEOUTMILLISECONDS 100</code>); ikisinden küçüğü geçerlidir ve aşan sorgu sonlandırılır. AWS, serverless instance'ta çok yüksek bir sınırın kapasiteyi ve faturayı beklenmedik biçimde büyütebileceğini hatırlatır (<a href="https://docs.aws.amazon.com/neptune/latest/userguide/opencypher-query-hints-timeout-hint.html">openCypher query timeout hint</a>).</p>
+{% call k.ask("Supernode'u pratikte nasıl görürüm?") %}
+<p>Derecesini say: <code>MATCH (p:Product)&lt;-[b:BOUGHT]-() RETURN p.`~id`, count(b) AS d ORDER BY d DESC LIMIT 10</code>. Bu bir taramadır, bir kez çalıştırılır ve sonuç bir property (<code>degree</code>) ya da bir label (<code>:Hot</code>) olarak yazılır; sorgular sonra bu işaretle supernode'dan kaçınır ya da onu sınırlar (A4).</p>
+{% endcall %}
+{{ k.quiz("npt-q9", "Gece trafiği neredeyse sıfır olan bir Neptune Serverless cluster'ında (bir writer, bir reader, en az 1 NCU) ayda en az ne ödenir?",
+   ["Hiçbir şey, Serverless sıfıra iner", "Yaklaşık 283 USD ve storage", "Yalnız storage", "Yalnız yapılan sorgular kadar"],
+   1, "Neptune Serverless kapasitesi en düşük NCU'nun altına inmez. İki instance × 1 NCU × 730 saat × 0,1941 USD ≈ 283 USD, üstüne storage ve I/O. M2'deki kart 6 ve 9 bu yüzden R5'te puan kaybeder.") }}
 
-<div class="part"><b>Bölüm 2</b><h2 id="part2" data-short="BÖLÜM 2: Amazon Neptune">Amazon Neptune: AWS servisi</h2>
-<p>Bir cluster, ortak bir storage volume ve üç query dili.</p></div>
+<h2 id="extras" data-short="Bulk loader, Streams, arama"><span class="sec">B6</span>Ek özellikler: bulk loader, Streams, metin araması ve Neptune Analytics</h2>
+<p>A8'deki toplu yükleme ve değişiklik akışı Neptune'de bulk loader ve Neptune Streams adlarını taşır (Ö7); A9'daki algoritmalar Neptune Analytics'tedir (Ö8).</p>
+<table class="data">
+  <thead><tr><th>Özellik</th><th>Ne yapar</th><th>Lale Market'te</th></tr></thead>
+  <tbody>
+    <tr><td>Bulk loader</td><td>S3'teki CSV (property graph) ya da RDF dosyalarını bir yükleme işiyle yükler; vertex ve edge dosyaları ayrıdır, başlıkta <code>~id</code>, <code>~label</code>, <code>~from</code>, <code>~to</code> (<a href="https://docs.aws.amazon.com/neptune/latest/userguide/bulk-load-tutorial-format-gremlin.html">Gremlin load data format</a>)</td><td>Kullanılmaz: Seed 500'lük UNWIND gruplarıyla yazar, çünkü graph küçüktür (C3)</td></tr>
+    <tr><td>Neptune Streams</td><td><code>neptune_streams</code> parametresiyle açılır; kayıtlar 1–90 gün (varsayılan 7) tutulur; writer ve reader'larda bir streams endpoint'i vardır</td><td>Kapalı</td></tr>
+    <tr><td>Full-text search</td><td>Streams'i okuyan bir poller OpenSearch'e kopyalar; Gremlin ve SPARQL sorguları metin araması yapar. AWS'e göre entegrasyon boş bir graph'ta kurulmalıdır, sonradan eklenen veriyi kendiliğinden kopyalamaz</td><td>Kullanılmaz; ürün araması OpenSearch Engine App'indedir</td></tr>
+    <tr><td>Neptune Analytics</td><td>Graph'ı S3'ten ya da bir Neptune Database snapshot'ından belleğe yükler; algoritmalar ve vector araması</td><td>Kullanılmaz</td></tr>
+  </tbody>
+</table>
+{{ k.fig("neptune-full-text.png", "ortadaki Stream Poller Lambda Function, aşağıdaki kaynak Neptune'ün (Stream Enabled) akışından kayıtları okur ve sağdaki OpenSearch'e yazar. DynamoDB nerede kaldığını (checkpoint) tutar, bir Step Functions akışı poller'ı belirli aralıklarla başlatır. Graph'ta metin araması bu kopyanın üzerinden yapılır; yani metin araması bir saniye ile birkaç dakika arası geride kalabilir ve ayrı bir sistemin bakımını ister.") }}
+{% call k.ask("Neptune ML nedir, bu sayfada neden yok?") %}
+<p>Neptune ML, graph üzerinde bir makine öğrenmesi modeli (graph neural network) eğitip "bu iki vertex arasında bir edge olmalı mı?" (link prediction) ya da "bu vertex'in sınıfı ne?" gibi tahminleri sorgu içinde döndüren bir özelliktir (<a href="https://docs.aws.amazon.com/neptune/latest/userguide/machine-learning-gremlin-inference-queries.html">Neptune ML inference queries</a>). Bir modelin eğitimini ve işletmesini ister; bu sayfanın kartlarındaki iş yüklerinin hiçbiri onu gerektirmediği için puanlarda yer almaz.</p>
+{% endcall %}
 
-<h2 id="service" data-short="Neptune cluster'ı"><span class="sec">08</span>Neptune cluster'ı ve AWS'in çalıştırdıkları</h2>
-<p>Bir Neptune DB cluster'ında bir primary instance ve en fazla 15 read replica vardır
-   (<a href="https://docs.aws.amazon.com/prescriptive-guidance/latest/neptune-well-architected-framework/reliability-pillar.html">Neptune reliability pillar</a>).
-   Primary instance okur ve yazar. Replica'lar sadece okur. Bütün instance'lar aynı cluster volume'u kullanır.
-   Neptune verinin kopyalarını üç Availability Zone'da tutar ve replikasyon miktarı instance sayısına bağlı değildir
-   (<a href="https://docs.aws.amazon.com/neptune/latest/userguide/storage.html">Neptune storage</a>).
-   Yeni bir replica zaten var olan volume'a bağlandığı için Neptune onu eklemek için graph'ı kopyalamaz.</p>
-<p>Primary instance arızalandığında Neptune bir replica'yı primary yapar. Kılavuza göre kesinti "generally less than 30 seconds", yani genellikle 30 saniyeden azdır.</p>
-<p>Bir cluster hem property-graph verisini hem RDF verisini saklayabilir. Neptune'ün bir Gremlin endpoint'i, bir openCypher endpoint'i ve bir SPARQL endpoint'i vardır.
-   Gremlin ve openCypher aynı property-graph verisini okur. SPARQL sadece RDF verisini okur (<a href="https://aws.amazon.com/neptune/faqs/">Neptune FAQs</a>).</p>
+<div class="part"><b>Bölüm C</b><h2 id="partC" data-short="Bölüm C: AWS servisi">AWS servisi: Neptune'ün senin için çalıştırdıkları</h2>
+<p>Bir graph database'i kendin çalıştırdığında ne yapman gerekir ve bunun yerine AWS ne yapar.</p></div>
+
+<h2 id="selfrun" data-short="Kendin çalıştırırsan"><span class="sec">C1</span>Bir graph database'i kendin çalıştırdığında ne yapmalısın</h2>
+<p>Açık kaynak graph database'ler (Neo4j Community, JanusGraph) aynı fikirleri kullanır. Birini kendin çalıştırdığında şu görevleri çözmelisin:</p>
+<ol>
+  <li><b>Makineler ve storage.</b> Sunucuları seç, graph'ın sıcak kısmının belleğe sığacağı boyutu hesapla, diskleri planla. JanusGraph'ta ayrıca altındaki storage'ı (Cassandra ya da HBase) ve index için bir search engine'i işlet.</li>
+  <li><b>Kopyalar ve failover.</b> Verinin kopyalarını farklı veri merkezlerinde tut, bir arızada yazmayı başka bir makineye devret ve uygulamayı yeni adrese yönlendir.</li>
+  <li><b>Okuma ölçeği.</b> Okuma kopyalarını ekle ve her birine graph'ın tamamını kopyala; büyük bir graph'ta bu saatler sürer.</li>
+  <li><b>Yedekler ve geri yükleme.</b> Tutarlı bir anlık görüntü al, sakla ve geri yüklemeyi dene.</li>
+  <li><b>Yükleme, akış ve sürüm.</b> Toplu yükleme araçlarını, değişiklik akışını ve yazılım güncellemelerini kur ve işlet.</li>
+  <li><b>Güvenlik.</b> Kimlik doğrulama, şifreleme ve ağ erişimi.</li>
+</ol>
+
+<h2 id="service" data-short="Servis olarak Neptune"><span class="sec">C2</span>Neptune senin için ne yapar</h2>
+<p>Bir Neptune DB cluster'ında bir primary (writer) instance ve en fazla 15 read replica vardır; hepsi aynı cluster volume'unu kullanır (<a href="https://docs.aws.amazon.com/prescriptive-guidance/latest/neptune-well-architected-framework/reliability-pillar.html">Neptune reliability pillar</a>). Volume her 10 GB'lık parçayı üç Availability Zone'da altı kopya olarak tutar ve AWS'e göre iki kopyanın kaybını yazmayı, üç kopyanın kaybını okumayı etkilemeden taşıyacak biçimde tasarlanmıştır (<a href="https://aws.amazon.com/documentation-overview/neptune/">Amazon Neptune overview</a>). Kopyaların sayısı instance sayısına bağlı değildir; bu yüzden yeni bir replica graph'ı kopyalamaz, var olan volume'a bağlanır (<a href="https://docs.aws.amazon.com/neptune/latest/userguide/storage.html">Neptune storage</a>).</p>
 <table class="data">
   <thead><tr><th>Görev</th><th>Kendi graph database'in</th><th>Amazon Neptune</th></tr></thead>
   <tbody>
-    <tr><td>Storage ve kopyalar</td><td>Diskleri ve replikasyonu sen planlarsın.</td><td>Üç Availability Zone'da kopyalar. Neptune bozuk bir kopyayı otomatik olarak değiştirir.</td></tr>
-    <tr><td>Okuma kapasitesi</td><td>Sunucu ekler ve veriyi kopyalarsın.</td><td>Aynı volume üzerinde en fazla 15 replica.</td></tr>
-    <tr><td>Failover</td><td>Sen kurar ve test edersin.</td><td>Bir replica'nın otomatik olarak primary yapılması.</td></tr>
-    <tr><td>Yedekler</td><td>Sen zamanlarsın.</td><td>Otomatik yedekler ve point-in-time restore.</td></tr>
-    <tr><td>Erişim</td><td>Şifreler ya da plugin'ler.</td><td>IAM database authentication (SigV4), sadece VPC.</td></tr>
+    <tr><td>Storage ve kopyalar</td><td>Diskleri ve replikasyonu sen planlarsın.</td><td>Üç AZ'de altı kopya; bozulan bir kopyayı Neptune kendisi onarır.</td></tr>
+    <tr><td>Okuma kapasitesi</td><td>Sunucu ekler ve graph'ı kopyalarsın.</td><td>Aynı volume üzerinde 15'e kadar replica; ekleme graph'ı kopyalamaz.</td></tr>
+    <tr><td>Failover</td><td>Sen kurar ve test edersin.</td><td>Bir replica otomatik olarak writer olur; kesinti AWS'e göre "typically restored in less than 120 seconds, and often less than 60 seconds" (<a href="https://docs.aws.amazon.com/neptune/latest/userguide/backup-restore-overview-fault-tolerance.html">Fault tolerance</a>). Replica'lara 0–15 arası bir öncelik verilir.</td></tr>
+    <tr><td>Kapasite</td><td>Tepe için makine alırsın.</td><td>Serverless instance'lar seçtiğin NCU aralığında yükle büyür; en düşük NCU sürekli ödenir.</td></tr>
+    <tr><td>Yedekler</td><td>Sen zamanlar ve test edersin.</td><td>Otomatik yedekler ve 35 güne kadar point-in-time restore; elle snapshot.</td></tr>
+    <tr><td>Birkaç Region</td><td>Replikasyonu sen kurarsın.</td><td>Global Database: bir birincil ve beş Region'a kadar ikincil cluster.</td></tr>
+    <tr><td>Erişim</td><td>Şifreler ya da eklentiler.</td><td>IAM database authentication (SigV4); cluster yalnız VPC içinden erişilir.</td></tr>
   </tbody>
 </table>
+<p>Neptune'ün bir cluster endpoint'i (writer), bir reader endpoint'i (replica'lara dağıtır) ve her instance'ın kendi endpoint'i vardır. Bir uygulama yazmaları ve hemen görülmesi gereken okumaları cluster endpoint'ine, diğer okumaları reader endpoint'ine gönderir.</p>
+{% call k.ask("Writer düşerse Lale Market'te ne olur?") %}
+<p>Reader (eu-central-1c) writer olur. Bu sırada istekler bir hata alır; Engine App bir sonraki istekte cluster endpoint'ine tekrar bağlanır ve yeni writer'a ulaşır. Veri kaybolmaz, çünkü volume ortaktır. Graph siparişlerin bir kopyası olduğu için en kötü durumda Seed onu yeniden kurar.</p>
+{% endcall %}
 
-<h2 id="lalemarket" data-short="Lale Market'te Neptune"><span class="sec">09</span>Lale Market'te Neptune</h2>
+<h2 id="lalemarket" data-short="Lale Market'te Neptune"><span class="sec">C3</span>Lale Market'te Neptune</h2>
+{% call k.live("cluster ve instance'lar (aws neptune describe-db-clusters / describe-db-instances, eu-central-1, 2026-10-31)") %}
+<pre><code>DBClusterIdentifier: dbws-neptune     Engine: neptune 1.4.8.0     Status: available   MultiAZ: true
+ServerlessV2ScalingConfiguration: { MinCapacity: 1, MaxCapacity: 8 }   IAMDatabaseAuthenticationEnabled: true
+Port: 8182   BackupRetentionPeriod: 1
+Members:
+  dbws-neptune-writer   db.serverless   eu-central-1b   IsClusterWriter: true    PromotionTier: 1
+  dbws-neptune-reader   db.serverless   eu-central-1c   IsClusterWriter: false   PromotionTier: 1
+Graph: 200 Product vertex'i, 11.887 BOUGHT edge'i (GET /neptune/api/learn/overview)</code></pre>
+{% endcall %}
 <ul>
-  <li>Data subnet'lerinde bir Neptune cluster'ı. Neptune Engine App cluster endpoint'ine HTTPS port 8182 üzerinden bağlanır.</li>
-  <li>Engine App her request'i kendi IAM role'ü ile imzalar (SigV4, servis adı <code>neptune-db</code>). Şifre yoktur.</li>
-  <li>Seed graph'ı siler, Customer ve Product vertex'lerini oluşturur ve iptal edilmemiş her sipariş satırı için bir BOUGHT edge'i oluşturur. Edge'leri <code>UNWIND</code> ile 500'lük gruplar hâlinde gönderir.</li>
-  <li>Ürün sayfası Q1'i çalıştırır. Persona önerileri Q2'yi çalıştırır. Admin sayfası "Customer graph" bir müşterinin komşularını çizer.</li>
-  <li>Mağazadaki bir satın alma, order id'si W ile başlayan yeni BOUGHT edge'leri oluşturur. Reset sadece bu edge'leri siler.</li>
+  <li>Data subnet'lerinde bir Neptune cluster'ı, iki Serverless instance (writer ve reader, iki farklı AZ'de), 1–8 NCU. Neptune Engine App cluster endpoint'ine HTTPS port 8182 üzerinden bağlanır.</li>
+  <li>Engine App her isteği kendi IAM role'üyle imzalar (SigV4, servis adı <code>neptune-db</code>). Role yalnız bu cluster'da sorgu ile okuma, yazma ve silme izni taşır; şifre yoktur.</li>
+  <li>Seed graph'ı siler, Customer ve Product vertex'lerini oluşturur ve iptal edilmemiş her sipariş satırı için bir BOUGHT edge'i yazar; edge'leri <code>UNWIND</code> ile 500'lük gruplar hâlinde gönderir.</li>
+  <li>Ürün sayfası Q1'i, persona önerisi Q2'yi çalıştırır. Admin Console'daki "Customer graph" bir müşterinin komşularını çizer.</li>
+  <li>Mağazadaki bir satın alma, order id'si W ile başlayan yeni BOUGHT edge'leri yazar. Reset yalnız bu edge'leri tek bir pattern sorgusuyla siler: <code>MATCH ()-[b:BOUGHT]-&gt;() WHERE b.order_id STARTS WITH 'W' DELETE b</code>.</li>
 </ul>
 
-<h2 id="recall" data-short="Hatırlama testi"><span class="sec">10</span>Hatırlama testi</h2>
-{{ k.quiz("np-r1", "Lale Market'in property graph'ında bir edge müşterisi hakkında ne saklar?",
-   ["İsmin ve şehrin bir kopyasını", "~from içinde müşteri vertex'inin ~id'sini", "Sipariş toplamını", "Hiçbir şey, çünkü edge'lerin başlangıç vertex'i yoktur"],
-   1, "Edge, başlangıç ve bitiş vertex'lerinin ~id'sini saklar. Müşteri verisi vertex'te kalır.") }}
-{{ k.quiz("np-r2", "Q2'de NOT (me)-[:BOUGHT]->(rec) ne yapar?",
-   ["Zaten aldığım ürünleri atar", "Hiçbir şey almamış müşterileri atar", "Edge'lerin yönünü tersine çevirir", "BOUGHT edge'lerini siler"],
-   0, "WHERE içindeki bir pattern bir koşuldur. NOT, sadece benden BOUGHT edge'i olmayan ürünleri tutar.") }}
-{{ k.quiz("np-r3", "Neptune neden hızlıca bir read replica ekleyebilir?",
-   ["Replica graph'ı daha sonra arka planda kopyalar", "Replica, veriyi zaten tutan cluster volume'a bağlanır", "Replica'lar veri saklamaz", "Neptune replica'yı eklerken yazmaları durdurur"],
-   1, "Veri ortak cluster volume'da yaşar. Yeni bir replica sadece ona bağlanır.") }}
+<h2 id="recall" data-short="Hatırlama testi" data-group="Sonunda">Hatırlama testi</h2>
+<p>Bölümlere geri bakmadan cevapla.</p>
+{{ k.quiz("npt-r1", "Lale Market graph'ında bir BOUGHT edge'i müşteri hakkında ne saklar?",
+   ["Müşterinin adının ve şehrinin bir kopyasını", "~from'da müşteri vertex'inin kimliğini", "Müşterinin bütün siparişlerinin toplamını", "Hiçbir şey, edge'in başlangıcı yoktur"],
+   1, "Edge iki ucunun kimliğini (~from, ~to) ve kendi property'lerini (order_id, qty) saklar. Müşterinin verisi vertex'te kalır.") }}
+{{ k.quiz("npt-r2", "Bir graph sorgusunun maliyeti neden graph'ın toplam boyutuyla büyümez?",
+   ["Neptune bütün graph'ı bellekte tutar", "Bir traversal yalnız yolunun üzerindeki vertex'lerin edge'lerini okur", "Neptune her graph'ı bir milyon edge ile sınırlar", "openCypher sorguları edge okumaz"],
+   1, "Traversal bir başlangıç noktasından yürür ve yalnız ulaştığı vertex'lerin edge'lerini okur. Hiçbir yolun ulaşmadığı vertex'lerin maliyeti yoktur; bunun istisnası supernode'dur.") }}
+{{ k.quiz("npt-r3", "Neptune Database'te hangisi yapılamaz?",
+   ["Değişken uzunlukta bir path ile en fazla dört hop", "openCypher'da shortestPath() ve PageRank", "Edge'i olan bir vertex'i DETACH DELETE ile silmek", "Aynı iki vertex arasında birden çok edge"],
+   1, "shortestPath() Neptune Database openCypher'ında desteklenmez ve PageRank gibi algoritmalar Neptune Analytics'tedir. Diğer üçü yapılabilir.") }}
+{{ k.quiz("npt-r4", "İki aday arasındaki yakın bir yarışta karar kaydı neyi içermeli?",
+   ["Sadece kazananın adını", "Kazananı, karar veren gereksinimi ve cevabı değiştirecek koşulu", "İki servisin fiyat listesini", "Bütün AWS servislerinin bir listesini"],
+   1, "Karar veren gereksinim ve seçimi tersine çevirecek koşul (\"kişisel üç hop'luk öneri istenmeseydi Aurora kazanırdı\"), ekibe kararın ne zaman yeniden kontrol edilmesi gerektiğini söyler.") }}
 
 <section class="lesson-foot">
   <h2>Daha derine in</h2>
-  <p><b>Ana kaynak:</b> <a href="https://docs.aws.amazon.com/neptune/latest/userguide/graph-get-started.html">Getting started with Amazon Neptune</a>, sonra
+  <p><b>Ana kaynak:</b> <a href="https://docs.aws.amazon.com/neptune/latest/userguide/intro.html">What is Amazon Neptune?</a>, sonra
+     <a href="https://docs.aws.amazon.com/neptune/latest/userguide/access-graph-opencypher.html">Accessing the Neptune graph with openCypher</a>,
+     <a href="https://docs.aws.amazon.com/neptune-analytics/latest/userguide/what-is-neptune-analytics.html">What is Neptune Analytics?</a> ve
      <a href="https://opencypher.org/">openCypher projesi</a>.</p>
   <p><b>Mağazada kullan:</b> Guided görevde <a href="/guided-e-commerce-app/?adim=11">11. adımda</a> ürün sayfasındaki öneriler persona'ya göre istenir; <a href="/guided-e-commerce-app/?adim=35">35. adımda</a> Customer graph bir müşterinin komşularını çizer.</p>
-  <p><b>Soru sor.</b> Bir kısım net değilse eğitmenine ya da AI asistanına sor. Projenden ilişkileri takip eden bir soru getir ve onun graph'ını birlikte çizin.</p>
+  <p><b>Soru sor.</b> Bir kısım net değilse eğitmenine ya da AI asistanına sor. Projenden bağlantıları takip eden bir soru getir ve onun graph'ını birlikte çizin.</p>
 </section>
 {% endblock %}
