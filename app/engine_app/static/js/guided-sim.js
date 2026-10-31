@@ -1204,8 +1204,11 @@
         ${(b.tables || []).map((t, k) => table(b, t, k)).join("")}<div class="gs-pl-note"></div><div class="gs-pl-pkt"></div></div>`; };
     const row = (list, cls) => `<div class="gs-pl-row ${cls}">${list.map(boxHtml).join("")}</div>`;
     const main = boxes.filter((b) => (b.row || "main") === "main"), side = boxes.filter((b) => b.row === "side");
+    // spec.rows [{id, title, flow, side}] (optional): several named rows, e.g. a page that reads several stores.
+    // flow: arrows between the boxes; side: dashed boxes (helpers); neither: plain boxes. A box with no row goes to the first row.
+    const named = spec.rows ? spec.rows.map((r) => `<p class="gs-pl-sidecap">${esc(r.title || "")}</p>${row(boxes.filter((b) => (b.row || spec.rows[0].id) === r.id), r.flow ? "main" : r.side ? "side" : "plain")}`).join("") : "";
     const html = `<ol class="gs-pl-phases">${Object.entries(phases).map(([n, t]) => `<li data-p="${esc(n)}"><b>t-1 · ${esc(n)}</b> ${esc(t)}</li>`).join("")}</ol>
-      <div class="gs-lanes one">${shell("pl", spec.title || "Veri hedefe nasıl geldi?", `<div class="gs-pl">${row(main, "main")}${side.length ? `<p class="gs-pl-sidecap">${esc(spec.side_title || "Yandaki işler (hata, izleme, ilk yükleme ve onarım)")}</p>${row(side, "side")}` : ""}</div>`,
+      <div class="gs-lanes one">${shell("pl", spec.title || "Veri hedefe nasıl geldi?", `<div class="gs-pl">${spec.rows ? named : `${row(main, "main")}${side.length ? `<p class="gs-pl-sidecap">${esc(spec.side_title || "Yandaki işler (hata, izleme, ilk yükleme ve onarım)")}</p>${row(side, "side")}` : ""}`}</div>`,
         { count: "Aşama", result: false, col: true })}</div>${summary(spec.summary || "")}`;
     function paint(root, id, f) {
       const L = laneOf(root, id);
