@@ -4878,56 +4878,685 @@ steps:
           - [Filtre (filter context), "Ürünü eleyen ama skora katkı yapmayan koşul. Sonucu önbelleğe alınabilir."]
           - [keyword, "Analyzer'dan geçmeyen, olduğu gibi saklanan alan türü. Sayma ve birebir filtre için kullanılır."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde facet'li arama için hazırlık
+      t1:
+        title: Önceden ne vardı? Kategori sayıları aramayla birlikte gelsin diye index nasıl hazırlandı, nasıl doğru tutuluyor?
         intro: >-
-          Facet listesi hiç kullanılmadan, sayılacak alanlar index'te doğru türle tanımlanır. Aşağıdaki beş adım bu hazırlığın
-          sırasıdır.
-        text:
-          - title: Önce sayfanın soruları yazılır
-            text: >-
-              Arama sayfası tek istekte üç şey ister: eşleşen ürünler (skor sırasında), kategori sayıları ve fiyat aralığı
-              sayıları. Kullanıcı bir facet seçince aynı istek bir filtreyle tekrarlanır.
-            code: |-
-              { "query": { … }, "size": 24,
-                "aggs": { "categories": { "terms": { "field": "category" } },
-                          "price": { "range": { "field": "price", "ranges": [ {"to": 500}, {"from": 500, "to": 2000}, {"from": 2000} ] } } } }
-          - title: Sayılacak alanlar keyword olarak tanımlanır
-            text: >-
-              Kategori gibi alanlar analyzer'dan geçirilmez (keyword); "Ev & Yaşam" tek bir değer olarak kalır ve sayılabilir.
-              Hem aranacak hem sayılacak bir alan, text ve keyword olarak iki kez tanımlanır.
-            code: |-
-              "category": { "type": "keyword" },
-              "brand":    { "type": "text", "fields": { "raw": { "type": "keyword" } } }
-          - title: Seçim filtre olarak eklenir, sorguya değil
-            text: >-
-              Kullanıcının seçtiği kategori bool sorgusunun filter bölümüne konur. Filtre skoru değiştirmez ve sonucu
-              önbelleğe alınabilir; aynı filtre sık kullanıldıkça daha ucuzlar.
-            code: |-
-              "bool": { "must": [ { "multi_match": { … } } ], "filter": [ { "term": { "category": "Elektronik" } } ] }
-          - title: Seçili facet'in diğer seçenekleri ayrıca düşünülür
-            text: >-
-              Filtre aggregation'ları da daraltır: Elektronik seçilince kategori listesinde sadece Elektronik kalır. Kullanıcı
-              diğer kategorileri de görmeye devam etsin isteniyorsa filtre post_filter'a konur; o zaman sonuçlar daralır ama
-              sayılar bütün aramadan hesaplanır.
-          - title: Kova sayısı sınırlanır
-            text: >-
-              terms aggregation varsayılan olarak en çok ürünü olan 10 kovayı döndürür. Çok değerli alanlarda (ör. marka)
-              size açıkça verilir ve en çok kullanılanlar gösterilir; hepsini döndürmek pahalıdır.
-      feed:
-        title: Veri nereden geliyor?
-        writes: >-
-          Arama index'ine kullanıcı yazmaz. Ürünlerin asıl kaydı katalog veritabanındadır; arama motoru ondan beslenir.
-        reads: Uygulama, arama sayfası ve facet listesi için.
-        kind: >-
-          OpenSearch başka bir veritabanından kendiliğinden veri çekmez; birinin onu beslemesi gerekir (Amazon OpenSearch
-          Ingestion ya da kataloğun değişikliklerini okuyan bir program).
-        with: >-
-          Sonuç kartlarının görselleri nesne deposundan (S3) gelir; ürünün asıl kaydı ve stok katalogdadır (DocumentDB).
-          Facet sayıları index'teki kopyadan hesaplanır; katalogda yeni bir ürün eklendiğinde sayı, index güncellenince değişir.
-        best: >-
-          Katalog tek yerde tutulur ve arama index'i ondan otomatik beslenir (DocumentDB'nin OpenSearch ile zero-ETL
-          entegrasyonu). Facet olarak gösterilecek alanlar katalog tasarlanırken belirlenir ve index'te keyword olarak tanımlanır.
+          "Elektronik"e tıklamadan önce OpenSearch'teki products index'i zaten dolu: 200 ürünün her birinin kategorisi orada tek
+          ve birebir bir değer olarak duruyor ("Ev & Yaşam" tek parça, "ev" ve "yasam" diye bölünmeden). Her ürünün kategorisi
+          index'e yazılırken ayrıca bir sütuna da yazılmış; OpenSearch sayıları arama sırasında bu sütundan sayıyor. Burada bu
+          hazırlığın gerçek bir sistemde nasıl yapıldığını görüyorsun: kategori adlarının nereden geldiğini, alanın neden keyword
+          olduğunu, sayıların ne zaman kesin, ne zaman yaklaşık olduğunu, yeni bir ürünün sayılara ne kadar sürede girdiğini ve
+          bir kategorinin adı değişirse sayılara ne olduğunu. Ürünlerin index'e gelişi Adım 5'teki zincirin aynısı. Önce zincirin
+          bileşenleri, sonra bir simülasyon, sonra dört aşama (tasarım, ilk yükleme, sürekli besleme, tutarlılık ve onarım).
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1", "t0'daki \"Elektronik\" tıklamasından önceki zaman. Arama sayfasının \"siyah\" ile ilk açılışı tıklamadan hemen önceydi; onu t0'daki simülasyon \"İstek 1\" diye gösterecek. Bu bölüm ondan da önceki, günler ve haftalar süren hazırlığı anlatır."]
+          - ["Doküman, alan, index ve ters index (Adım 5)", "Doküman: index'teki tek bir ürün kaydı. Alan: dokümanın bir bilgisi (ad, kategori, fiyat). Index: OpenSearch'te ürünlerin aranabilir kopyası. Ters index: \"değer → o değeri taşıyan ürünler\" listesi (Elektronik → P0066, P0151 …); kitabın sonundaki dizin gibi. Filtre bu listeyi okur."]
+          - ["text ve keyword (Adım 5)", "text: analyzer'dan geçen, kelimelere bölünen alan (ad, açıklama); aranır. keyword: olduğu gibi, tek parça tutulan alan (kategori, marka); birebir filtre ve sayım için. Büyük-küçük harf de birebir: \"elektronik\" ile \"Elektronik\" iki ayrı değer."]
+          - ["doc_count", "Bir kovadaki ürün sayısı. \"Kitap (11)\" yazısındaki 11, OpenSearch'ün cevabında Kitap kovasının doc_count'udur."]
+          - ["doc_values", "OpenSearch'ün her keyword ve sayı alanı için yazma anında tuttuğu ikinci liste: \"ürün → değer\". Bir tablonun tek bir sütunu gibi: P0066 → Elektronik, P0114 → Kitap… Sayım bu sütunu okur; ürünün bütün kaydını açmaz. keyword alanında varsayılan olarak açıktır; text alanında yoktur."]
+          - ["fielddata", "text bir alanda sayım yapabilmek için açılabilen, bellekte kurulan liste. Kelimeleri sayar, değeri değil: \"Ev & Yaşam\" iki kova olur (\"ev\", \"yasam\"). Varsayılan kapalıdır ve bu mağazada kullanılmaz."]
+          - ["Mapping ve index şablonu", "Mapping: index'teki her alanın türü (text, keyword, float). Index şablonu: adı products_ ile başlayan her yeni index'in hangi mapping ve ayarlarla doğacağını söyleyen tanım (Adım 6). Bir alanın türü veri yazıldıktan sonra değiştirilemez; yeni bir index sürümü gerekir."]
+          - ["Parça (shard), kopya (replica) ve koordinatör", "Index parçalara bölünür; her parça ürünlerin bir kısmını tutar ve ayrı bir sunucuda çalışabilir. Kopya, bir parçanın başka sunucudaki ikizidir. products_v1'de 5 parça ve her birinin 1 kopyası var. Mağazanın arama motoru 3 veri sunucusunda çalışıyor, her biri ayrı bir AWS veri merkezinde (Availability Zone). Koordinatör: isteği alan sunucu; soruyu bütün parçalara dağıtır, cevapları birleştirir, bir anket sorumlusunun şubelerden gelen sayıları toplaması gibi."]
+          - ["shard_size, doc_count_error_upper_bound, sum_other_doc_count", "shard_size: her parçanın koordinatöre en fazla kaç kova gönderdiği (OpenSearch bunu size'dan biraz büyük seçer). doc_count_error_upper_bound: cevaptaki sayıların en fazla ne kadar eksik olabileceği; 0 ise sayılar kesin. sum_other_doc_count: listeye girmeyen kovalardaki ürünlerin toplamı."]
+          - ["size ve min_doc_count", "size: terms aggregation'ın en çok kaç kova döndürdüğü; varsayılan 10, en kalabalık kovalar önce. min_doc_count: bir kovanın listede görünmesi için en az kaç ürünü olmalı; varsayılan 1, yani o aramada hiç ürünü olmayan kategori listede çıkmaz."]
+          - ["Refresh ve refresh_interval", "Refresh: yeni yazılan dokümanların aramada (ve sayılarda) görünür hâle gelmesi. refresh_interval: bunun ne sıklıkla yapıldığı; varsayılan 1 saniye. Yazılan bir ürün en çok bu kadar \"bekleme odasında\" kalır."]
+          - ["Pipeline gecikmesi", "DocumentDB'ye yazılan bir değişikliğin index'e ulaşması için geçen süre; genellikle birkaç saniye. Bir ürünün sayılara girme süresi: pipeline gecikmesi + refresh."]
+          - ["Özellik sözlüğü ve iki anlamlı söz: kategori listesi", "Özellik sözlüğü (Adım 4): ürün bilgilerinin adlarını, izinli değerlerini ve eski yazımlarını tutan tek liste, kod deposunda. Bu sayfada iki ayrı \"kategori listesi\" var: sözlükteki izinli adlar (5 ad; kim ne yazabilir) ve arama sayfasının solundaki liste (o aramanın kovaları; hangi kategoride kaç ürün bulundu). Soldaki liste bir yerde elle tutulmaz, her aramada kovalardan çizilir."]
+          - ["Doğrulama kuralı (validator, enum) ve collMod (Adım 1, 4)", "Doğrulama kuralı: DocumentDB koleksiyonunun giriş kontrolü; kapıdaki bilet kontrolü gibi. enum: \"sadece bu listedeki değerler\". Kategori enum'u sözlükten üretilir; listede olmayan kategoriyle ürün yazılamaz. collMod: kuralı koleksiyonu boşaltmadan değiştiren komut."]
+          - ["updateMany", "DocumentDB'de bir koşula uyan bütün dokümanları tek komutla güncellemek, ör. \"kategorisi Moda olanların hepsini Giyim yap\". Değişiklik akışına her doküman için ayrı bir güncelleme yazılır."]
+          - ["Kod kartlarındaki sözcükler", "match_all: bütün ürünler. \"size\": 0: ürün listesi isteme, sadece sayıları ver. $group, $sum: DocumentDB'de \"kategoriye göre grupla, her grubu say\" (Adım 1). $set: bir alanı yeni değere çevir. number_of_shards / number_of_replicas: parça ve kopya sayısı. took: OpenSearch'ün bir aramada harcadığı süre (ms)."]
+          - ["Sayım denetimi ve fark", "Yayın hattının her gece yaptığı kontrol: her kategori için DocumentDB'deki ürün sayısı ile OpenSearch'teki ürün sayısını yan yana koyar. Fark: ikisinin farkı; 0 olmalı. Bir kasanın gün sonunda fişlerle sayılması gibi."]
+          - ["Alias, products_v1 ve products_v2 (Adım 6)", "Alias (takma ad): bir index'in ikinci adı. Uygulama hep products adını sorar; bu ad bugün products_v1'i gösteriyor. Yeni ayarlarla products_v2 kurulursa ad tek komutla ona çevrilir."]
+          - ["zero-ETL zinciri (Adım 5)", "DocumentDB'deki her değişiklik değişiklik akışına (change stream) yazılır, OpenSearch Ingestion pipeline'ı onu okuyup index'e yazar; araya ekibin kodu girmez. Pipeline: OpenSearch Ingestion'ın veri taşıyan hattı."]
+          - ["Dağıtım hattı (CI/CD), DLQ ve CloudWatch alarmı", "Dağıtım hattı: yeni kodun ve ayarın yayına çıkmadan önce geçtiği otomatik adımlar. DLQ: OpenSearch'ün kabul etmediği dokümanların bırakıldığı S3 klasörü. CloudWatch alarmı: bir sayaç eşiği aşınca ekibe haber verir."]
+          - ["Ekip ve katalog ekibi", "Ekip: mağazanın sistemini kuran ve işleten mühendisler; ayarları onlar değiştirir, alarmlara onlar bakar. Katalog ekibi: ürün ekleyen ve değiştiren çalışanlar; kod yazmaz, arka ofis ekranını kullanır."]
+          - ["Kesit", "Simülasyonda gösterilen birkaç kayıt. Gerçek katalogda 200 ürün, her kategoride 40; kesit t0'daki simülasyonun 10 ürünü."]
+          - ["Görev adımları", "\"Adım 5\", \"Adım 6\" gibi adlar bu görevin (mağazadaki 37 adımın) adımlarıdır. Simülasyonun sayacındaki \"Adım 1 / 19\" ise simülasyonun karesidir."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra"
+          sütunu veriyi kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim kodumuz" etiketli
+          parçaları mağazanın ekibi yazar. Katalogdan index'e giden parçalar Adım 5 ve 6'dakinin aynısı; katalog tarafındaki
+          özellik sözlüğü (Adım 4) ile index ve plan kontrolü (Adım 3 ve 4) de aynı parçalar. Bu sayfada öne çıkanlar: kategori adlarını tutan
+          özellik sözlüğü, category alanını keyword olarak tanımlayan arama ayarları ve sayıları her gece katalogla karşılaştıran
+          yayın hattı. Aynı parçalar aşağıdaki simülasyonda birer kutu: üst sırada yazan ve kuran parçalar, sonra kurallar, ortada
+          katalogdan index'e zincir, altta arayan, izleyen ve yandaki işler.
+        inventory:
+          - id: admin
+            name: Katalog yönetim servisi
+            kind: code
+            what: arka ofis programı (ürün ekranlarının arka ucu)
+            does: >-
+              Katalog ekibinin eklediği ya da değiştirdiği ürünü sadece DocumentDB'ye yazar; kategori ekranda sözlükteki listeden
+              seçilir, elle yazılmaz. Bir kategorinin adı değişirse o kategorideki bütün ürünleri tek komutla (updateMany) yeni
+              ada çevirir. Arama motoruna kendisi hiçbir şey göndermez.
+            box: "Ürünü sadece DocumentDB'ye yazar; kategori sözlükteki listeden seçilir."
+            phases: [3, 4]
+            before: [Katalog ekibi (arka ofis ekranı), sozluk]
+            after: docdb
+          - id: indexjob
+            name: Index ve plan kontrolü (dağıtım hattı)
+            kind: code
+            what: dağıtım hattında (CI/CD) çalışan kod
+            does: >-
+              Kategori kuralını (Adım 1'de anlatılan doğrulama kuralının kategori satırı) sözlükten üretip koleksiyona koyar (Adım 4): category alanı sadece sözlükteki 5 addan biri
+              olabilir. Sözlük değişince kuralı collMod ile günceller; bir ad değişirken önce iki adı birden kabul eder, iş bitince
+              eski adı çıkarır.
+            box: "Kategori kuralını sözlükten üretir (sadece izinli adlar); sözlük değişince collMod ile günceller."
+            phases: [2, 4]
+            before: sozluk
+            after: docdb
+          - id: release
+            name: Arama yayın ve kalite testi (dağıtım hattı)
+            kind: code
+            what: dağıtım hattında (CI/CD) çalışan kod
+            does: >-
+              Arama ayarlarını yayına çıkarır: index şablonunu ve products_v1'i kurar, products adını (alias) ona verir (Adım 6).
+              Test setini her değişiklikte ve her gece çalıştırır. Kategori sayıları için ayrıca her gece sayım denetimi yapar: her
+              kategorinin DocumentDB'deki ve OpenSearch'teki ürün sayısını karşılaştırır, kategori sayısının size sınırının altında
+              ve hata payının (doc_count_error_upper_bound) 0 olduğuna bakar; sonucu CloudWatch'a yazar.
+            box: "Şablonu ve index'i kurar; her gece sayım denetimi: DocumentDB ile OpenSearch, kategori kategori."
+            phases: [1, 2, 3, 4]
+            before: [ayar, docdb]
+            after: [opensearch, monitor]
+          - id: sozluk
+            name: Özellik sözlüğü
+            kind: code
+            what: kod deposundaki sürümlü dosya
+            does: >-
+              Kategori adlarının tek kaynağı (Adım 4'te renkler için anlatılan sözlüğün kategori bölümü): 5 ad ve varsa eski
+              adları. Doğrulama kuralı, ürün ekranındaki kategori listesi ve uygulamanın eski adları yenisine çeviren tablosu
+              buradan üretilir. Değişikliği ekip ve katalog ekibi birlikte yapar; dosya dağıtım hattından geçer.
+            box: "Kategori adlarının tek kaynağı: 5 ad ve eski adları. Kural, ekran listesi ve eski ad tablosu buradan."
+            phases: [1, 2, 4]
+            before: Ekip ve katalog ekibi (değişiklik isteği)
+            after: [indexjob, admin, web]
+          - id: ayar
+            name: Arama ayarları (kod deposunda)
+            kind: code
+            what: kod deposundaki sürümlü dosyalar
+            does: >-
+              Index tarafı index şablonunda: category keyword (doc_values açık, varsayılan), ad ve açıklama text, fiyat float,
+              parça ve kopya sayısı, refresh_interval. Sorgu tarafı uygulamanın arama kodunda: aramaya eklenen iki aggregation
+              (kategori sayıları ve fiyat aralıkları; sınırlar 500 ve 2000 ₺). Değişiklik sadece dağıtım hattından geçerek yayına çıkar.
+            box: "category keyword, sayımlar sorguda; parça, kopya ve refresh ayarları. Her değişiklik dağıtım hattından geçer."
+            phases: [1, 2, 4]
+            before: Ekip (değişiklik isteği)
+            after: [release, web]
+          - id: docdb
+            name: DocumentDB (shop.products)
+            kind: aws
+            what: katalog veritabanı
+            does: >-
+              Ürünlerin asıl kaydı; arama index'i bunun aranabilir bir kopyasıdır. Her ürünün category alanı doğrulama kuralı
+              sayesinde sözlükteki 5 yazımdan biridir. İlk ürünler kataloğa eski sitenin katalog sisteminden içe aktarma işiyle
+              geldi (Adım 1); bu sayfanın zinciri katalog dolu hâldeyken başlar.
+            box: "Ürünlerin asıl kaydı (tek doğru kaynak); kategori sadece izinli 5 addan biri."
+            phases: [2, 3, 4]
+            before: [admin, indexjob, "İçe aktarma işi (Adım 1)"]
+            after: [stream, osi, release]
+          - id: stream
+            name: Değişiklik akışı (change stream)
+            kind: aws
+            what: DocumentDB'nin içinde, koleksiyon için açılır
+            does: Koleksiyondaki her ekleme, güncelleme ve silmeyi sırayla kaydeder (bu kümede 7 gün saklar, Adım 5).
+            box: Her ekleme, güncelleme ve silmeyi sırayla kaydeder.
+            phases: [3, 4]
+            before: docdb
+            after: osi
+          - id: osi
+            name: OpenSearch Ingestion pipeline (zero-ETL)
+            kind: aws
+            what: AWS'in veri taşıma servisi
+            does: >-
+              Önce koleksiyonun tamamını bir kez taşır, sonra değişiklik akışındaki her değişikliği birkaç saniyede index'e yazar.
+              products_v1 index'ine adıyla yazar; ziyaretçiler products adıyla (alias) arar. Kategori alanını olduğu gibi taşır.
+            box: "Önce hepsini bir kez, sonra her değişikliği birkaç saniyede products_v1'e yazar; araya kod girmez."
+            phases: [2, 3, 4]
+            before: [docdb, stream, s3]
+            after: [opensearch, s3, dlq]
+          - id: opensearch
+            name: OpenSearch (products index)
+            kind: aws
+            what: arama motoru (OpenSearch Service domain'i)
+            does: >-
+              Her ürünü yazarken kategorisini iki yere koyar: filtre için ters index'e ("Elektronik → hangi ürünler") ve sayım için
+              doc_values sütununa ("ürün → kategori"). Arama sırasında 5 parçanın her biri kendi eşleşen ürünlerini bulur ve aynı
+              geçişte kategorilerini sayar; koordinatör ürünleri ve sayıları tek cevapta birleştirir.
+            box: "Ürünler ve category (filtre için ters index, sayım için doc_values); aramalar products adına gelir."
+            phases: [1, 2, 3, 4]
+            before: [osi, release, web]
+            after: [web, release, monitor]
+          - id: web
+            name: Uygulama (mağaza sayfaları)
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucusunda)
+            does: >-
+              Arama sayfasının sorgusunu kurar ve iki aggregation'ı (kategori sayıları, fiyat aralıkları) aynı isteğe ekler;
+              kategori seçilince onu filtre olarak ekler (t0'daki istek). Adresteki kategori sözlükte eski bir adsa onu yeni ada
+              çevirir. Kataloğa yazmaz.
+            box: "Aramayı sayımlarla birlikte tek istekte gönderir; eski kategori adını yenisine çevirir."
+            phases: [3, 4]
+            before: [Tarayıcı (arama sayfası), ayar, sozluk]
+            after: opensearch
+          - id: s3
+            name: S3 (ilk yükleme klasörü)
+            kind: aws
+            what: Amazon S3 bucket'ı
+            does: İlk yüklemede koleksiyonun dışa aktarılan kopyasının geçici olarak durduğu yer.
+            box: İlk yüklemenin geçici kopyası.
+            phases: [2]
+            before: osi
+            after: "aynı pipeline (dosyaları geri okur, index'e yükler)"
+          - id: dlq
+            name: Hata klasörü (S3 DLQ)
+            kind: aws
+            what: Amazon S3 bucket'ı
+            does: OpenSearch'ün birkaç denemeden sonra da kabul etmediği dokümanları saklar; akış durmaz, ekip onları sonra işler.
+            box: Kabul edilmeyen dokümanları saklar; akış durmaz.
+            phases: [4]
+            before: osi
+            after: Ekip (inceler, yeniden gönderir)
+          - id: monitor
+            name: CloudWatch alarmları
+            kind: aws
+            what: AWS'in izleme servisi
+            does: >-
+              Gece sayım denetiminin sonuçlarını (fark, hata payı, kategori sayısının size sınırına uzaklığı), pipeline'ın hata sayaçlarını ve DLQ'yu izler; eşik aşılınca ekibe alarm
+              gönderir.
+            box: "Sayım farkı, hata payı, pipeline hataları ve DLQ; alarm verir."
+            phases: [2, 3, 4]
+            before: [release, osi, opensearch]
+            after: Ekip (alarm)
+        sim_title: "Simülasyon: kategori sayıları için index nasıl hazırlandı, nasıl doğru tutuluyor?"
+        sim:
+          kind: pipeline
+          title: Yazanlar ve kurallar → katalogdan index'e zincir → arayan, denetleyen ve izleyen
+          caption: >-
+            OpenSearch kutusunda iki tablo var: dokümanlar (category sütunu, sayımın okuduğu doc_values) ve category alanının ters
+            index'i (filtrenin okuduğu liste). İkisi de kesit: t0'daki simülasyonun 10 ürünü; katalogda 200 ürün, her kategoride 40.
+            Kesitteki 10 ürünün hepsi "siyah" aramasında bulunuyor. Önce ayarların yayına çıkışı, ilk yükleme ve ilk sayım
+            denetimi, sonra yeni bir ürünün zincirden geçişi, bir arama ve gece denetimi, en sonda tutarlılık ve onarım oynuyor. 4.
+            aşamada "Örnek durum" diye başlayan kareler bu zincirde yaşanmış durumlar; "Olsaydı" diye başlayanlar yaşanmadı,
+            yaşansaydı ne olacağını gösteriyor ("Moda" adının "Giyim" olması). Arama sonuçları, sayılar ve süreler canlı
+            index'ten; temsilî değerler: denetimin saatleri ve bekleme süreleri, "işlenen 21" ara sayısı, eski ad tablosunun
+            süresi. Son karede index, t0'daki simülasyonun başladığı hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım}
+          rows:
+            - {id: writers, title: "Ürünü yazan, kuralı ve index'i kuran, sayıları denetleyen"}
+            - {id: rules, title: "Kurallar: kategori adları (sözlük) ve arama ayarları"}
+            - {id: chain, title: "Katalogdan arama index'ine (zero-ETL zinciri, Adım 5)", flow: true}
+            - {id: helpers, title: "Arayan, izleyen ve yandaki işler", side: true}
+          summary: >-
+            Index'i zero-ETL zinciri doldurdu; uygulama kataloğa yazmadı, arama motoruna da ürün göndermedi. Kategori adları
+            sözlükten geliyor ve kapıdaki kural sayesinde katalogda hep aynı yazımla duruyor. category keyword olduğu için tek
+            parça; her ürün yazılırken kategorisi doc_values sütununa da yazıldı, sayım arama sırasında bu sütundan yapılıyor. 5
+            kategori size sınırının (10) altında: her parça bütün kovalarını gönderiyor, sayılar kesin (hata payı 0). Yeni ürün
+            sayılara pipeline gecikmesi + en çok 1 saniyede giriyor; her gece sayım denetimi katalogla farkın 0 olduğunu gösteriyor.
+            Son durum: kesitte 10 ürün; Elektronik 4, Kitap 2, Moda 2, Spor 1, Ev & Yaşam 1; t0'daki simülasyonun başladığı durum.
+          boxes:
+            - id: admin
+              row: writers
+            - id: indexjob
+              row: writers
+            - id: release
+              row: writers
+              tables:
+                - name: "sayım denetimi (son denetimin sonucu; bütün katalog; DocumentDB ↔ OpenSearch)"
+                  cols: [kategori, DocumentDB, OpenSearch, fark]
+                  rows:
+                    - {key: r_el, kategori: Elektronik, DocumentDB: 39, OpenSearch: 39, fark: 0, hidden: true}
+                    - {key: r_ev, kategori: Ev & Yaşam, DocumentDB: 40, OpenSearch: 40, fark: 0, hidden: true}
+                    - {key: r_kt, kategori: Kitap, DocumentDB: 40, OpenSearch: 40, fark: 0, hidden: true}
+                    - {key: r_md, kategori: Moda, DocumentDB: 40, OpenSearch: 40, fark: 0, hidden: true}
+                    - {key: r_sp, kategori: Spor, DocumentDB: 40, OpenSearch: 40, fark: 0, hidden: true}
+                    - {key: r_gy, kategori: Giyim, DocumentDB: 40, OpenSearch: 40, fark: 0, hidden: true}
+            - id: sozluk
+              row: rules
+              tables:
+                - name: "kategori adları (sürüm 1)"
+                  cols: [kategori, durum]
+                  rows:
+                    - {key: s_el, kategori: Elektronik, durum: izinli}
+                    - {key: s_ev, kategori: Ev & Yaşam, durum: izinli}
+                    - {key: s_kt, kategori: Kitap, durum: izinli}
+                    - {key: s_md, kategori: Moda, durum: izinli}
+                    - {key: s_sp, kategori: Spor, durum: izinli}
+                    - {key: s_gy, kategori: Giyim, durum: "olsaydı: yeni ad (eski adı: Moda)", hidden: true}
+            - id: ayar
+              row: rules
+              tables:
+                - name: "yayındaki ayarlar (sürüm 1)"
+                  cols: [ayar, değer, ne demek]
+                  rows:
+                    - {key: a_cat, ayar: category, değer: "keyword (doc_values açık)", ne demek: "tek parça, birebir; sayım ve filtre için", hidden: true}
+                    - {key: a_txt, ayar: "name, description", değer: "text (tr_folded)", ne demek: "aranır; sayılmaz", hidden: true}
+                    - {key: a_prc, ayar: price, değer: float, ne demek: "fiyat aralıkları sayılır (range)", hidden: true}
+                    - {key: a_agg, ayar: "aggs (sorgu kodunda)", değer: "terms category (size 10) + range price", ne demek: "aramayla aynı istekte", hidden: true}
+                    - {key: a_shd, ayar: parça / kopya, değer: "5 / 1 (servisin varsayılanı)", ne demek: "izlenen karar (4. aşama)", hidden: true}
+                    - {key: a_ref, ayar: refresh_interval, değer: "1 sn (varsayılan)", ne demek: "yeni ürün en çok 1 sn sonra sayılarda", hidden: true}
+            - id: docdb
+              row: chain
+              tables:
+                - name: "shop.products (kesit: t0'daki 10 ürün; katalogda 200)"
+                  cols: [_id, name, category]
+                  rows:
+                    - {_id: P0066, name: Rhein Powerbank 66, category: Elektronik}
+                    - {_id: P0151, name: Anadolu Powerbank 151, category: Elektronik}
+                    - {_id: P0114, name: Rhein Bulut Mimarisi 114, category: Kitap}
+                    - {_id: P0130, name: Nordwind Yün Kazak 130, category: Moda}
+                    - {_id: P0078, name: Kapadokya Matara 78, category: Spor}
+                    - {_id: P0169, name: Nordwind Algoritmalar 169, category: Kitap}
+                    - {_id: P0082, name: Alpen Masa Lambası 82, category: Ev & Yaşam}
+                    - {_id: P0125, name: Ege Güneş Gözlüğü 125, category: Moda}
+                    - {_id: P0181, name: Alpen Bluetooth Hoparlör 181, category: Elektronik, hidden: true}
+                    - {_id: P0001, name: Alpen Kablosuz Kulaklık 1, category: Elektronik}
+            - id: stream
+              row: chain
+            - id: osi
+              row: chain
+            - id: opensearch
+              row: chain
+              tables:
+                - name: "products (takma ad) → products_v1: dokümanlar (kesit; category sütunu = doc_values)"
+                  cols: [_id, name, category]
+                  rows:
+                    - {_id: P0066, name: Rhein Powerbank 66, category: Elektronik, hidden: true}
+                    - {_id: P0151, name: Anadolu Powerbank 151, category: Elektronik, hidden: true}
+                    - {_id: P0114, name: Rhein Bulut Mimarisi 114, category: Kitap, hidden: true}
+                    - {_id: P0130, name: Nordwind Yün Kazak 130, category: Moda, hidden: true}
+                    - {_id: P0078, name: Kapadokya Matara 78, category: Spor, hidden: true}
+                    - {_id: P0169, name: Nordwind Algoritmalar 169, category: Kitap, hidden: true}
+                    - {_id: P0082, name: Alpen Masa Lambası 82, category: Ev & Yaşam, hidden: true}
+                    - {_id: P0125, name: Ege Güneş Gözlüğü 125, category: Moda, hidden: true}
+                    - {_id: P0181, name: Alpen Bluetooth Hoparlör 181, category: Elektronik, hidden: true}
+                    - {_id: P0001, name: Alpen Kablosuz Kulaklık 1, category: Elektronik, hidden: true}
+                - name: "category alanı, ters index (filtre için; kesit)"
+                  cols: [değer, ürünler]
+                  rows:
+                    - {key: c_el, değer: Elektronik, ürünler: "P0066 · P0151 · P0001", hidden: true}
+                    - {key: c_ev, değer: Ev & Yaşam, ürünler: P0082, hidden: true}
+                    - {key: c_kt, değer: Kitap, ürünler: "P0114 · P0169", hidden: true}
+                    - {key: c_md, değer: Moda, ürünler: "P0130 · P0125", hidden: true}
+                    - {key: c_sp, değer: Spor, ürünler: P0078, hidden: true}
+                    - {key: c_gy, değer: Giyim, ürünler: P0130, hidden: true}
+            - id: web
+              row: helpers
+            - id: s3
+              row: helpers
+            - id: dlq
+              row: helpers
+            - id: monitor
+              row: helpers
+          frames:
+            - phase: 2
+              who: release
+              lit: [ayar, release, opensearch]
+              packet: {at: opensearch, text: "PUT _index_template/products (category: keyword) · PUT products_v1 · alias: products → products_v1"}
+              show: {ayar: [a_cat, a_txt, a_prc, a_agg, a_shd, a_ref]}
+              fresh: {ayar: [a_cat, a_txt, a_prc, a_agg, a_shd, a_ref]}
+              note: {ayar: "sürüm 1", release: "kurulan: şablon + products_v1 (5 parça, 1 kopya) + alias", opensearch: "boş"}
+              say: >-
+                Index henüz yok. Ekip arama ayarlarını kod deposuna yazdı: category keyword (tek parça, birebir), ad ve açıklama
+                text, fiyat float; iki sayım (kategori ve fiyat) uygulamanın arama sorgusunda. Yayın hattı önce index şablonunu,
+                sonra products_v1'i kurdu ve products adını ona verdi. Sıra önemli: bir alanın türü veri yazıldıktan sonra
+                değiştirilemez.
+            - phase: 2
+              who: sozluk
+              lit: [sozluk, indexjob, docdb]
+              fresh: {sozluk: [s_el, s_ev, s_kt, s_md, s_sp]}
+              note: {release: "", opensearch: "", ayar: "", indexjob: "kural: category ∈ 5 ad", docdb: "kesitte 9 ürün · hepsi izinli 5 addan biri"}
+              say: >-
+                Katalog dolu: ürünler DocumentDB'ye Adım 1'deki içe aktarma işiyle gelmişti. Kategori adları sözlükten geliyor;
+                index ve plan kontrolü kapıdaki kuralı bu 5 addan üretmişti. Bu yüzden katalogda "elektronik" ya da "Elektronik "
+                (sonda boşluklu) gibi bir yazım yok; sayılar ancak her ürün aynı yazımı taşıdığı için doğru çıkar. Kesitteki onuncu
+                ürün (P0181) henüz katalogda değil; 3. aşamada gelecek.
+            - phase: 2
+              who: osi
+              lit: [docdb, osi, s3]
+              packet: {at: s3, text: "dışa aktarma: shop.products (kesitte 9 doküman)"}
+              note: {sozluk: "", indexjob: "", docdb: "", s3: "9 doküman (kesitte)"}
+              say: >-
+                Pipeline ilk yüklemeye başladı: koleksiyonun bütün dokümanlarını bir kez okudu ve geçici olarak S3'e yazdı.
+                Değişiklik akışındaki yerini de not etti; yükleme sürerken gelen değişiklikleri sonra oradan alacak.
+            - phase: 2
+              who: osi
+              lit: [s3, osi, opensearch]
+              packet: {at: osi, text: "index products_v1/_doc/P0066 … (9 doküman)"}
+              show: {opensearch: [P0066, P0151, P0114, P0130, P0078, P0169, P0082, P0125, P0001, c_el, c_ev, c_kt, c_md, c_sp]}
+              fresh: {opensearch: [P0066, P0151, P0114, P0130, P0078, P0169, P0082, P0125, P0001, c_el, c_ev, c_kt, c_md, c_sp]}
+              note: {s3: "", osi: "yazılan 9 · hatalı 0", opensearch: "9 doküman · category iki yerde: ters index + doc_values"}
+              say: >-
+                Pipeline dokümanları ürün numarasıyla index'e yazdı. OpenSearch her ürünün kategorisini yazarken iki yere koydu:
+                ters index'e ("Moda → P0130, P0125"; filtre bunu okur) ve doc_values sütununa ("P0130 → Moda"; sayım bunu okur).
+                İkisi de yazma anında hazırlandı; arama sırasında sadece okunacak. "Ev & Yaşam" tek parça kaldı, çünkü keyword
+                analyzer'dan geçmez.
+            - phase: 2
+              who: release
+              lit: [release, docdb, opensearch, monitor]
+              packet: {at: opensearch, text: "sayım denetimi: OpenSearch terms category (size 0, match_all) · DocumentDB $group category"}
+              show: {release: [r_el, r_ev, r_kt, r_md, r_sp]}
+              fresh: {release: [r_el, r_ev, r_kt, r_md, r_sp]}
+              note: {osi: "", opensearch: "", release: "ilk denetim: 5 kategori · fark 0 · hata payı 0", monitor: "alarmlar kuruldu: sayım farkı ≠ 0 (iki denetim üst üste) · hata payı > 0 · pipeline hatalı kayıt > 0"}
+              say: >-
+                Arama ziyaretçiye açılmadan önce yayın hattı ilk sayım denetimini yaptı: bütün katalogda her kategorinin ürün
+                sayısını DocumentDB'ye ve OpenSearch'e ayrı ayrı sordu. Hepsi tuttu, fark 0. Elektronik'te 39 ürün var; 40'ıncısı
+                (P0181) birazdan gelecek. Alarmlar da şimdi kuruldu.
+            - phase: 3
+              who: admin
+              lit: [admin, docdb]
+              show: {docdb: [P0181]}
+              fresh: {docdb: [P0181]}
+              note: {release: "", monitor: "", docdb: "kural: Elektronik izinli ✓"}
+              say: >-
+                Katalog ekibi yeni bir ürün ekledi: Alpen Bluetooth Hoparlör 181. Kategoriyi ekrandaki listeden seçti (liste
+                sözlükten). Katalog yönetim servisi dokümanı DocumentDB'ye yazdı; kapıdaki kural kategoriyi kabul etti. Arama
+                motoruna hiçbir şey gönderilmedi.
+            - phase: 3
+              who: stream
+              lit: [docdb, stream]
+              packet: {at: stream, text: "insert shop.products P0181"}
+              note: {docdb: ""}
+              say: DocumentDB bu eklemeyi değişiklik akışına yazdı.
+            - phase: 3
+              who: osi
+              lit: [stream, osi, opensearch]
+              packet: {at: osi, text: "index products_v1/_doc/P0181 · refresh: en çok 1 sn"}
+              show: {opensearch: [P0181]}
+              fresh: {opensearch: [P0181, c_el]}
+              set: {opensearch: {c_el: {ürünler: "P0066 · P0151 · P0181 · P0001"}}}
+              note: {osi: "yazılan 1 · hatalı 0", opensearch: "10 doküman (kesitte) · Elektronik: 40"}
+              say: >-
+                Pipeline değişikliği akıştan okudu ve dokümanı index'e yazdı; birkaç saniye sürdü. OpenSearch kategoriyi yine iki
+                yere koydu. Ürün bir sonraki refresh'te (en çok 1 saniye sonra) hem aramada hem sayılarda göründü. Arada bir an
+                ürün yazılmış ama henüz görünmüyordu; o an da liste ile sayılar birbirini tuttu, çünkü ikisi aynı index'ten okunur.
+            - phase: 3
+              who: web
+              lit: [web, opensearch]
+              packet: {at: opensearch, text: "\"siyah\" + 2 aggregation → 40 ürün · Kitap 11 · Elektronik 9 · Ev & Yaşam 9 · Spor 7 · Moda 4 · took 24 ms"}
+              note: {stream: "", osi: "", web: "1 istek · 24 ürün + 2 sayım geri", opensearch: "kesitte sayılan: Elektronik 4 · Kitap 2 · Moda 2 · Spor 1 · Ev & Yaşam 1"}
+              say: >-
+                Bir ziyaretçi "siyah" aradı. Uygulama tek bir istek gönderdi: arama ve iki sayım birlikte. 5 parçanın her biri
+                kendi ürünleri arasında eşleşenleri buldu ve aynı geçişte her eşleşenin kategorisini doc_values sütunundan okuyup
+                kovasına ekledi. Sayılar eşleşen 40 ürünün hepsinden çıktı; ekrana ise ilk 24'ü gönderildi. Koordinatör parçaların ürünlerini ve
+                sayılarını birleştirdi. Kategori başına ayrı bir sorgu gitmedi. Süre canlı ölçüm; her istekte değişir.
+            - phase: 3
+              who: release
+              lit: [release, docdb, opensearch, monitor]
+              packet: {at: opensearch, text: "gece: sayım denetimi · hata payı (doc_count_error_upper_bound)"}
+              set: {release: {r_el: {DocumentDB: 40, OpenSearch: 40}}}
+              fresh: {release: [r_el]}
+              note: {web: "", opensearch: "", release: "gece: 5 kategori · fark 0 · hata payı 0 · listeye girmeyen 0", monitor: "sayım farkı 0 · hata payı 0 → alarm yok"}
+              say: >-
+                Gece yayın hattı sayım denetimini yine yaptı; kimse ayarlara dokunmasa da çalışır, çünkü katalog her gün değişir.
+                Elektronik artık iki tarafta da 40. OpenSearch'ün cevabındaki iki alana da baktı: hata payı 0 ve listeye girmeyen
+                ürün 0; yani sayılar kesin.
+            - phase: 4
+              who: osi
+              lit: [stream, osi, opensearch]
+              packet: {at: osi, text: "aynı değişiklik yine geldi → aynı _id, aynı belge sürüm numarası"}
+              mark: {opensearch: {P0181: fix}}
+              note: {release: "", monitor: "", osi: "yazılan 1 · yeni doküman 0", opensearch: "Elektronik yine 40 (41 değil)"}
+              say: >-
+                Örnek durum: pipeline aynı değişikliği ikinci kez gönderdi. Doküman ürün numarasıyla yazıldığı için aynı dokümanın
+                üstüne yazıldı (değişiklikle gelen sürüm numarası da aynıydı; OpenSearch eski ya da aynı sürümü yeni sanmaz). İkinci bir
+                P0181 oluşmadı, Elektronik kovası 41'e çıkmadı.
+            - phase: 4
+              who: dlq
+              lit: [osi, dlq, monitor, release]
+              mark: {opensearch: {P0181: ""}}
+              note: {osi: "", opensearch: "", dlq: "doküman: 0", monitor: "pipeline hatalı kayıt: 0 · DLQ: 0", release: "olsaydı: Elektronik 40 ↔ 39 · fark 1"}
+              say: >-
+                Örnek durum: bu hafta hata klasöründe 0 doküman. Olsaydı: OpenSearch bir Elektronik ürününü kabul etmeseydi
+                pipeline onu birkaç denemeden sonra hata klasörüne yazardı. O ürün hem listede hem sayıda eksik olurdu (39). DLQ
+                alarmı hemen, gece sayım denetimi de ertesi sabah aynı eksiği gösterirdi: DocumentDB 40, OpenSearch 39.
+            - phase: 4
+              who: sozluk
+              lit: [sozluk, indexjob, docdb]
+              packet: {at: docdb, text: "olsaydı: collMod · category enum: 5 ad + Giyim"}
+              show: {sozluk: [s_gy]}
+              fresh: {sozluk: [s_gy, s_md]}
+              set: {sozluk: {s_md: {durum: "olsaydı: eski ad → Giyim"}}}
+              note: {dlq: "", monitor: "", release: "", sozluk: "olsaydı: sürüm 2", indexjob: "olsaydı: kural geçici olarak 6 adı kabul eder"}
+              say: >-
+                Olsaydı: katalog ekibi "Moda" adını "Giyim" yapmaya karar verseydi. Önce sözlüğe yeni ad girer ve "Moda" onun eski
+                adı olarak işaretlenir. Index ve plan kontrolü kuralı collMod ile genişletir: bir süre iki ad da kabul edilir.
+                Sıra önemli: kural önce genişlemeseydi, ürünleri Giyim'e çeviren komut kapıda reddedilirdi.
+            - phase: 4
+              who: admin
+              lit: [admin, docdb, stream]
+              packet: {at: docdb, text: "olsaydı: updateMany({ category: \"Moda\" }, { $set: { category: \"Giyim\" } }) → 40 güncellendi"}
+              set: {docdb: {P0130: {category: Giyim}, P0125: {category: Giyim}}}
+              fresh: {docdb: [P0130, P0125]}
+              note: {sozluk: "", indexjob: "", admin: "olsaydı: 40 ürün tek komutla", stream: "olsaydı: 40 ayrı güncelleme"}
+              say: >-
+                Olsaydı: katalog yönetim servisi Moda'daki 40 ürünü tek komutla Giyim'e çevirirdi. Katalog bir anda yeni adı
+                taşır; değişiklik akışına ise her ürün için ayrı bir güncelleme düşer: 40 güncelleme.
+            - phase: 4
+              who: osi
+              lit: [stream, osi, opensearch]
+              packet: {at: osi, text: "olsaydı: 40 güncelleme → products_v1 · birkaç saniye"}
+              set: {opensearch: {P0130: {category: Giyim}, c_md: {ürünler: P0125}}}
+              show: {opensearch: [c_gy]}
+              fresh: {opensearch: [P0130, c_md, c_gy]}
+              note: {admin: "", stream: "", osi: "olsaydı: 40 değişiklik · işlenen 21 (temsilî)", opensearch: "olsaydı, birkaç saniye: Moda + Giyim yan yana (toplam 40)"}
+              say: >-
+                Olsaydı: pipeline 40 güncellemeyi sırayla index'e yazardı. Birkaç saniye boyunca bazı ürünler Moda, bazıları Giyim
+                olurdu; o sırada arama yapan biri listede ikisini yan yana görürdü (ör. Moda 19, Giyim 21). Sayılar yanlış
+                değildir: o anda index'te ne varsa onu sayar. Toplam yine 40.
+            - phase: 4
+              who: web
+              lit: [web, sozluk, opensearch]
+              packet: {at: opensearch, text: "olsaydı: adresteki category=Moda → uygulama Giyim'e çevirir → term category: Giyim"}
+              set: {opensearch: {P0125: {category: Giyim}, c_gy: {ürünler: "P0130 · P0125"}}}
+              hide: {opensearch: [c_md]}
+              fresh: {opensearch: [P0125, c_gy]}
+              note: {osi: "olsaydı: işlenen 40 · hatalı 0", web: "olsaydı: eski ad çevrildi", opensearch: "olsaydı: Giyim 40 · Moda kovası yok"}
+              say: >-
+                Olsaydı: 40 güncelleme bitince Moda kovası listeden kendiliğinden düşerdi; hiç ürünü kalmayan kova gösterilmez
+                (min_doc_count 1). Ama birinin tarayıcısında eski bir bağlantı kalabilir: ...?category=Moda. keyword birebir
+                eşleşir; bugün canlı index'te category=elektronik (küçük e) 0 ürün getiriyor, Moda da 0 getirirdi. Bu yüzden
+                uygulama adresteki adı sözlüğün eski ad tablosuna bakıp Giyim'e çevirir.
+            - phase: 4
+              who: release
+              lit: [release, indexjob, docdb, monitor]
+              packet: {at: docdb, text: "olsaydı: sayım denetimi Moda 0 ↔ 0 · collMod · enum: 5 ad (Moda çıktı)"}
+              show: {release: [r_gy]}
+              hide: {release: [r_md]}
+              fresh: {release: [r_gy]}
+              note: {web: "", sozluk: "", opensearch: "", osi: "", release: "olsaydı: Giyim 40 ↔ 40 · Moda 0 ↔ 0 · fark 0", indexjob: "olsaydı: kural yeniden 5 ad", monitor: "olsaydı: alarm yok"}
+              say: >-
+                Olsaydı: o gecenin sayım denetimi Giyim'i iki tarafta da 40, Moda'yı iki tarafta da 0 bulurdu. Bundan sonra index ve
+                plan kontrolü kuralı daraltır: Moda artık yazılamaz. Uygulamanın eski ad çevirisi bir süre (temsilî: 90 gün)
+                kalır, çünkü eski bağlantılar ve reklamlar hemen kaybolmaz.
+            - phase: 4
+              who: monitor
+              lit: [ayar, opensearch, monitor]
+              packet: {at: monitor, text: "izlenen karar: 5 parça · kategori 5 (size 10) · hata payı 0"}
+              note: {release: "", indexjob: "", monitor: "gece denetiminden: hata payı 0 · kategori 5 (size 10)", ayar: "parça 5 → sonraki sürümde (products_v2) 1", opensearch: "5 parça · 200 doküman · ~72 KB"}
+              say: >-
+                Örnek durum: bir izlenen karar. products_v1 servisin varsayılanıyla 5 parçaya bölündü; AWS'e göre bu boyutta
+                (200 ürün, yaklaşık 72 KB) tek parça yeterli. Sayılar yine de kesin: kategori 5 tane, size 10; her parça bütün
+                kovalarını gönderiyor. Ekip düzeltmeyi bir sonraki index sürümüne bağladı: products_v2 tek parçayla kurulacak (parça sayısı var olan bir
+                index'te değiştirilemez). O zamana kadar gece denetimi hata payının 0 olduğuna bakıyor.
+            - phase: 4
+              who: opensearch
+              lit: [opensearch]
+              set: {docdb: {P0130: {category: Moda}, P0125: {category: Moda}}, opensearch: {P0130: {category: Moda}, P0125: {category: Moda}, c_md: {ürünler: "P0130 · P0125"}}, sozluk: {s_md: {durum: izinli}}}
+              show: {opensearch: [c_md], release: [r_md]}
+              hide: {opensearch: [c_gy], release: [r_gy], sozluk: [s_gy]}
+              note: {monitor: "", ayar: "", opensearch: "products → products_v1 · 10 doküman (kesitte)"}
+              say: >-
+                Hazır. "Olsaydı" karelerindeki ad değişikliği yaşanmadı; tablolar bugünkü adlara döndü. Index t0'daki
+                simülasyonun başladığı hâlde: kesitte Elektronik 4, Kitap 2, Moda 2, Spor 1, Ev & Yaşam 1. Sayfa "siyah" ile
+                açılınca bu ürünler ve sayılar aynı cevapta gelecek; "Elektronik"e tıklayınca filtre ters index'ten 4'ünü
+                bırakacak.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Önce sayfanın sorusu yazılır: ürünler ve sayılar aynı anda. Sonra sayılacak alanların türü seçilir, kategori adlarının
+              tek kaynağı belirlenir ve sayıların ne zaman kesin olduğu hesaplanır. Kararlar iki yerde durur: kategori adları özellik
+              sözlüğünde, alan türleri ve sorgu arama ayarlarında.
+            cards:
+              - title: Ürünler ve sayılar tek istekte, tek geçişte
+                text: >-
+                  Arama sayfası tek istekte üç şey ister: eşleşen ürünler (puan sırasında), kategori sayıları ve fiyat aralığı
+                  sayıları. Sayılar ayrı bir sorgu değildir: index'in her parçası eşleşen ürünleri bulurken, aynı geçişte her
+                  birinin kategorisini doc_values sütunundan okur ve kovasına ekler. Koordinatör parçaların ürünlerini ve
+                  kovalarını birleştirip tek cevap verir. Kategori başına bir sayım sorgusu ve fiyat aralığı başına bir sayım sorgusu gönderilseydi sayfa 1 yerine 9 istek (arama + 5 kategori + 3 fiyat
+                  aralığı) beklerdi. Sayılar eşleşen bütün ürünlerden çıkar; ekrana gelen ilk 24'ten değil.
+                code:
+                  - {code: "{ \"query\": { \"bool\": { \"must\": [ … ], \"filter\": [ … ] } }, \"size\": 24,", tag: Uygulamanın içinde, say: "Arama ve (seçildiyse) kategori filtresi; ilk 24 ürün."}
+                  - {code: "  \"aggs\": { \"categories\": { \"terms\": { \"field\": \"category\" } },", tag: Uygulamanın içinde, say: "Aynı isteğe: eşleşenleri kategoriye göre say."}
+                  - {code: "           \"price\": { \"range\": { \"field\": \"price\", \"ranges\": [ … ] } } } }", tag: Uygulama → OpenSearch, say: "Fiyat aralıklarına göre de say; hepsi tek istekte gider."}
+              - title: category neden keyword, neden text değil?
+                text: >-
+                  Sayılacak bir alan tek parça kalmalı. text bir alan kelimelere bölünür; OpenSearch varsayılan olarak text alanda
+                  sayım yapmaz, fielddata açılsa bile kelimeleri sayar: "Ev & Yaşam" iki kova olurdu ("ev" ve "yasam"). keyword
+                  değeri olduğu gibi tutar ve doc_values sütunu otomatik açılır. Bedeli: birebir eşleşir; canlı index'te
+                  "siyah" araması category=Elektronik ile 9 ürün, category=elektronik (küçük e) ile 0 ürün getiriyor. Bu yüzden yazımın her yerde aynı olması
+                  katalogda sağlanır (sonraki kartlar).
+                map:
+                  cols: [Alan, Tür, Neden]
+                  rows:
+                    - ["name, description", "text (tr_folded)", "Aranır: kelimelere bölünür, Türkçe harfler sadeleşir (Adım 5). Sayılmaz."]
+                    - ["category", "keyword", "Sayılır ve filtrelenir: tek parça, birebir. doc_values açık."]
+                    - ["brand", "keyword", "Arama sayfasında marka listesi yok; eklenirse aynı şekilde sayılır (size'ı açıkça verilerek, çünkü marka çoktur)."]
+                    - ["price", "float", "Fiyat aralıkları (range) sayılır; sayı alanlarında da doc_values açıktır."]
+                code:
+                  - {code: "\"category\": { \"type\": \"keyword\" },", tag: OpenSearch'ün içinde, say: "Tek parça değer; doc_values varsayılan olarak açık."}
+                  - {code: "\"name\": { \"type\": \"text\", \"analyzer\": \"tr_folded\" },", tag: OpenSearch'ün içinde, say: "Aranan alan; sayım için kullanılmaz."}
+              - title: Kategori adları katalogda tek yerden gelir
+                text: >-
+                  Sayıların doğru olması için her ürünün kategorisi aynı yazımla gelmeli: "Elektronik" ile "Elektronik " (sonda
+                  boşluk) iki ayrı kova olur. Bu index'te değil, katalogda sağlanır. Kural category'yi zorunlu tutar ve tek bir değer ister: her ürünün tam
+                  bir kategorisi vardır. 5 ad özellik sözlüğünde durur; DocumentDB'nin
+                  doğrulama kuralı (enum) ve ürün ekranındaki liste bu addan üretilir (Adım 1, 4). Soldaki listeyi ise kimse
+                  tutmaz: her aramada OpenSearch'ün kovalarından çizilir. O aramada ürünü olmayan kategori listede çıkmaz.
+                code:
+                  - {code: "kategoriler: [ Elektronik, \"Ev & Yaşam\", Kitap, Moda, Spor ]   # özellik sözlüğü", tag: Kod deposunun içinde, say: "Kategori adlarının tek kaynağı."}
+                  - {code: "properties: { category: { enum: [\"Elektronik\", \"Ev & Yaşam\", \"Kitap\", \"Moda\", \"Spor\"] } }", tag: Index ve plan kontrolü → DocumentDB, say: "Kapıdaki kural bu listeden üretilir; başka yazım giremez."}
+              - title: Seçim filtre olur; sayılar da daralır
+                text: >-
+                  Seçilen kategori sorgunun filter bölümüne konur: ürünleri eler, puanlarına dokunmaz. Filtre sayıları da daraltır:
+                  Elektronik seçilince listede sadece Elektronik kalır (t0). Diğer kategorilerin sayıları seçimden sonra da
+                  görünsün istenseydi filtre post_filter'a ("sayımdan sonra uygulanan filtre") konurdu: ürünler daralır, sayılar bütün aramadan
+                  hesaplanır. Ekip tek seçimli bir liste için ilkini seçti: liste ekrandaki ürünlerle hep aynı şeyi söylüyor; birden
+                  çok kategori seçilebilen bir liste gelirse post_filter'a geçilir. "All categories" (bütün kategoriler) seçimi filtreyi kaldırır.
+              - title: Sayılar ne zaman kesin, ne zaman yaklaşık?
+                text: >-
+                  Her parça kendi kovalarını sayar ve koordinatöre en kalabalık kovalarından size'dan biraz fazlasını gönderir
+                  (shard_size; size 10 iken 10'dan fazla). Bir parçadaki farklı değer sayısı bunun altındaysa parça bütün kovalarını
+                  gönderir ve toplam kesindir. Değer çoksa (ör. büyük bir katalogda
+                  binlerce marka), bir parçada az olan değer o parçanın listesine girmeyebilir; toplam biraz eksik çıkar. Cevaptaki
+                  doc_count_error_upper_bound bu eksiğin en fazla ne olabileceğini, sum_other_doc_count listeye girmeyenleri söyler.
+                  Burada her parçada en fazla 5 farklı kategori var; 5 < 10: sayılar kesin. Değer çok olsaydı shard_size büyütülür ya da index daha az parçaya
+                  bölünürdü.
+                code:
+                  - {code: "\"categories\": { \"doc_count_error_upper_bound\": 0, \"sum_other_doc_count\": 0,", tag: OpenSearch → Uygulama, say: "Hata payı 0, listeye girmeyen ürün 0: sayılar kesin."}
+                  - {code: "  \"buckets\": [ { \"key\": \"Kitap\", \"doc_count\": 11 }, { \"key\": \"Elektronik\", \"doc_count\": 9 }, … ] }", tag: OpenSearch → Uygulama, say: "En kalabalık kova önce; \"siyah\" aramasının gerçek sayıları."}
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              Index boşken kataloğun tamamı bir kez taşınır (Adım 5'teki gibi pipeline'ın kendisi yapar). Bu sayfa için önemli olan
+              iki şey: şablon index'ten önce kurulur ve arama açılmadan sayılar bir kez katalogla karşılaştırılır.
+            cards:
+              - title: Önce şablon, sonra index, en son veri
+                text: >-
+                  Şablon olmasaydı OpenSearch ilk dokümana bakıp türü kendisi seçerdi (dynamic mapping, "kendiliğinden tür seçme"):
+                  category text olurdu; birebir hâli ancak category.keyword adlı ikinci bir alanda tutulurdu. Uygulama sayımı category
+                  alanında ister; text alanda sayım yapılmadığı için arama sayfası hata verirdi. Tür veri
+                  yazıldıktan sonra değiştirilemez; index silinip yeniden kurulmalıdır. Bu yüzden yayın hattı önce şablonu, sonra
+                  products_v1'i kurar, pipeline en son çalışır. Parça ve kopya sayısı da şablonda yazılır (4. aşamadaki karar).
+                code:
+                  - {code: "PUT _index_template/products { \"index_patterns\": [\"products_*\"],", tag: Yayın hattı → OpenSearch, say: "Adı products_ ile başlayan her index bu ayarlarla doğar."}
+                  - {code: "  \"template\": { \"mappings\": { \"properties\": { \"category\": { \"type\": \"keyword\" }, … } } } }", tag: OpenSearch'ün içinde, say: "category baştan keyword."}
+                  - {code: "PUT products_v1 · POST _aliases { add: products_v1 → products }", tag: Yayın hattı → OpenSearch, say: "Index kurulur, uygulamanın sorduğu ad ona verilir."}
+              - title: Arama açılmadan ilk sayım denetimi
+                text: >-
+                  İlk yükleme bitince yayın hattı her kategorinin ürün sayısını iki yere sorar: DocumentDB'ye (Adım 1'deki gruplama)
+                  ve OpenSearch'e (ürün listesi istemeden, sadece sayılar). İki liste kategori kategori karşılaştırılır; fark 0
+                  olmalı. İlk ölçüm de kaydedilir; alarmlar bu andan sonra çalışır.
+                code:
+                  - {code: "db.products.aggregate([ { $group: { _id: \"$category\", n: { $sum: 1 } } } ])", tag: [Yayın hattı → DocumentDB, DocumentDB → Yayın hattı], say: "Katalogda her kategoride kaç ürün var?"}
+                  - {code: "GET products/_search { \"size\": 0, \"query\": { \"match_all\": {} }, \"aggs\": { \"c\": { \"terms\": { \"field\": \"category\" } } } }", tag: [Yayın hattı → OpenSearch, OpenSearch → Yayın hattı], say: "Index'te her kategoride kaç ürün var? (ürün listesi yok, sadece sayılar)"}
+                  - {code: "if fark(a, b) != 0: tekrar_olc(10 dk)", tag: Yayın hattının içinde, say: "Bir kategori bile tutmazsa bir kez daha ölçülür; yine tutmazsa alarm (4. aşama)."}
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              Yeni ürünler birkaç saniyede index'e gelir (Adım 5'teki zincir). Sayılar için ayrıca bir iş yapılmaz: ürünün kategorisi
+              yazılırken doc_values'a da yazılır, bir sonraki aramada sayılır.
+            cards:
+              - title: Yeni ürün sayılara ne kadar sürede girer?
+                text: >-
+                  Katalog yönetim servisi ürünü sadece DocumentDB'ye yazar; değişiklik akışı ve pipeline onu index'e taşır
+                  (genellikle birkaç saniye). OpenSearch ürünü yazar ama bir sonraki refresh'e kadar (en çok 1 saniye) aramada ve
+                  sayılarda göstermez. Toplam: pipeline gecikmesi + refresh. Bu arada liste ile sayılar birbirini hep tutar, çünkü
+                  ikisi aynı cevapta, index'in aynı anki hâlinden hesaplanır; sadece katalogdan birkaç saniye geride kalabilirler. Silinen ürün aynı yoldan index'ten de silinir ve sayılardan düşer.
+                  Stok index'e taşınmaz (Adım 5'teki pipeline onu çıkarır): stoğu biten ürün aramada ve sayılarda kalır, stok ürün
+                  sayfasında gösterilir.
+                code:
+                  - {code: "db.products.insert_one({ \"_id\": \"P0181\", \"name\": \"Alpen Bluetooth Hoparlör 181\", \"category\": \"Elektronik\", … })", tag: Katalog yönetim servisi → DocumentDB, say: "Yeni ürün kataloğa yazılır; gerisini zincir yapar."}
+              - title: "Tazelik ve bedeli: refresh_interval"
+                text: >-
+                  AWS, yoğun yazılan index'lerde refresh_interval'ı 30 saniye ya da üstüne çıkarmayı önerir: daha seyrek refresh
+                  daha hızlı yazma demektir. Bu index'e günde birkaç değişiklik yazılıyor ve ziyaretçi yeni ürünü ve sayısını hemen
+                  görmeli; bu yüzden varsayılan 1 saniye kalıyor. Toplu bir değişiklik (ör. 40 ürünün kategorisi) de birkaç saniyede
+                  biter. Yazma çok artarsa (ör. her gün binlerce fiyat değişikliği) bu karar yeniden açılır; pipeline'ın yazma
+                  hataları ve gecikmesi izleniyor.
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              Değişiklik iki kez gelirse, doküman reddedilirse, sayılar katalogla tutmazsa, bir kategorinin adı değişirse ya da
+              parça sayısı sayıları etkilerse ne olur? Her biri için zincirde bir parça vardır; her parçanın ne zaman çalıştığı ve
+              neyi yakalamadığı aşağıda.
+            cards:
+              - title: Aynı değişiklik iki kez, kabul edilmeyen doküman
+                text: >-
+                  Doküman ürün numarasıyla yazılır; aynı değişiklik tekrar gelirse aynı dokümanın üstüne yazılır, kova iki kez
+                  saymaz. Kabul edilmeyen doküman hata klasörüne (DLQ) gider ve alarm çalar; o ürün hem listede hem sayıda eksiktir.
+                  Onarım: ekip DLQ'daki dokümanın sebebini düzeltir ve ürünü katalogda bir kez daha kaydeder; yeni değişiklik zincirden
+                  geçer ve ürün sayılara döner. Fark çok büyükse index ilk yüklemeyle yeni bir sürüm olarak kurulur ve alias ona
+                  çevrilir (Adım 6). Ne zaman: her değişiklikte, birkaç saniye içinde. Yakalamadığı: OpenSearch'ün kabul ettiği ama yanlış kategoriyle
+                  gelen bir ürün; o, katalogda da yanlıştır ve ancak katalog ekibi fark eder.
+              - title: Gece sayım denetimi
+                text: >-
+                  Her gece yayın hattı her kategorinin ürün sayısını DocumentDB'de ve OpenSearch'te sayar (2. aşamadaki iki komut).
+                  Pipeline gecikmesi yüzünden tek bir denetimde küçük bir fark olabilir; bu yüzden fark 10 dakika sonra (temsilî)
+                  yeniden ölçülür, iki denetim üst üste tutmazsa alarm çalar. Aynı çalışmada hata payının 0 ve kategori sayısının
+                  size sınırının (10) altında olduğuna da bakılır. Ne zaman: her gece. Yakalamadığı: tek bir aramanın sayıları
+                  (denetim sadece bütün katalogun kategori toplamlarına bakar) ve iki tarafta da aynı olan bir yanlış kategori.
+                code:
+                  - {code: "a = docdb_sayilari()  # { \"Elektronik\": 40, \"Kitap\": 40, … }", tag: [Yayın hattı → DocumentDB, DocumentDB → Yayın hattı], say: "Katalogdaki sayılar ($group)."}
+                  - {code: "b, hata = opensearch_sayilari()  # terms, size 0", tag: [Yayın hattı → OpenSearch, OpenSearch → Yayın hattı], say: "Index'teki sayılar ve hata payı."}
+                  - {code: "if fark(a, b) != 0 or hata > 0: tekrar_olc(10 dk)", tag: Yayın hattının içinde, say: "Tutmazsa bir kez daha ölçülür; yine tutmazsa CloudWatch alarmı."}
+              - title: Bir kategorinin adı değişirse
+                text: >-
+                  Sıra hep aynıdır. 1) Sözlüğe yeni ad girer, eski ad onun eski adı olarak işaretlenir. 2) Index ve plan kontrolü
+                  kuralı collMod ile genişletir: iki ad birden kabul edilir. 3) Katalog yönetim servisi ürünleri tek komutla yeni
+                  ada çevirir. 4) Zincir her ürünü birkaç saniyede index'e taşır; bu arada iki ad yan yana sayılır. 5) Uygulama
+                  adresteki eski adı yenisine çevirir. 6) Gece denetimi eski adı iki tarafta da 0 bulunca ekip onaylar, index ve plan kontrolü kuralı daraltır (sözlük
+                  sürüm 3). Index
+                  yeniden kurulmaz: alanın türü değişmedi, sadece değeri. Ne zaman: ürünlerin çevrilmesi birkaç saniye; kuralın daraltılması o geceki denetimden sonra; eski ad çevirisi 90
+                  gün (temsilî). Yakalamadığı:
+                  eski ad tablosu kaldırıldıktan sonra gelen eski bağlantılar; onlar 0 ürün görür.
+                code:
+                  - {code: "db.runCommand({ collMod: \"products\", validator: { $jsonSchema: kural(sozluk) } })", tag: Index ve plan kontrolü → DocumentDB, say: "Kural geçici olarak eski ve yeni adı birlikte kabul eder."}
+                  - {code: "db.products.updateMany({ category: \"Moda\" }, { $set: { category: \"Giyim\" } })", tag: Katalog yönetim servisi → DocumentDB, say: "40 ürün tek komutla; akışa 40 ayrı güncelleme düşer."}
+                  - {code: "cat = sozluk.yeni_ad.get(cat, cat)", tag: Uygulamanın içinde, say: "Adresteki eski ad yeni ada çevrilir; yeni adsa olduğu gibi kalır."}
+              - title: "İzlenen karar: 5 parça"
+                text: >-
+                  products_v1 şablonda parça sayısı yazılmadan kuruldu ve OpenSearch Service'in varsayılanını aldı: 5 parça, her
+                  birinin 1 kopyası (açık kaynak OpenSearch'ün varsayılanı 1 parçadır). AWS'in önerisi bir parçayı 10–30 GiB arasında
+                  tutmak; birkaç GiB'lık bir index'te bile tek parça. Bu index yaklaşık 72 KB. Bugün bunun sayılara bir zararı yok:
+                  kategori 5, size 10, hata payı 0. Sonraki index sürümü (products_v2) şablonda number_of_shards 1 ile kurulacak; parça
+                  sayısı mevcut bir index'te değiştirilemez. Nasıl izleniyor: gece denetimi hata payına her gece bakar, 0'dan büyükse alarm çalar. Yakalamadığı: parça
+                  başına küçük ek yük (bellek, işlemci); o, OpenSearch'ün kendi ölçümlerinde görünür.
+                code:
+                  - {code: "\"settings\": { \"number_of_shards\": 1, \"number_of_replicas\": 2 }   # products_v2 için", tag: Yayın hattı → OpenSearch, say: "Tek parça; 3 veri sunucusunun her birinde ürünlerin tam bir kopyası olsun diye 2 kopya."}
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
