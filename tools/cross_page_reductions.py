@@ -16,7 +16,7 @@ APP = Path(sys.argv[1] if len(sys.argv) > 1 else Path(__file__).resolve().parent
 sys.path.insert(0, str(APP))
 import engine_app.e2e_usecases_w as w  # noqa: E402
 
-PAGES = ["dynamodb", "aurora", "docdb", "keyspaces", "elasticache", "opensearch", "neptune", "redshift"]
+PAGES = sorted(w.USECASES_W)  # every registered model 2 page
 
 # (tag, regex on the reduction part of the reason). The first match wins; order from specific to general.
 TAGS = [
