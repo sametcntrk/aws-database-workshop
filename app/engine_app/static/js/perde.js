@@ -175,7 +175,7 @@
         <td data-l="Ne?"><span><em class="pa-inv-kind ${c.kind === "code" ? "code" : "aws"}">${c.kind === "code" ? "bizim kodumuz" : "AWS"}</em> ${esc(c.what || "")}</span></td>
         <td data-l="Görevi"><span>${esc(c.does)}</span></td>
         <td data-l="Aşama"><span>${(c.phases || []).map((p) => `<a class="pa-inv-ph" href="#pa-t1-${esc(p)}">t-1 · ${esc(p)}</a>`).join(" ")}</span></td>
-        <td data-l="Önce → Sonra"><span>${[].concat(c.before || "—").map(link).join(", ")} → ${[].concat(c.after || "—").map(link).join(", ")}</span></td></tr>`).join("")}</tbody></table>`;
+        <td data-l="Önce → Sonra"><span class="pa-ba"><span><small>Önce</small>${[].concat(c.before || "—").map(link).join(", ")}</span><span><small>Sonra</small>${[].concat(c.after || "—").map(link).join(", ")}</span></span></td></tr>`).join("")}</tbody></table>`;
   }
   function t1CardHtml(x, k) {
     const code = (x.code || []).length ? `<div class="pa-code pa-t1-code">${x.code_title ? `<h4>${esc(x.code_title)}</h4>` : ""}<ol>${x.code.map((l, i) =>
