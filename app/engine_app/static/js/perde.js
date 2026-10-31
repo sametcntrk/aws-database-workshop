@@ -153,6 +153,43 @@
     return paras + feed;
   }
 
+  /* ---------- t-1 as the real production chain (panel.t1): the component inventory, the pipeline simulation, then the
+   * sub-phases (1 Tasarım, 2 İlk yükleme, 3 Sürekli besleme, 4 Tutarlılık ve onarım, ...). Each sub-phase is a stop of
+   * the strip, names the components that work in it, and has cards {title, text, code [{code, tag, say}], map {cols, rows}}. */
+  const T1 = P.t1 || null;
+  const inv = T1 ? Object.fromEntries((T1.inventory || []).map((c) => [c.id, c])) : {};
+  const invName = (id) => (inv[id] ? inv[id].name : id);
+  function inventoryHtml(list) {
+    const link = (x) => (inv[x] ? `<a href="#pa-inv-${esc(x)}">${esc(inv[x].name)}</a>` : esc(x));
+    return `<table class="pa-inv"><thead><tr><th>Bileşen</th><th>Ne?</th><th>Görevi</th><th>Aşama</th><th>Önce → Sonra</th></tr></thead><tbody>
+      ${list.map((c) => `<tr id="pa-inv-${esc(c.id)}"><td data-l="Bileşen"><span><b>${esc(c.name)}</b></span></td>
+        <td data-l="Ne?"><span><em class="pa-inv-kind ${c.kind === "code" ? "code" : "aws"}">${c.kind === "code" ? "bizim kodumuz" : "AWS"}</em> ${esc(c.what || "")}</span></td>
+        <td data-l="Görevi"><span>${esc(c.does)}</span></td>
+        <td data-l="Aşama"><span>${(c.phases || []).map((p) => `<a class="pa-inv-ph" href="#pa-t1-${esc(p)}">t-1 · ${esc(p)}</a>`).join(" ")}</span></td>
+        <td data-l="Önce → Sonra"><span>${[].concat(c.before || "—").map(link).join(", ")} → ${[].concat(c.after || "—").map(link).join(", ")}</span></td></tr>`).join("")}</tbody></table>`;
+  }
+  function t1CardHtml(x, k) {
+    const code = (x.code || []).length ? `<div class="pa-code pa-t1-code">${x.code_title ? `<h4>${esc(x.code_title)}</h4>` : ""}<ol>${x.code.map((l, i) =>
+      `<li><code><b>${i + 1}</b>${esc(l.code)}</code><span>${[].concat(l.tag || []).map((t) => `<em class="${/içinde/.test(t) ? "in" : "go"}">${esc(t)}</em>`).join("")}${esc(l.say)}</span></li>`).join("")}</ol></div>` : "";
+    const map = x.map ? `<table class="pa-map"><thead><tr>${x.map.cols.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>${x.map.rows.map((r) =>
+      `<tr>${r.map((v, i) => `<td data-l="${esc(x.map.cols[i])}"><span>${i < 2 ? `<code>${esc(v)}</code>` : esc(v)}</span></td>`).join("")}</tr>`).join("")}</tbody></table>` : "";
+    return `<div class="pa-prep"><h4><span>${k + 1}</span>${esc(x.title || "")}</h4>${[].concat(x.text || []).map((p) => `<p>${esc(p)}</p>`).join("")}${map}${code}</div>`;
+  }
+  function t1PhaseHtml(ph) {
+    const who = (T1.inventory || []).filter((c) => (c.phases || []).map(String).includes(String(ph.n)));
+    return `<div class="pa-phase pa-sub" id="pa-t1-${esc(ph.n)}"><span>t-1 · ${esc(ph.n)}</span><div><h2>${esc(ph.title)}</h2>${ph.intro ? `<p>${esc(ph.intro)}</p>` : ""}</div></div>
+      <section class="gp-sec pa-t1-sec"><p class="pa-t1-who"><b>Bu aşamada çalışanlar:</b> ${who.map((c) => `<a class="chip pa-inv-chip ${c.kind === "code" ? "code" : "aws"}" href="#pa-inv-${esc(c.id)}">${esc(c.name)}</a>`).join(" ")}
+        ${T1.sim && (T1.sim.frames || []).some((f) => String(f.phase) === String(ph.n)) ? `<button type="button" class="pa-t1-go" data-p="${esc(ph.n)}">Simülasyonda bu aşamayı göster</button>` : ""}</p>
+        ${(ph.cards || []).map(t1CardHtml).join("")}</section>`;
+  }
+  function t1Html(no) {
+    return `${(T1.terms || []).length ? `<section class="gp-sec"><h3><span>${no()}</span>${esc(T1.terms_title || "Bu bölümün terimleri")}</h3><dl class="gp-terms">${T1.terms.map(([t, d]) =>
+        `<div><dt>${esc(t)}</dt><dd>${esc(d)}</dd></div>`).join("")}</dl></section>` : ""}
+      <section class="gp-sec" id="pa-t1-inv"><h3><span>${no()}</span>${esc(T1.inventory_title || "Zincirin bileşenleri")}</h3><p>${esc(T1.inventory_intro || "")}</p>${inventoryHtml(T1.inventory || [])}</section>
+      ${T1.sim ? `<section class="gp-sec" id="pa-t1-sim"><h3><span>${no()}</span>${esc(T1.sim_title || "Simülasyon: veri hedefe nasıl geldi?")}</h3><div class="gp-sim gp-sim-t1"></div></section>` : ""}
+      ${(T1.phases || []).map(t1PhaseHtml).join("")}`;
+  }
+
   /* ---------- t0: the request on the wire, as three packets. Live values come from the call (net, trace path);
    * a value the app cannot see is marked "örnek". panel.wire describes the last hop of the engine. */
   const tag = (live) => `<em class="${live ? "pa-live" : "pa-ex"}">${live ? "gerçek" : "örnek"}</em>`;
@@ -213,7 +250,9 @@
     let no = 0;
     const h = (title) => `<h3><span>${++no}</span>${esc(title)}</h3>`;
     const phase = (id, t, title, intro) => `<div class="pa-phase" id="${id}"><span>${t}</span><div><h2>${esc(title)}</h2>${intro ? `<p>${esc(intro)}</p>` : ""}</div></div>`;
-    const strip = [["pa-need", "", "Ne lazım?"], ...(P.prior || P.feed ? [["pa-t1", "t-1", "Önceden"]] : []), ["pa-t0", "t0", step.action === "look" ? "Sayfa açılınca" : "Tıklaman"],
+    const t1Stops = T1 ? [["pa-t1", "t-1", "Zincir"], ...(T1.phases || []).map((ph) => [`pa-t1-${ph.n}`, `t-1 · ${ph.n}`, ph.title])]
+      : P.prior || P.feed ? [["pa-t1", "t-1", "Önceden"]] : [];
+    const strip = [["pa-need", "", "Ne lazım?"], ...t1Stops, ["pa-t0", "t0", step.action === "look" ? "Sayfa açılınca" : "Tıklaman"],
       ...(P.back ? [["pa-t2", "t+1", "Cevap dönünce"]] : []), ["pa-keep", "", "Akılda kalsın"]];
     root.className = `gp pa-page eng-${(step.engines || [])[0] || "docdb"}`;
     root.innerHTML = `<header class="gp-head pa-head"><div><span class="gp-kicker">Perde arkası</span>${chips()}${step.use_case ? `<em>${esc(step.use_case)}</em>` : ""}
@@ -225,8 +264,9 @@
         <div class="gp-intro" id="pa-need"><section class="gp-sec">${h("Ne lazım?")}<p>${esc(P.need)}</p></section>
         <section class="gp-sec">${h(`Kavram: ${C.term || ""}`)}<p>${esc(C.text || "")}</p></section></div>
         ${(C.terms || []).length ? `<dl class="gp-terms">${C.terms.map(([t, d]) => `<div><dt>${esc(t)}</dt><dd>${esc(d)}</dd></div>`).join("")}</dl>` : ""}
-        ${P.prior || P.feed ? phase("pa-t1", "t-1", "Önceden ne vardı?", (P.prior || {}).intro) : ""}
-        ${P.prior || P.feed ? `<section class="gp-sec">${h((P.prior || {}).title || "Bu adımdan önce")}${priorHtml(P.prior, P.feed)}</section>` : ""}
+        ${T1 ? `${phase("pa-t1", "t-1", T1.title || "Önceden ne vardı?", T1.intro)}${t1Html(() => ++no)}` : ""}
+        ${!T1 && (P.prior || P.feed) ? phase("pa-t1", "t-1", "Önceden ne vardı?", (P.prior || {}).intro) : ""}
+        ${!T1 && (P.prior || P.feed) ? `<section class="gp-sec">${h((P.prior || {}).title || "Bu adımdan önce")}${priorHtml(P.prior, P.feed)}</section>` : ""}
         ${phase("pa-t0", "t0", P.now_title || (step.action === "look" ? "Sayfa açılınca ne oldu?" : "Senin tıklamanla ne oldu?"), P.now_intro)}
         ${P.scenario ? `<section class="gp-sec pa-scn">${h(P.scenario.title || "Ne oldu? Senin gözünden")}<p>${esc(P.scenario.intro || "")}</p>
           <ol>${(P.scenario.steps || []).map((x) => `<li><p>${esc(x.text)}</p>${(x.engines || []).length ? `<span class="pa-scn-db">${x.engines.map((e) =>
@@ -246,12 +286,29 @@
         <section class="gp-sec gp-keep" id="pa-keep"><h3>Akılda kalsın</h3><p>${esc(P.remember || "")}</p>${P.why_db ? `<p class="gp-why">${esc(P.why_db)}</p>` : ""}</section>
       </div>`;
     root.querySelector("[data-c=back]").addEventListener("click", () => { if (window.opener) { window.opener.focus(); window.close(); } else history.back(); });
-    if (P.sim && window.GuidedSim) {
-      sim = GuidedSim.render(root.querySelector(".gp-sim"), P.sim);
-      const io = new IntersectionObserver((seen) => {                // the simulation plays once, when it comes into view
-        if (seen.some((x) => x.isIntersecting)) { io.disconnect(); setTimeout(() => sim.play(), 400); }
+    const playOnce = (box, s) => {                                     // a simulation plays once, when it comes into view
+      const io = new IntersectionObserver((seen) => {
+        if (seen.some((x) => x.isIntersecting)) { io.disconnect(); setTimeout(() => s.play(), 400); }
       }, { threshold: 0.35 });
-      io.observe(root.querySelector(".gp-sim"));
+      io.observe(box);
+      return io;
+    };
+    if (P.sim && window.GuidedSim) {
+      const box = root.querySelector(".gp-sim:not(.gp-sim-t1)");
+      sim = GuidedSim.render(box, P.sim);
+      playOnce(box, sim);
+    }
+    if (T1 && T1.sim && window.GuidedSim) {                            // the t-1 chain: box names and functions come from the inventory
+      const box = root.querySelector(".gp-sim-t1");
+      const comps = Object.fromEntries((T1.inventory || []).map((c) => [c.id, { name: c.name, what: c.what, box: c.box, kind: c.kind }]));
+      const sim1 = GuidedSim.render(box, { ...T1.sim, components: comps });
+      const io1 = playOnce(box, sim1);
+      root.querySelectorAll(".pa-t1-go").forEach((b) => b.addEventListener("click", () => {
+        io1.disconnect();                                              // the reader chose a frame: no automatic play over it
+        const t = sim1.phaseAt(b.dataset.p);
+        if (t >= 0) sim1.goto(t);
+        root.querySelector("#pa-t1-sim").scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+      }));
     }
     root.querySelectorAll(".pa-code li[data-hl]").forEach((el) => {    // a line of the app code lights its part of the simulation
       const on = () => sim && sim.highlight(el.dataset.hl), off = () => sim && sim.highlight(null);

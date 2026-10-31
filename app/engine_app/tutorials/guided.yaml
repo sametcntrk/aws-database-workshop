@@ -1214,58 +1214,363 @@ steps:
           - [standard, "Varsayılan analyzer: küçültür ama Türkçe harfleri olduğu gibi tutar (kulaklık)."]
           - [Fuzziness, "Bir iki harf farkla yazılmış kelimeleri de eşleştirme. AUTO, kelime uzunluğuna göre 1–2 harf fark kabul eder."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde arama index'i için hazırlık
+      t1:
+        title: Önceden ne vardı? Ürünler arama index'ine nasıl geldi?
         intro: >-
-          Arama kutusu hiç kullanılmadan, ürünler arama motoruna kendi analyzer'larıyla yazılır. Aşağıdaki beş adım bu
-          hazırlığın sırasıdır.
-        text:
-          - title: Önce aramanın soruları yazılır
-            text: >-
-              Ziyaretçi nasıl yazacak? Türkçe harfsiz ("kulaklik"), yazım hatalı ("kulaklk"), birden fazla kelimeyle. Hangi
-              alan daha önemli? Adda geçen kelime, açıklamada geçenden değerlidir. Bu kararlar index kurulmadan verilir.
-            code: |-
-              multi_match: { query: "kablosuz kulaklik", fields: ["name^3", "description"], fuzziness: "AUTO" }
-          - title: Dil için bir analyzer tanımlanır
-            text: >-
-              Türkçe için harf küçültme Türkçe kurallarla yapılır (I → ı, İ → i) ve ardından harfler sadeleştirilir
-              (asciifolding). Böylece "Kulaklık" index'e "kulaklik" olarak yazılır ve ASCII aramalar onu bulur.
-            code: |-
-              "analysis": { "filter": { "tr_lower": { "type": "lowercase", "language": "turkish" } },
-                            "analyzer": { "tr_folded": { "tokenizer": "standard", "filter": ["tr_lower", "asciifolding"] } } }
-          - title: Aynı alan iki şekilde index'lenebilir
-            text: >-
-              Bir alan hem sadeleştirilmiş hem orijinal hâliyle tutulabilir (multi-field). Böylece aynı veriyle hem esnek arama
-              hem birebir eşleşme yapılır; kategori gibi alanlar ise analyzer'sız keyword olarak tutulur (filtre ve sayım için).
-            code: |-
-              "name": { "type": "text", "analyzer": "tr_folded", "fields": { "std": { "type": "text", "analyzer": "standard" } } },
-              "category": { "type": "keyword" }
-          - title: Analyzer önceden denenir
-            text: >-
-              _analyze ile bir metnin hangi token'lara bölündüğü görülür. Analyzer sonradan değiştirilirse bütün ürünlerin
-              yeniden index'lenmesi gerekir; bu yüzden yayından önce denenir.
-            code: |-
-              POST products/_analyze { "analyzer": "tr_folded", "text": "Kablosuz Kulaklık" }  →  ["kablosuz", "kulaklik"]
-          - title: Kapasite parçalara bölünür
-            text: >-
-              Index parçalara (shard) bölünür ve her parçanın bir kopyası (replica) başka bir sunucuda durur; bir sunucu düşse
-              de arama çalışır. Bu katalogda products index'i 5 parçalı ve her parçanın 1 kopyası var, domain 3 sunucudan oluşuyor.
-      feed:
-        title: Veri nereden geliyor?
-        writes: >-
-          Arama index'ine kullanıcı yazmaz. Ürünlerin asıl kaydı katalog veritabanındadır; arama motoru ondan beslenir.
-        reads: Uygulama, arama sayfası ve arama kutusunun öneri listesi için.
-        kind: >-
-          OpenSearch başka bir veritabanından kendiliğinden veri çekmez; birinin onu beslemesi gerekir. Besleme ya bir ara
-          servisle (Amazon OpenSearch Ingestion) ya da kataloğun değişikliklerini okuyan bir programla yapılır.
-        with: >-
-          Arama sonucundaki ürünlerin asıl kaydı katalogdadır (DocumentDB); kartlardaki görseller nesne deposundan (S3) gelir.
-          Kartta arama motorunun döndürdüğü alanlar (ad, fiyat, kategori) gösterilir; daha fazla bilgi gerekirse ürün sayfası
-          kataloğa sorar.
-        best: >-
-          Katalog tek yerde tutulur; arama index'i ondan otomatik beslenir. DocumentDB'nin OpenSearch ile zero-ETL
-          entegrasyonu önce bütün ürünleri yükler, sonra her değişikliği change streams ile birkaç saniye içinde taşır.
-          Uygulama aynı ürünü iki yere ayrı ayrı yazmaz.
+          Arama sayfası açılmadan önce OpenSearch'teki products index'i zaten dolu ve katalogla aynı. Burada onu dolduran gerçek
+          zinciri görüyorsun: önce zincirin bileşenleri, sonra bir simülasyon, sonra dört aşama (tasarım, ilk yükleme, sürekli
+          besleme, tutarlılık ve onarım).
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1", "t0'daki tıklamadan (ya da sayfanın açılmasından) önceki zaman. Bu bölüm, verinin o ana kadar hedefe nasıl geldiğini anlatır."]
+          - ["Ekip", "Mağazanın sistemini kuran ve işleten mühendisler. Bir kez çalışan kurulum komutlarını onlar gönderir, alarmlara onlar bakar."]
+          - ["Transaction (iş paketi) ve COMMIT", "Birlikte kaydedilmesi gereken yazmaların paketi. COMMIT paketi kalıcı yapar: ya hepsi kaydolur ya hiçbiri; tıpkı bir havalenin iki hesaba birden işlenmesi gibi."]
+          - ["zero-ETL", "ETL: veriyi çıkar, dönüştür, yükle; normalde bunu ekibin yazdığı bir program yapar. zero-ETL'de taşımayı AWS'in servisi yapar; ekip sadece ayar yazar (hangi alanlar çıkarılsın gibi), kod yazmaz."]
+          - ["Koleksiyon ve doküman", "DocumentDB'de bir koleksiyon (ör. products) ürünlerin dosyası, her ürün bir doküman (alanları olan bir kayıt)."]
+          - ["Değişiklik akışı (change stream)", "DocumentDB'nin bir koleksiyondaki her ekleme, güncelleme ve silmeyi sırayla yazdığı kayıt. Pipeline bu kaydı okur."]
+          - ["OpenSearch Ingestion pipeline", "AWS'in veri taşıma servisi. source: nereden okur, processor: yolda ne değiştirir, sink: nereye yazar."]
+          - ["Alias (takma ad)", "Bir index'in ikinci adı. Uygulama hep products adını sorar; bu ad bugün products_v1'i, yarın products_v2'yi gösterebilir."]
+          - ["Index şablonu", "Adı belli bir şekilde başlayan her yeni index'in hangi ayarlarla doğacağını söyleyen tanım."]
+          - ["text, keyword, float", "Alan türleri. text: analyzer'dan geçer ve aranır. keyword: olduğu gibi tutulur (filtre, sayım). float: sayı."]
+          - ["DLQ (dead-letter queue)", "Kabul edilmeyen kayıtların bırakıldığı yer; burada S3'te bir klasör. Akış onları beklemeden devam eder."]
+          - ["CloudWatch", "AWS'in ölçüm ve alarm servisi."]
+          - ["Secrets Manager ve VPC", "Secrets Manager: şifrelerin kodda değil, AWS'te kilitli durduğu yer. VPC: sistemin internete kapalı özel ağı."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra" sütunu veriyi kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim kodumuz" etiketli parçayı mağazanın
+          ekibi yazar. Aynı parçalar aşağıdaki simülasyonda birer kutu: üst sırada ürünün yolu, alt sırada yandaki işler.
+        inventory:
+          - id: app
+            name: Uygulama (katalog yönetimi)
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucusunda)
+            does: Yeni ya da değişen ürünü DocumentDB'ye yazar. Arama motoruna kendisi hiçbir şey göndermez.
+            box: Ürünü sadece DocumentDB'ye yazar.
+            phases: [3]
+            before: Katalog ekibi (ürün ekleme ekranı)
+            after: docdb
+          - id: docdb
+            name: DocumentDB (shop.products)
+            kind: aws
+            what: katalog veritabanı
+            does: Ürünlerin asıl kaydı. Fiyat, stok, özellikler, etiketler burada.
+            box: Ürünlerin asıl kaydı (tek doğru kaynak).
+            phases: [1, 2, 3]
+            before: app
+            after: [stream, osi]
+          - id: stream
+            name: Değişiklik akışı (change stream)
+            kind: aws
+            what: DocumentDB'nin içinde, koleksiyon için açılır
+            does: Koleksiyondaki her ekleme, güncelleme ve silmeyi sırayla kaydeder (varsayılan 3 saat saklar, 7 güne kadar uzatılabilir).
+            box: Her ekleme, güncelleme ve silmeyi sırayla kaydeder.
+            phases: [1, 3, 4]
+            before: docdb
+            after: osi
+          - id: osi
+            name: OpenSearch Ingestion pipeline (zero-ETL)
+            kind: aws
+            what: AWS'in veri taşıma servisi
+            does: >-
+              Önce koleksiyonun tamamını bir kez taşır, sonra değişiklik akışını okuyup her değişikliği index'e uygular. Yolda
+              aramaya gerekmeyen alanları çıkarır.
+            box: "AWS'in taşıma servisi: önce hepsini bir kez, sonra her değişikliği birkaç saniyede index'e yazar; araya kod girmez."
+            phases: [2, 3, 4]
+            before: [docdb, stream, s3]
+            after: [opensearch, s3, dlq]
+          - id: opensearch
+            name: OpenSearch (products index)
+            kind: aws
+            what: arama motoru (OpenSearch Service domain'i)
+            does: Ürünleri analyzer'dan geçirip ters index'e yazar. Uygulama aramayı products adıyla (alias) yapar.
+            box: Ürünler ters index'te; aramalar products adına gelir.
+            phases: [1, 2, 3, 4]
+            before: osi
+            after: Arama sorgusu (t0)
+          - id: s3
+            name: S3 (ilk yükleme klasörü)
+            kind: aws
+            what: Amazon S3 bucket'ı
+            does: İlk yüklemede koleksiyonun dışa aktarılan kopyasının geçici olarak durduğu yer.
+            box: İlk yüklemenin geçici kopyası.
+            phases: [2]
+            before: osi
+            after: "aynı pipeline (dosyaları geri okur, index'e yükler)"
+          - id: dlq
+            name: Hata klasörü (S3 DLQ)
+            kind: aws
+            what: Amazon S3 bucket'ı
+            does: OpenSearch'ün birkaç denemeden sonra da kabul etmediği dokümanları saklar; akış durmaz, ekip onları sonra işler.
+            box: Kabul edilmeyen dokümanları saklar; akış durmaz.
+            phases: [4]
+            before: osi
+            after: Ekip (inceler, yeniden gönderir)
+          - id: monitor
+            name: CloudWatch alarmları
+            kind: aws
+            what: AWS'in izleme servisi
+            does: Pipeline'ın sayaçlarını (işlenen ve hata veren kayıtlar, DLQ'ya yazılanlar) izler ve eşik aşılınca alarm verir.
+            box: Pipeline'ın işlenen/hatalı kayıt sayaçlarını izler.
+            phases: [4]
+            before: [osi, dlq]
+            after: Ekip (alarm)
+        sim_title: "Simülasyon: ürünler index'e nasıl geldi?"
+        sim:
+          kind: pipeline
+          title: DocumentDB → değişiklik akışı → OpenSearch Ingestion → OpenSearch (products)
+          caption: >-
+            t0'daki ters index kesitinin 7 ürünü. Önce index boşken ilk yükleme, sonra bir ürünün katalogdan index'e her kutudan
+            geçişi, en sonda aynı değişikliğin ikinci kez gelmesi, hata klasörü, izleme ve analyzer değişikliği oynuyor. Son karede
+            index, t0'daki simülasyonun başladığı hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım}
+          side_title: "Yandaki işler: ilk yükleme klasörü, hata klasörü, izleme"
+          summary: >-
+            Index'i pipeline doldurdu: kataloğun tamamını bir kez, yeni ürünü değişiklik akışından. Uygulama sadece DocumentDB'ye
+            yazdı. Son durum, t0'daki simülasyonun başladığı durum: 7 ürün, adları tr_folded terimleriyle.
+          boxes:
+            - id: app
+            - id: docdb
+              tables:
+                - name: shop.products (dokümanlar)
+                  cols: [_id, name, price, stock]
+                  money: [price]
+                  rows:
+                    - {_id: P0136, name: Bosphorus Kablosuz Kulaklık 136, price: 2350.18, stock: 407}
+                    - {_id: P0081, name: Kapadokya Kablosuz Kulaklık 81, price: 4372.79, stock: 103}
+                    - {_id: P0031, name: Alpen Kablosuz Kulaklık 31, price: 1884.63, stock: 311}
+                    - {_id: P0001, name: Alpen Kablosuz Kulaklık 1, price: 3373.84, stock: 128}
+                    - {_id: P0196, name: Nordwind Kablosuz Kulaklık 196, price: 260.93, stock: 60, hidden: true}
+                    - {_id: P0121, name: Toros Bluetooth Hoparlör 121, price: 2140.19, stock: 313}
+                    - {_id: P0141, name: Anadolu Mekanik Klavye 141, price: 2907.12, stock: 169}
+            - id: stream
+            - id: osi
+            - id: opensearch
+              tables:
+                - name: "products (takma ad) → products_v1 (asıl index)"
+                  cols: [_id, "name (tr_folded terimleri)", price]
+                  money: [price]
+                  rows:
+                    - {_id: P0136, "name (tr_folded terimleri)": "bosphorus · kablosuz · kulaklik · 136", price: 2350.18, hidden: true}
+                    - {_id: P0081, "name (tr_folded terimleri)": "kapadokya · kablosuz · kulaklik · 81", price: 4372.79, hidden: true}
+                    - {_id: P0031, "name (tr_folded terimleri)": "alpen · kablosuz · kulaklik · 31", price: 1884.63, hidden: true}
+                    - {_id: P0001, "name (tr_folded terimleri)": "alpen · kablosuz · kulaklik · 1", price: 3373.84, hidden: true}
+                    - {_id: P0196, "name (tr_folded terimleri)": "nordwind · kablosuz · kulaklik · 196", price: 260.93, hidden: true}
+                    - {_id: P0121, "name (tr_folded terimleri)": "toros · bluetooth · hoparlor · 121", price: 2140.19, hidden: true}
+                    - {_id: P0141, "name (tr_folded terimleri)": "anadolu · mekanik · klavye · 141", price: 2907.12, hidden: true}
+            - id: s3
+              row: side
+            - id: dlq
+              row: side
+            - id: monitor
+              row: side
+          frames:
+            - phase: 2
+              who: osi
+              lit: [docdb, osi, s3]
+              packet: {at: s3, text: "dışa aktarma: shop.products (6 doküman)"}
+              note: {opensearch: "boş"}
+              say: >-
+                Index boş. Pipeline kuruldu ve ilk yüklemeye başladı: koleksiyondaki bütün dokümanları bir kez okudu ve geçici
+                olarak S3'e yazdı. Aynı anda değişiklik akışının o anki yerini not etti: ilk yükleme sürerken gelen değişiklikleri
+                sonra oradan alacak.
+            - phase: 2
+              who: osi
+              lit: [s3, osi, opensearch]
+              packet: {at: osi, text: "stock, attributes, tags, color, type çıkarıldı"}
+              show: {opensearch: [P0136, P0081, P0031, P0001, P0121, P0141]}
+              fresh: {opensearch: [P0136, P0081, P0031, P0001, P0121, P0141]}
+              note: {opensearch: ""}
+              say: >-
+                Pipeline dosyaları S3'ten okudu, aramaya gerekmeyen alanları çıkardı ve dokümanları ürün numarasıyla (_id)
+                index'e yazdı. OpenSearch yazarken analyzer'ı çalıştırdı: "Kulaklık" index'e "kulaklik" olarak girdi.
+            - phase: 3
+              who: app
+              lit: [app, docdb]
+              show: {docdb: [P0196]}
+              fresh: {docdb: [P0196]}
+              say: >-
+                Katalog ekibi yeni bir ürün ekledi: Nordwind Kablosuz Kulaklık 196. Uygulama dokümanı DocumentDB'ye yazdı;
+                arama motoruna hiçbir şey göndermedi.
+            - phase: 3
+              who: stream
+              lit: [docdb, stream]
+              packet: {at: stream, text: "insert shop.products P0196"}
+              say: DocumentDB bu eklemeyi değişiklik akışına yazdı. Uygulamanın işi burada bitti.
+            - phase: 3
+              who: osi
+              lit: [stream, osi]
+              packet: {at: osi, text: "index products/_doc/P0196"}
+              say: >-
+                Pipeline akıştan değişikliği okudu, gereksiz alanları çıkardı ve dokümanı ürün numarasıyla OpenSearch'e gönderdi.
+                Araya kimsenin yazdığı bir program girmedi.
+            - phase: 3
+              who: opensearch
+              lit: [osi, opensearch]
+              show: {opensearch: [P0196]}
+              fresh: {opensearch: [P0196]}
+              say: >-
+                Ürün birkaç saniye içinde aranabilir oldu. Adı analyzer'dan geçti ve "nordwind, kablosuz, kulaklik, 196"
+                terimleriyle ters index'e girdi.
+            - phase: 4
+              who: osi
+              lit: [stream, osi, opensearch]
+              packet: {at: osi, text: "aynı değişiklik yine geldi → aynı _id, aynı sürüm"}
+              mark: {opensearch: {P0196: fix}}
+              say: >-
+                Pipeline aynı değişikliği ikinci kez gönderse bile doküman ürün numarasıyla yazılır: aynı dokümanın üstüne
+                yazılır, ikinci bir ürün oluşmaz. Sürüm numarası, eski bir değişikliğin yenisinin üstüne yazılmasını da engeller.
+            - phase: 4
+              who: dlq
+              lit: [osi, dlq]
+              note: {dlq: "doküman: 0"}
+              mark: {opensearch: {P0196: ""}}
+              say: >-
+                OpenSearch bir dokümanı kabul etmeseydi (ör. fiyat alanına metin gelseydi), pipeline birkaç denemeden sonra onu
+                S3'teki hata klasörüne (DLQ) yazardı. Diğer ürünler akmaya devam ederdi.
+            - phase: 4
+              who: monitor
+              lit: [osi, dlq, monitor]
+              note: {monitor: "hatalı kayıt: 0 · DLQ: 0"}
+              say: >-
+                CloudWatch, pipeline'ın işlediği ve hata veren kayıt sayılarını izler. Bir eşik aşılırsa ekibe alarm gider.
+            - phase: 4
+              who: opensearch
+              lit: [osi, opensearch]
+              note: {opensearch: "analyzer değişirse: products_v2 kurulur, alias çevrilir"}
+              say: >-
+                Analyzer değişirse eski index'teki terimler yeniden yazılamaz. Yeni ayarla products_v2 kurulur ve doldurulur, sonra
+                products adı (alias) tek komutla yeni index'e çevrilir. Arama hiç kesilmez.
+            - phase: 4
+              who: opensearch
+              lit: [opensearch]
+              note: {opensearch: ""}
+              say: >-
+                Hazır: index t0'daki simülasyonun başladığı hâlde. Arama "kablosuz kulaklik" sorgusunu bu terimlerde arayacak.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Index kurulmadan önce aramanın soruları yazılır, dil için analyzer seçilir ve katalogdan hangi alanların index'e
+              gireceğine karar verilir. Katalog asıl kayıttır; index onun aranabilir bir kopyasıdır.
+            cards:
+              - title: Aramanın soruları
+                text: >-
+                  Ziyaretçi nasıl yazacak? Türkçe harfsiz ("kulaklik"), yazım hatalı ("kulaklk"), birden fazla kelimeyle. Hangi alan
+                  daha önemli? Adda geçen kelime, açıklamada geçenden değerlidir. Kategori ve fiyat ise filtre ve sayım içindir.
+                code:
+                  - {code: "multi_match: { query: \"kablosuz kulaklik\", fields: [\"name^3\", \"description\"], fuzziness: \"AUTO\" }", tag: [Uygulama → OpenSearch], say: "Arama sayfasının soracağı soru: adda 3 kat önemli, açıklamada da ara, küçük yazım farkına izin ver."}
+              - title: Kaynaktan hedefe alan alan
+                text: >-
+                  Her alan için bir karar: aranacak mı (text, analyzer'lı), filtrelenecek mi (keyword: olduğu gibi), sayı mı, yoksa
+                  index'e hiç girmeyecek mi.
+                map:
+                  cols: [Kaynak (DocumentDB), Hedef (OpenSearch), Kural]
+                  rows:
+                    - [_id, _id, "Doküman kimliği ürün no. Aynı ürün hep aynı dokümanın üstüne yazılır."]
+                    - [name, "name (text, tr_folded) + name.std (text, standard)", Aynı ad iki şekilde index'lenir (multi-field).]
+                    - [description, "description (text, tr_folded)", Aranır; skora addan daha az katkı yapar.]
+                    - ["category, brand", "category, brand (keyword)", "Analyzer'sız, olduğu gibi: filtre ve sayım için."]
+                    - ["price, rating", "price, rating (float)", "Aralık filtresi ve sıralama için."]
+                    - ["stock, color, type, attributes, tags", (index'e girmez), "Aramada kullanılmaz; pipeline yolda çıkarır."]
+              - title: Dil için bir analyzer ve bir index şablonu
+                text: >-
+                  Türkçe için harf küçültme Türkçe kurallarla yapılır (I → ı, İ → i), ardından harfler sadeleştirilir (asciifolding).
+                  Böylece "Kulaklık" index'e "kulaklik" olarak yazılır ve ASCII aramalar onu bulur. Bu ayarlar bir index şablonuna
+                  (index template) konur: adı products_ ile başlayan her yeni index aynı ayarlarla doğar.
+                code:
+                  - {code: "PUT _index_template/products { \"index_patterns\": [\"products_*\"], …", tag: Ekip → OpenSearch, say: Şablon bir kez tanımlanır.}
+                  - {code: "\"tr_lower\": { \"type\": \"lowercase\", \"language\": \"turkish\" }", tag: OpenSearch'ün içinde, say: Türkçe kurallarla küçük harf.}
+                  - {code: "\"tr_folded\": { \"tokenizer\": \"standard\", \"filter\": [\"tr_lower\", \"asciifolding\"] }", tag: OpenSearch'ün içinde, say: "Kelimelere böl, küçült, ı→i, ö→o."}
+                  - {code: "\"name\": { \"type\": \"text\", \"analyzer\": \"tr_folded\", \"fields\": { \"std\": { … \"standard\" } } }", tag: OpenSearch'ün içinde, say: "Ad hem tr_folded hem standard ile."}
+                  - {code: "\"category\": { \"type\": \"keyword\" }, \"price\": { \"type\": \"float\" }", tag: OpenSearch'ün içinde, say: "Kategori olduğu gibi, fiyat sayı."}
+              - title: Analyzer önceden denenir
+                text: >-
+                  _analyze bir metnin hangi terimlere bölündüğünü gösterir. Analyzer sonradan değişirse bütün ürünlerin yeniden
+                  index'lenmesi gerekir (4. aşama); bu yüzden yayından önce denenir.
+                code:
+                  - {code: "POST products/_analyze { \"analyzer\": \"tr_folded\", \"text\": \"Kablosuz Kulaklık\" }", tag: Ekip → OpenSearch, say: Analyzer'ı bir metinle dener.}
+                  - {code: "→ [\"kablosuz\", \"kulaklik\"]", tag: OpenSearch → Ekip, say: İki terim; ı harfi i oldu.}
+              - title: Kapasite parçalara bölünür
+                text: >-
+                  Index parçalara (shard) bölünür ve her parçanın bir kopyası (replica) başka bir sunucuda durur; bir sunucu düşse de
+                  arama çalışır. Parça ve kopya sayısı da şablonda yazılır.
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              Index boşken kataloğun tamamı bir kez taşınır. Bu zincirde bunu ayrı bir program değil, pipeline'ın kendisi yapar.
+            cards:
+              - title: Önce koleksiyon hazırlanır
+                text: >-
+                  DocumentDB'de bu koleksiyon için değişiklik akışı açılır ve saklama süresi uzatılır; varsayılan 3 saat büyük bir
+                  koleksiyonun ilk yüklemesi için kısa kalabilir (en fazla 7 gün). Pipeline'ın DocumentDB şifresini AWS Secrets
+                  Manager'dan okuması ve VPC içinden bağlanması gerekir.
+                code:
+                  - {code: "db.adminCommand({ modifyChangeStreams: 1, database: \"shop\", collection: \"products\", enable: true })", tag: Ekip → DocumentDB, say: Bu koleksiyonun değişiklikleri kaydedilmeye başlar.}
+                  - {code: "change_stream_log_retention_duration = 604800   (küme parametresi, saniye)", tag: DocumentDB'nin içinde, say: Değişiklikler 7 gün saklanır.}
+              - title: Pipeline bir kez kurulur
+                text: >-
+                  Pipeline önce koleksiyonu dışa aktarır (export) ve geçici olarak S3'e yazar, oradan index'e yükler. Ardından aynı
+                  pipeline değişiklik akışını (stream) okumaya geçer. Pipeline ilk yüklemeye başlarken akıştaki yerini not eder;
+                  ilk yükleme sürerken gelen değişiklikler de böylece sonra uygulanır. Index'in kendisi products_v1 adını taşır,
+                  uygulama ona products takma adıyla (alias) ulaşır.
+                code:
+                  - {code: "source: documentdb: collections: [ { collection: \"shop.products\", export: true, stream: true } ]", tag: DocumentDB → Pipeline, say: "Önce hepsini taşı (export), sonra değişiklikleri (stream)."}
+                  - {code: "  s3_bucket: \"lm-search-export\"", tag: Pipeline → S3, say: İlk yüklemenin geçici kopyasının yeri.}
+                  - {code: "processor: - delete_entries: { with_keys: [\"stock\", \"attributes\", \"tags\", \"color\", \"type\"] }", tag: Pipeline'ın içinde, say: Aramada kullanılmayan alanlar çıkarılır.}
+                  - {code: "sink: - opensearch: { index: \"products\", document_id: \"${getMetadata(\\\"primary_key\\\")}\" … }", tag: Pipeline → OpenSearch, say: "Her doküman ürün numarasıyla, products adına yazılır."}
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              İlk yüklemeden sonra her ekleme, güncelleme ve silme birkaç saniye içinde index'e ulaşır. Uygulama sadece
+              DocumentDB'ye yazar.
+            cards:
+              - title: Uygulama ürünü tek yere yazar
+                text: >-
+                  Ürünü DocumentDB'ye, ayrıca OpenSearch'e yazmak (dual write) iki ayrı yazmadır: ikincisi başarısız olursa katalogda
+                  var ama aramada yok. Tek yazma ve otomatik besleme bu ayrılığı önler.
+                code:
+                  - {code: "db.products.insert_one({ \"_id\": \"P0196\", \"name\": \"Nordwind Kablosuz Kulaklık 196\", … })", tag: Uygulama → DocumentDB, say: Yeni ürün kataloğa yazılır.}
+                  - {code: "db.products.update_one({ \"_id\": \"P0196\" }, { \"$set\": { \"price\": <yeni fiyat> } })", tag: Uygulama → DocumentDB, say: "Fiyat değişirse (ör. indirim) o da aynı yoldan index'e gider."}
+              - title: Değişiklik akışından index'e
+                text: >-
+                  Pipeline değişiklik akışını sürekli okur ve her olayı index'te karşılığına çevirir: ekleme ve güncelleme dokümanı
+                  yazar, silme dokümanı siler. OpenSearch dokümanı yazarken analyzer'ı çalıştırır ve ters index'i günceller.
+                  Gecikme genellikle birkaç saniyedir.
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              Değişiklik iki kez gelirse, doküman reddedilirse, pipeline durursa ya da analyzer değişirse ne olur? Her biri için bir
+              parça vardır.
+            cards:
+              - title: Aynı değişiklik iki kez gelirse
+                text: >-
+                  Doküman kimliği ürün numarasıdır (document_id); aynı değişiklik tekrar gelirse aynı dokümanın üstüne yazılır.
+                  Pipeline her değişiklikle bir sürüm numarası da gönderir (external version); eski bir değişiklik geç gelirse
+                  yenisinin üstüne yazılmaz.
+                code:
+                  - {code: "  action: \"${getMetadata(\\\"opensearch_action\\\")}\"", tag: Pipeline → OpenSearch, say: "Ekleme mi, güncelleme mi, silme mi: akıştaki olaydan."}
+                  - {code: "  document_version: \"${getMetadata(\\\"document_version\\\")}\", document_version_type: \"external\"", tag: Pipeline → OpenSearch, say: Eski sürüm yenisinin üstüne yazılamaz.}
+                  - {code: "  dlq: { s3: { bucket: \"lm-search-dlq\" } }", tag: Pipeline → S3, say: Kabul edilmeyen dokümanların gideceği hata klasörü.}
+              - title: Doküman reddedilirse ve izleme
+                text: >-
+                  OpenSearch bir dokümanı birkaç denemeden sonra da kabul etmezse pipeline onu S3'teki hata klasörüne (DLQ) yazar;
+                  diğerleri akmaya devam eder. CloudWatch'ta pipeline'ın sayaçları izlenir (akıştan başarıyla işlenen ve hata veren
+                  kayıtlar, DLQ'ya yazılanlar). Ekip ayrıca bir ürünü değiştirip aramada görünme süresini ölçerek gecikmeyi izler.
+              - title: Pipeline uzun süre durursa
+                text: >-
+                  Değişiklik akışı olayları sadece saklama süresi kadar tutar. Pipeline bu süreden uzun durursa aradaki değişiklikler
+                  akıştan okunamaz; index ilk yüklemeyle baştan doldurulur.
+              - title: Analyzer değişince index yeniden kurulur, arama kesilmez
+                text: >-
+                  Bir alanın analyzer'ı sonradan değiştirilemez; terimler yazılırken üretilmiştir. Yeni ayarla yeni bir index
+                  (products_v2) kurulur ve yeni bir pipeline onu ilk yükleme + akışla doldurur. Hazır olunca products adı (alias:
+                  bir index'in takma adı) tek komutla yeni index'e çevrilir; uygulama hep products adını sorduğu için arama hiç
+                  kesilmez.
+                code:
+                  - {code: "PUT products_v2", tag: Ekip → OpenSearch, say: "Şablondan yeni ayarlarla yeni index."}
+                  - {code: "POST _aliases { \"actions\": [ { \"remove\": { \"index\": \"products_v1\", \"alias\": \"products\" } },", tag: Ekip → OpenSearch, say: products adı eski index'ten alınır…}
+                  - {code: "  { \"add\": { \"index\": \"products_v2\", \"alias\": \"products\" } } ] }", tag: Ekip → OpenSearch, say: "…ve aynı komutta yenisine verilir; iki işlem birlikte olur."}
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
@@ -2936,60 +3241,443 @@ steps:
           - [Kenar (edge), "İki düğüm arasındaki ilişki. Burada BOUGHT: bu müşteri bu ürünü aldı."]
           - [openCypher, "Graf sorgulama dili. Yolu çizer gibi yazarsın: (müşteri)-[:BOUGHT]->(ürün)."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde öneri grafı için hazırlık
+      t1:
+        title: Önceden ne vardı? Satın almalar grafa nasıl geldi?
         intro: >-
-          Öneri butonuna hiç basılmadan, graf bu sayfanın sorularına göre kurulur ve doldurulur. Aşağıdaki beş adım bu
-          hazırlığın sırasıdır.
-        text:
-          - title: Önce sayfanın soruları yazılır
-            text: >-
-              Öneri şeridinin iki sorusu var: "bu ürünü alanlar başka ne aldı?" (herkese aynı) ve "benim gibi alanlar ne aldı?"
-              (kişiye özel). İkisi de ilişki üzerinden yürüyen sorulardır; graf bu sorular için kurulur.
-            code: |-
-              (ürün)<-[:BOUGHT]-(müşteri)-[:BOUGHT]->(öneri)                       -- 2 hop
-              (sen)-[:BOUGHT]->(ürün)<-[:BOUGHT]-(başkası)-[:BOUGHT]->(öneri)      -- 3 hop
-          - title: Model ilişkiye göre kurulur
-            text: >-
-              Müşteri ve ürün birer düğüm (vertex), her satın alma müşteriden ürüne giden bir BOUGHT kenarı (edge). Sipariş
-              no ve adet kenarın özelliğidir. Ürün düğümü sadece öneride gereken özellikleri taşır (ad, kategori); fiyat ve
-              stok katalogda kalır. Graf asıl kayıt değildir, sipariş veritabanının bir kopyasıdır.
-            code: |-
-              (:Customer {~id, name, city})-[:BOUGHT {order_id, qty}]->(:Product {~id, name, category})
-          - title: İlk yükleme toplu yapılır
-            text: >-
-              Geçmiş siparişler düğüm ve kenar dosyaları (openCypher CSV) olarak S3'e konur; Neptune bulk loader hepsini tek
-              bir işte yükler. Satır satır yazmaktan çok daha hızlıdır.
-            code: |-
-              POST https://<cluster>:8182/loader
-              { "source": "s3://bucket/graph/", "format": "opencypher", "iamRoleArn": "…", "region": "eu-central-1" }
-          - title: Yeni siparişler sürekli eklenir
-            text: >-
-              Sipariş veritabanına yazılan her sipariş birkaç saniye içinde grafa BOUGHT kenarı olarak eklenir: değişiklik akışı
-              (CDC) ya da siparişle aynı transaction'da yazılan bir "outbox" kaydı bir program tarafından okunur ve grafa
-              yazılır.
-          - title: Yürüyüş kısa ve sınırlı tutulur
-            text: >-
-              Çok satan bir ürün binlerce müşteriye bağlıdır (süper düğüm) ve her hop sonucu katlar. Öneri sorguları 2–3 hop ile
-              sınırlanır, sonuç LIMIT ile kesilir ve plan yayından önce Neptune'un openCypher explain'i ile kontrol edilir.
-      feed:
-        title: Veri nereden geliyor?
-        writes: >-
-          Asıl sipariş kaydı ilişkisel veritabanına yazılır. Grafa her yeni siparişin BOUGHT kenarlarını bir besleme süreci
-          ekler.
-        reads: Uygulama, öneri şeritleri için ("bunu alanlar şunları da aldı", "sana özel").
-        kind: >-
-          Neptune başka bir veritabanından kendiliğinden veri çekmez; graf dışarıdan beslenir. Besleyen ya uygulama ya da
-          sipariş veritabanının değişikliklerini dinleyen bir süreçtir.
-        with: >-
-          Öneri şeridi Neptune'un yanında başka veritabanlarıyla birlikte çalışır: sipariş asıl olarak ilişkisel veritabanında
-          (Aurora) durur ve grafı o besler; kartların görselleri nesne deposundan (S3, büyük sistemlerde bir CDN ile) gelir;
-          fiyat ve stok gibi sık değişen bilgiler katalogda (DocumentDB) kalır. Kartta fiyat gösterilecekse uygulama önerilen
-          ürün numaralarıyla katalogdan toplu bir okuma yapar ve iki sonucu birleştirir.
-        best: >-
-          Sipariş veritabanının değişiklik akışı (CDC) dinlenir: AWS DMS, Neptune'u hedef olarak alabilir; ya da siparişle
-          aynı transaction'da bir "outbox" tablosuna yazılan olayı küçük bir program okuyup grafa ekler. Uygulamanın siparişi
-          iki veritabanına ayrı ayrı yazması (dual write) önerilmez: ikinci yazma başarısız olursa iki kayıt birbirini tutmaz.
+          Öneri butonuna basılmadan önce Neptune'daki graf zaten dolu: her satın alma bir BOUGHT kenarı. Burada grafı dolduran
+          gerçek zinciri görüyorsun: önce zincirin bileşenleri, sonra bir simülasyon, sonra dört aşama (tasarım, ilk yükleme,
+          sürekli besleme, tutarlılık ve onarım).
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1", "t0'daki tıklamadan (ya da sayfanın açılmasından) önceki zaman. Bu bölüm, verinin o ana kadar hedefe nasıl geldiğini anlatır."]
+          - ["Ekip", "Mağazanın sistemini kuran ve işleten mühendisler. Bir kez çalışan kurulum komutlarını onlar gönderir, alarmlara onlar bakar."]
+          - ["Transaction (iş paketi) ve COMMIT", "Birlikte kaydedilmesi gereken yazmaların paketi. COMMIT paketi kalıcı yapar: ya hepsi kaydolur ya hiçbiri; tıpkı bir havalenin iki hesaba birden işlenmesi gibi."]
+          - ["Değişiklik kaydı (WAL)", "Write-ahead log: veritabanının kaydettiği her değişikliği sırayla yazdığı defter. Kopyalama servisleri bu defteri okur; veritabanına ayrıca soru sormazlar."]
+          - ["Outbox", "Siparişle aynı iş paketinde yazılan \"sipariş verildi\" olayı satırı; giden mektupların konduğu kutu gibi. Olayı oradan alıp taşımak zincirin geri kalanının işidir."]
+          - ["AWS DMS ve CDC", "CDC (change data capture): değişiklik kaydını okuyup her değişikliği başka bir yere taşımak. AWS DMS bunu yapan AWS servisidir."]
+          - ["Kinesis Data Streams (olay akışı)", "Olayların sırayla konduğu ve bir süre (varsayılan 24 saat) saklandığı AWS servisi; bir bant gibi: biri koyar, diğeri kendi hızında alır."]
+          - ["AWS Lambda", "Bir olay gelince kısa bir kodu çalıştıran AWS servisi; sunucuyu AWS yönetir. Tüketici bu kodun adıdır."]
+          - ["En az bir kez (at-least-once) ve idempotency", "Akış bir olayı kaybetmez ama bazen iki kez verebilir. Idempotency: aynı olay kaç kez gelirse gelsin sonuç bir kez gelmiş gibi olur."]
+          - ["DLQ (dead-letter queue, hata kuyruğu)", "İşlenemeyen olayların bırakıldığı yer; akış onları beklemeden devam eder, ekip sonra bakar."]
+          - ["IteratorAge", "Tüketicinin işlediği son olayın akışa ne kadar önce girdiği: tüketici ne kadar geride, o kadar büyük."]
+          - ["CloudWatch", "AWS'in ölçüm ve alarm servisi."]
+          - ["EventBridge Scheduler", "Bir işi belli saatlerde (ör. her gece) başlatan AWS servisi."]
+          - ["Okuma kopyası (reader)", "Aurora'nın sadece okuma yapan ikinci sunucusu; ağır okumalar siparişleri yazan sunucuyu yormaz."]
+          - ["MERGE", "openCypher'da \"varsa bul, yoksa yarat\". Aynı kenar ikinci kez yaratılmaz."]
+          - ["openCypher CSV", "Neptune'un toplu yükleme dosya biçimi: virgülle ayrılmış satırlar; ilk satır sütunların ne olduğunu söyler (:ID kimlik, :START_ID nereden, :END_ID nereye)."]
+          - ["S3", "AWS'in dosya deposu. Dosyalar bir bucket'ta (kova) durur."]
+          - ["IAM rolü", "Bir AWS servisine verilen izin kartı: şifre yerine \"bu servis şu kovayı okuyabilir\" der."]
+          - ["VPC ve uç nokta (endpoint)", "VPC: sistemin internete kapalı özel ağı. Uç nokta: bu ağdan bir AWS servisine (ör. S3) internete çıkmadan giden kapı."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra" sütunu veriyi kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim kodumuz" etiketli parçaları mağazanın
+          ekibi yazar. Aynı parçalar aşağıdaki simülasyonda birer kutu: üst sırada yeni siparişin yolu, alt sırada ilk yükleme ve
+          yandaki işler.
+        inventory:
+          - id: app
+            name: Uygulama
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucusunda)
+            does: Siparişi, kalemlerini ve "sipariş verildi" olayını aynı transaction'da Aurora'ya yazar. Grafa kendisi yazmaz.
+            box: Siparişi ve olayını (outbox) aynı iş paketinde Aurora'ya yazar.
+            phases: [3]
+            before: Tarayıcı (sipariş butonu)
+            after: aurora
+          - id: aurora
+            name: Aurora PostgreSQL (shop)
+            kind: aws
+            what: işlemsel veritabanı
+            does: Siparişlerin asıl kaydı (orders, order_items, customers, products) ve olay kutusu (outbox). Graf bunun bir kopyasıdır.
+            box: Satın almaların asıl kaydı + outbox tablosu.
+            phases: [1, 2, 3, 4]
+            before: app
+            after: [wal, export, reconcile]
+          - id: wal
+            name: Aurora'nın değişiklik kaydı (WAL)
+            kind: aws
+            what: Aurora'nın içinde, bir ayarla açılır
+            does: COMMIT edilen her değişikliği sırayla yazar. DMS bu kaydı okur.
+            box: Her COMMIT'i sırayla yazar; DMS buradan okur.
+            phases: [3]
+            before: aurora
+            after: dms
+          - id: dms
+            name: AWS DMS (CDC görevi)
+            kind: aws
+            what: AWS'in değişiklik yakalama servisi
+            does: Değişiklik kaydından sadece outbox tablosuna eklenen satırları okur ve her birini Kinesis akışına bir kayıt olarak koyar.
+            box: "Değişiklik yakalama: outbox'a eklenen her satırı akışa koyar; araya kod girmez."
+            phases: [3]
+            before: wal
+            after: kinesis
+          - id: kinesis
+            name: Kinesis Data Streams (lm-order-events)
+            kind: aws
+            what: olay akışı
+            does: Olayları sırayla saklar (varsayılan 24 saat) ve tüketiciye verir. Tüketici durursa olaylar bekler, kaybolmaz.
+            box: Olayları sırayla saklar; tüketici durursa bekletir.
+            phases: [3, 4]
+            before: dms
+            after: consumer
+          - id: consumer
+            name: Graf tüketicisi (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod
+            does: Akıştan olayı alır ve her kalem için BOUGHT kenarını MERGE (varsa bul, yoksa yarat) ile yazar; aynı sipariş iki kez gelirse ikinci kenar oluşmaz.
+            box: "Akıştan olayı alır, BOUGHT kenarını MERGE ile yazar; aynı siparişi iki kez eklemez."
+            phases: [3, 4]
+            before: kinesis
+            after: [neptune, dlq]
+          - id: neptune
+            name: Neptune (graf)
+            kind: aws
+            what: graf veritabanı
+            does: Customer ve Product düğümleri, aralarında BOUGHT kenarları. Öneri sorguları burada yürür.
+            box: Müşteri ve ürün düğümleri, BOUGHT kenarları.
+            phases: [1, 2, 3, 4]
+            before: [consumer, loader, reconcile]
+            after: Öneri sorgusu (t0)
+          - id: export
+            name: Dışa aktarma işi
+            kind: code
+            what: ilk yüklemede (ve graf baştan kurulurken) çalışan program
+            does: Aurora'dan müşterileri, ürünleri ve satın almaları okur; düğüm ve kenar dosyaları (openCypher CSV) olarak S3'e yazar.
+            box: "Bir kez: Aurora'dan okur, CSV dosyalarını S3'e yazar."
+            phases: [2]
+            before: aurora
+            after: s3
+          - id: s3
+            name: S3 (yükleme klasörü)
+            kind: aws
+            what: Amazon S3 bucket'ı
+            does: Düğüm ve kenar dosyalarının yükleme bitene kadar durduğu yer.
+            box: CSV dosyalarının geçici yeri.
+            phases: [2]
+            before: export
+            after: loader
+          - id: loader
+            name: Neptune bulk loader
+            kind: aws
+            what: Neptune'un toplu yükleme özelliği
+            does: S3'teki dosyaları tek bir işte grafa yükler; satır satır yazmaktan çok daha hızlıdır.
+            box: S3'teki dosyaları tek işte grafa yükler.
+            phases: [2]
+            before: s3
+            after: neptune
+          - id: dlq
+            name: Hata kuyruğu (SQS DLQ)
+            kind: aws
+            what: Amazon SQS kuyruğu
+            does: Tekrar tekrar hata veren bir olayın yerini (akıştaki sıra numarasını) saklar; akış durmaz, ekip olayı sonra işler.
+            box: İşlenemeyen olayın yerini saklar; akış durmaz.
+            phases: [4]
+            before: consumer
+            after: Ekip (inceler, yeniden gönderir)
+          - id: monitor
+            name: CloudWatch alarmları
+            kind: aws
+            what: AWS'in izleme servisi
+            does: Tüketicinin akışın ne kadar gerisinde olduğunu (IteratorAge) ve hata kuyruğundaki mesaj sayısını izler.
+            box: "Gecikmeyi (IteratorAge) ve DLQ'yu izler."
+            phases: [4]
+            before: [consumer, dlq]
+            after: Ekip (alarm)
+          - id: reconcile
+            name: Karşılaştırma işi
+            kind: code
+            what: düzenli çalışan program (EventBridge Scheduler + Lambda)
+            does: Müşteri başına satın alma sayısını Aurora ile Neptune'da karşılaştırır; farkı düzeltir, graf bozulduysa ilk yüklemeyi baştan yaptırır.
+            box: Aurora ile grafı karşılaştırır, farkı düzeltir.
+            phases: [4]
+            before: aurora
+            after: neptune
+        sim_title: "Simülasyon: satın almalar grafa nasıl geldi?"
+        sim:
+          kind: pipeline
+          title: Aurora → değişiklik kaydı → DMS → Kinesis → Tüketici → Neptune
+          caption: >-
+            t0'daki graf kesitinin 8 müşterisi ve aldıkları. Önce graf boşken toplu ilk yükleme (alt sıradaki kutular), sonra
+            Can Weber'in yeni siparişinin üst sıradaki her kutudan geçişi, en sonda aynı olayın ikinci kez gelmesi, hata kuyruğu,
+            izleme ve karşılaştırma oynuyor. Aurora ürünleri numarayla tutar, grafta düğümün adı görünür: P0001 Kablosuz Kulaklık,
+            P0002 Hava Temizleyici, P0014 Python ile Veri, P0019 Toros Bulut Mimarisi, P0027 Masa Lambası, P0028 Toros Spor Çantası,
+            P0030 Deri Ceket, P0053 Dambıl Seti, P0063 Alpen Spor Çantası, P0066 Powerbank, P0114 Rhein Bulut Mimarisi, P0148 Yoga
+            Matı. Son karede graf, t0'daki simülasyonun başladığı hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım}
+          side_title: "Yandaki işler: ilk yükleme (dışa aktarma → S3 → bulk loader), hata kuyruğu, izleme, karşılaştırma"
+          summary: >-
+            Grafı ilk yükleme bir kez kurdu; yeni siparişi akış ve tüketici taşıdı; ikinci kez gelen olay MERGE sayesinde yeni
+            kenar yaratmadı; karşılaştırma grafı Aurora ile eşit buldu. Son durum, t0'daki simülasyonun başladığı durum.
+          boxes:
+            - id: app
+            - id: aurora
+              tables:
+                - name: "order_items + orders, birleştirilmiş (müşteri başına aldıkları)"
+                  cols: [customer_id, product_id]
+                  rows:
+                    - {customer_id: C00944, product_id: "P0001, P0066, P0053, P0014"}
+                    - {customer_id: C00828, product_id: "P0001, P0066, P0027"}
+                    - {customer_id: C00630, product_id: "P0001, P0063, P0028"}
+                    - {customer_id: C00001, product_id: "P0001, P0002, P0019, P0028, P0030"}
+                    - {customer_id: C00226, product_id: "P0002, P0063, P0028"}
+                    - {customer_id: C00040, product_id: "P0002, P0063"}
+                    - {customer_id: C00685, product_id: "P0002, P0148"}
+                    - {customer_id: C00378, product_id: "P0019, P0063, P0030"}
+                - name: outbox
+                  cols: [order_id, customer_id, items]
+                  rows:
+                    - {order_id: O004809, customer_id: C00226, items: "P0114 (+2 ürün, bu kesitte gösterilmiyor)", hidden: true}
+            - id: wal
+            - id: dms
+            - id: kinesis
+            - id: consumer
+            - id: neptune
+              tables:
+                - name: "(:Customer)-[:BOUGHT]->(:Product)"
+                  cols: [müşteri, aldıkları]
+                  rows:
+                    - {key: C00944, müşteri: Ece Koç, aldıkları: "Kablosuz Kulaklık, Powerbank, Dambıl Seti, Python ile Veri", hidden: true}
+                    - {key: C00828, müşteri: Selin Çelik, aldıkları: "Kablosuz Kulaklık, Powerbank, Masa Lambası", hidden: true}
+                    - {key: C00630, müşteri: Ozan Schmidt, aldıkları: "Kablosuz Kulaklık, Alpen Spor Çantası, Toros Spor Çantası", hidden: true}
+                    - {key: C00001, müşteri: Ayşe Yılmaz, aldıkları: "Kablosuz Kulaklık, Hava Temizleyici, Toros Bulut Mimarisi, Toros Spor Çantası, Deri Ceket", hidden: true}
+                    - {key: C00226, müşteri: Can Weber, aldıkları: "Hava Temizleyici, Alpen Spor Çantası, Toros Spor Çantası", hidden: true}
+                    - {key: C00040, müşteri: Seda Yılmaz, aldıkları: "Hava Temizleyici, Alpen Spor Çantası", hidden: true}
+                    - {key: C00685, müşteri: Kerem Çelik, aldıkları: "Hava Temizleyici, Yoga Matı", hidden: true}
+                    - {key: C00378, müşteri: Naz Yılmaz, aldıkları: "Toros Bulut Mimarisi, Alpen Spor Çantası, Deri Ceket", hidden: true}
+            - id: export
+              row: side
+            - id: s3
+              row: side
+            - id: loader
+              row: side
+            - id: dlq
+              row: side
+            - id: monitor
+              row: side
+            - id: reconcile
+              row: side
+          frames:
+            - phase: 2
+              who: dms
+              lit: [dms, export, neptune]
+              note: {dms: "T anından itibaren yakalıyor", neptune: "boş"}
+              say: >-
+                Graf boş. Önce DMS görevi başlatıldı: T anından sonraki her yeni siparişi yakalayacak. İlk yükleme T anına
+                kadarki satın almaları taşıyacak; hiçbir sipariş ne iki kez ne de hiç yazılmaz.
+            - phase: 2
+              who: export
+              lit: [aurora, export]
+              packet: {at: export, text: "SELECT … FROM orders JOIN order_items … WHERE order_date < :T"}
+              say: >-
+                Dışa aktarma işi Aurora'nın okuma kopyasından müşterileri, ürünleri ve satın almaları okudu (iptal edilen
+                siparişler hariç). Siparişleri yazan sunucu etkilenmedi.
+            - phase: 2
+              who: export
+              lit: [export, s3]
+              packet: {at: s3, text: "nodes/customers.csv · nodes/products.csv · edges/bought.csv"}
+              say: >-
+                Satırlar openCypher CSV dosyalarına yazıldı: düğümler bir dosyada, kenarlar başka bir dosyada. Dosyalar S3'te
+                aynı klasörde duruyor.
+            - phase: 2
+              who: loader
+              lit: [s3, loader, neptune]
+              show: {neptune: [C00944, C00828, C00630, C00001, C00226, C00040, C00685, C00378]}
+              fresh: {neptune: [C00944, C00828, C00630, C00001, C00226, C00040, C00685, C00378]}
+              note: {neptune: ""}
+              say: >-
+                Neptune bulk loader S3'teki dosyaları tek bir işte yükledi: önce düğümler, sonra aralarındaki BOUGHT kenarları.
+                Her kenar sipariş numarasını (order_id) taşıyor.
+            - phase: 3
+              who: app
+              lit: [app, aurora]
+              show: {aurora: [O004809]}
+              set: {aurora: {C00226: {product_id: "P0002, P0063, P0028, P0114"}}}
+              fresh: {aurora: [O004809, C00226]}
+              say: >-
+                Can Weber bir sipariş verdi (O004809, içinde Rhein Bulut Mimarisi var). Uygulama aynı iş paketinde siparişi,
+                kalemlerini ve outbox'a "sipariş verildi" olayını yazdı. COMMIT.
+            - phase: 3
+              who: wal
+              lit: [aurora, wal]
+              packet: {at: wal, text: "INSERT outbox O004809 …"}
+              say: Aurora değişiklikleri değişiklik kaydına yazdı. Uygulamanın işi burada bitti; grafa hiç dokunmadı.
+            - phase: 3
+              who: dms
+              lit: [wal, dms, kinesis]
+              packet: {at: dms, text: "olay: O004809 · C00226 · [P0114, …]"}
+              say: AWS DMS outbox'a eklenen satırı gördü ve onu Kinesis akışına bir kayıt olarak koydu.
+            - phase: 3
+              who: kinesis
+              lit: [kinesis, consumer]
+              packet: {at: kinesis, text: "akıştaki kayıt: O004809"}
+              say: Kayıt akışta sırasıyla duruyor; tüketici okuyana kadar bekler.
+            - phase: 3
+              who: consumer
+              lit: [consumer, neptune]
+              packet: {at: consumer, text: "MERGE (C00226)-[:BOUGHT {order_id: 'O004809'}]->(P0114)"}
+              say: >-
+                Graf tüketicisi (Lambda) olayı aldı ve her kalem için MERGE gönderdi: "bu müşteriden bu ürüne, bu sipariş
+                numarasıyla bir kenar varsa onu kullan, yoksa yarat".
+            - phase: 3
+              who: neptune
+              lit: [consumer, neptune]
+              set: {neptune: {C00226: {aldıkları: "Hava Temizleyici, Alpen Spor Çantası, Toros Spor Çantası, Rhein Bulut Mimarisi"}}}
+              fresh: {neptune: [C00226]}
+              say: >-
+                Neptune yeni BOUGHT kenarını yarattı: Can Weber → Rhein Bulut Mimarisi. Bir sonraki öneri sorgusu bu kenarı da
+                yürür; grafı baştan hesaplamak gerekmez.
+            - phase: 4
+              who: consumer
+              lit: [kinesis, consumer, neptune]
+              packet: {at: consumer, text: "aynı olay yine geldi: MERGE eşleşti → yeni kenar yok"}
+              say: >-
+                Akışlar bir olayı "en az bir kez" teslim eder; aynı kayıt yeniden geldi. MERGE aynı order_id'li kenarı buldu ve
+                yeni bir kenar yaratmadı. Öneri skorları değişmedi.
+            - phase: 4
+              who: dlq
+              lit: [consumer, dlq]
+              note: {dlq: "mesaj: 0"}
+              say: >-
+                Bir olay her denemede hata verseydi (ör. henüz grafa yüklenmemiş bir ürün), Lambda birkaç denemeden sonra onu
+                bırakır ve yerini SQS'teki hata kuyruğuna (DLQ) yazardı. Arkadaki olaylar işlenmeye devam ederdi.
+            - phase: 4
+              who: monitor
+              lit: [consumer, dlq, monitor]
+              note: {monitor: "IteratorAge ≈ 1 sn · DLQ: 0"}
+              say: >-
+                CloudWatch, tüketicinin akışın ne kadar gerisinde olduğunu (IteratorAge) ve hata kuyruğundaki mesaj sayısını
+                izler. Biri bir eşiği aşarsa ekibe alarm gider.
+            - phase: 4
+              who: reconcile
+              lit: [aurora, reconcile, neptune]
+              note: {reconcile: "8 / 8 müşteri eşit"}
+              say: >-
+                Karşılaştırma işi müşteri başına satın alma sayısını Aurora'da ve Neptune'da saydı: eşit. Fark olsaydı o müşterinin
+                kenarlarını yeniden yazardı; graf bozulsaydı ilk yükleme baştan yapılırdı.
+            - phase: 4
+              who: neptune
+              lit: [neptune]
+              say: >-
+                Hazır: graf t0'daki simülasyonun başladığı hâlde. Öneri sorguları bu kenarlar üzerinde yürüyecek.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Önce sayfanın soruları yazılır, sonra bu soruları kısa bir yürüyüşle cevaplayacak graf modeli kurulur. Graf asıl kayıt
+              değildir; sipariş veritabanının bir kopyasıdır.
+            cards:
+              - title: Sayfanın soruları
+                text: >-
+                  Öneri şeridinin iki sorusu var: "bu ürünü alanlar başka ne aldı?" (herkese aynı) ve "benim gibi alanlar ne aldı?"
+                  (kişiye özel). İkisi de ilişki üzerinden yürüyen sorulardır; graf bu sorular için kurulur.
+                code:
+                  - {code: "(ürün)<-[:BOUGHT]-(müşteri)-[:BOUGHT]->(öneri)", tag: Neptune'un içinde, say: "2 hop: bu ürünü alanların aldıkları."}
+                  - {code: "(sen)-[:BOUGHT]->(ürün)<-[:BOUGHT]-(başkası)-[:BOUGHT]->(öneri)", tag: Neptune'un içinde, say: "3 hop: senin gibi alanların aldıkları."}
+              - title: Kaynaktan hedefe alan alan
+                text: >-
+                  Müşteri ve ürün birer düğüm (vertex), her satın alma müşteriden ürüne giden bir BOUGHT kenarı (edge). Sipariş no ve
+                  adet kenarın özelliğidir. Ürün düğümü sadece öneride gereken alanları taşır; fiyat ve stok katalogda kalır.
+                map:
+                  cols: [Kaynak (Aurora), Hedef (Neptune), Kural]
+                  rows:
+                    - ["customers (customer_id, name, city)", "(:Customer {~id, name, city})", "Düğümün kimliği müşteri no."]
+                    - ["products (product_id, name, category)", "(:Product {~id, name, category})", Fiyat ve stok grafa girmez.]
+                    - ["order_items + orders (customer_id, product_id, order_id, qty)", "-[:BOUGHT {order_id, qty}]->", "Siparişin her kalemi bir kenar. İptal edilen sipariş kenar olmaz."]
+                    - ["outbox: order_placed (order_id, customer_id, name, city, items)", "aynı BOUGHT kenarları (+ yeni müşteri düğümü)", "Yeni siparişler bu yoldan gelir; olay müşterinin adını ve şehrini de taşır."]
+                    - ["outbox: product_created (product_id, name, category)", "(:Product) düğümü", "Katalog ekibi ürün ekleyince aynı yoldan gelir; ürün düğümü siparişten önce grafta olur."]
+              - title: Yürüyüş kısa ve sınırlı tutulur
+                text: >-
+                  Çok satan bir ürün binlerce müşteriye bağlıdır (süper düğüm: çok kalabalık bir kavşak gibi) ve her hop sonucu
+                  katlar. Öneri sorguları 2–3 hop ile sınırlanır, sonuç LIMIT ile kesilir ve plan yayından önce Neptune'un openCypher
+                  explain'i ile kontrol edilir.
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              Graf boşken geçmişin tamamı bir kez, toplu olarak yüklenir. Akış ancak bundan sonraki siparişleri taşır.
+            cards:
+              - title: Hangi siparişi kim taşır?
+                text: >-
+                  Önce DMS görevi bir T anından itibaren değişiklikleri yakalamaya başlar. Dışa aktarma işi T anına kadarki
+                  satın almaları taşır. T'den önceki sipariş ilk yüklemede, sonraki sipariş akışta gelir.
+              - title: Düğüm ve kenar dosyaları
+                text: >-
+                  Dışa aktarma işi Aurora'nın okuma kopyasından okur ve openCypher CSV biçiminde dosyalar yazar: düğümler ve kenarlar
+                  ayrı dosyalarda. Her dosyanın ilk satırı sütunların ne olduğunu söyler.
+                code:
+                  - {code: ":ID,:LABEL,name:String,city:String", tag: Dosyanın içinde, say: "Düğüm dosyasının başlığı: kimlik, etiket, özellikler."}
+                  - {code: "C00226,Customer,Can Weber,München", tag: Dışa aktarma işi → S3, say: Bir müşteri düğümü.}
+                  - {code: ":ID,:START_ID,:END_ID,:TYPE,order_id:String,qty:Int", tag: Dosyanın içinde, say: "Kenar dosyasının başlığı: nereden, nereye, türü, özellikleri."}
+                  - {code: "O000828-P0063,C00226,P0063,BOUGHT,O000828,<adet>", tag: Dışa aktarma işi → S3, say: "Bir satın alma: Can Weber → Alpen Spor Çantası."}
+              - title: Bulk loader tek işte yükler
+                text: >-
+                  Neptune'un yükleme adresine bir istek gider; Neptune dosyaları S3'ten kendisi okur. Bunun için Neptune'a S3'ü
+                  okuyabileceği bir IAM rolü verilir ve VPC'de S3'e giden bir uç nokta (endpoint) bulunur.
+                code:
+                  - {code: "POST https://<neptune>:8182/loader", tag: Ekip → Neptune, say: Toplu yükleme isteği.}
+                  - {code: "{ \"source\": \"s3://lm-graph-load/\", \"format\": \"opencypher\",", tag: Ekip → Neptune, say: "Dosyaların yeri ve biçimi."}
+                  - {code: "  \"iamRoleArn\": \"<S3 okuma rolü>\", \"region\": \"eu-central-1\", \"failOnError\": \"TRUE\" }", tag: Ekip → Neptune, say: "Neptune'un S3'ü okuma izni; hata olursa iş durur."}
+                  - {code: "GET https://<neptune>:8182/loader/<loadId>", tag: [Ekip → Neptune, Neptune → Ekip], say: "İşin durumu ve hata veren satırlar."}
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              Her yeni sipariş birkaç saniye içinde grafa kenar olarak eklenir. Uygulama sadece Aurora'ya yazar; gerisini akış ve
+              tüketici yapar.
+            cards:
+              - title: Uygulama siparişi ve olayını birlikte yazar
+                text: >-
+                  Siparişi Aurora'ya, kenarı da ayrıca Neptune'a yazmak (dual write) iki ayrı yazmadır: ikincisi başarısız olursa
+                  sipariş var ama kenar yok. Bunun yerine sipariş ve "sipariş verildi" olayı aynı iş paketinde Aurora'ya yazılır
+                  (outbox: giden mektupların konduğu kutu gibi).
+                code:
+                  - {code: "BEGIN;", tag: Uygulama → Aurora, say: İş paketi başlar.}
+                  - {code: "INSERT INTO orders … ; INSERT INTO order_items … ;", tag: Uygulama → Aurora, say: Sipariş ve kalemleri.}
+                  - {code: "INSERT INTO outbox (order_id, customer_id, total, items) VALUES ('O004809', 'C00226', …);", tag: Uygulama → Aurora, say: "Aynı iş paketinde: \"sipariş verildi\" olayı."}
+                  - {code: "COMMIT;", tag: Uygulama → Aurora, say: "Ya hepsi kalıcı olur ya hiçbiri."}
+              - title: DMS olayı akışa koyar
+                text: >-
+                  AWS DMS, Aurora'nın değişiklik kaydını okuyan yönetilen bir servistir. Bu görev sadece outbox tablosuna bakar ve
+                  her yeni satırı Kinesis akışına JSON kayıt olarak yazar. Aynı akışı başka tüketiciler de okuyabilir (ör. canlı
+                  sıralamayı güncelleyen tüketici); her biri kendi hızında okur.
+              - title: Tüketici kenarı MERGE ile yazar
+                text: >-
+                  MERGE "varsa bul, yoksa yarat" demektir. Kenar sipariş numarasıyla aranır; bu yüzden aynı olay kaç kez gelirse
+                  gelsin kenar bir kez oluşur (idempotency: bir bileti ikinci kez okutunca turnikenin açılmaması gibi). Yeni ürünler de
+                  aynı akıştan gelir: katalog ekibi ürün ekleyince outbox'a "ürün eklendi" olayı yazılır ve tüketici Product düğümünü
+                  MERGE eder.
+                code:
+                  - {code: "for rec in event[\"Records\"]:", tag: Kinesis → Tüketici, say: Lambda akıştan bir paket olay alır.}
+                  - {code: "    e = json.loads(base64.b64decode(rec[\"kinesis\"][\"data\"]))[\"data\"]", tag: Tüketicinin içinde, say: Olayı okunur hâle getirir.}
+                  - {code: "    neptune.run(\"MERGE (c:Customer {`~id`: $cid}) ON CREATE SET c.name = $name, c.city = $city\"", tag: Tüketici → Neptune, say: "Müşteri düğümünü bulur; yoksa adı ve şehriyle yaratır."}
+                  - {code: "      \" WITH c UNWIND $items AS i\"", tag: Tüketicinin içinde, say: Siparişin kalemlerini tek tek ele alır.}
+                  - {code: "      \" MATCH (p:Product {`~id`: i.pid}) MERGE (c)-[b:BOUGHT {order_id: $oid}]->(p)\"", tag: Tüketici → Neptune, say: Her kalem için kenarı sipariş numarasıyla bulur ya da yaratır.}
+                  - {code: "      \" ON CREATE SET b.qty = i.qty\", e)", tag: [Tüketici → Neptune, Neptune → Tüketici], say: Adet sadece kenar yeni yaratılınca yazılır.}
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              Olay iki kez gelirse, hiç işlenemezse, tüketici geride kalırsa ya da graf bozulursa ne olur? Her biri için bir parça
+              vardır.
+            cards:
+              - title: Aynı olay iki kez gelirse
+                text: >-
+                  Akış ve Lambda bir olayı "en az bir kez" teslim eder. MERGE kenarı sipariş numarasıyla aradığı için ikinci geliş
+                  yeni kenar yaratmaz; "kaç farklı müşteri aldı" sayıları bozulmaz.
+              - title: Bir olay hiç işlenemezse
+                text: >-
+                  Ürün düğümü henüz grafta yoksa MATCH boş döner ve kenar yazılamaz; tüketici bunu hata sayar. Lambda belirli sayıda
+                  denemeden sonra olayı bırakır ve yerini (akıştaki sıra numarasını) SQS'teki hata kuyruğuna (DLQ) yazar; arkadaki
+                  olaylar beklemez. Ekip kaydı inceler ve yeniden işletir.
+              - title: Gecikme ölçülür
+                text: >-
+                  Lambda'nın IteratorAge ölçüsü, işlenen son olayın akışa ne kadar önce girdiğini söyler: önerilerin kaç saniye
+                  geride olduğu budur. CloudWatch alarmı bu süre ve DLQ'daki mesaj sayısı için kurulur.
+              - title: Karşılaştırma ve yeniden yükleme
+                text: >-
+                  Düzenli çalışan bir iş, müşteri başına satın alma sayısını Aurora'da ve Neptune'da sayar (son birkaç dakikanın
+                  siparişleri hariç, onlar hâlâ akışta olabilir). Fark çıkan müşterinin kenarları Aurora'dan yeniden MERGE edilir.
+                  Graf bozulursa ya da model değişirse yeni bir graf ilk yüklemeyle baştan kurulur.
+                code:
+                  - {code: "SELECT customer_id, count(*) FROM order_items JOIN orders USING (order_id) … GROUP BY 1;", tag: [Karşılaştırma işi → Aurora, Aurora → Karşılaştırma işi], say: Aurora'daki satın alma sayıları.}
+                  - {code: "MATCH (c:Customer)-[b:BOUGHT]->() RETURN c.`~id`, count(b);", tag: [Karşılaştırma işi → Neptune, Neptune → Karşılaştırma işi], say: Grafta aynı sayılar.}
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
@@ -6791,53 +7479,308 @@ steps:
           - [CDC (değişiklik yakalama), "Kaynağın değişiklik kaydını okuyup her değişikliği hedefe uygulama."]
           - [aurora_live, "Redshift'te, Aurora'nın kopyalanan tablolarının durduğu veritabanı."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde zero-ETL için hazırlık
+      t1:
+        title: Önceden ne vardı? Siparişler Redshift'e nasıl geldi?
         intro: >-
-          Canlı rapor hiç açılmadan, kaynak veritabanı ve analiz deposu birbirine bağlanır. Aşağıdaki beş adım bu hazırlığın
-          sırasıdır.
-        text:
-          - title: Önce hangi tabloların raporlanacağı belirlenir
-            text: >-
-              Siparişler, kalemler, ürünler ve müşteriler raporun kaynağı. Bunlar işlemsel veritabanında normalize durur; rapor onları
-              analiz deposunda JOIN'leyecek.
-          - title: Kaynak veritabanı hazırlanır
-            text: >-
-              Aurora'da gelişmiş mantıksal çoğaltma (enhanced logical replication) açılır; değişiklikler kayıt defterinden
-              okunabilir hâle gelir. Kopyalanacak tablolarda birincil anahtar olmalıdır.
-            code: |-
-              rds.logical_replication = 1        (cluster parametre grubu)
-              aurora.enhanced_logical_replication = 1
-          - title: Entegrasyon bir kez kurulur
-            text: >-
-              Aurora ile Redshift arasında bir entegrasyon oluşturulur ve Redshift'te bu entegrasyondan bir veritabanı yaratılır. Önce
-              bütün tablolar bir kez kopyalanır, sonra her değişiklik sürekli akar.
-            code: |-
-              aws rds create-integration --source-arn <aurora cluster> --target-arn <redshift namespace> …
-              CREATE DATABASE aurora_live FROM INTEGRATION '<integration id>' DATABASE shop;
-          - title: Raporlar kopyayı okur
-            text: >-
-              Rapor sorguları aurora_live veritabanındaki tablolara yazılır; Aurora'ya hiçbir rapor sorgusu gitmez. Kopya salt
-              okunurdur.
-          - title: Gecikme ve durum izlenir
-            text: >-
-              svv_integration görünümü entegrasyonun durumunu, kopyalanan ve hata veren tablo sayısını gösterir. Gecikme genelde
-              saniyeler düzeyindedir ve izlenir (Adım 31).
-      feed:
-        title: Veri nereden geliyor?
-        writes: >-
-          Kullanıcı yazmaz. Geçmiş satışlar toplu yükleme ile (ör. S3'ten COPY) gelir; canlı siparişler işlemsel veritabanından
-          zero-ETL ile kendiliğinden kopyalanır.
-        reads: Rapor ekranları, panolar ve analistlerin sorguları.
-        kind: >-
-          Motordan motora: Aurora'nın değişiklikleri zero-ETL entegrasyonuyla Redshift'e akar; arada uygulama ya da yazılmış bir
-          veri hattı yoktur. Geçmiş veri ise toplu yüklemeyle gelir.
-        with: >-
-          Raporun her satırı başka bir veritabanında doğdu: sipariş Aurora'da yazıldı, Redshift onun kopyasını tutuyor. Aynı
-          sipariş Keyspaces'te olay, ElastiCache'te sıralama puanı olarak da durur; rapor için doğru kaynak Redshift'teki kopyadır.
-        best: >-
-          Analiz sorguları işlemsel veritabanında değil, sütun bazlı bir analiz deposunda çalışır. İşlemsel veri ona zero-ETL ile
-          kod yazmadan, kısa bir gecikmeyle (burada yaklaşık 30 saniye) akar; ağır raporlar siparişleri hiç yavaşlatmaz.
+          "Live from Aurora" butonuna basılmadan önce Redshift'teki kopya zaten dolu ve güncel. Burada bu kopyayı dolduran
+          gerçek zinciri görüyorsun: önce zincirin bileşenleri, sonra bir simülasyon, sonra dört aşama (tasarım, ilk yükleme,
+          sürekli besleme, tutarlılık ve onarım).
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1", "t0'daki tıklamadan (ya da sayfanın açılmasından) önceki zaman. Bu bölüm, verinin o ana kadar hedefe nasıl geldiğini anlatır."]
+          - ["Ekip", "Mağazanın sistemini kuran ve işleten mühendisler. Bir kez çalışan kurulum komutlarını onlar gönderir, alarmlara onlar bakar."]
+          - ["Transaction (iş paketi) ve COMMIT", "Birlikte kaydedilmesi gereken yazmaların paketi. COMMIT paketi kalıcı yapar: ya hepsi kaydolur ya hiçbiri; tıpkı bir havalenin iki hesaba birden işlenmesi gibi."]
+          - ["Değişiklik kaydı (WAL)", "Write-ahead log: veritabanının kaydettiği her değişikliği sırayla yazdığı defter. Kopyalama servisleri bu defteri okur; veritabanına ayrıca soru sormazlar."]
+          - ["zero-ETL", "ETL: veriyi bir yerden çıkar, dönüştür, başka yere yükle (extract, transform, load); normalde bunu ekibin yazdığı bir program yapar. zero-ETL'de taşımayı AWS kendisi yapar, ekip kod yazmaz."]
+          - ["Şema", "Tabloların tanımı: hangi tablolar, hangi sütunlar, sütunların türü."]
+          - ["Küme ve parametre grubu", "Küme (cluster): Aurora'nın birlikte çalışan sunucuları. Parametre grubu: kümenin ayar dosyası."]
+          - ["SVV_INTEGRATION", "Redshift'in, entegrasyonun durumunu gösteren hazır tablosu (sistem görünümü). current_lag sütunu gecikmeyi milisaniye olarak verir: 30000 ms = 30 saniye."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra" sütunu veriyi kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim kodumuz" etiketli parçayı mağazanın
+          ekibi yazar. Aynı parçalar aşağıdaki simülasyonda soldan sağa birer kutu olarak duruyor.
+        inventory:
+          - id: app
+            name: Uygulama
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucusunda)
+            does: Siparişi Aurora'ya yazar. Kopyalama için hiçbir şey yapmaz.
+            box: Siparişi Aurora'ya yazar; kopyalama kodu yoktur.
+            phases: [3]
+            before: Tarayıcı (sipariş butonu)
+            after: aurora
+          - id: aurora
+            name: Aurora PostgreSQL (shop)
+            kind: aws
+            what: işlemsel veritabanı
+            does: Siparişlerin asıl kaydı. orders, order_items, products ve customers tabloları burada.
+            box: Siparişlerin asıl kaydı (tek doğru kaynak).
+            phases: [1, 2, 3]
+            before: app
+            after: wal
+          - id: wal
+            name: Aurora'nın değişiklik kaydı (WAL)
+            kind: aws
+            what: Aurora'nın içinde, bir ayarla açılır
+            does: COMMIT edilen her değişikliği sırayla yazar. zero-ETL bu kaydı okur.
+            box: Her COMMIT'i sırayla yazar; zero-ETL buradan okur.
+            phases: [1, 3]
+            before: aurora
+            after: zetl
+          - id: zetl
+            name: zero-ETL entegrasyonu
+            kind: aws
+            what: AWS'in kopyalama servisi
+            does: >-
+              Önce bütün tabloları bir kez kopyalar, sonra değişiklik kaydını okuyup her değişikliği Redshift'e uygular. Araya
+              kod girmez.
+            box: "AWS'in kopyalama servisi: önce hepsini bir kez kopyalar, sonra her değişikliği ~30 sn içinde taşır; araya kod girmez."
+            phases: [2, 3, 4]
+            before: wal
+            after: redshift
+          - id: redshift
+            name: Redshift · aurora_live
+            kind: aws
+            what: analiz deposu (Redshift Serverless)
+            does: Entegrasyondan yaratılan, salt okunur kopya. Rapor sorguları buraya gider.
+            box: Aurora tablolarının salt okunur kopyası; raporlar burayı okur.
+            phases: [1, 2, 3, 4]
+            before: zetl
+            after: [monitor, "Rapor sorgusu (t0)"]
+          - id: monitor
+            name: İzleme görünümleri
+            kind: aws
+            what: Redshift'in sistem görünümleri (SVV_INTEGRATION, SVV_INTEGRATION_TABLE_STATE)
+            does: Gecikmeyi (current_lag, milisaniye) ve sorunlu tabloları gösterir. Ekip onarıma buradan karar verir.
+            box: Gecikmeyi ve sorunlu tabloları gösterir.
+            phases: [4]
+            before: redshift
+            after: Ekip (alarm, gerekirse onarım komutu)
+        sim_title: "Simülasyon: siparişler Redshift'e nasıl geldi?"
+        sim:
+          kind: pipeline
+          title: Aurora → değişiklik kaydı → zero-ETL → Redshift (aurora_live)
+          side_title: "Yandaki iş: izleme"
+          caption: >-
+            Siparişler ve müşteriler tablolarından küçük bir kesit. Önce hedef boşken ilk yükleme, sonra tek bir yeni siparişin
+            her kutudan geçişi, en sonda gecikmenin ölçülmesi ve şema değişikliği oynuyor. Son karede Redshift, t0'daki
+            simülasyonun başladığı hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım}
+          summary: >-
+            Redshift'teki kopyayı zero-ETL doldurdu: geçmişi bir kez, yeni siparişi değişiklik kaydından. Uygulama sadece
+            Aurora'ya yazdı. Son durum, t0'daki simülasyonun başladığı durum: iki sipariş, iki müşteri.
+          boxes:
+            - id: app
+            - id: aurora
+              tables:
+                - name: shop.public.orders
+                  cols: [order_id, customer_id, total]
+                  money: [total]
+                  rows:
+                    - {order_id: W1793380550, customer_id: C00005, total: 951.92}
+                    - {order_id: W1793390012, customer_id: C00002, total: 1299.90, hidden: true}
+                - name: shop.public.customers
+                  cols: [customer_id, city]
+                  rows:
+                    - {customer_id: C00005, city: İstanbul}
+                    - {customer_id: C00002, city: Ankara}
+            - id: wal
+            - id: zetl
+            - id: redshift
+              tables:
+                - name: aurora_live.public.orders
+                  cols: [order_id, customer_id, total]
+                  money: [total]
+                  rows:
+                    - {order_id: W1793380550, customer_id: C00005, total: 951.92, hidden: true}
+                    - {order_id: W1793390012, customer_id: C00002, total: 1299.90, hidden: true}
+                - name: aurora_live.public.customers
+                  cols: [customer_id, city]
+                  rows:
+                    - {customer_id: C00005, city: İstanbul, hidden: true}
+                    - {customer_id: C00002, city: Ankara, hidden: true}
+            - id: monitor
+              row: side
+          frames:
+            - phase: 2
+              who: zetl
+              lit: [aurora, zetl, redshift]
+              note: {redshift: "durum: ilk kopya başlıyor"}
+              say: >-
+                Entegrasyon kuruldu ve Redshift'te aurora_live veritabanı yaratıldı. Hedef boş: Redshift'te henüz tek satır yok.
+                Aurora'da ise bir sipariş ve iki müşteri var.
+            - phase: 2
+              who: zetl
+              lit: [aurora, zetl, redshift]
+              packet: {at: zetl, text: "ilk kopya: orders, order_items, products, customers"}
+              show: {redshift: [W1793380550, C00005, C00002]}
+              fresh: {redshift: [W1793380550, C00005, C00002]}
+              say: >-
+                İlk yükleme: zero-ETL Aurora'daki tabloların o anki hâlini bir kez kopyaladı. Redshift'te aynı tablolar, aynı
+                sütunlar, aynı satırlar.
+            - phase: 2
+              who: zetl
+              lit: [zetl, redshift]
+              note: {redshift: "durum: değişiklikleri izliyor"}
+              say: >-
+                İlk kopya bitti. Entegrasyon artık tabloları baştan kopyalamıyor; sadece değişiklik kaydında yeni ne varsa onu
+                taşıyor.
+            - phase: 3
+              who: app
+              lit: [app, aurora]
+              show: {aurora: [W1793390012]}
+              fresh: {aurora: [W1793390012]}
+              say: >-
+                Bir müşteri sipariş verdi. Uygulama siparişi Aurora'ya yazdı ve COMMIT etti (W1793390012, Ankara'dan, 1.299,90 ₺).
+                Uygulamanın işi burada bitti.
+            - phase: 3
+              who: wal
+              lit: [aurora, wal]
+              packet: {at: wal, text: "INSERT orders W1793390012 …"}
+              say: >-
+                Aurora aynı anda bu değişikliği kendi değişiklik kaydına yazdı: hangi tabloya hangi satır, bütün sütunlarıyla.
+            - phase: 3
+              who: zetl
+              lit: [wal, zetl]
+              packet: {at: zetl, text: "INSERT orders W1793390012 …"}
+              say: zero-ETL kaydı okudu ve değişikliği Redshift'e taşıyor. Araya kimsenin yazdığı bir program girmiyor.
+            - phase: 3
+              who: redshift
+              lit: [zetl, redshift]
+              show: {redshift: [W1793390012]}
+              fresh: {redshift: [W1793390012]}
+              say: >-
+                Satır Redshift'te aurora_live.public.orders tablosunda göründü; COMMIT'ten yaklaşık 30 saniye sonra. Kopya salt
+                okunur: buraya kimse yazamaz.
+            - phase: 4
+              who: monitor
+              lit: [redshift, monitor]
+              note: {monitor: "current_lag ≈ 30000 ms (30 sn) · başarısız tablo: 0"}
+              say: >-
+                İzleme: SVV_INTEGRATION görünümünün current_lag sütunu gecikmeyi milisaniye olarak verir; total_tables_failed
+                sorunlu tabloları sayar. Bir eşik aşılırsa alarm çalar.
+            - phase: 4
+              who: zetl
+              lit: [aurora, zetl, redshift]
+              packet: {at: zetl, text: "ALTER TABLE orders ADD COLUMN …"}
+              say: >-
+                Şema değişikliği: Aurora'da tabloya sütun eklenirse zero-ETL aynı sütunu Redshift'e de ekler. Desteklenmeyen bir
+                tür gelirse sadece o tablo durur; izleme bunu gösterir ve tablo yeniden kopyalanır.
+            - phase: 4
+              who: redshift
+              lit: [redshift]
+              say: >-
+                Hazır: Redshift'teki kopya t0'daki simülasyonun başladığı hâlde. Senin Adım 25'teki siparişin (W1793396741) de
+                aynı yoldan geçecek; t0'daki simülasyon onunla başlıyor. Rapor bu tabloları JOIN'leyecek, şehri customers'tan alacak.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Kopyalamadan önce iki karar verilir: rapor hangi soruları soracak ve kaynaktaki tablolar kopyalanmaya hazır mı.
+            cards:
+              - title: Raporun soruları
+                text: >-
+                  "Şehir şehir sipariş, adet ve ciro", aynısı ürüne ve kategoriye göre. Bu cevaplar tek bir tabloda yazmaz:
+                  siparişler, kalemler, ürünler ve müşteriler tablolarını birleştirmek (JOIN) gerekir. Böyle ağır sorgular
+                  siparişlerin yazıldığı veritabanında değil, analiz için kurulmuş ayrı bir depoda çalışır; ödeme sayfası hiç
+                  yavaşlamaz.
+              - title: "Hedefin şekli: tablolar olduğu gibi"
+                text:
+                  - >-
+                    zero-ETL tabloları aynı adla ve aynı sütunlarla kopyalar; yolda bir dönüşüm yoktur. Bu yüzden hedefi tasarlamak,
+                    kaynağı hazırlamak demektir. Kopyalanan her tabloda bir birincil anahtar (primary key) olmalıdır; yoksa tablo
+                    kopyalanmaz. Birincil anahtar bir satırı tek başına tanıtan sütundur, bir kimlik numarası gibi.
+                map:
+                  cols: ["Kaynak (Aurora, shop)", "Hedef (Redshift, aurora_live)", "Ne taşır?"]
+                  rows:
+                    - [public.orders, public.orders, "Birincil anahtar order_id. Sipariş, müşteri no, tarih, durum, tutar."]
+                    - [public.order_items, public.order_items, "Birincil anahtar (order_id, product_id). Ciro adet × birim fiyattan buradan hesaplanır."]
+                    - [public.customers, public.customers, Birincil anahtar customer_id. Raporun şehri buradan gelir.]
+                    - [public.products, public.products, Birincil anahtar product_id. Kategori buradan gelir.]
+              - title: Kaynak veritabanı hazırlanır
+                text: >-
+                  Aurora'nın değişiklik kaydı dışarıdan okunabilir hâle getirilir. Bu ayarlar kümenin ayar dosyasında (cluster
+                  parameter group) yapılır ve genellikle bir yeniden başlatma ister. Kayda her satırın bütün sütunları yazıldığı
+                  için Aurora'nın disk işi biraz artabilir.
+                code_title: Aurora'nın ayarları
+                code:
+                  - {code: "rds.logical_replication = 1", tag: Aurora'nın içinde, say: Değişiklik kaydı dışarıdan okunabilir olur.}
+                  - {code: "aurora.enhanced_logical_replication = 1", tag: Aurora'nın içinde, say: "Kayda her satırın bütün sütunları yazılır; kopya eksiksiz olur."}
+                  - {code: "aurora.logical_replication_backup = 0", tag: Aurora'nın içinde, say: "AWS'in zero-ETL için istediği zorunlu değer."}
+                  - {code: "aurora.logical_replication_globaldb = 0", tag: Aurora'nın içinde, say: "AWS'in zero-ETL için istediği zorunlu değer."}
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              Hedef boşken geçmişin tamamı bir kez taşınır. Bu zincirde bunu ayrı bir program değil, entegrasyonun kendisi yapar.
+            cards:
+              - title: Entegrasyon kurulur, kopyanın veritabanı yaratılır
+                text: >-
+                  Ekip entegrasyonu bir kez kurar: kaynak Aurora kümesi, hedef Redshift. Redshift tarafında "bu Aurora kümesi bana
+                  veri gönderebilir" diyen bir yetki kuralı yazılır. Redshift'te tablo adlarında büyük/küçük harf ayrımı açılır,
+                  çünkü PostgreSQL adlarda bu ayrımı yapar ve kopyadaki adlar birebir aynı olmalıdır. Sonra Redshift'te kopyanın
+                  duracağı veritabanı entegrasyondan yaratılır. Komuttaki <…> yerlerine kümenin ve Redshift'in AWS'teki kimlikleri
+                  (ARN) yazılır.
+                code:
+                  - {code: "aws rds create-integration --integration-name lm-orders \\", tag: Ekip → AWS, say: Bir kez çalışan kurulum komutu.}
+                  - {code: "  --source-arn <Aurora kümesi> --target-arn <Redshift>", tag: Ekip → AWS, say: Kaynağı ve hedefi birbirine bağlar.}
+                  - {code: "CREATE DATABASE aurora_live FROM INTEGRATION '<id>' DATABASE shop;", tag: Ekip → Redshift, say: "Redshift'te aurora_live adında, Aurora'daki shop veritabanının kopyasını yaratır."}
+              - title: İlk kopya
+                text: >-
+                  Entegrasyon önce kaynaktaki tabloların o anki hâlini bir kez kopyalar. Bu, tabloların büyüklüğüne göre dakikalar
+                  ya da saatler sürebilir; Aurora bu sırada sipariş almaya devam eder. İlk kopya bitince entegrasyon değişiklik
+                  kaydının devamını uygular; aradaki siparişler de kopyaya girer.
+                code:
+                  - {code: "SELECT state, total_tables_replicated FROM svv_integration;", tag: [Ekip → Redshift, Redshift → Ekip], say: "Entegrasyonun hangi aşamada olduğunu ve kaç tablonun kopyalandığını gösterir."}
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              İlk kopyadan sonra her yeni sipariş kendiliğinden kopyaya ulaşır. Uygulama sadece Aurora'ya yazar.
+            cards:
+              - title: Uygulama siparişi tek yere yazar
+                text: >-
+                  Sipariş tek bir transaction'da (ya hep ya hiç çalışan iş paketi) yazılır. Uygulamada kopyalama kodu yoktur;
+                  siparişi Redshift'e de ayrıca yazmak (dual write) gerekmez. İkinci yazma başarısız olsaydı iki kayıt birbirini
+                  tutmazdı.
+                code:
+                  - {code: "BEGIN;", tag: Uygulama → Aurora, say: İş paketi başlar.}
+                  - {code: "INSERT INTO orders (order_id, customer_id, status, total) VALUES (…);", tag: Uygulama → Aurora, say: Siparişin kendisi.}
+                  - {code: "INSERT INTO order_items (order_id, product_id, qty, unit_price) VALUES (…);", tag: Uygulama → Aurora, say: Siparişin kalemleri.}
+                  - {code: "COMMIT;", tag: Uygulama → Aurora, say: "Sipariş kalıcı olur; Aurora değişikliği aynı anda kaydına da yazar."}
+              - title: Değişiklik kaydından Redshift'e
+                text: >-
+                  zero-ETL Aurora'nın değişiklik kaydını sürekli okur ve aynı değişikliği aurora_live'daki tabloya uygular: yeni
+                  satır eklenir, güncellenen satır güncellenir, silinen silinir. Gecikme genellikle saniyeler düzeyindedir (bu
+                  zincirde yaklaşık 30 saniye). Kopya salt okunurdur.
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              Kopya ne kadar geride, bir tablo bozulursa ne olur, şema değişirse ne olur? Bunlar önceden düşünülür ve izlenir.
+            cards:
+              - title: Gecikme ölçülür
+                text: >-
+                  current_lag kaynak ile kopya arasındaki gecikmedir (milisaniye). Raporun "ne kadar güncel" sorusunun cevabı budur.
+                  Bir eşik (ör. birkaç dakika) aşılırsa ekibe alarm gider.
+                code:
+                  - {code: "SELECT state, current_lag, total_tables_failed", tag: Ekip → Redshift, say: "Durum, gecikme (ms) ve sorunlu tablo sayısı."}
+                  - {code: "FROM svv_integration;", tag: Redshift → Ekip, say: Her entegrasyon için bir satır döner.}
+              - title: Aynı satır iki kez yazılmaz
+                text: >-
+                  Entegrasyon satırları birincil anahtarla eşleştirir: bir satır güncellenince kopyadaki aynı satır güncellenir,
+                  yeni bir satır eklenmez. Kaynakta birincil anahtarın zorunlu olmasının sebebi budur.
+              - title: Şema değişince ya da bir tablo bozulunca
+                text: >-
+                  Aurora'da sütun eklemek gibi şema değişiklikleri Redshift'e kendiliğinden taşınır. Desteklenmeyen bir veri türü
+                  ya da silinen bir birincil anahtar, sadece o tabloyu "Failed" (hatalı) durumuna düşürür; diğer tablolar akmaya
+                  devam eder. Sorun giderilince tablo baştan yeniden kopyalanır.
+                code:
+                  - {code: "SELECT table_name, table_state, reason FROM svv_integration_table_state", tag: Ekip → Redshift, say: Her tablonun durumu ve sorunun sebebi.}
+                  - {code: "  WHERE table_state <> 'Synced';", tag: Redshift → Ekip, say: Sadece eşitlenmemiş tablolar.}
+                  - {code: "ALTER DATABASE aurora_live INTEGRATION REFRESH TABLES orders;", tag: Ekip → Redshift, say: "Bu tabloyu kaynaktan baştan yeniden kopyalar."}
+              - title: Kopya kaybolursa
+                text: >-
+                  Asıl kayıt her zaman Aurora'dadır. Kopya bozulursa tablo ya da veritabanı entegrasyondan yeniden kopyalanır;
+                  rapor deposu hiçbir zaman siparişin tek kaydı değildir.
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
@@ -7468,53 +8411,436 @@ steps:
           - [ZREVRANGE, "Puanı en yüksekten başlayarak istenen kadar üyeyi getirir."]
           - [ZCOUNT, "Puanı bir aralıkta olan üyeleri sayar (burada son 5 dakikada görülen ziyaretçiler)."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde canlı sıralama için hazırlık
+      t1:
+        title: Önceden ne vardı? Sıralama belleğe nasıl geldi?
         intro: >-
-          Canlı ekran hiç açılmadan, sıralama ve sayaçlar bellekte kurulur. Aşağıdaki beş adım bu hazırlığın sırasıdır.
-        text:
-          - title: Önce ekranın soruları yazılır
-            text: >-
-              "En çok ciro yapan 10 müşteri", "bugünkü sipariş sayısı", "son 5 dakikada aktif ziyaretçi". Üçü de her birkaç saniyede
-              sorulur ve tek komutla cevaplanmalıdır.
-            code: |-
-              ZREVRANGE lm:leaderboard 0 9 WITHSCORES
-              GET       lm:orders:today
-              ZCOUNT    lm:active <şimdi − 300> +inf
-          - title: Sıralama yazarken güncellenir
-            text: >-
-              Her sipariş verildiğinde müşterinin puanı tutar kadar artırılır; sayaç bir artırılır. Okuma tarafında hesap yapılmaz.
-            code: |-
-              ZINCRBY lm:leaderboard 3373.84 C00001
-              INCR    lm:orders:today
-          - title: Başlangıç değeri asıl kayıttan kurulur
-            text: >-
-              Liderlik tablosu ilk kez kurulurken müşterilerin geçmiş cirosu sipariş veritabanından hesaplanır ve tek seferde
-              yazılır (ZADD). Bellek kaybolursa aynı yolla yeniden kurulur.
-          - title: Gösterim bilgisi tek komutla alınır
-            text: >-
-              İlk 10'un adları için 10 ayrı GET yerine tek bir MGET ya da bir hash (HMGET lm:names …) kullanılır, ya da komutlar bir
-              pipeline'da tek gidiş-dönüşte gönderilir. Her ayrı komut bir ağ gidiş-dönüşüdür.
-            code: |-
-              MGET lm:name:C00487 lm:name:C00717 lm:name:C00163 …
-          - title: Günlük sayaçlar kendiliğinden sıfırlanır
-            text: >-
-              "Bugünkü siparişler" gibi sayaçların anahtarına tarih konur (lm:orders:2026-10-31) ve bir süre verilir; ertesi gün yeni
-              anahtar başlar, eskisi kendiliğinden silinir.
-      feed:
-        title: Veri nereden geliyor?
-        writes: >-
-          Sipariş verildiğinde (ZINCRBY ve INCR) ve her sayfa açılışında aktif ziyaretçiler kümesine (ZADD). Başlangıç sıralaması
-          sipariş veritabanından bir kez yüklenir.
-        reads: Canlı ekran, her 5 saniyede.
-        kind: >-
-          Uygulama orkestrasyonu. ElastiCache sipariş veritabanından kendiliğinden veri çekmez; her siparişte ona haber verilir.
-        with: >-
-          Puanların kaynağı siparişlerdir: asıl kayıt Aurora'da, sıralama ElastiCache'te bir kopya. Müşteri adları da bellekte
-          kopya olarak tutulur (lm:name:<id>); asıl müşteri kaydı Aurora'dadır.
-        best: >-
-          Sıralama ve sayaçlar bellekte, yazarken güncellenir; ekranlar sadece okur. Puanlar asıl kayıttan yeniden kurulabilir ve
-          sipariş olayları kuyruktan okunarak, idempotent biçimde eklenir.
+          Canlı ekran açılmadan önce lm:leaderboard bellekte zaten dolu ve her siparişte güncel tutuluyor. Burada bunu yapan
+          gerçek zinciri görüyorsun: önce zincirin bileşenleri, sonra bir simülasyon, sonra dört aşama (tasarım, ilk yükleme,
+          sürekli besleme, tutarlılık ve onarım).
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1", "t0'daki tıklamadan (ya da sayfanın açılmasından) önceki zaman. Bu bölüm, verinin o ana kadar hedefe nasıl geldiğini anlatır."]
+          - ["Ekip", "Mağazanın sistemini kuran ve işleten mühendisler. Bir kez çalışan kurulum komutlarını onlar gönderir, alarmlara onlar bakar."]
+          - ["Transaction (iş paketi) ve COMMIT", "Birlikte kaydedilmesi gereken yazmaların paketi. COMMIT paketi kalıcı yapar: ya hepsi kaydolur ya hiçbiri; tıpkı bir havalenin iki hesaba birden işlenmesi gibi."]
+          - ["Değişiklik kaydı (WAL)", "Write-ahead log: veritabanının kaydettiği her değişikliği sırayla yazdığı defter. Kopyalama servisleri bu defteri okur; veritabanına ayrıca soru sormazlar."]
+          - ["Outbox", "Siparişle aynı iş paketinde yazılan \"sipariş verildi\" olayı satırı; giden mektupların konduğu kutu gibi. Olayı oradan alıp taşımak zincirin geri kalanının işidir."]
+          - ["AWS DMS ve CDC", "CDC (change data capture): değişiklik kaydını okuyup her değişikliği başka bir yere taşımak. AWS DMS bunu yapan AWS servisidir."]
+          - ["Kinesis Data Streams (olay akışı)", "Olayların sırayla konduğu ve bir süre (varsayılan 24 saat) saklandığı AWS servisi; bir bant gibi: biri koyar, diğeri kendi hızında alır."]
+          - ["AWS Lambda", "Bir olay gelince kısa bir kodu çalıştıran AWS servisi; sunucuyu AWS yönetir. Tüketici bu kodun adıdır."]
+          - ["En az bir kez (at-least-once) ve idempotency", "Akış bir olayı kaybetmez ama bazen iki kez verebilir. Idempotency: aynı olay kaç kez gelirse gelsin sonuç bir kez gelmiş gibi olur."]
+          - ["DLQ (dead-letter queue, hata kuyruğu)", "İşlenemeyen olayların bırakıldığı yer; akış onları beklemeden devam eder, ekip sonra bakar."]
+          - ["IteratorAge", "Tüketicinin işlediği son olayın akışa ne kadar önce girdiği: tüketici ne kadar geride, o kadar büyük."]
+          - ["CloudWatch", "AWS'in ölçüm ve alarm servisi."]
+          - ["EventBridge Scheduler", "Bir işi belli saatlerde (ör. her gece) başlatan AWS servisi."]
+          - ["Okuma kopyası (reader)", "Aurora'nın sadece okuma yapan ikinci sunucusu; ağır okumalar siparişleri yazan sunucuyu yormaz."]
+          - ["ZADD, ZINCRBY, INCR, SET … NX", "ZADD: sıralı kümeye üyeyi bir puanla koyar (üzerine yazar). ZINCRBY: puanı artırır. INCR: sayacı 1 artırır. SET … NX: anahtar yoksa yazar, varsa hiçbir şey yapmaz."]
+          - ["Valkey", "ElastiCache'in kullandığı, Redis ile aynı komutları anlayan bellek veritabanı motoru."]
+          - ["Pipeline (bellekte)", "Birçok komutu tek seferde gönderip cevaplarını tek seferde almak; her komut için ayrı ağ gidiş-dönüşü olmaz."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra" sütunu veriyi kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim kodumuz" etiketli parçaları mağazanın
+          ekibi yazar. Aynı parçalar aşağıdaki simülasyonda birer kutu: üst sırada siparişin yolu, alt sırada yandaki işler.
+        inventory:
+          - id: app
+            name: Uygulama
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucusunda)
+            does: >-
+              Siparişi ve "sipariş verildi" olayını aynı transaction'da Aurora'ya yazar. Sıralamaya kendisi dokunmaz. (Her sayfa
+              açılışında aktif ziyaretçiyi de lm:active kümesine o yazar.)
+            box: Siparişi ve olayını (outbox) aynı iş paketinde Aurora'ya yazar.
+            phases: [3]
+            before: Tarayıcı (sipariş butonu, sayfa açılışı)
+            after: [aurora, cache]
+          - id: aurora
+            name: Aurora PostgreSQL (shop)
+            kind: aws
+            what: işlemsel veritabanı
+            does: Siparişlerin asıl kaydı (orders) ve olay kutusu (outbox tablosu). Puanların doğru değeri hep buradan hesaplanır.
+            box: Siparişlerin asıl kaydı + outbox tablosu.
+            phases: [1, 2, 3, 4]
+            before: app
+            after: [wal, backfill, reconcile]
+          - id: wal
+            name: Aurora'nın değişiklik kaydı (WAL)
+            kind: aws
+            what: Aurora'nın içinde, bir ayarla açılır
+            does: COMMIT edilen her değişikliği sırayla yazar. DMS bu kaydı okur.
+            box: Her COMMIT'i sırayla yazar; DMS buradan okur.
+            phases: [3]
+            before: aurora
+            after: dms
+          - id: dms
+            name: AWS DMS (CDC görevi)
+            kind: aws
+            what: AWS'in değişiklik yakalama servisi
+            does: Değişiklik kaydından sadece outbox tablosuna eklenen satırları okur ve her birini Kinesis akışına bir kayıt olarak koyar.
+            box: "Değişiklik yakalama: outbox'a eklenen her satırı akışa koyar; araya kod girmez."
+            phases: [3]
+            before: wal
+            after: kinesis
+          - id: kinesis
+            name: Kinesis Data Streams (lm-order-events)
+            kind: aws
+            what: olay akışı
+            does: Olayları sırayla saklar (varsayılan 24 saat) ve tüketiciye verir. Tüketici durursa olaylar bekler, kaybolmaz.
+            box: Olayları sırayla saklar; tüketici durursa bekletir.
+            phases: [3, 4]
+            before: dms
+            after: consumer
+          - id: consumer
+            name: Tüketici (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod
+            does: Akıştan olayı alır, aynı siparişi iki kez saymamak için işaret koyar, sonra ZINCRBY ve INCR gönderir.
+            box: "Akıştan olayı alır, SET NX ile işaret koyar, ZINCRBY gönderir; aynı siparişi iki kez saymaz."
+            phases: [3, 4]
+            before: kinesis
+            after: [cache, dlq]
+          - id: cache
+            name: ElastiCache (Valkey)
+            kind: aws
+            what: bellekte çalışan veritabanı
+            does: lm:leaderboard (sıralı küme), lm:orders:today (sayaç), lm:name:<id> (adlar) ve processed:<order_id> (işaretler).
+            box: Sıralama, sayaç, adlar ve "işlendi" işaretleri bellekte.
+            phases: [1, 2, 3, 4]
+            before: [consumer, backfill, reconcile]
+            after: Canlı ekran (t0)
+          - id: backfill
+            name: İlk yükleme işi
+            kind: code
+            what: bir kez çalışan program
+            does: Aurora'dan müşteri başına toplam ciroyu okur ve sıralamayı tek seferde yazar (ZADD); adları da yazar.
+            box: "Bir kez: Aurora'da SUM, ElastiCache'e ZADD."
+            phases: [2]
+            before: aurora
+            after: cache
+          - id: dlq
+            name: Hata kuyruğu (SQS DLQ)
+            kind: aws
+            what: Amazon SQS kuyruğu
+            does: Tekrar tekrar hata veren bir olayın yerini (akıştaki sıra numarasını) saklar; akış durmaz, ekip olayı sonra işler.
+            box: İşlenemeyen olayın yerini saklar; akış durmaz.
+            phases: [4]
+            before: consumer
+            after: Ekip (inceler, yeniden gönderir)
+          - id: monitor
+            name: CloudWatch alarmları
+            kind: aws
+            what: AWS'in izleme servisi
+            does: Tüketicinin akışın ne kadar gerisinde olduğunu (IteratorAge) ve hata kuyruğundaki mesaj sayısını izler.
+            box: "Gecikmeyi (IteratorAge) ve DLQ'yu izler."
+            phases: [4]
+            before: [consumer, dlq]
+            after: Ekip (alarm)
+          - id: reconcile
+            name: Gece karşılaştırma işi
+            kind: code
+            what: her gece çalışan program (EventBridge Scheduler + Lambda)
+            does: Aurora'daki toplamları bellekteki puanlarla karşılaştırır; farkı düzeltir, bellek kaybolduysa sıralamayı yeniden kurar.
+            box: Aurora ile belleği karşılaştırır, farkı düzeltir.
+            phases: [4]
+            before: aurora
+            after: cache
+        sim_title: "Simülasyon: sıralama belleğe nasıl geldi?"
+        sim:
+          kind: pipeline
+          title: Aurora → değişiklik kaydı → DMS → Kinesis → Tüketici → ElastiCache
+          caption: >-
+            Liderlik tablosunun ilk 10'u (iki ayrı müşteri aynı adı taşıyor: C00004 ve C00404 Lukas Weber). Önce bellek boşken ilk yükleme, sonra İrem Kurt'un yeni siparişinin her kutudan
+            geçişi, en sonda aynı olayın ikinci kez gelmesi, hata kuyruğu, izleme ve gece karşılaştırması oynuyor. Son karede
+            bellek, t0'daki simülasyonun başladığı hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım}
+          side_title: "Yandaki işler: ilk yükleme, hata kuyruğu, izleme, gece karşılaştırması"
+          summary: >-
+            Sıralamayı ilk yükleme işi bir kez kurdu; yeni siparişi akış ve tüketici taşıdı; ikinci kez gelen olay işaret sayesinde
+            sayılmadı; gece karşılaştırması belleği Aurora ile eşit buldu. Son durum, t0'daki simülasyonun başladığı durum.
+          boxes:
+            - id: app
+            - id: aurora
+              tables:
+                - name: "orders → müşteri başına SUM(total)"
+                  cols: [customer_id, toplam]
+                  money: [toplam]
+                  sort: [toplam, desc]
+                  rows:
+                    - {customer_id: C00002, toplam: 1168114.91}
+                    - {customer_id: C00001, toplam: 465187.51}
+                    - {customer_id: C00487, toplam: 237363.13}
+                    - {customer_id: C00004, toplam: 225767.79}
+                    - {customer_id: C00717, toplam: 195359.79}
+                    - {customer_id: C00163, toplam: 195806.03}
+                    - {customer_id: C00608, toplam: 182240.94}
+                    - {customer_id: C00404, toplam: 173614.52}
+                    - {customer_id: C00983, toplam: 169980.56}
+                    - {customer_id: C00270, toplam: 164401.25}
+                - name: outbox
+                  cols: [order_id, customer_id, total]
+                  money: [total]
+                  rows:
+                    - {order_id: W1793391207, customer_id: C00717, total: 1884.63, hidden: true}
+            - id: wal
+            - id: dms
+            - id: kinesis
+            - id: consumer
+            - id: cache
+              tables:
+                - name: "lm:leaderboard (sorted set) + lm:name:<id>"
+                  cols: [üye, ad, puan]
+                  money: [puan]
+                  sort: [puan, desc]
+                  rows:
+                    - {üye: C00002, ad: Mert Doğan, puan: 1168114.91, hidden: true}
+                    - {üye: C00001, ad: Ayşe Yılmaz, puan: 465187.51, hidden: true}
+                    - {üye: C00487, ad: Mehmet Yılmaz, puan: 237363.13, hidden: true}
+                    - {üye: C00004, ad: Lukas Weber, puan: 225767.79, hidden: true}
+                    - {üye: C00717, ad: İrem Kurt, puan: 195359.79, hidden: true}
+                    - {üye: C00163, ad: Seda Yılmaz, puan: 195806.03, hidden: true}
+                    - {üye: C00608, ad: Ozan Doğan, puan: 182240.94, hidden: true}
+                    - {üye: C00404, ad: Lukas Weber, puan: 173614.52, hidden: true}
+                    - {üye: C00983, ad: Mehmet Demir, puan: 169980.56, hidden: true}
+                    - {üye: C00270, ad: Mehmet Müller, puan: 164401.25, hidden: true}
+                - name: "processed:<order_id> (24 saat yaşar)"
+                  cols: [anahtar, değer]
+                  rows:
+                    - {anahtar: "processed:W1793391207", değer: "1", hidden: true}
+            - id: backfill
+              row: side
+            - id: dlq
+              row: side
+            - id: monitor
+              row: side
+            - id: reconcile
+              row: side
+          frames:
+            - phase: 2
+              who: dms
+              lit: [dms, backfill, cache]
+              note: {dms: "T anından sonrasını yakalıyor", cache: "boş"}
+              say: >-
+                Bellek boş. Önce DMS görevi başlatıldı: T anından sonraki her yeni olayı yakalayacak. İlk yükleme işi ise T anına
+                kadarki siparişleri toplayacak; böylece hiçbir sipariş ne iki kez ne de hiç sayılmaz.
+            - phase: 2
+              who: backfill
+              lit: [aurora, backfill]
+              packet: {at: backfill, text: "SELECT customer_id, SUM(total) … GROUP BY customer_id"}
+              say: >-
+                İlk yükleme işi Aurora'ya müşteri başına toplam ciroyu sordu (iptal edilen siparişler hariç). Sorgu bir okuma
+                kopyasında (reader) çalıştı; siparişlerin yazıldığı sunucu yorulmadı.
+            - phase: 2
+              who: backfill
+              lit: [backfill, cache]
+              packet: {at: backfill, text: "ZADD lm:leaderboard 1168114.91 C00002 465187.51 C00001 …"}
+              note: {cache: ""}
+              show: {cache: [C00002, C00001, C00487, C00004, C00717, C00163, C00608, C00404, C00983, C00270]}
+              fresh: {cache: [C00002, C00001, C00487, C00004, C00717, C00163, C00608, C00404, C00983, C00270]}
+              say: >-
+                İş sonucu tek seferde belleğe yazdı: ZADD her müşterinin puanını doğrudan koyar, adlar da lm:name:<id>
+                anahtarlarına yazıldı. Sıralı küme üyeleri puana göre sıraladı; İrem Kurt şimdilik 6. sırada.
+            - phase: 3
+              who: app
+              lit: [app, aurora]
+              show: {aurora: [W1793391207]}
+              set: {aurora: {C00717: {toplam: 197244.42}}}
+              fresh: {aurora: [W1793391207, C00717]}
+              say: >-
+                İrem Kurt 1.884,63 ₺'lik bir sipariş verdi. Uygulama aynı iş paketinde iki satır yazdı: orders tablosuna sipariş,
+                outbox tablosuna "sipariş verildi" olayı. COMMIT: ya ikisi birden kalıcı olur ya hiçbiri.
+            - phase: 3
+              who: wal
+              lit: [aurora, wal]
+              packet: {at: wal, text: "INSERT outbox W1793391207 …"}
+              say: Aurora iki satırı da değişiklik kaydına yazdı. Uygulamanın işi burada bitti; sıralamaya hiç dokunmadı.
+            - phase: 3
+              who: dms
+              lit: [wal, dms, kinesis]
+              packet: {at: dms, text: "olay: W1793391207 · C00717 · 1884.63"}
+              say: >-
+                AWS DMS değişiklik kaydında outbox'a eklenen satırı gördü ve onu Kinesis akışına bir kayıt olarak koydu. Diğer
+                tablolardaki değişikliklere bakmadı.
+            - phase: 3
+              who: kinesis
+              lit: [kinesis, consumer]
+              packet: {at: kinesis, text: "kayıt #… · W1793391207"}
+              say: Kayıt akışta sırasıyla duruyor; tüketici okuyana kadar bekler, okunduktan sonra da bir süre saklanır.
+            - phase: 3
+              who: consumer
+              lit: [consumer, cache]
+              packet: {at: consumer, text: "SET processed:W1793391207 1 NX EX 86400 → OK"}
+              show: {cache: ["processed:W1793391207"]}
+              fresh: {cache: ["processed:W1793391207"]}
+              say: >-
+                Tüketici (Lambda) kaydı aldı. Önce "bu siparişi daha önce saydım mı?" diye sordu: SET … NX, yani anahtar yoksa
+                yaz. Cevap OK: ilk kez görüyor, işaret kondu.
+            - phase: 3
+              who: cache
+              lit: [consumer, cache]
+              packet: {at: consumer, text: "ZINCRBY lm:leaderboard 1884.63 C00717 · INCR lm:orders:today"}
+              set: {cache: {C00717: {puan: 197244.42}}}
+              fresh: {cache: [C00717]}
+              note: {cache: "lm:orders:today +1"}
+              say: >-
+                ZINCRBY İrem'in puanını 1.884,63 artırdı; İrem 6. sıradan 5. sıraya geçti. Sıralama yazarken yapıldı. INCR bugünkü
+                sipariş sayacını bir artırdı.
+            - phase: 4
+              who: consumer
+              lit: [kinesis, consumer, cache]
+              packet: {at: consumer, text: "aynı olay yine geldi: SET processed:W1793391207 NX → (boş)"}
+              say: >-
+                Akışlar bir olayı "en az bir kez" teslim eder; bir hatadan sonra aynı kayıt yeniden gelebilir. SET NX boş döndü:
+                işaret zaten var. Tüketici ZINCRBY göndermedi; İrem'in puanı değişmedi.
+            - phase: 4
+              who: dlq
+              lit: [consumer, dlq]
+              note: {dlq: "mesaj: 0"}
+              say: >-
+                Bir olay her denemede hata verseydi (ör. bozuk kayıt), Lambda birkaç denemeden sonra onu bırakır ve yerini SQS'teki
+                hata kuyruğuna (DLQ) yazardı. Arkadaki olaylar beklemeden işlenmeye devam ederdi.
+            - phase: 4
+              who: monitor
+              lit: [consumer, dlq, monitor]
+              note: {monitor: "IteratorAge ≈ 1 sn · DLQ: 0"}
+              say: >-
+                CloudWatch, tüketicinin akışın ne kadar gerisinde olduğunu (IteratorAge) ve hata kuyruğundaki mesaj sayısını izler.
+                Biri bir eşiği aşarsa ekibe alarm gider.
+            - phase: 4
+              who: reconcile
+              lit: [aurora, reconcile, cache]
+              note: {reconcile: "10 / 10 eşit"}
+              say: >-
+                Gece karşılaştırma işi Aurora'daki toplamları bellekteki puanlarla karşılaştırdı: hepsi eşit. Fark olsaydı doğru
+                toplamı ZADD ile üzerine yazardı; bellek tamamen kaybolsaydı ilk yüklemeyi baştan yapardı.
+            - phase: 4
+              who: cache
+              lit: [cache]
+              say: >-
+                Hazır: lm:leaderboard t0'daki simülasyonun başladığı hâlde: Ayşe Yılmaz 465.187,51 ile 2. sırada. t0'daki
+                simülasyonun ilk adımı, Adım 25'teki siparişin (3.373,84 ₺) Ayşe'nin puanına eklenmesi.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Önce ekranın soruları yazılır, sonra her soruyu tek komutla cevaplayacak bellek yapısı seçilir. Puanların doğru
+              değeri her zaman Aurora'dadır; bellekteki her şey bir kopyadır.
+            cards:
+              - title: Ekranın soruları
+                text: >-
+                  "En çok ciro yapan 10 müşteri", "bugünkü sipariş sayısı", "son 5 dakikada aktif ziyaretçi". Üçü de her birkaç
+                  saniyede sorulur ve tek komutla cevaplanmalıdır. Okurken hesap yapılmaz; hesap her siparişte, yazarken yapılır.
+                code:
+                  - {code: "ZREVRANGE lm:leaderboard 0 9 WITHSCORES", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: En yüksek puanlı 10 üye.}
+                  - {code: "GET lm:orders:today", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: Bugünkü sipariş sayacı.}
+                  - {code: "ZCOUNT lm:active <şimdi − 300> +inf", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: Son 5 dakikada görülen ziyaretçi sayısı.}
+              - title: Kaynaktan hedefe alan alan
+                text: >-
+                  Her bellek anahtarının Aurora'da bir karşılığı vardır. Bu tablo, belleğin bir gün tamamen kaybolsa bile
+                  yeniden nasıl kurulacağını da söyler.
+                map:
+                  cols: [Kaynak (Aurora), Hedef (ElastiCache), Kural]
+                  rows:
+                    - ["orders: SUM(total) müşteri başına", "lm:leaderboard (sorted set)", "Üye = customer_id, puan = toplam ciro. İptal edilen sipariş sayılmaz."]
+                    - ["orders: bugünün sipariş sayısı", "lm:orders:today (sayaç)", "Her siparişte +1; gece yarısı kendiliğinden silinir, ertesi gün sıfırdan başlar."]
+                    - ["customers.name", "lm:name:<customer_id> (metin)", "Ekranda gösterilen ad. Ad değişirse aynı yoldan güncellenir."]
+                    - ["outbox.order_id", "processed:<order_id> (işaret)", "Bu sipariş sayıldı. 24 saat sonra kendiliğinden silinir."]
+                    - ["(veritabanı değil: sayfa açılışı)", "lm:active (sorted set)", "Uygulama her sayfa açılışında ziyaretçiyi o anki zamanla yazar."]
+              - title: Neden "outbox"?
+                text: >-
+                  Siparişi Aurora'ya, puanı da ayrıca belleğe yazmak (dual write) iki ayrı yazmadır: ikincisi başarısız olursa
+                  sipariş var ama puan yok. Bunun yerine sipariş ve "sipariş verildi" olayı aynı iş paketinde Aurora'ya yazılır
+                  (outbox: giden mektupların konduğu kutu gibi). Olayı oradan alıp taşımak zincirin geri kalanının işidir.
+              - title: Adlar tek gidiş-dönüşte alınır
+                text: >-
+                  İlk 10'un adları için 10 ayrı komutun her biri bir ağ gidiş-dönüşüdür. Komutlar bir pipeline'da (komutları
+                  topluca gönderip cevapları topluca alma) gönderilir. Anahtarlar bellekte farklı parçalarda (slot) durabildiği
+                  için çok anahtarlı tek komut yerine pipeline kullanılır.
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              Bellek boşken sıralama bir kez, asıl kayıttan kurulur. Akış ancak bundan sonraki siparişleri taşır.
+            cards:
+              - title: Hangi siparişi kim sayar?
+                text: >-
+                  Önce DMS görevi bir T anından itibaren değişiklikleri yakalamaya başlar. İlk yükleme işi T anına kadarki
+                  siparişleri toplar. T'den önceki sipariş ilk yüklemede, sonraki sipariş akışta sayılır; ikisinin arasında boşluk
+                  ya da çakışma kalmaz.
+              - title: İlk yükleme işi
+                text: >-
+                  Sorgu Aurora'nın okuma kopyasında (reader) çalışır; siparişleri yazan sunucu etkilenmez. Sonuç belleğe ZADD ile
+                  yazılır: ZADD puanı artırmaz, doğrudan koyar. Bu yüzden iş yarıda kalırsa baştan çalıştırmak güvenlidir.
+                code:
+                  - {code: "SELECT customer_id, SUM(total) FROM orders", tag: İlk yükleme işi → Aurora, say: Müşteri başına toplam ciro.}
+                  - {code: "  WHERE status <> 'cancelled' AND order_date < :T GROUP BY customer_id;", tag: Aurora → İlk yükleme işi, say: "İptaller hariç, T anına kadarki siparişler."}
+                  - {code: "ZADD lm:leaderboard 1168114.91 C00002 465187.51 C00001 …", tag: İlk yükleme işi → ElastiCache, say: Puanları tek seferde yazar.}
+                  - {code: "SET lm:name:C00487 \"Mehmet Yılmaz\"   (her üye için, tek pipeline'da)", tag: İlk yükleme işi → ElastiCache, say: Ekranda gösterilecek adlar.}
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              Her yeni sipariş birkaç saniye içinde sıralamaya girer. Sipariş için uygulama sadece Aurora'ya yazar; gerisini akış ve
+              tüketici yapar.
+            cards:
+              - title: Uygulama siparişi ve olayını birlikte yazar
+                code:
+                  - {code: "BEGIN;", tag: Uygulama → Aurora, say: İş paketi başlar.}
+                  - {code: "INSERT INTO orders (order_id, customer_id, status, total) VALUES ('W1793391207', 'C00717', …, 1884.63);", tag: Uygulama → Aurora, say: Siparişin kendisi.}
+                  - {code: "INSERT INTO outbox (order_id, customer_id, total, items) VALUES ('W1793391207', 'C00717', 1884.63, …);", tag: Uygulama → Aurora, say: "Aynı iş paketinde: \"sipariş verildi\" olayı."}
+                  - {code: "COMMIT;", tag: Uygulama → Aurora, say: "Ya ikisi birden kalıcı olur ya hiçbiri."}
+              - title: DMS olayı akışa koyar
+                text: >-
+                  AWS DMS, Aurora'nın değişiklik kaydını okuyan yönetilen bir servistir. Bu görev sadece outbox tablosuna bakar
+                  ve her yeni satırı Kinesis akışına JSON kayıt olarak yazar. Akış olayları sırayla saklar; tüketici bir süre
+                  dursa bile olaylar kaybolmaz (varsayılan saklama 24 saat).
+                code:
+                  - {code: "aws dms create-replication-task --migration-type cdc \\", tag: Ekip → AWS, say: "Bir kez kurulur; sadece değişiklikleri taşıyan görev."}
+                  - {code: "  --source-endpoint-arn <Aurora> --target-endpoint-arn <Kinesis lm-order-events> \\", tag: Ekip → AWS, say: Kaynak ve hedef.}
+                  - {code: "  --table-mappings '{\"rules\": [… \"table-name\": \"outbox\" …]}' --cdc-start-time <T>", tag: Ekip → AWS, say: "Sadece outbox tablosu, T anından itibaren."}
+              - title: Tüketici aynı siparişi iki kez saymaz
+                text: >-
+                  Tüketici AWS Lambda'da çalışan kısa bir koddur. Önce siparişe bir işaret koymayı dener (SET … NX: anahtar yoksa
+                  yaz); işaret yeni konduysa puanı ve sayacı artırır. İşaret zaten varsa hiçbir şey yapmaz. Buna idempotency
+                  denir: aynı olay kaç kez gelirse gelsin sonuç bir kez gelmiş gibidir, tıpkı bir bileti ikinci kez okutunca
+                  turnikenin açılmaması gibi.
+                code:
+                  - {code: "for rec in event[\"Records\"]:", tag: Kinesis → Tüketici, say: Lambda akıştan bir paket olay alır.}
+                  - {code: "    e = json.loads(base64.b64decode(rec[\"kinesis\"][\"data\"]))[\"data\"]", tag: Tüketicinin içinde, say: Olayı okunur hâle getirir.}
+                  - {code: "    if r.set(f\"processed:{e['order_id']}\", 1, nx=True, ex=86400):", tag: [Tüketici → ElastiCache, ElastiCache → Tüketici], say: "Bu sipariş ilk kez mi geliyor? İlk kezse işaret konur."}
+                  - {code: "        r.zincrby(\"lm:leaderboard\", e[\"total\"], e[\"customer_id\"])", tag: Tüketici → ElastiCache, say: Müşterinin puanı sipariş tutarı kadar artar.}
+                  - {code: "        r.incr(\"lm:orders:today\")", tag: Tüketici → ElastiCache, say: Bugünkü sipariş sayacı +1.}
+                  - {code: "        r.expireat(\"lm:orders:today\", gece_yarisi)", tag: Tüketici → ElastiCache, say: "Sayaç gece yarısı kendiliğinden silinir; ertesi gün sıfırdan başlar."}
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              Olay iki kez gelirse, hiç işlenemezse, tüketici geride kalırsa ya da bellek kaybolursa ne olur? Her biri için bir
+              parça vardır.
+            cards:
+              - title: Aynı olay iki kez gelirse
+                text: >-
+                  Akış ve Lambda bir olayı "en az bir kez" teslim eder; bir hatadan sonra aynı paket yeniden gelebilir. processed
+                  işareti sayesinde ikinci geliş puanı değiştirmez. İşaret 24 saat yaşar; bu süre bir olayın yeniden gelebileceği
+                  süreden uzundur.
+              - title: Bir olay hiç işlenemezse
+                text: >-
+                  Bozuk bir kayıt her denemede hata verirse arkasındaki olaylar beklemesin diye Lambda belirli sayıda denemeden
+                  sonra onu bırakır ve yerini (akıştaki sıra numarasını) SQS'teki hata kuyruğuna (DLQ) yazar. Ekip kaydı inceler,
+                  düzeltir ve yeniden işletir.
+                code:
+                  - {code: "aws lambda create-event-source-mapping --function-name lm-leaderboard \\", tag: Ekip → AWS, say: Tüketiciyi akışa bağlar.}
+                  - {code: "  --event-source-arn <Kinesis lm-order-events> --starting-position TRIM_HORIZON \\", tag: Ekip → AWS, say: Akıştaki en eski bekleyen olaydan başlar.}
+                  - {code: "  --maximum-retry-attempts 5 --bisect-batch-on-function-error \\", tag: Ekip → AWS, say: "5 deneme; hatalı paketi ikiye bölüp bozuk kaydı ayırır."}
+                  - {code: "  --destination-config '{\"OnFailure\": {\"Destination\": \"<SQS DLQ>\"}}'", tag: Ekip → AWS, say: Vazgeçilen olayın yeri hata kuyruğuna yazılır.}
+              - title: Gecikme ölçülür
+                text: >-
+                  Lambda'nın IteratorAge ölçüsü, işlenen son olayın akışa ne kadar önce girdiğini söyler: canlı ekranın kaç saniye
+                  geride olduğu budur. CloudWatch alarmı bu süre ve DLQ'daki mesaj sayısı için kurulur.
+              - title: Gece karşılaştırması ve yeniden kurma
+                text: >-
+                  Tüketici işareti koyup puanı artırmadan çökerse o sipariş eksik sayılır; gece karşılaştırması bunu yakalar. İş
+                  Aurora'daki toplamları bellekle karşılaştırır (son birkaç dakikanın siparişleri hariç, onlar hâlâ akışta olabilir)
+                  ve farkı doğru toplamla üzerine yazar. Bellek tamamen kaybolursa ilk yükleme baştan yapılır.
+                code:
+                  - {code: "SELECT customer_id, SUM(total) FROM orders WHERE status <> 'cancelled' AND order_date < now() - interval '5 minutes' GROUP BY 1;", tag: [Karşılaştırma işi → Aurora, Aurora → Karşılaştırma işi], say: Doğru toplamlar.}
+                  - {code: "ZSCORE lm:leaderboard C00717   (her müşteri için, tek pipeline'da)", tag: [Karşılaştırma işi → ElastiCache, ElastiCache → Karşılaştırma işi], say: Bellekteki puan.}
+                  - {code: "ZADD lm:leaderboard 197244.42 C00717   (sadece fark varsa)", tag: Karşılaştırma işi → ElastiCache, say: "Doğru değeri üzerine yazar; eklemez."}
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-

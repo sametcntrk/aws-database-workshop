@@ -1170,6 +1170,71 @@
     return { html, lanes: { obj: fr }, paint, final: showSum };
   }
 
+  /* ---------- pipeline: the t-1 chain that fills the target store before the step (initial load, then one new record
+   * through every component, then duplicates / lag / repair). One box per component, left to right; side boxes under them.
+   * spec.components {id: {name, what, box, kind: "aws" | "code"}} (from panel.t1.inventory, merged in by perde.js),
+   * spec.boxes [{id, row: "main" | "side", tables [{name, cols, rows [{..., key?, hidden?}], sort: [col, "desc"], money: [cols]}]}],
+   * spec.phases {2: "İlk yükleme", ...}, spec.frames [{phase, who, lit [ids], packet {at, text}, show {box: [keys]},
+   * hide {box: [keys]}, set {box: {key: {col: value}}}, fresh {box: [keys]}, mark {box: {key: "dup" | "fix"}}, note {box: text}, say}].
+   * Rows are keyed by row.key or by the first column. Every frame keeps the state of the frame before it. */
+  function pipeline(spec) {
+    const C = spec.components || {}, boxes = spec.boxes, phases = spec.phases || {};
+    const keyOf = (t, r) => String(r.key ?? r[t.cols[0]]);
+    const start = { say: START, phase: null, who: null, on: [], packet: null, vis: {}, vals: {}, fresh: {}, mark: {}, note: {} };
+    boxes.forEach((b) => { start.vis[b.id] = (b.tables || []).flatMap((t) => t.rows.filter((r) => !r.hidden).map((r) => keyOf(t, r))); });
+    const fr = [start];
+    let s = start;
+    spec.frames.forEach((f) => {
+      const vis = { ...s.vis }, vals = { ...s.vals }, mark = { ...s.mark }, note = { ...s.note, ...(f.note || {}) };
+      Object.entries(f.show || {}).forEach(([b, keys]) => { vis[b] = [...new Set([...(vis[b] || []), ...keys.map(String)])]; });
+      Object.entries(f.hide || {}).forEach(([b, keys]) => { vis[b] = (vis[b] || []).filter((k) => !keys.map(String).includes(k)); });
+      Object.entries(f.set || {}).forEach(([b, rows]) => { vals[b] = { ...(vals[b] || {}) }; Object.entries(rows).forEach(([k, v]) => { vals[b][k] = { ...(vals[b][k] || {}), ...v }; }); });
+      Object.entries(f.mark || {}).forEach(([b, m]) => { mark[b] = { ...(mark[b] || {}), ...m }; });
+      s = { ...s, say: f.say, phase: f.phase ?? s.phase, who: f.who || null, on: f.lit || (f.who ? [f.who] : []), packet: f.packet || null,
+        vis, vals, mark, note, fresh: f.fresh || {} };
+      fr.push(s);
+    });
+    fr[fr.length - 1] = { ...fr[fr.length - 1], done: true };
+    const nameOf = (id) => (C[id] || {}).name || id;
+    const table = (b, t, k) => `<div class="gs-pl-tab"><span>${esc(t.name || "")}</span><table class="gs-table"><thead><tr>${t.cols.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead>
+      <tbody data-t="${k}"></tbody></table></div>`;
+    const boxHtml = (b) => { const c = C[b.id] || {};
+      return `<div class="gs-pl-box ${b.tables ? "store" : "mover"} ${c.kind === "code" ? "code" : "aws"}" data-box="${esc(b.id)}" data-hl="${esc(b.id)}">
+        <header><b>${esc(c.name || b.id)}</b><em>${esc(c.what || "")}</em></header>${c.box ? `<p>${esc(c.box)}</p>` : ""}
+        ${(b.tables || []).map((t, k) => table(b, t, k)).join("")}<div class="gs-pl-note"></div><div class="gs-pl-pkt"></div></div>`; };
+    const row = (list, cls) => `<div class="gs-pl-row ${cls}">${list.map(boxHtml).join("")}</div>`;
+    const main = boxes.filter((b) => (b.row || "main") === "main"), side = boxes.filter((b) => b.row === "side");
+    const html = `<ol class="gs-pl-phases">${Object.entries(phases).map(([n, t]) => `<li data-p="${esc(n)}"><b>t-1 · ${esc(n)}</b> ${esc(t)}</li>`).join("")}</ol>
+      <div class="gs-lanes one">${shell("pl", spec.title || "Veri hedefe nasıl geldi?", `<div class="gs-pl">${row(main, "main")}${side.length ? `<p class="gs-pl-sidecap">${esc(spec.side_title || "Yandaki işler (hata, izleme, ilk yükleme ve onarım)")}</p>${row(side, "side")}` : ""}</div>`,
+        { count: "Aşama", result: false, col: true })}</div>${summary(spec.summary || "")}`;
+    function paint(root, id, f) {
+      const L = laneOf(root, id);
+      L.querySelector(".gs-count b").textContent = f.phase ? `t-1 · ${f.phase}` : "—";
+      L.classList.toggle("done", !!f.done);
+      root.querySelectorAll(".gs-pl-phases li").forEach((li) => li.classList.toggle("on", String(f.phase) === li.dataset.p));
+      boxes.forEach((b) => {
+        const el = L.querySelector(`[data-box="${CSS.escape(b.id)}"]`);
+        el.classList.toggle("on", (f.on || []).includes(b.id));
+        el.classList.toggle("who", f.who === b.id);
+        el.querySelector(".gs-pl-pkt").innerHTML = f.packet && f.packet.at === b.id ? `<code>${esc(f.packet.text)}</code>` : "";
+        el.querySelector(".gs-pl-note").textContent = (f.note || {})[b.id] || "";
+        (b.tables || []).forEach((t, k) => {
+          const vals = (f.vals || {})[b.id] || {}, vis = (f.vis || {})[b.id] || [];
+          let rows = t.rows.map((r) => ({ ...r, ...(vals[keyOf(t, r)] || {}) })).filter((r) => vis.includes(keyOf(t, r)));
+          if (t.sort) rows = rows.sort((p, q) => (t.sort[1] === "desc" ? q[t.sort[0]] - p[t.sort[0]] : p[t.sort[0]] - q[t.sort[0]]));
+          const fresh = ((f.fresh || {})[b.id] || []).map(String), mark = (f.mark || {})[b.id] || {};
+          const fmt = (v, c) => (typeof v !== "number" ? v : (t.money || []).includes(c)          // money columns: 2 decimals, Turkish format
+            ? v.toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : String(v));
+          el.querySelector(`tbody[data-t="${k}"]`).innerHTML = rows.length ? rows.map((r) => `<tr class="${fresh.includes(keyOf(t, r)) ? "fresh" : ""} ${mark[keyOf(t, r)] ? `gs-pl-${esc(mark[keyOf(t, r)])}` : ""}">${t.cols.map((c) => `<td>${esc(fmt(r[c], c))}</td>`).join("")}</tr>`).join("")
+            : `<tr class="gs-pl-empty"><td colspan="${t.cols.length}">boş</td></tr>`;
+        });
+      });
+      const c = C[f.who] || {};
+      L.querySelector(".gs-say").innerHTML = `${f.who ? `<b class="gs-who ${c.kind === "code" ? "app" : "db"}">${esc(nameOf(f.who))}</b> ` : ""}${esc(f.say)}`;
+    }
+    return { html, lanes: { pl: fr }, paint, final: showSum, phaseAt: (p) => fr.findIndex((x) => String(x.phase) === String(p)) };
+  }
+
   /* ---------- Who works in a frame (owner rule: work of the app is never credited to the database).
    * actorize(frames, send, back, db): after START the app sends, every middle frame is the database's (unless it names
    * its own `who`), the last frame is the app sending the answer on. actorBar(db) is the bar above the lanes;
@@ -1189,7 +1254,7 @@
     root.querySelectorAll(".gs-actors [data-a]").forEach((x) => x.classList.toggle("on", ws.includes(x.dataset.a)));
   }
 
-  const KINDS = { hops, objects, timeseries, zset, "plan-tree": planTree, columnar, replicate, join, fanout, txn, spread, replicas, "ddb-items": ddbItems, projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
+  const KINDS = { pipeline, hops, objects, timeseries, zset, "plan-tree": planTree, columnar, replicate, join, fanout, txn, spread, replicas, "ddb-items": ddbItems, projection, geo, facets, "inverted-index": invertedIndex, "nested-filter": nestedFilter, kv, "doc-group": docGroup, "index-vs-scan": indexVsScan, race, partition, "condition-write": conditionWrite, "graph-walk": graphWalk };
 
   function render(box, spec) {
     const kind = KINDS[spec.kind];
@@ -1223,6 +1288,8 @@
     new ResizeObserver(() => { if (!timer) show(); }).observe(root);   // graph edges follow the layout
     return {
       play,
+      goto(n) { stop(); t = Math.max(0, Math.min(total, n)); show(); },     // show frame n (a t-1 sub-phase button jumps here)
+      phaseAt: (p) => (k.phaseAt ? k.phaseAt(p) : -1),
       highlight(key) {
         root.querySelectorAll(".gs-hl").forEach((el) => el.classList.remove("gs-hl"));
         if (key) root.querySelectorAll(`[data-hl~="${key}"]`).forEach((el) => el.classList.add("gs-hl"));
