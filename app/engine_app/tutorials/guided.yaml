@@ -5780,55 +5780,698 @@ steps:
           - [geo_distance, "Bir noktaya belli bir uzaklık içindekileri bırakan filtre: \"merkeze 100 km içinde\"."]
           - [_geo_distance sırası, "Sonuçları merkeze uzaklığa göre sıralama; cevapta her mağazanın uzaklığı da gelir."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde mağaza konumları için hazırlık
+      t1:
+        title: Önceden ne vardı? Mağazaların konumları index'e nasıl geldi, nasıl doğru tutuluyor?
         intro: >-
-          Harita hiç açılmadan, konum alanı doğru türle tanımlanır ve mağazalar index'e yazılır. Aşağıdaki beş adım bu
-          hazırlığın sırasıdır.
-        text:
-          - title: Önce sayfanın sorusu yazılır
-            text: >-
-              "Bu noktaya X km içindeki mağazalar, en yakın önce". Nokta, ziyaretçinin seçtiği şehir ya da haritada tıkladığı
-              yerdir.
-            code: |-
-              { "query": { "geo_distance": { "distance": "100km", "location": { "lat": 41.0082, "lon": 28.9784 } } },
-                "sort": [ { "_geo_distance": { "location": { "lat": 41.0082, "lon": 28.9784 }, "order": "asc", "unit": "km" } } ] }
-          - title: Konum alanı geo_point olarak tanımlanır
-            text: >-
-              Alan türü index kurulurken seçilir ve sonradan değiştirilemez. geo_point olmayan bir alanda (ör. iki ayrı sayı)
-              uzaklık araması yapılamaz.
-            code: |-
-              PUT stores { "mappings": { "properties": {
-                "name": { "type": "text" }, "city": { "type": "keyword" }, "location": { "type": "geo_point" } } } }
-          - title: Konum tek bir kaynaktan yazılır
-            text: >-
-              Mağaza adresleri asıl kayıtta (ör. mağaza yönetim sistemi) tutulur; adres koordinata bir kez çevrilir (geocoding)
-              ve index'e enlem/boylam olarak yazılır. Her aramada adresten koordinat hesaplanmaz.
-            code: |-
-              POST stores/_doc/S010 { "name": "İstanbul Mağaza 2", "city": "İstanbul", "location": { "lat": 41.07989, "lon": 28.90559 } }
-          - title: Uzaklık filtresi sıralamadan ayrı düşünülür
-            text: >-
-              geo_distance sadece eler; sırayı _geo_distance sort verir. Uzaklık skora da karıştırılmak istenirse (yakın ve
-              ilgili olanı öne al) function_score ile bir uzaklık eğrisi eklenir.
-          - title: Harita ve adres servisi ayrıca seçilir
-            text: >-
-              Harita görüntüsü ve adres→koordinat çevirisi arama motorunun işi değildir. Bunun için bir harita servisi kullanılır
-              (AWS'de Amazon Location Service); arama motoru sadece noktaları ve uzaklığı bilir.
-      feed:
-        title: Veri nereden geliyor?
-        writes: >-
-          Mağaza yönetimi: yeni mağaza açılınca ya da adresi değişince kayıt güncellenir ve index'e yazılır. Değişiklik seyrektir.
-        reads: Uygulama, mağaza bulucu sayfası için.
-        kind: >-
-          OpenSearch başka bir veritabanından kendiliğinden veri çekmez; mağaza kayıtları ona bir program ya da Amazon
-          OpenSearch Ingestion ile yazılır.
-        with: >-
-          Bu sayfada harita karoları (zemindeki harita görüntüsü) bir veritabanından değil, dış bir harita servisinden
-          (OpenStreetMap) gelir; tarayıcı onları doğrudan ister. Mağazaların noktaları ve uzaklıkları ise OpenSearch'ten gelir.
-          İkisini aynı ekranda birleştiren tarayıcıdır.
-        best: >-
-          Mağazaların asıl kaydı tek yerde tutulur ve arama index'i ondan beslenir. Harita ve adres çevirisi için yönetilen bir
-          servis (Amazon Location Service) kullanılır; dış harita karolarının kullanım koşulları ve kotası ayrıca kontrol edilir.
+          "100 km"ye tıklamadan önce OpenSearch'teki stores index'i zaten dolu: 27 mağazanın her biri adı, şehri ve konumuyla
+          orada duruyor; konum enlem ve boylamdan oluşan bir harita noktası (geo_point). Bu noktalar bir yerden geldi: mağazaların
+          asıl kaydı, operasyon ekibinin Aurora PostgreSQL'deki mağaza tablosu (Adım 30 ve 33'teki sipariş veritabanı, ayrı bir
+          tablo). Burada bu hazırlığın gerçek bir sistemde nasıl yapıldığını görüyorsun: bir adresin nasıl koordinata
+          çevrildiğini ve neden onaylandığını, enlem ve boylamın neden üç ayrı yerde kontrol edildiğini, açılan, taşınan ya da
+          kapanan bir mağazanın haritaya nasıl yansıdığını ve "100 km içindeki mağazalar, en yakın önce" cevabının her gece
+          nasıl test edildiğini. Index'i besleyen servis Adım 5'teki zincirin servisiyle aynı (OpenSearch Ingestion); kaynağı bu
+          kez Aurora. Önce zincirin bileşenleri, sonra bir simülasyon, sonra dört aşama (tasarım, ilk yükleme, sürekli besleme,
+          tutarlılık ve onarım).
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1", "t0'daki \"100 km\" tıklamasından önceki zaman. Mağazalar sayfasının ilk açılışı (25 km) tıklamadan hemen önceydi; t0'daki simülasyon o tek isteği \"t-1 · İstek 1\" şeridinde gösterecek. İkisi de tıklamadan önce olduğu için ikisi de t-1; bu bölüm o istekten de önceki, haftalar süren hazırlığı anlatır."]
+          - ["Doküman, alan ve index (Adım 5)", "Doküman: index'teki tek bir kayıt; burada bir mağaza. Alan: dokümanın bir bilgisi (ad, şehir, konum). Index: OpenSearch'te mağazaların aranabilir kopyası."]
+          - ["Enlem (lat) ve boylam (lon)", "Bir noktanın dünya üzerindeki adresi iki sayıyla verilir. Enlem: ekvatorun ne kadar kuzeyinde ya da güneyinde (-90 ile 90 arası; İstanbul yaklaşık 41). Boylam: Greenwich'in ne kadar doğusunda ya da batısında (-180 ile 180 arası; İstanbul yaklaşık 29). Bir sinema salonunda sıra ve koltuk numarası gibi: ikisi birlikte tek bir yeri gösterir, yer değiştirirlerse başka bir koltuk çıkar. Virgülden sonraki 5 basamak yaklaşık 1 metre demektir."]
+          - ["geo_point ve harita ağacı (BKD)", "geo_point: enlem ve boylamı tek bir konum olarak tutan alan türü (Kavram bölümü). OpenSearch her noktayı yazarken haritayı karelere bölen bir ağaca (BKD ağacı) koyar; arama, daireye değmeyen kareleri hiç açmaz."]
+          - ["Geocoding ve Amazon Location Service", "Geocoding: bir adresi enleme ve boylama çevirmek; bir postacının adresi haritada bulması gibi. Amazon Location Service: AWS'in harita ve adres servisi; Geocode isteği adresi alır, konumu döndürür. Konum cevapta [boylam, enlem] sırasıyla gelir: önce boylam."]
+          - ["Sonuç türü ve eşleşme puanı", "Geocode cevabının iki bilgisi. Sonuç türü (PlaceType): bulunan yerin ne olduğu; PointAddress bina adresi demektir, Street sadece sokak, Locality sadece şehir ya da ilçe. Eşleşme puanı (MatchScores): adresin ne kadar iyi eşleştiği, 0 ile 1 arası."]
+          - ["IntendedUse: Storage", "Geocode isteğinde \"sonucu saklayacağım\" demek. Sonucu bir veritabanında tutmak isteyen bunu söyler; varsayılan SingleUse ise sonucun sadece o an gösterilmesi içindir. Saklanan sonuçlar daha yüksek fiyatla ücretlendirilir."]
+          - ["Ülke kutusu (sınır kutusu)", "Bir ülkeyi içine alan dikdörtgen: en küçük ve en büyük enlem, en küçük ve en büyük boylam. Türkiye için yaklaşık enlem 35,8–42,1, boylam 25,6–44,8. Almanya için yaklaşık enlem 47,3–55,1, boylam 5,9–15,0. Servis mağazanın ülkesine göre kutuyu seçer; kutunun dışındaki bir konum o ülkedeki bir mağazaya ait olamaz."]
+          - ["status: açılacak, açık, kapalı", "Mağaza tablosunda mağazanın hâlini tutan sütun; üç değeri var. açılacak: kayıtta var, henüz ziyaretçiye açılmadı. açık: ziyaretçiye açık; index'te sadece bunlar var. kapalı: kapandı ya da geçici olarak kapalı (ör. tadilat); satır silinmez."]
+          - ["Aurora PostgreSQL, tablo, satır ve CHECK kuralı", "Aurora PostgreSQL: mağazanın ilişkisel veritabanı (Adım 30). Tablo: aynı türden kayıtların satır satır tutulduğu yer (shop.stores); satır: bir mağaza. CHECK kuralı: tabloya yazılan her satırın uyması gereken koşul, ör. \"enlem -90 ile 90 arasında\"; kapıdaki bilet kontrolü gibi."]
+          - ["WAL ve mantıksal çoğaltma (Adım 30)", "WAL: Aurora'nın her COMMIT'i sırayla yazdığı değişiklik kaydı. Mantıksal çoğaltma (logical replication): bu kaydı \"şu tabloya şu satır eklendi, şu satır değişti\" diye dışarıya okutma yolu. Pipeline değişiklikleri buradan okur."]
+          - ["zero-ETL zinciri, pipeline ve dönüştürme adımı (Adım 5)", "OpenSearch Ingestion pipeline'ı Aurora'daki her değişikliği okuyup index'e yazar; araya ekibin kodu girmez. Dönüştürme adımı (processor): pipeline'ın bir kaydı index'e yazmadan önce yaptığı küçük iş; burada lat ve lon'u location alanında birleştirmek ve açık olmayan mağazanın dokümanını silmek."]
+          - ["Alias ve stores_v1 (Adım 6)", "Alias (takma ad): bir index'in ikinci adı. Uygulama hep stores adını sorar; bu ad bugün stores_v1'i gösteriyor. Ayarlar değişirse stores_v2 kurulur ve ad tek komutla ona çevrilir."]
+          - ["Index şablonu ve kendiliğinden tür seçme (Adım 7)", "Index şablonu: adı stores_ ile başlayan her yeni index'in hangi alan türleriyle doğacağını söyleyen tanım. Şablon yoksa OpenSearch türü ilk dokümana bakıp kendisi seçer (dynamic mapping). Bir alanın türü veri yazıldıktan sonra değiştirilemez."]
+          - ["Refresh (Adım 7)", "Yeni yazılan dokümanın aramada görünür hâle gelmesi; varsayılan olarak her saniye."]
+          - ["Büyük daire uzaklığı (arc)", "İki nokta arasındaki, dünyanın eğriliğini hesaba katan uzaklık; bir uçağın en kısa rotası gibi. OpenSearch'ün uzaklık filtresi ve sıralaması varsayılan olarak bunu kullanır."]
+          - ["Yarıçap test seti ve mağaza denetimi", "Yarıçap test seti: birkaç sabit nokta ve yarıçap (ör. İstanbul merkez, 25 km); her biri için beklenen mağaza listesi Aurora'daki açık mağazalardan aynı formülle hesaplanır ve index'in cevabıyla sıra sıra karşılaştırılır. Mağaza denetimi: her gece Aurora'daki açık mağazalarla index'tekileri mağaza mağaza karşılaştırma; bir kasanın gün sonunda fişlerle sayılması gibi."]
+          - ["Dağıtım hattı (CI/CD), DLQ ve CloudWatch alarmı", "Dağıtım hattı: yeni kodun ve ayarın yayına çıkmadan önce geçtiği otomatik adımlar. DLQ: OpenSearch'ün kabul etmediği dokümanların bırakıldığı S3 klasörü. CloudWatch alarmı: bir sayaç eşiği aşınca ekibe haber verir."]
+          - ["Ekip ve operasyon ekibi", "Ekip: mağazanın sistemini kuran ve işleten mühendisler; ayarları onlar değiştirir, alarmlara onlar bakar. Operasyon ekibi: fiziksel mağazaları açan, taşıyan ve kapatan çalışanlar; kod yazmaz, arka ofis ekranını kullanır."]
+          - ["Kesit", "Simülasyonda gösterilen birkaç kayıt. Gerçekte 27 mağaza var, 9 şehirde 3'er: Türkiye'de İstanbul, Ankara, İzmir, Bursa, Antalya; Almanya'da Berlin, Hamburg, München, Frankfurt. Kesit t0'daki simülasyonun 8 mağazası, adları ve konumları t0'dakiyle aynı."]
+          - ["Kod kartlarındaki sözcükler", "CREATE TABLE: tablo kur. PRIMARY KEY: satırın tekrar etmeyen numarası (burada mağaza no). COMMIT: bir yazmanın kesinleşmesi. match_all: bütün dokümanlar. INSERT, UPDATE ... SET ... WHERE: satır ekle; şu koşula uyan satırın şu sütununu değiştir. PUT, POST _aliases: OpenSearch'e \"kur\" ve \"takma adı bağla\" demek. add_when: \"sadece şu koşulda yap\". took: OpenSearch'ün bir aramada harcadığı süre (ms). geo_places.geocode: Location Service'e Geocode isteği; ResultItems: cevaptaki sonuçlar, Position: sonucun konumu."]
+          - ["Sürüm numarası", "Pipeline her değişikliği Aurora'daki sırasından gelen bir numarayla gönderir. OpenSearch, elindeki dokümanın numarasından büyük olmayan bir numarayla gelen yazmayı uygulamaz; böylece eski ya da tekrar gelen bir değişiklik yeni bir değişikliğin üstüne yazılamaz."]
+          - ["Görev adımları", "\"Adım 5\", \"Adım 30\" gibi adlar bu görevin (mağazadaki 37 adımın) adımlarıdır. Simülasyonun sayacındaki \"Adım 1 / 21\" ise simülasyonun karesidir."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra"
+          sütunu veriyi kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim kodumuz" etiketli
+          parçaları mağazanın ekibi yazar. Index'i kuran yayın hattı, arama ayarları, pipeline, hata klasörü ve alarmlar Adım 5,
+          6 ve 7'dekilerin aynısı; Aurora ve değişiklik kaydı Adım 30'dakinin aynısı. Bu sayfada öne çıkanlar: adresi konuma
+          çeviren mağaza yönetim servisi ve Location Service, enlem ve boylamı kapıda kontrol eden Aurora, sadece açık mağazaları
+          index'e koyan pipeline ve cevabı her gece test eden yayın hattı. Aynı parçalar aşağıdaki simülasyonda birer kutu: üst
+          sırada yazan, konumu bulan ve test eden parçalar, sonra ayarlar, ortada Aurora'dan index'e zincir, altta arayan,
+          izleyen ve yandaki işler.
+        inventory:
+          - id: ops
+            name: Mağaza yönetim servisi
+            kind: code
+            what: arka ofis programı (mağaza ekranlarının arka ucu)
+            does: >-
+              Operasyon ekibinin girdiği mağazayı (ad, şehir, adres, açılış tarihi, çalışma saatleri) sadece Aurora'ya yazar.
+              Adres girilince ya da değişince konumu Location Service'e sorar, cevabın sırasını çevirir (enlem, boylam), konumun
+              ülke kutusunda olduğuna bakar ve noktayı haritada ekibe onaylatır. Mağaza açılınca status'u açık, kapanınca kapalı
+              yapar; satırı silmez. Arama motoruna kendisi hiçbir şey göndermez.
+            box: "Mağazayı sadece Aurora'ya yazar; adresi konuma çevirtir, ülke kutusuna bakar, pini ekibe onaylatır."
+            phases: [3, 4]
+            before: Operasyon ekibi (mağaza ekranı)
+            after: [location, aurora]
+          - id: location
+            name: Amazon Location Service (Geocode)
+            kind: aws
+            what: AWS'in harita ve adres servisi
+            does: >-
+              Adresi konuma çevirir. Cevapta konum [boylam, enlem] sırasıyla, sonucun türü (PointAddress: bina adresi) ve
+              eşleşme puanı gelir. Sonuç veritabanında saklanacağı için istek IntendedUse: Storage ile yapılır.
+            box: "Adresi konuma çevirir: [boylam, enlem], sonuç türü ve eşleşme puanı."
+            phases: [3, 4]
+            before: ops
+            after: ops
+          - id: release
+            name: Arama yayın ve kalite testi (dağıtım hattı)
+            kind: code
+            what: dağıtım hattında (CI/CD) çalışan kod
+            does: >-
+              Arama ayarlarını yayına çıkarır: index şablonunu ve stores_v1'i kurar, stores adını (alias) ona verir (Adım 6).
+              Yarıçap test setini her değişiklikte ve her gece çalıştırır: beklenen listeyi Aurora'daki açık mağazalardan aynı
+              formülle hesaplar, index'in cevabıyla sıra sıra karşılaştırır. Her gece ayrıca mağaza denetimi yapar: Aurora'daki
+              açık mağazaları index'tekilerle mağaza mağaza karşılaştırır (eksik, fazla, konumu farklı). Sonuçları CloudWatch'a yazar.
+            box: "Şablonu ve index'i kurar; yarıçap test seti ve gece mağaza denetimi: Aurora ile OpenSearch."
+            phases: [1, 2, 3, 4]
+            before: [ayar, aurora]
+            after: [opensearch, monitor]
+          - id: ayar
+            name: Arama ayarları (kod deposunda)
+            kind: code
+            what: kod deposundaki sürümlü dosyalar
+            does: >-
+              Index tarafı index şablonunda: location geo_point, city keyword, name text, refresh_interval. Pipeline tarafı
+              pipeline tanımında: hangi sütunlar taşınır (name, city, lat ve lon), lat ve lon'un location'da birleşmesi, status'u
+              açık olmayan mağazanın silinmesi. Yarıçap test setinin noktaları da burada. Değişiklik sadece dağıtım hattından geçerek
+              yayına çıkar.
+            box: "location geo_point, city keyword; pipeline: sadece açık mağazalar, lat + lon → location; test noktaları."
+            phases: [1, 2, 4]
+            before: Ekip (değişiklik isteği)
+            after: [release, osi]
+          - id: aurora
+            name: Aurora PostgreSQL (shop.stores)
+            kind: aws
+            what: ilişkisel veritabanı (Adım 30'daki küme)
+            does: >-
+              Mağazaların asıl kaydı; arama index'i bunun aranabilir bir kopyasıdır. Her satırda ad, şehir, adres, enlem, boylam,
+              konum kaynağı (geo_source: "Geocode + onay" ya da "elle düzeltildi"; ekip elle düzeltilen konumları ayrıca görür), status ve kapanış tarihi (closed_on) var; çalışma saatleri ayrı bir tabloda (shop.store_hours). Kapıdaki CHECK
+              kuralları: enlem -90 ile 90, boylam -180 ile 180 arasında; açık bir mağazanın konumu boş olamaz.
+            box: "Mağazaların asıl kaydı (tek doğru kaynak); CHECK: enlem ve boylam aralıkta, açık mağazada konum dolu."
+            phases: [2, 3, 4]
+            before: ops
+            after: [wal, osi, release]
+          - id: wal
+            name: Aurora'nın değişiklik kaydı (WAL)
+            kind: aws
+            what: Aurora'nın içinde; mantıksal çoğaltma açık
+            does: Her COMMIT'i sırayla yazar; pipeline shop.stores'taki ekleme, güncelleme ve silmeleri buradan okur.
+            box: "Her COMMIT'i sırayla yazar; pipeline buradan okur."
+            phases: [3, 4]
+            before: aurora
+            after: osi
+          - id: osi
+            name: OpenSearch Ingestion pipeline (zero-ETL)
+            kind: aws
+            what: AWS'in veri taşıma servisi
+            does: >-
+              Önce shop.stores'un anlık görüntüsünü (S3 üzerinden) bir kez taşır, sonra WAL'daki her değişikliği birkaç saniyede
+              stores_v1 index'ine adıyla yazar; ziyaretçiler stores adıyla (alias) arar. Doküman numarası mağaza numarasıdır.
+              Dönüştürme adımı lat ve lon'u location alanında birleştirir, adresi ve saatleri index'e taşımaz; status'u açık
+              olmayan mağazanın dokümanını siler.
+            box: "Önce hepsini bir kez, sonra her değişikliği birkaç saniyede stores_v1'e yazar; açık olmayanı siler."
+            phases: [2, 3, 4]
+            before: [aurora, wal, s3, ayar]
+            after: [opensearch, s3, dlq]
+          - id: opensearch
+            name: OpenSearch (stores index)
+            kind: aws
+            what: arama motoru (OpenSearch Service domain'i)
+            does: >-
+              Her mağazanın location'ını geo_point olarak saklar: yazarken enlemin ve boylamın aralığını kontrol eder, aralık
+              dışını reddeder; noktayı haritayı karelere bölen ağaca (BKD) koyar. Aramada daireye değmeyen kareleri atlar,
+              kalan mağazaların uzaklığını hesaplar ve sıralar. Aramalar stores adına gelir.
+            box: "Mağazalar ve konumları (harita ağacında); aralık dışı konumu reddeder. Aramalar stores adına gelir."
+            phases: [1, 2, 3, 4]
+            before: [osi, release, web]
+            after: [web, release, monitor]
+          - id: web
+            name: Uygulama (mağaza sayfaları)
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucusunda)
+            does: >-
+              Mağazalar sayfasının sorgusunu gönderir: nokta, yarıçap, uzaklığa göre sıra, en fazla 20 mağaza (t0'daki istek).
+              "Sadece açık mağazalar" diye bir filtre eklemez; index'te zaten sadece açık mağazalar var. Mağaza kaydına yazmaz.
+            box: "Uzaklık sorgusunu gönderir; mağaza kaydına yazmaz."
+            phases: [3, 4]
+            before: Tarayıcı (mağazalar sayfası)
+            after: opensearch
+          - id: s3
+            name: S3 (ilk yükleme klasörü)
+            kind: aws
+            what: Amazon S3 bucket'ı
+            does: İlk yüklemede Aurora tablosunun dışa aktarılan anlık görüntüsünün geçici olarak durduğu yer.
+            box: İlk yüklemenin geçici kopyası.
+            phases: [2]
+            before: osi
+            after: "aynı pipeline (dosyaları geri okur, index'e yükler)"
+          - id: dlq
+            name: Hata klasörü (S3 DLQ)
+            kind: aws
+            what: Amazon S3 bucket'ı
+            does: OpenSearch'ün birkaç denemeden sonra da kabul etmediği dokümanları saklar (ör. geo_point olmayan bir location); akış durmaz, ekip onları sonra işler.
+            box: Kabul edilmeyen dokümanları saklar; akış durmaz.
+            phases: [4]
+            before: osi
+            after: Ekip (inceler, düzeltir)
+          - id: monitor
+            name: CloudWatch alarmları
+            kind: aws
+            what: AWS'in izleme servisi
+            does: >-
+              Yarıçap test setinin ve gece denetiminin sonuçlarını, pipeline'ın hatalı kayıt sayacını ve DLQ'yu izler; eşik
+              aşılınca ekibe alarm gönderir.
+            box: "Test seti, denetim farkı, pipeline hataları ve DLQ; alarm verir."
+            phases: [2, 3, 4]
+            before: [release, osi]
+            after: Ekip (alarm)
+        sim_title: "Simülasyon: mağaza konumları index'e nasıl geldi, nasıl doğru tutuluyor?"
+        sim:
+          kind: pipeline
+          title: Yazan, konumu bulan ve test eden → Aurora'dan index'e zincir → arayan ve izleyen
+          caption: >-
+            Aurora kutusunda mağaza tablosu, OpenSearch kutusunda dokümanlar ve location alanının harita ağacı (kareler çok
+            basitleştirilmiş: şehir çevreleri). İkisi de kesit: t0'daki simülasyonun 8 mağazası; gerçekte 27 mağaza var. Önce
+            ayarların yayına çıkışı, ilk yükleme ve ilk test, sonra yeni bir mağazanın (Bursa Mağaza 3) zincirden geçişi, bir
+            arama ve gece testi, en sonda tutarlılık ve onarım oynuyor. 4. aşamada "Örnek durum" diye başlayan kareler bu
+            zincirde yaşanmış durumlar; "Olsaydı" diye başlayanlar yaşanmadı, yaşansaydı ne olacağını gösteriyor (ters konum,
+            taşınan ve kapanan bir mağaza). Konumlar, uzaklıklar ve arama sonuçları canlı index'ten; temsilî değerler: yeni
+            mağazanın adresi ve eşleşme puanı, taşınan mağazanın yeni konumu, eşikler (100 m, 10 dakika). Son karede index,
+            t0'daki simülasyonun başladığı hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım}
+          rows:
+            - {id: writers, title: "Mağazayı yazan, konumu bulan, index'i kuran ve test eden"}
+            - {id: rules, title: "Ayarlar: alan türleri, pipeline kuralları, test noktaları"}
+            - {id: chain, title: "Aurora'daki mağaza kaydından arama index'ine (zero-ETL zinciri)", flow: true}
+            - {id: helpers, title: "Arayan, izleyen ve yandaki işler", side: true}
+          summary: >-
+            Index'i zero-ETL zinciri doldurdu; mağaza yönetim servisi sadece Aurora'ya yazdı, uygulama mağaza kaydına hiç
+            dokunmadı. Konum bir kez bulundu, sırası çevrildi, ülke kutusunda olduğu ve pini onaylandı; Aurora aralığı kapıda,
+            OpenSearch yazarken bir kez daha kontrol etti. Pipeline sadece açık mağazaları index'e koydu; açılmamış ya da
+            kapanmış mağaza index'te yok, bu yüzden sorguda "sadece açık" filtresi gerekmiyor. Yeni mağaza birkaç saniyede
+            aramaya girdi; her gece test seti ve denetim index'in Aurora'yla aynı cevabı verdiğini gösterdi. Son durum: kesitte 8
+            mağaza (İstanbul 3, Bursa 3, İzmir 1, Ankara 1); t0'daki simülasyonun başladığı durum.
+          boxes:
+            - id: ops
+              row: writers
+            - id: location
+              row: writers
+            - id: release
+              row: writers
+              tables:
+                - name: "yarıçap test seti (son çalışma; beklenen liste Aurora'daki açık mağazalardan)"
+                  cols: [nokta · yarıçap, beklenen, index]
+                  rows:
+                    - {key: t10, nokta · yarıçap: "İstanbul merkez · 10 km", beklenen: "0 (en yakını S010: 10,04 km)", index: "0 ✓", hidden: true}
+                    - {key: t25, nokta · yarıçap: "İstanbul merkez · 25 km", beklenen: "3: S010 · S001 · S019", index: "aynı sıra ✓", hidden: true}
+                    - {key: t100, nokta · yarıçap: "İstanbul merkez · 100 km", beklenen: "5: S010 · S001 · S019 · S004 · S013", index: "aynı sıra ✓", hidden: true}
+                    - {key: tank, nokta · yarıçap: "Ankara merkez · 25 km", beklenen: "3: S011 · S020 · S002", index: "aynı sıra ✓", hidden: true}
+                    - {key: tfra, nokta · yarıçap: "Frankfurt merkez · 100 km", beklenen: "3: S024 · S006 · S015", index: "aynı sıra ✓", hidden: true}
+                - name: "mağaza denetimi (son denetim; bütün mağazalar; Aurora ↔ OpenSearch)"
+                  cols: [denetim, sonuç]
+                  rows:
+                    - {key: d_n, denetim: "açık mağaza", sonuç: "26 ↔ 26", hidden: true}
+                    - {key: d_x, denetim: "eksik / fazla", sonuç: "0 / 0", hidden: true}
+                    - {key: d_loc, denetim: "konumu 100 m'den fazla farklı", sonuç: "0", hidden: true}
+            - id: ayar
+              row: rules
+              tables:
+                - name: "yayındaki ayarlar (sürüm 1)"
+                  cols: [ayar, değer, ne demek]
+                  rows:
+                    - {key: a_loc, ayar: location, değer: geo_point, ne demek: "enlem + boylam; uzaklık filtresi ve sırası", hidden: true}
+                    - {key: a_city, ayar: city, değer: keyword, ne demek: "şehir adı tek parça, birebir", hidden: true}
+                    - {key: a_name, ayar: name, değer: text, ne demek: "mağaza adı aranabilir", hidden: true}
+                    - {key: a_fld, ayar: "pipeline: alanlar", değer: "name, city, lat + lon → location", ne demek: "adres, saatler, status index'e gitmez", hidden: true}
+                    - {key: a_st, ayar: "pipeline: status", değer: "açık değilse → sil", ne demek: "index'te sadece açık mağazalar", hidden: true}
+                    - {key: a_ref, ayar: refresh_interval, değer: "1 sn (varsayılan)", ne demek: "yeni mağaza en çok 1 sn sonra aramada", hidden: true}
+            - id: aurora
+              row: chain
+              tables:
+                - name: "shop.stores (kesit: t0'daki 8 mağaza; toplamda 27)"
+                  cols: [store_id, name, lat, lon, status]
+                  rows:
+                    - {store_id: S010, name: İstanbul Mağaza 2, lat: "41.07989", lon: "28.90559", status: açık}
+                    - {store_id: S001, name: İstanbul Mağaza 1, lat: "41.07272", lon: "29.07395", status: açık}
+                    - {store_id: S019, name: İstanbul Mağaza 3, lat: "40.89754", lon: "28.94886", status: açık}
+                    - {store_id: S022, name: Bursa Mağaza 3, lat: "40.32254", lon: "29.12761", status: açılacak, hidden: true}
+                    - {store_id: S004, name: Bursa Mağaza 1, lat: "40.26288", lon: "28.9117", status: açık}
+                    - {store_id: S013, name: Bursa Mağaza 2, lat: "40.25907", lon: "28.91654", status: açık}
+                    - {store_id: S003, name: İzmir Mağaza 1, lat: "38.47421", lon: "27.11965", status: açık}
+                    - {store_id: S002, name: Ankara Mağaza 1, lat: "39.82101", lon: "33.00533", status: açık}
+            - id: wal
+              row: chain
+            - id: osi
+              row: chain
+            - id: opensearch
+              row: chain
+              tables:
+                - name: "stores (takma ad) → stores_v1: dokümanlar (kesit)"
+                  cols: [_id, name, city, location]
+                  rows:
+                    - {_id: S010, name: İstanbul Mağaza 2, city: İstanbul, location: "41.07989, 28.90559", hidden: true}
+                    - {_id: S001, name: İstanbul Mağaza 1, city: İstanbul, location: "41.07272, 29.07395", hidden: true}
+                    - {_id: S019, name: İstanbul Mağaza 3, city: İstanbul, location: "40.89754, 28.94886", hidden: true}
+                    - {_id: S022, name: Bursa Mağaza 3, city: Bursa, location: "40.32254, 29.12761", hidden: true}
+                    - {_id: S004, name: Bursa Mağaza 1, city: Bursa, location: "40.26288, 28.9117", hidden: true}
+                    - {_id: S013, name: Bursa Mağaza 2, city: Bursa, location: "40.25907, 28.91654", hidden: true}
+                    - {_id: S003, name: İzmir Mağaza 1, city: İzmir, location: "38.47421, 27.11965", hidden: true}
+                    - {_id: S002, name: Ankara Mağaza 1, city: Ankara, location: "39.82101, 33.00533", hidden: true}
+                - name: "location alanı, harita ağacı (çok basitleştirilmiş kareler; kesit)"
+                  cols: [kare, mağazalar]
+                  rows:
+                    - {key: g_ist, kare: İstanbul çevresi, mağazalar: "S010 · S001 · S019", hidden: true}
+                    - {key: g_bur, kare: Bursa çevresi, mağazalar: "S004 · S013", hidden: true}
+                    - {key: g_izm, kare: İzmir çevresi, mağazalar: S003, hidden: true}
+                    - {key: g_ank, kare: Ankara çevresi, mağazalar: S002, hidden: true}
+            - id: web
+              row: helpers
+            - id: s3
+              row: helpers
+            - id: dlq
+              row: helpers
+            - id: monitor
+              row: helpers
+          frames:
+            - phase: 2
+              who: release
+              lit: [ayar, release, opensearch]
+              packet: {at: opensearch, text: "PUT _index_template/stores (location: geo_point) · PUT stores_v1 · alias: stores → stores_v1"}
+              show: {ayar: [a_loc, a_city, a_name, a_fld, a_st, a_ref]}
+              fresh: {ayar: [a_loc, a_city, a_name, a_fld, a_st, a_ref]}
+              note: {ayar: "sürüm 1", release: "kurulan: şablon + stores_v1 + alias", opensearch: "boş"}
+              say: >-
+                Index henüz yok. Ekip arama ayarlarını kod deposuna yazdı: location geo_point, city keyword, name text; pipeline
+                sadece ad, şehir ve konumu taşıyacak ve sadece açık mağazaları index'e koyacak. Yayın hattı önce index şablonunu,
+                sonra stores_v1'i kurdu ve stores adını ona verdi. Sıra önemli: şablon olmasaydı OpenSearch ilk dokümandaki
+                location'ı iki ayrı sayı sanardı ve tür sonradan değiştirilemez.
+            - phase: 2
+              who: aurora
+              lit: [aurora]
+              note: {ayar: "", release: "", opensearch: "", aurora: "kesitte 7 mağaza · hepsi açık · konumları dolu"}
+              say: >-
+                Mağaza kaydı dolu: Aurora'da 26 açık mağaza var (kesitte 7). Her biri açılırken operasyon ekibince mağaza yönetim
+                servisinden girildi; konumu o gün bulundu ve onaylandı (3. aşamada adım adım göreceğiz). Kapıdaki CHECK kuralları
+                yüzünden tabloda aralık dışı bir enlem ya da boylam, ya da konumu boş bir açık mağaza yok. Kesitteki sekizinci
+                mağaza (S022, Bursa Mağaza 3) henüz kayıtta değil; 3. aşamada gelecek.
+            - phase: 2
+              who: osi
+              lit: [aurora, osi, s3]
+              packet: {at: s3, text: "anlık görüntü: shop.stores → S3 (kesitte 7 satır; toplam 26)"}
+              note: {aurora: "", s3: "7 satır (kesitte)"}
+              say: >-
+                Pipeline ilk yüklemeye başladı: Aurora tablonun anlık görüntüsünü (snapshot) S3'e dışa aktardı. Pipeline WAL'daki
+                yerini de not etti; yükleme sürerken gelen değişiklikleri sonra oradan alacak.
+            - phase: 2
+              who: osi
+              lit: [s3, osi, opensearch]
+              packet: {at: osi, text: "lat + lon → location · index stores_v1/_doc/S010 … (7 doküman)"}
+              show: {opensearch: [S010, S001, S019, S004, S013, S003, S002, g_ist, g_bur, g_izm, g_ank]}
+              fresh: {opensearch: [S010, S001, S019, S004, S013, S003, S002, g_ist, g_bur, g_izm, g_ank]}
+              note: {s3: "", osi: "yazılan 7 · silinen 0 · hatalı 0", opensearch: "7 doküman · her konum harita ağacında bir karede"}
+              say: >-
+                Pipeline her satırdan sadece adı, şehri ve konumu aldı; lat ve lon sütunlarını tek bir location alanında birleştirdi.
+                Adres, status ve çalışma saatleri index'e gitmedi. Doküman numarası mağaza numarası. OpenSearch her location'ı
+                yazarken aralığını kontrol etti, sonra noktayı haritayı karelere bölen ağaca koydu. Uzaklıklar burada
+                hesaplanmadı; onlar aramada, aranan noktaya göre hesaplanacak.
+            - phase: 2
+              who: release
+              lit: [release, aurora, opensearch, monitor]
+              packet: {at: opensearch, text: "yarıçap test seti: 5 nokta · geo_distance + _geo_distance sırası · Aurora: aynı formül"}
+              show: {release: [t10, t25, t100, tank, tfra, d_n, d_x, d_loc]}
+              fresh: {release: [t10, t25, t100, tank, tfra, d_n, d_x, d_loc]}
+              note: {osi: "", opensearch: "", release: "ilk test: 5 noktanın 5'i geçti · denetim: 26 ↔ 26", monitor: "alarmlar kuruldu: test noktası kalırsa · denetimde fark ≠ 0 (iki kez üst üste) · pipeline hatalı kayıt > 0 · DLQ > 0"}
+              say: >-
+                Mağaza bulucu açılmadan önce yayın hattı yarıçap test setini çalıştırdı. Her nokta için beklenen listeyi Aurora'daki
+                açık mağazalardan aynı uzaklık formülüyle hesapladı ve index'in cevabıyla sıra sıra karşılaştırdı. İstanbul 10 km:
+                0 mağaza; en yakını S010 10,04 km'de; listede "10 km" diye yuvarlanmış görünür ama dairenin dışındadır. İstanbul 100 km: 5
+                mağaza. Mağaza denetimi de tuttu. Alarmlar da şimdi kuruldu.
+            - phase: 3
+              who: ops
+              lit: [ops, location]
+              packet: {at: location, text: "Geocode · adres: \"…, Bursa\" (temsilî) · IntendedUse: Storage"}
+              note: {release: "", monitor: "", location: "cevap: [29.12761, 40.32254] = [boylam, enlem] · tür: PointAddress · puan 0,97 (temsilî)"}
+              say: >-
+                Operasyon ekibi yeni bir mağazayı ekrana girdi: Bursa Mağaza 3, adresi ve açılış tarihi. Mağaza yönetim servisi
+                adresi Location Service'e sordu. Cevapta konum [boylam, enlem] sırasıyla geldi: önce 29,12761, sonra 40,32254.
+                Sonuç türü PointAddress (bina adresi; sadece sokak ya da ilçe değil) ve eşleşme puanı yüksek. Sonuç saklanacağı
+                için istek Storage kullanımıyla gönderildi.
+            - phase: 3
+              who: ops
+              lit: [ops, aurora]
+              show: {aurora: [S022]}
+              fresh: {aurora: [S022]}
+              packet: {at: aurora, text: "INSERT INTO shop.stores (store_id, name, city, country, lat, lon, geo_source, status) VALUES ('S022', 'Bursa Mağaza 3', 'Bursa', 'TR', 40.32254, 29.12761, 'Geocode + onay', 'açılacak')"}
+              note: {location: "", ops: "sıra çevrildi: lat 40.32254 · lon 29.12761 · Türkiye kutusunda ✓ · pin onaylandı", aurora: "CHECK: enlem ve boylam aralıkta ✓"}
+              say: >-
+                Servis sırayı çevirdi (enlem ikinci sayıydı), konumun Türkiye'nin kutusunda olduğuna baktı ve noktayı haritada
+                gösterdi; ekip pinin mağazanın kapısında durduğunu onayladı. Servis satırı Aurora'ya status "açılacak" ile yazdı;
+                CHECK kuralları kabul etti. Mağaza henüz açılmadı; arama motoruna hiçbir şey gönderilmedi.
+            - phase: 3
+              who: osi
+              lit: [aurora, wal, osi, opensearch]
+              packet: {at: osi, text: "insert S022 · status açılacak → delete stores_v1/_doc/S022 (zaten yok)"}
+              note: {ops: "", aurora: "", wal: "insert shop.stores S022", osi: "yazılan 0 · silinen 0 (doküman yoktu)"}
+              say: >-
+                Aurora eklemeyi WAL'a yazdı; pipeline okudu. status açık olmadığı için pipeline'ın kuralı yazmak yerine silme
+                gönderdi. Index'te böyle bir doküman zaten yoktu; hiçbir şey değişmedi. Böylece açılmamış bir mağaza haritada
+                görünmez.
+            - phase: 3
+              who: ops
+              lit: [ops, aurora, wal]
+              packet: {at: aurora, text: "UPDATE shop.stores SET status = 'açık' WHERE store_id = 'S022'"}
+              set: {aurora: {S022: {status: açık}}}
+              fresh: {aurora: [S022]}
+              note: {osi: "", aurora: "açık mağaza: 27", wal: "update shop.stores S022"}
+              say: >-
+                Açılış günü sabah ekip mağazayı ekranda "açık" yaptı. Mağaza yönetim servisi status'u güncelledi; Aurora
+                güncellemeyi WAL'a yazdı.
+            - phase: 3
+              who: osi
+              lit: [wal, osi, opensearch]
+              packet: {at: osi, text: "index stores_v1/_doc/S022 { location: { lat: 40.32254, lon: 29.12761 } } · refresh: en çok 1 sn"}
+              show: {opensearch: [S022]}
+              set: {opensearch: {g_bur: {mağazalar: "S022 · S004 · S013"}}}
+              fresh: {opensearch: [S022, g_bur]}
+              note: {aurora: "", wal: "", osi: "yazılan 1 · hatalı 0", opensearch: "8 doküman (kesitte) · toplam 27"}
+              say: >-
+                Pipeline güncellemeyi okudu: status açık, doküman yazılır. OpenSearch aralığı kontrol etti ve noktayı Bursa
+                çevresindeki kareye koydu. Bir sonraki refresh'te (en çok 1 saniye sonra) mağaza aramalarda göründü. Ekipteki
+                tıklamadan aramaya kadar birkaç saniye geçti.
+            - phase: 3
+              who: web
+              lit: [web, opensearch]
+              packet: {at: opensearch, text: "geo_distance 100km · İstanbul merkez → 6 mağaza · S022: 77,3 km · took ~15 ms"}
+              note: {osi: "", release: "tablolar dün gecenin çalışması (S022 açılmadan önce); bu gece yeniden", web: "1 istek · 6 mağaza geri", opensearch: "açılan kareler: İstanbul ve Bursa çevresi · İzmir ve Ankara hiç açılmadı"}
+              say: >-
+                Bir ziyaretçi İstanbul merkezden 100 km aradı. OpenSearch daireye değmeyen kareleri hiç açmadı; değen karelerdeki
+                mağazaların uzaklığını hesapladı ve en yakından sıraladı. Yeni mağaza S022 77,3 km ile Bursa mağazalarının başında.
+                Süre canlı ölçüm; her istekte değişir.
+            - phase: 3
+              who: release
+              lit: [release, aurora, opensearch, monitor]
+              packet: {at: opensearch, text: "gece: yarıçap test seti (5 nokta) · mağaza denetimi (27 mağaza)"}
+              set: {release: {t100: {beklenen: "6: S010 · S001 · S019 · S022 · S004 · S013"}, d_n: {sonuç: "27 ↔ 27"}}}
+              fresh: {release: [t100, d_n]}
+              note: {web: "", opensearch: "", release: "gece: 5 noktanın 5'i geçti · 27 ↔ 27 · eksik 0 · fazla 0 · konum farkı 0", monitor: "alarm yok"}
+              say: >-
+                Gece yayın hattı test setini ve denetimi yine çalıştırdı; kimse ayarlara dokunmasa da çalışır, çünkü mağazalar
+                açılır, taşınır, kapanır. Beklenen liste Aurora'dan yeniden hesaplandığı için İstanbul 100 km artık 6 mağaza
+                bekliyor; index de 6 veriyor, aynı sırayla. Denetim: açık 27 ↔ 27; konumu index'te 100 m'den fazla farklı
+                mağaza yok.
+            - phase: 4
+              who: osi
+              lit: [wal, osi, opensearch]
+              packet: {at: osi, text: "aynı değişiklik yine geldi → aynı _id S022, aynı sürüm numarası → uygulanmadı"}
+              mark: {opensearch: {S022: fix}}
+              note: {release: "", monitor: "", osi: "gönderilen 1 · uygulanan 0 (aynı sürüm)", opensearch: "S022 yine tek doküman, değişmedi"}
+              say: >-
+                Örnek durum: pipeline aynı değişikliği ikinci kez gönderdi. Doküman mağaza numarasıyla yazıldığı için hedef aynı
+                dokümandı; değişikliğin sürüm numarası da aynıydı. OpenSearch elindekinden büyük olmayan bir sürümü uygulamaz: ikinci
+                yazma yok sayıldı, doküman aynı kaldı. İkinci bir S022 oluşmadı; harita aynı mağazayı iki kez göstermedi.
+            - phase: 4
+              who: ops
+              lit: [ops, location]
+              mark: {opensearch: {S022: ""}}
+              packet: {at: ops, text: "olsaydı: lat 29.12761 · lon 40.32254 (sıra ters) → Türkiye kutusu: enlem 35,8–42,1 ✗"}
+              note: {osi: "", opensearch: "", ops: "olsaydı: kaydedilmedi · ekibe \"konum ülke dışında\" uyarısı"}
+              say: >-
+                Olsaydı: Location Service'in [boylam, enlem] cevabı enlem-boylam sanılsaydı. İki sayı da geçerli aralıkta:
+                Aurora'nın kuralı da geo_point da kabul ederdi ve mağaza Türkiye'nin dışında, çok güneyde, İstanbul'a
+                1.673 km uzakta bir noktaya düşerdi; İstanbul'dan yapılan hiçbir aramada çıkmazdı. Bunu servisin ülke kutusu
+                kontrolü yakalar: enlem 29 Türkiye'nin kutusunda değil, kayıt yazılmaz.
+            - phase: 4
+              who: dlq
+              lit: [osi, dlq, monitor, opensearch]
+              note: {ops: "", dlq: "doküman: 0", monitor: "pipeline hatalı kayıt: 0 · DLQ: 0", opensearch: "olsaydı: location = adres metni → reddedildi"}
+              say: >-
+                Örnek durum: bu hafta hata klasöründe 0 doküman. Aurora'nın CHECK kuralı aralık dışı bir enlemi kapıda durdurduğu için
+                DLQ'ya düşen doküman çoğunlukla pipeline'ın kendi hatasından gelir. Olsaydı: pipeline ayarı yanlış yayına çıksaydı ve
+                location'a konum yerine adres metni gitseydi, OpenSearch her dokümanı "geo_point değil" diye reddederdi. Pipeline
+                birkaç denemeden sonra onları hata klasörüne yazardı; değişen mağazalar aramada eski hâliyle kalırdı. DLQ alarmı
+                hemen çalar; ekip ayarı geri alır ve dokümanları yeniden gönderir.
+            - phase: 4
+              who: ops
+              lit: [ops, location, aurora]
+              packet: {at: aurora, text: "olsaydı: UPDATE shop.stores SET lat = 40.99210, lon = 29.02310 WHERE store_id = 'S019'"}
+              set: {aurora: {S019: {lat: "40.99210", lon: "29.02310"}}}
+              fresh: {aurora: [S019]}
+              note: {osi: "", dlq: "", monitor: "", opensearch: "", ops: "olsaydı: yeni adres → Geocode → PointAddress · pin onaylandı", aurora: "olsaydı: S019 yeni konum (temsilî)"}
+              say: >-
+                Olsaydı: İstanbul Mağaza 3 başka bir semte taşınsaydı. Operasyon ekibi yeni adresi girer; servis adres değiştiği
+                için konumu yeniden bulur (eski konum yeni adresle kalamaz), sırayı çevirir, kutuya bakar, pini ekibe onaylatır ve
+                satırı günceller. Mağaza numarası aynı kalır.
+            - phase: 4
+              who: osi
+              lit: [wal, osi, opensearch, release]
+              packet: {at: osi, text: "olsaydı: update S019 → index stores_v1/_doc/S019 (aynı _id, yeni location)"}
+              set: {opensearch: {S019: {location: "40.99210, 29.02310"}}, release: {t10: {beklenen: "olsaydı: 1 (S019, ~4,2 km)", index: "olsaydı: 1 ✓"}}}
+              fresh: {opensearch: [S019], release: [t10]}
+              note: {ops: "", aurora: "", osi: "olsaydı: yazılan 1", opensearch: "olsaydı: eski nokta ağaçtan çıktı · tek S019", release: "olsaydı: beklenen Aurora'dan yeniden hesaplandı"}
+              say: >-
+                Olsaydı: pipeline güncellemeyi aynı mağaza numarasıyla yazardı. Doküman bütünüyle yenisiyle değişir; eski nokta
+                ağaçtan çıkar, iki S019 olmaz. İstanbul 10 km araması artık 1 mağaza getirirdi (S019, yaklaşık 4,2 km). O gecenin
+                testi de beklentiyi Aurora'dan yeniden hesaplar ve 1 bekler; taşınma testi bozmaz, index geride kalırsa yakalar.
+            - phase: 4
+              who: ops
+              lit: [ops, aurora, wal]
+              packet: {at: aurora, text: "olsaydı: UPDATE shop.stores SET status = 'kapalı', closed_on = current_date WHERE store_id = 'S013'"}
+              set: {aurora: {S013: {status: kapalı}}}
+              fresh: {aurora: [S013]}
+              note: {osi: "", opensearch: "", release: "", ops: "olsaydı: satır silinmez · kapanış tarihi yazılır", wal: "olsaydı: update shop.stores S013"}
+              say: >-
+                Olsaydı: Bursa Mağaza 2 kapansaydı. Satır silinmez; geçmiş kayıtlar ve raporlar o mağazayı göstermeye devam eder.
+                status "kapalı" olur ve kapanış tarihi yazılır. Tadilat için geçici kapanış da aynı yoldan "kapalı" olur; mağaza
+                yeniden açılınca status tekrar "açık" yapılır ve mağaza aynı yoldan index'e döner.
+            - phase: 4
+              who: osi
+              lit: [wal, osi, opensearch, web]
+              packet: {at: osi, text: "olsaydı: update S013 · status kapalı → delete stores_v1/_doc/S013"}
+              hide: {opensearch: [S013]}
+              set: {opensearch: {g_bur: {mağazalar: "S022 · S004"}}}
+              fresh: {opensearch: [g_bur]}
+              note: {ops: "", wal: "", osi: "olsaydı: silinen 1", opensearch: "olsaydı: kesitte 7 doküman · toplam 26", web: "olsaydı: İstanbul 100 km → 5 mağaza"}
+              say: >-
+                Olsaydı: pipeline'ın kuralı dokümanı silerdi; bir sonraki refresh'ten sonra mağaza hiçbir aramada çıkmazdı.
+                Uygulamanın sorgusunda "sadece açık" filtresi yok, gerek de yok: index'te sadece açık mağazalar var.
+            - phase: 4
+              who: release
+              lit: [release, aurora, opensearch, monitor]
+              packet: {at: opensearch, text: "olsaydı: gece denetimi · Aurora açık 26 ↔ OpenSearch 27 · fazla: S013"}
+              note: {web: "", osi: "", opensearch: "", release: "olsaydı, kural çalışmasaydı: fazla 1 (S013) · tekrar ölçüm 10 dk sonra yine 1", monitor: "olsaydı: alarm → ekip"}
+              say: >-
+                Olsaydı: silme bir sebeple index'e ulaşmasaydı (ör. pipeline ayarı yanlış yayına çıksaydı), kapalı mağaza
+                haritada kalırdı. Gece denetimi bunu "fazla 1: S013" diye bulur; 10 dakika sonraki ikinci ölçüm de tutmayınca alarm
+                çalar. Onarım: ekip ayarı düzeltir ve mağazanın satırını bir kez daha kaydeder; değişiklik zincirden geçer ve doküman
+                silinir. Fark büyükse stores_v2 ilk yüklemeyle kurulur, stores adı ona çevrilir (Adım 6).
+            - phase: 4
+              who: opensearch
+              lit: [opensearch, aurora]
+              set: {aurora: {S019: {lat: "40.89754", lon: "28.94886"}, S013: {status: açık}}, opensearch: {S019: {location: "40.89754, 28.94886"}, g_bur: {mağazalar: "S022 · S004 · S013"}}, release: {t10: {beklenen: "0 (en yakını S010: 10,04 km)", index: "0 ✓"}}}
+              show: {opensearch: [S013]}
+              note: {release: "", monitor: "", opensearch: "stores → stores_v1 · 8 doküman (kesitte) · toplam 27"}
+              say: >-
+                Hazır. "Olsaydı" karelerindeki taşınma ve kapanış yaşanmadı; tablolar bugünkü hâline döndü. Index t0'daki
+                simülasyonun başladığı hâlde: kesitte İstanbul'da 3, Bursa'da 3, İzmir'de ve Ankara'da birer mağaza. Sayfa
+                açılınca 25 km araması İstanbul'daki 3'ünü, "100 km"ye tıklayınca Bursa'dakilerle birlikte 6'sını getirecek.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Önce sayfanın sorusu yazılır: bir noktaya belli bir uzaklıktaki mağazalar, en yakın önce. Sonra konum alanının türü
+              seçilir, mağazaların asıl kaydının yeri ve konumların nasıl bulunacağı belirlenir, index'e neyin gideceğine karar
+              verilir. Kararlar iki yerde durur: Aurora'nın tablo tanımında ve kod deposundaki arama ayarlarında.
+            cards:
+              - title: "Sayfanın sorusu: bu noktaya X km içindekiler, en yakın önce"
+                text: >-
+                  Nokta, ziyaretçinin haritada tıkladığı yer ya da seçtiği şehir; yarıçap 10, 25 ya da 100 km. Sorunun iki parçası
+                  ayrı işlerdir: geo_distance daireye girmeyenleri eler, _geo_distance sırası kalanları uzaklığa göre dizer ve her
+                  birinin uzaklığını cevaba koyar. Uzaklık büyük daire uzaklığıdır (dünyanın eğriliği hesaba katılır). Liste en
+                  fazla 20 mağaza: canlı index'te İstanbul'dan 20.000 km aransa da 27 mağazanın en yakın 20'si gelir.
+                code:
+                  - {code: "{ \"query\": { \"geo_distance\": { \"distance\": \"100km\", \"location\": { \"lat\": 41.0082, \"lon\": 28.9784 } } },", tag: Uygulamanın içinde, say: "Bu noktaya 100 km içindekiler kalsın."}
+                  - {code: "  \"sort\": [ { \"_geo_distance\": { \"location\": { … }, \"order\": \"asc\", \"unit\": \"km\" } } ],", tag: Uygulamanın içinde, say: "En yakından uzağa sırala; uzaklık km olarak dönsün."}
+                  - {code: "  \"size\": 20 }", tag: Uygulama → OpenSearch, say: "En fazla 20 mağaza; sorgu böyle gider (t0'daki istek)."}
+              - title: location neden geo_point, enlem ve boylam neden kontrol edilir?
+                text: >-
+                  Uzaklık araması sadece geo_point türündeki bir alanda çalışır; iki ayrı sayı alanında (lat ve lon) çalışmaz.
+                  geo_point konumu birkaç biçimde kabul eder; bu index { lat, lon } nesnesini kullanır, çünkü adlar sırayı
+                  söyler. Dizi biçimi [boylam, enlem] sırasındadır ve en sık hata buradan çıkar. OpenSearch aralık dışı bir değeri
+                  (enlem 90'dan büyük gibi) reddeder; ama yer değiştirmiş iki sayı ikisi de aralıktaysa hatasız kabul edilir ve
+                  mağaza başka bir ülkeye düşer. Bu yüzden konum üç yerde kontrol edilir: mağaza yönetim servisi (sıra ve ülke
+                  kutusu, yazmadan önce), Aurora (aralık, kapıda) ve gece denetimi (Aurora ile index aynı mı).
+                map:
+                  cols: [Alan, Tür, Neden]
+                  rows:
+                    - ["location", "geo_point", "Uzaklık filtresi ve uzaklık sırası; yazılırken aralık kontrol edilir, harita ağacına girer."]
+                    - ["city", "keyword", "Şehir adı tek parça; listede olduğu gibi gösterilir, gerekirse birebir filtrelenir."]
+                    - ["name", "text", "Mağaza adı aranabilir (ör. \"Bursa\")."]
+                code:
+                  - {code: "\"location\": { \"type\": \"geo_point\" },", tag: OpenSearch'ün içinde, say: "Enlem ve boylam tek bir konum; uzaklık bunun üzerinde hesaplanır."}
+                  - {code: "\"location\": { \"lat\": 40.32254, \"lon\": 29.12761 }   # [29.12761, 40.32254] de aynı nokta", tag: OpenSearch'ün içinde, say: "Nesnede adlar sırayı söyler; dizide önce boylam gelir."}
+              - title: Mağazaların asıl kaydı Aurora'da, index onun kopyası
+                text: >-
+                  Mağaza bilgisi operasyon ekibinindir ve birbirine bağlı parçalardan oluşur: mağaza, adresi, çalışma saatleri, açılış
+                  ve kapanış tarihleri. Bu, satır ve sütunlu, kuralları kapıda kontrol eden bir veritabanının işi; mağazanın
+                  siparişlerini tutan Aurora PostgreSQL kümesinde ayrı bir tablo olarak durur. Kurallar CHECK olarak tabloya yazılır:
+                  kural dışı bir satır hiç kaydedilmez. Değişiklik seyrektir (ayda birkaç mağaza). Index Aurora'nın aranabilir
+                  kopyasıdır; ona Aurora'dan zero-ETL zinciri yazar, kimse elle yazmaz. Adım 5'teki pipeline servisi Aurora'yı da
+                  kaynak olarak okur: önce tabloların anlık görüntüsünü, sonra mantıksal çoğaltmayla her değişikliği.
+                code_title: Tablo tanımı (kısaltılmış)
+                code:
+                  - {code: "CREATE TABLE shop.stores ( store_id text PRIMARY KEY, name text, city text, country text, address text,", tag: Aurora'nın içinde, say: "Mağaza tablosu: numara, ad, şehir, ülke, adres."}
+                  - {code: "  lat numeric(8,5), lon numeric(8,5), geo_source text, status text, closed_on date,", tag: Aurora'nın içinde, say: "Konum virgülden sonra 5 basamak (yaklaşık 1 m), konumun kaynağı, hâli, kapanış tarihi."}
+                  - {code: "  CHECK (lat BETWEEN -90 AND 90 AND lon BETWEEN -180 AND 180),", tag: Aurora'nın içinde, say: "Aralık dışı enlem ya da boylam kapıda reddedilir."}
+                  - {code: "  CHECK (status <> 'açık' OR (lat IS NOT NULL AND lon IS NOT NULL)) );", tag: Aurora'nın içinde, say: "Açık bir mağazanın konumu boş olamaz."}
+              - title: Konum bir kez bulunur, saklanır ve onaylanır
+                text: >-
+                  Adres her aramada koordinata çevrilmez; mağaza girilirken ya da adresi değişince bir kez çevrilir ve Aurora'da
+                  saklanır. Mağaza yönetim servisi adresi Location Service'in Geocode isteğiyle sorar. Cevaptaki sonuç türü konumun ne
+                  kadar kesin olduğunu söyler: PointAddress bina adresidir; Street ya da Locality ise sadece sokağın ya da ilçenin bir
+                  noktasıdır ve mağazayı yüzlerce metre, hatta kilometrelerce kaydırabilir. Servis sadece PointAddress'i ve yüksek
+                  eşleşme puanını kabul eder; ayrıca pini haritada ekibe gösterir, ekip kapının yerini onaylar ya da pini kaydırır.
+                  Sonuç saklandığı için istek IntendedUse: Storage ile yapılır (bu kullanım daha yüksek fiyatla ücretlendirilir).
+                code:
+                  - {code: "r = geo_places.geocode(QueryText=adres, IntendedUse=\"Storage\")", tag: [Mağaza yönetim servisi → Location Service, Location Service → Mağaza yönetim servisi], say: "Adresi sorar; sonucu saklayacağını söyler."}
+                  - {code: "lon, lat = r[\"ResultItems\"][0][\"Position\"]   # önce boylam", tag: Servisin içinde, say: "Cevaptaki sırayı çevirir: ilk sayı boylam."}
+                  - {code: "if not ulke_kutusu(magaza.country, lat, lon): hata(\"konum ülke dışında\")", tag: Servisin içinde, say: "Konum mağazanın ülkesinin kutusunda değilse kaydetmez; elle kaydırılan pin de bu kontrolden geçer."}
+              - title: Index'e sadece aramanın gerektirdiği alanlar, sadece açık mağazalar
+                text: >-
+                  Mağaza bulucu "nerede" sorusunu cevaplar: index'e ad, şehir ve konum gider. Adres, çalışma saatleri ve status
+                  Aurora'da kalır. Saatler sık değişir (bayram, tadilat) ve bu sayfa onları göstermez; "şimdi açık olanlar" diye
+                  bir filtre istenirse saatler index'e yeni bir alan olarak eklenir, yeni bir index sürümüyle (stores_v2) kurulur.
+                  Ziyaretçi açılmamış ya da kapanmış bir mağazayı görmemeli. İki yol var: index'e bütün mağazaları koyup her sorguya
+                  "status: açık" filtresi eklemek, ya da index'e sadece açık mağazaları koymak. Ekip ikincisini seçti: kural tek
+                  yerde, pipeline'da durur ve hiçbir sorgu onu unutamaz.
+                code_title: Pipeline tanımı (kısaltılmış, okunur hâle getirilmiş)
+                code:
+                  - {code: "source: rds { engine: aurora-postgresql, tables: [ shop.stores ] }", tag: Aurora → Pipeline, say: "Mağaza tablosunu okur: önce anlık görüntü, sonra her değişiklik."}
+                  - {code: "add_entries: location/lat ← /lat, location/lon ← /lon", tag: Pipeline'ın içinde, say: "İki sütunu tek bir location alanında birleştirir."}
+                  - {code: "add_entries: opensearch_action = delete, add_when: '/status != \"açık\"'", tag: Pipeline'ın içinde, say: "Mağaza açık değilse yazmak yerine siler."}
+                  - {code: "sink: opensearch { index: stores_v1, document_id: primary_key }", tag: Pipeline → OpenSearch, say: "Doküman numarası mağaza numarası; stores_v1'e yazar."}
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              Index boşken mağaza tablosunun tamamı bir kez taşınır (Adım 5'teki gibi pipeline'ın kendisi yapar). Bu sayfa için
+              önemli olan iki şey: şablon index'ten önce kurulur ve mağaza bulucu açılmadan cevaplar bir kez test edilir.
+            cards:
+              - title: Önce şablon, sonra index, en son veri
+                text: >-
+                  Şablon olmasaydı OpenSearch ilk dokümana bakıp türü kendisi seçerdi: { lat, lon } nesnesini iki ayrı ondalık sayı
+                  sanardı. O zaman location geo_point olmazdı ve uygulamanın uzaklık sorgusu hata verirdi. Tür veri yazıldıktan sonra
+                  değiştirilemez; index silinip yeniden kurulmalıdır. Bu yüzden yayın hattı önce şablonu, sonra stores_v1'i kurar,
+                  stores adını ona verir; pipeline en son çalışır.
+                code:
+                  - {code: "PUT _index_template/stores { \"index_patterns\": [\"stores_*\"],", tag: Yayın hattı → OpenSearch, say: "Adı stores_ ile başlayan her index bu ayarlarla doğar."}
+                  - {code: "  \"template\": { \"mappings\": { \"properties\": { \"location\": { \"type\": \"geo_point\" }, … } } } }", tag: OpenSearch'ün içinde, say: "location baştan geo_point."}
+                  - {code: "PUT stores_v1 · POST _aliases { add: stores_v1 → stores }", tag: Yayın hattı → OpenSearch, say: "Index kurulur, uygulamanın sorduğu ad ona verilir."}
+              - title: Mağaza bulucu açılmadan yarıçap testi ve ilk denetim
+                text: >-
+                  Yarıçap test setinde birkaç sabit nokta var: şehir merkezleri, bir sınır durumu (İstanbul 10 km: en yakın mağaza
+                  10,04 km'de, listede "10 km" diye yuvarlanmış görünür ama dairenin dışında) ve ülkeler arası bir uzak nokta (Frankfurt). Her nokta için beklenen liste ezbere
+                  yazılmaz; Aurora'daki açık mağazalardan aynı uzaklık formülüyle hesaplanır, böylece açılan ya da taşınan bir mağaza
+                  testi bozmaz. Index'in cevabı bu listeyle sıra sıra karşılaştırılır; uzaklığı birebir eşit iki mağazanın sırası
+                  her çalışmada serbesttir, test onların sırasını karşılaştırmaz (canlı index'te Antalya Mağaza 1 ve 2 ikisi de 475,1 km). Sonra mağaza denetimi: açık mağazalar iki
+                  tarafta aynı mı, konumları aynı mı. İlk ölçüm kaydedilir; alarmlar bu andan sonra çalışır.
+                code:
+                  - {code: "beklenen = aurora_acik_magazalar_uzakliga_gore(nokta, km)", tag: [Yayın hattı → Aurora, Aurora → Yayın hattı], say: "Bu noktaya km içindeki açık mağazalar, aynı formülle sıralı."}
+                  - {code: "gelen = opensearch_ara(nokta, km)   # geo_distance + _geo_distance", tag: [Yayın hattı → OpenSearch, OpenSearch → Yayın hattı], say: "Aynı soruyu index'e sorar."}
+                  - {code: "if gelen != beklenen: test_kaldi(nokta)", tag: Yayın hattının içinde, say: "Bir nokta bile tutmazsa: bir ayar değişikliğindeyse yayın durur, gece çalışmasındaysa alarm çalar."}
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              Mağazalar açılır, taşınır, kapanır. Her değişiklik önce Aurora'ya yazılır, zincir onu birkaç saniyede index'e taşır.
+              Uygulama ve arama motoru için ayrıca bir iş yapılmaz.
+            cards:
+              - title: Yeni bir mağaza haritaya nasıl gelir?
+                text: >-
+                  Mağaza açılmadan haftalar önce kayda "açılacak" olarak girer; konumu o gün bulunur ve onaylanır. Bu sürede
+                  pipeline her değişikliğinde silme gönderir; mağaza haritada görünmez. Açılış günü status "açık" olunca pipeline
+                  dokümanı yazar; mağaza bir sonraki refresh'te (en çok 1 saniye) aramalarda görünür. Toplam: pipeline gecikmesi
+                  (birkaç saniye) + refresh.
+                code:
+                  - {code: "UPDATE shop.stores SET status = 'açık' WHERE store_id = 'S022'", tag: Mağaza yönetim servisi → Aurora, say: "Açılış günü status açık olur; gerisini zincir yapar."}
+              - title: Taşınan mağaza aynı numarayla yeni noktaya geçer
+                text: >-
+                  Adres değişince mağaza yönetim servisi konumu yeniden bulur ve onaylatır; eski konumun yeni adresle kalması
+                  servisçe engellenir. Aurora'daki satır güncellenir, pipeline aynı mağaza numarasıyla dokümanın üstüne yazar:
+                  eski nokta harita ağacından çıkar, yenisi girer. Doküman numarası mağaza numarası olduğu için iki kopya oluşmaz.
+                  Yarıçap testinin beklentisi de Aurora'dan geldiği için taşınmadan sonraki ilk test yeni konumu bekler.
+              - title: Kapanan mağaza index'ten nasıl çıkar?
+                text: >-
+                  Satır silinmez; geçmiş kayıtlar ona bağlıdır. status "kapalı" olur, kapanış tarihi yazılır. Pipeline'ın kuralı
+                  açık olmayan mağazanın dokümanını siler; bir sonraki refresh'ten sonra mağaza aramada yoktur. Geçici kapanışta
+                  (tadilat) da aynısı olur; yeniden açılınca mağaza aynı numarayla geri gelir. Çalışma saatlerinin değişmesi index'e
+                  hiç dokunmaz, çünkü saatler index'te yok.
+                code:
+                  - {code: "UPDATE shop.stores SET status = 'kapalı', closed_on = current_date WHERE store_id = 'S013'", tag: Mağaza yönetim servisi → Aurora, say: "Mağaza kapanır; satır kalır, doküman pipeline'ca silinir."}
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              Değişiklik iki kez gelirse, konum ters ya da aralık dışı gelirse, index Aurora'dan geride kalırsa ya da kapalı bir
+              mağaza haritada kalırsa ne olur? Her biri için zincirde bir parça vardır; her parçanın ne zaman çalıştığı, neyi
+              yakalamadığı ve ekibin ne yaptığı aşağıda.
+            cards:
+              - title: Aynı değişiklik iki kez, kabul edilmeyen doküman
+                text: >-
+                  Doküman mağaza numarasıyla ve değişikliğin sürüm numarasıyla yazılır; aynı değişiklik tekrar gelirse aynı dokümanı
+                  hedefler ve sürümü büyük olmadığı için yok sayılır; ikinci bir mağaza oluşmaz. Kabul edilmeyen doküman (ör. yanlış bir pipeline ayarı yüzünden location'a adres metni gitmesi) hata klasörüne
+                  (DLQ) gider ve alarm çalar; yeni bir mağazaysa aramada eksiktir, değişen bir mağazaysa aramada eski hâliyle kalır. Ne zaman: her değişiklikte, birkaç saniye içinde.
+                  Yakalamadığı: OpenSearch'ün kabul ettiği ama yanlış olan bir konum. Onarım: ekip DLQ'daki kaydın sebebini bulur,
+                  ayarı düzeltir ya da (konum yanlışsa) operasyon ekibi Aurora'daki satırı düzeltir; yeni değişiklik zincirden geçer ve mağaza aramaya döner.
+              - title: Ters ya da yanlış konum
+                text: >-
+                  Üç kontrol üç farklı hatayı yakalar. Mağaza yönetim servisi yazmadan önce sırayı ve ülke kutusunu kontrol eder:
+                  ters sıra (enlem 29) Türkiye'nin kutusunda değildir, kayıt yazılmaz. Aurora'nın CHECK kuralı ve geo_point aralık dışı
+                  değeri reddeder. Gece denetimi her mağazanın Aurora'daki ve index'teki konumunu karşılaştırır, 100 m'den (temsilî)
+                  fazla fark varsa alarm verir. Yakalamadığı: aynı şehirde birkaç yüz metre kaymış ama iki tarafta da aynı olan bir
+                  pin. Onu ancak ekibin pin onayı ve ziyaretçinin "mağaza burada değil" bildirimi yakalar. Onarım: operasyon ekibi
+                  pini düzeltir, değişiklik zincirden geçer.
+                code:
+                  - {code: "KUTU = { \"TR\": ((35.8, 42.1), (25.6, 44.8)), \"DE\": ((47.3, 55.1), (5.9, 15.0)) }   # yaklaşık", tag: Servisin içinde, say: "Ülke başına bir kutu: enlem aralığı, boylam aralığı."}
+                  - {code: "if abs(aurora_konum - index_konum) > 100 m: fark(store_id)", tag: Yayın hattının içinde, say: "Gece denetimi: iki tarafın konumu aynı mı?"}
+              - title: Gece yarıçap testi ve mağaza denetimi
+                text: >-
+                  Her gece ve her ayar değişikliğinde yayın hattı yarıçap test setini çalıştırır ve mağaza denetimini yapar:
+                  açık mağaza sayısı, eksik ve fazla mağaza numaraları, konum farkları. Pipeline birkaç saniye geride olabileceği için
+                  tutmayan bir sonuç 10 dakika sonra (temsilî) yeniden ölçülür; iki ölçüm üst üste tutmazsa alarm çalar. Ne zaman:
+                  her gece ve her değişiklikte. Yakalamadığı: test noktaları dışındaki noktalar (test sadece birkaç noktaya bakar;
+                  denetim ise bütün mağazalara) ve iki tarafta da aynı olan yanlış bir konum. Onarım: eksik ya da fazla mağazanın
+                  satırı Aurora'da bir kez daha kaydedilir ve zincirden geçer.
+                code:
+                  - {code: "a = aurora_acik()      # { \"S010\": (41.07989, 28.90559), … }", tag: [Yayın hattı → Aurora, Aurora → Yayın hattı], say: "Aurora'daki açık mağazalar ve konumları."}
+                  - {code: "b = opensearch_hepsi() # stores, match_all", tag: [Yayın hattı → OpenSearch, OpenSearch → Yayın hattı], say: "Index'teki mağazalar ve konumları."}
+                  - {code: "eksik, fazla = a - b, b - a; if eksik or fazla: tekrar_olc(10 dk)", tag: Yayın hattının içinde, say: "Tutmazsa bir kez daha ölçülür; yine tutmazsa CloudWatch alarmı."}
+              - title: Kapalı mağaza haritada kalırsa, ayar değişirse
+                text: >-
+                  Kapanan mağazanın silinmesi pipeline'daki tek bir kurala bağlıdır. Kural yanlış yayına çıkarsa kapalı mağazalar
+                  haritada kalır; gece denetimi onları "fazla" diye bulur. Ne zaman: ertesi gece (ayar değişikliğinde hemen, çünkü test
+                  seti her değişiklikte çalışır). Yakalamadığı: kapandığı hâlde Aurora'da hâlâ "açık" görünen bir mağaza; o, kayıtta da
+                  yanlıştır ve ancak operasyon ekibi fark eder. Onarım: ekip ayarı düzeltir, etkilenen mağazaları bir kez daha kaydeder.
+                  Değişiklik büyükse (ör. yeni bir alan ya da başka bir tür) stores_v2 ilk yüklemeyle kurulur, test seti ona da
+                  çalışır, sonra stores adı tek komutla ona çevrilir (Adım 6).
+                code:
+                  - {code: "POST _aliases { remove: stores_v1 → stores, add: stores_v2 → stores }", tag: Yayın hattı → OpenSearch, say: "Uygulama hep stores'u sorar; ad tek komutla yeni sürüme geçer."}
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
