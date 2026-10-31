@@ -4002,52 +4002,647 @@ steps:
           - [fuzziness AUTO, "1–2 harfli kelimede 0, 3–5 harflide 1, daha uzunda 2 harf farkı kabul eder."]
           - [Token, "Analyzer'ın ürettiği tek kelime. \"kulaklk\" tek bir token."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde yazım hatası toleransı için hazırlık
+      t1:
+        title: Önceden ne vardı? Yazım hatası toleransı nasıl kuruldu, nasıl güvende tutuluyor?
         intro: >-
-          Arama kutusu hiç kullanılmadan, aramanın hatalara ne kadar esnek olacağı ve bunun bedeli belirlenir. Aşağıdaki beş adım
-          bu hazırlığın sırasıdır.
-        text:
-          - title: Önce ziyaretçinin nasıl yazdığı belirlenir
-            text: >-
-              Gerçek arama kayıtları incelenir: harf atlama, harf yer değiştirme, Türkçe harf yazmama. Türkçe harf sorunu
-              analyzer'la (Adım 5), harf atlama ve yer değiştirme fuzziness ile çözülür.
-          - title: Tolerans ölçülü açılır
-            text: >-
-              fuzziness AUTO kelime uzunluğuna göre 0–2 harf farkı kabul eder. prefix_length ilk harflerin birebir tutmasını
-              ister; hem yanlış eşleşmeyi hem işi azaltır. max_expansions denenecek benzer terim sayısını sınırlar.
-            code: |-
-              "multi_match": { "query": "kulaklk", "fields": ["name^3", "description"],
-                               "fuzziness": "AUTO", "prefix_length": 1, "max_expansions": 50 }
-          - title: Bedeli ölçülür
-            text: >-
-              Bulanık arama, index'te benzer terimleri tek tek dener; büyük bir index'te birebir aramadan belirgin şekilde
-              pahalıdır. Arama süresi (took) ve yük izlenir; gerekirse fuzziness sadece birebir arama sonuç vermediğinde
-              ikinci bir denemede açılır.
-          - title: Sık hatalar için eş anlamlı listesi tutulur
-            text: >-
-              Hep aynı şekilde yanlış yazılan ya da farklı adlandırılan kelimeler (ör. "kulaklık" ↔ "headset") bir synonym
-              filtresine yazılır; bunlar fuzziness'e bırakılmaz.
-            code: |-
-              "filter": { "tr_syn": { "type": "synonym", "synonyms": ["kulaklik, headset", "powerbank, tasinabilir sarj"] } }
-          - title: Sonuçsuz aramalar izlenir
-            text: >-
-              "Sonuç yok" dönen aramalar kaydedilir ve düzenli okunur. Sık görülenler synonym listesine eklenir ya da "Bunu mu
-              demek istediniz?" önerisi (suggester) gösterilir.
-      feed:
-        title: Veri nereden geliyor?
-        writes: >-
-          Arama index'ine kullanıcı yazmaz. Ürünlerin asıl kaydı katalog veritabanındadır; arama motoru ondan beslenir.
-        reads: Uygulama, arama sayfası ve arama kutusunun öneri listesi için.
-        kind: >-
-          OpenSearch başka bir veritabanından kendiliğinden veri çekmez; birinin onu beslemesi gerekir (Amazon OpenSearch
-          Ingestion ya da kataloğun değişikliklerini okuyan bir program).
-        with: >-
-          Sonuç kartlarının görselleri nesne deposundan (S3) gelir; ürünün asıl kaydı katalogdadır (DocumentDB). Sonuçsuz
-          aramaların kaydı çoğu zaman bir olay akışına ya da analiz deposuna yazılır.
-        best: >-
-          Katalog tek yerde tutulur ve arama index'i ondan otomatik beslenir (DocumentDB'nin OpenSearch ile zero-ETL
-          entegrasyonu). Synonym listesi de kod gibi sürümlenir; değişince index ayarları güncellenir.
+          "kulaklk" aramasından önce OpenSearch'teki products index'i zaten dolu: "kulaklik" terimi orada 5 ürünü gösteriyor,
+          "kulaklk" diye bir terim ise hiç yok. Yazım hatasını affeden şey index değil, sorgunun bir ayarı (fuzziness). Burada bu
+          ayarın gerçek bir sistemde nasıl seçildiğini, gerçek aramalardan kurulan bir test setiyle nasıl denendiğini, sonuçsuz
+          aramaların nasıl izlendiğini ve bir arama değişikliğinin nasıl yayına çıkıp gerekirse tek komutla geri alındığını
+          görüyorsun. Ürünlerin index'e gelişi Adım 5'teki zincirin aynısı. Önce zincirin bileşenleri, sonra bir simülasyon, sonra
+          dört aşama (tasarım, ilk yükleme, sürekli besleme, tutarlılık ve onarım).
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1", "t0'daki \"Exact words\" tıklamasından önceki zaman. Arama sayfasının ilk açılışı da bu zamana düşer (t0 simülasyonundaki \"t-1 · İstek 1\" şeridi); bu bölüm ondan da önceki hazırlığı anlatır."]
+          - ["Analyzer, terim, ters index ve doküman (Adım 5)", "Doküman: index'teki tek bir ürün kaydı. Analyzer: metni kelimelere bölüp sadeleştiren ayar; bu mağazanınki tr_folded (küçük harf, ı→i, ö→o). Çıkan her kelime bir terim. Ters index: \"terim → geçtiği ürünler\" listesi; kitabın sonundaki dizin gibi."]
+          - ["Puan (skor)", "OpenSearch'ün her bulunan ürüne verdiği uygunluk sayısı; sadece aynı aramadaki ürünleri sıralamak için. Birebir eşleşme (4,65) bulanık eşleşmeden (3,99) yüksek puan alır."]
+          - ["text, keyword ve index şablonu", "text: analyzer'dan geçen, aranan alan (ad, açıklama). keyword: olduğu gibi tutulan, filtre ve sayım için alan (kategori, marka). Index şablonu: adı products_ ile başlayan her yeni index'in hangi ayarlarla doğacağını söyleyen tanım."]
+          - ["Kod kartlarındaki sözcükler", "multi_match: aynı metni birden fazla alanda ara. name^3: adda geçen 3 kat önemli. tr_lower, asciifolding: Türkçe küçük harf ve harf sadeleştirme. synonym_graph: eş anlamlı süzgeci. { $.total = 0 }: \"bulunan 0 olan satırlar\". stats count(*) by q: \"her arama metnini say\"."]
+          - ["Pipeline ve dağıtım hattı (CI/CD)", "Pipeline: OpenSearch Ingestion'ın veri taşıyan hattı (Adım 5). Dağıtım hattı: yeni kodun ve ayarın yayına çıkmadan önce geçtiği otomatik adımlar; bir kontrol başarısızsa yayın çıkmaz."]
+          - ["İki anlamlı söz: sürüm", "Bu sayfada iki ayrı şey: ayarların ve index'in sürümü (sürüm 1 = products_v1, sürüm 2 = products_v2) ve pipeline'ın her değişiklikle gönderdiği belge sürüm numarası (eski bir değişikliğin yenisinin üstüne yazılmasını önler)."]
+          - ["Ekip ve katalog ekibi", "Ekip: mağazanın sistemini kuran ve işleten mühendisler; arama ayarlarını onlar değiştirir, alarmlara onlar bakar. Katalog ekibi: ürün ekleyen ve değiştiren çalışanlar; kod yazmaz."]
+          - ["Kesit", "Simülasyonda gösterilen birkaç kayıt. Gerçek katalogda 200 ürün var; kesit t0'daki simülasyonun 6 ürünü ve 4 terimi."]
+          - ["prefix_length", "Kelimenin baştan kaç harfinin birebir tutması gerektiği. 0 (varsayılan): ilk harfteki hata da affedilir. 1: ilk harf doğru olmalı; daha az benzer terim denenir, arama ucuzlar."]
+          - ["max_expansions", "Hatalı bir kelimenin en çok kaç benzer terime genişletileceği; varsayılan 50. Bir sözlükte en fazla 50 benzer kelimeye bakmak gibi."]
+          - ["fuzzy_transpositions", "Yan yana iki harfin yer değiştirmesini (\"kulkalik\") tek harf farkı sayma. Varsayılan açık."]
+          - ["Eş anlamlı (synonym)", "Harfleri hiç benzemeyen ama aynı şeyi arayan kelimeler, ör. \"headset\" ve \"kulaklık\". Fuzziness bunları bulamaz; bir listede eşlenir."]
+          - ["search_analyzer", "Sadece aramada çalışan analyzer. Eş anlamlılar buraya konursa ürünlerin terimleri değişmez; aranan kelime arama anında listedeki karşılıklarıyla genişler."]
+          - ["Test seti", "Gerçek aramalardan seçilmiş sorular ve her biri için beklenen sonuç (\"kulaklk → bütün kulaklıklar, başka ürün yok\"). Her değişiklikten önce ve her gece çalıştırılır; bir sınavın cevap anahtarı gibi. Bir soru \"bekliyor\" işaretliyse bugün geçmesi beklenmez (çözümü sırada); yayını durdurmaz."]
+          - ["Arama kaydı ve sıfır sonuç", "Arama kaydı: her aramadan sonra yazılan tek satır (aranan metin, fuzziness açık mı, bulunan ürün sayısı, süre). Sıfır sonuç: hiç ürün bulunamayan arama; ziyaretçinin \"sonuç yok\" gördüğü an."]
+          - ["Domain", "OpenSearch Service'te arama motorunu çalıştıran sunucuların bütünü; mağazanın tek bir arama motoru."]
+          - ["CloudWatch Logs, log grubu, metric filter, Logs Insights", "CloudWatch Logs: AWS'in kayıt deposu. Log grubu: aynı işin kayıtlarının toplandığı klasör (burada lm-search). Metric filter: gelen her kayda bakıp bir sayaç artıran kural (ör. sıfır sonuçlu arama sayısı). Logs Insights: kayıtlar üzerinde soru sorma aracı (ör. \"en sık sıfır sonuç veren 20 arama\")."]
+          - ["took, SearchLatency, p95 ve yavaş arama kaydı", "took: OpenSearch'ün bir aramada harcadığı süre (ms), her cevapta yazar. SearchLatency: OpenSearch'ün CloudWatch'a verdiği arama süresi ölçümü. p95: aramaların %95'inin bu süreden kısa sürdüğü değer. Yavaş arama kaydı (search slow log): bir süre sınırını aşan aramaları CloudWatch Logs'a yazan OpenSearch kaydı."]
+          - ["Alias, products_v1 ve products_v2", "Alias (takma ad): bir index'in ikinci adı. Uygulama hep products adını sorar; bu ad bugün products_v1'i gösteriyor. Yeni ayarlarla products_v2 kurulursa ad tek komutla ona, sorun çıkarsa yine tek komutla geri çevrilir."]
+          - ["zero-ETL zinciri", "Adım 5'te anlatılan yol: DocumentDB'deki her değişiklik değişiklik akışına (change stream) yazılır, OpenSearch Ingestion pipeline'ı onu okuyup index'e yazar; araya ekibin kodu girmez."]
+          - ["DLQ ve CloudWatch alarmları", "DLQ: OpenSearch'ün kabul etmediği dokümanların bırakıldığı S3 klasörü. CloudWatch alarmı: bir sayaç eşiği aşınca ekibe haber verir."]
+          - ["Öneri listesi", "Arama kutusuna yazarken açılan liste. Kelimenin başıyla (önek) arar (match_phrase_prefix); \"kulak\" yazınca kulaklıkları gösterir ama yazım hatasını affetmez."]
+          - ["Görev adımları", "\"Adım 5\", \"Adım 6\" gibi adlar bu görevin (mağazadaki 37 adımın) adımlarıdır. Simülasyonun sayacındaki \"Adım 1 / 19\" ise simülasyonun karesidir."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra"
+          sütunu veriyi kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim kodumuz" etiketli
+          parçaları mağazanın ekibi yazar. Katalogdan index'e giden parçalar Adım 5'tekinin aynısı (Adım 5'teki "Uygulama (katalog
+          yönetimi)" burada Adım 1, 3 ve 4'teki adıyla: Katalog yönetim servisi). Bu sayfada öne çıkan parçalar arama ayarları,
+          yayın ve kalite testi ile arama kaydı: hata toleransının ayarını onlar tutar, dener ve izler. Aynı parçalar aşağıdaki
+          simülasyonda birer kutu: üst sırada ürünü yazan ve ayarları yayına çıkaran parçalar, sonra ayarlar, ortada katalogdan
+          index'e zincir, altta arayan, kaydeden, izleyen ve yandaki işler.
+        inventory:
+          - id: admin
+            name: Katalog yönetim servisi
+            kind: code
+            what: arka ofis programı (ürün ekranlarının arka ucu)
+            does: >-
+              Katalog ekibinin eklediği ya da değiştirdiği ürünü sadece DocumentDB'ye yazar. Arama motoruna kendisi hiçbir şey
+              göndermez.
+            box: Yeni ürünü sadece DocumentDB'ye yazar.
+            phases: [3]
+            before: Katalog ekibi (ürün ekranı)
+            after: docdb
+          - id: release
+            name: Arama yayın ve kalite testi (dağıtım hattı)
+            kind: code
+            what: dağıtım hattında (CI/CD) çalışan kod
+            does: >-
+              Arama ayarlarını yayına çıkarır: index şablonunu ve index sürümlerini (products_v1, products_v2 …) kurar, products
+              adını (alias) doğru sürüme çevirir. Her değişiklikten önce ve her gece test setini çalıştırır; daha önce geçen bir
+              soru kalırsa yayını durdurur, gece çalışmasında alarm verir. Test, uygulamanın sorgu kuran kodunun aynısını
+              kullanır; sorgu tarafındaki bir değişiklikte o kodun yeni sürümüyle, yayından önce çalışır.
+            box: "Ayarları yayına çıkarır, alias'ı çevirir; test setini her değişiklikte ve her gece çalıştırır."
+            phases: [1, 2, 3, 4]
+            before: [ayar, searchlog]
+            after: [opensearch, monitor]
+          - id: ayar
+            name: Arama ayarları (kod deposunda)
+            kind: code
+            what: kod deposundaki sürümlü dosyalar
+            does: >-
+              Hata toleransının bütün kararları tek yerde: sorgu tarafı (fuzziness AUTO, prefix_length, max_expansions, hangi
+              alanların bulanık arandığı, adın 3 kat önemi) uygulamanın arama kodunda; index tarafı (analyzer'lar, eş anlamlı
+              listesi) index şablonunda. Değişiklik sadece dağıtım hattından geçerek yayına çıkar.
+            box: "Sorgunun ve index'in arama ayarları; eş anlamlı listesi. Her değişiklik dağıtım hattından geçer."
+            phases: [1, 2, 3, 4]
+            before: Ekip (değişiklik isteği)
+            after: [release, web]
+          - id: docdb
+            name: DocumentDB (shop.products)
+            kind: aws
+            what: katalog veritabanı
+            does: >-
+              Ürünlerin asıl kaydı; arama index'i bunun aranabilir bir kopyasıdır. İlk ürünler kataloğa mağazanın eski sitesinin
+              katalog sisteminden içe aktarma işiyle geldi (Adım 1); bu sayfanın zinciri katalog dolu hâldeyken başlar.
+            box: Ürünlerin asıl kaydı (tek doğru kaynak).
+            phases: [2, 3]
+            before: [admin, "İçe aktarma işi (Adım 1)"]
+            after: [stream, osi]
+          - id: stream
+            name: Değişiklik akışı (change stream)
+            kind: aws
+            what: DocumentDB'nin içinde, koleksiyon için açılır
+            does: Koleksiyondaki her ekleme, güncelleme ve silmeyi sırayla kaydeder (varsayılan 3 saat saklar, 7 güne kadar uzatılabilir).
+            box: Her ekleme, güncelleme ve silmeyi sırayla kaydeder.
+            phases: [3, 4]
+            before: docdb
+            after: osi
+          - id: osi
+            name: OpenSearch Ingestion pipeline (zero-ETL)
+            kind: aws
+            what: AWS'in veri taşıma servisi
+            does: >-
+              Önce koleksiyonun tamamını bir kez taşır, sonra değişiklik akışındaki her değişikliği birkaç saniyede index'e yazar.
+              Her pipeline kendi index'ine adıyla yazar (products_v1); yeni bir index sürümü kurulurken ikinci bir pipeline
+              products_v2'yi aynı yoldan doldurur. Ziyaretçiler ise hep products adıyla arar.
+            box: "Önce hepsini bir kez, sonra her değişikliği birkaç saniyede index'e yazar; araya kod girmez."
+            phases: [2, 3, 4]
+            before: [docdb, stream, s3]
+            after: [opensearch, s3, dlq]
+          - id: opensearch
+            name: OpenSearch (products index)
+            kind: aws
+            what: arama motoru (OpenSearch Service domain'i)
+            does: >-
+              Ürün adlarını tr_folded ile terimlere ayırıp ters index'e yazar. Bulanık aramayı arama anında yapar: hatalı kelimeye
+              yakın terimleri index'te bulur; bunun için index'te ek bir hazırlık yoktur. Uygulama aramayı products adıyla (alias)
+              yapar.
+            box: "Ürünler ve terimleri; bulanık eşleşme arama anında. Aramalar products adına gelir."
+            phases: [1, 2, 3, 4]
+            before: [osi, release, web]
+            after: [web, monitor]
+          - id: web
+            name: Uygulama (mağaza sayfaları)
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucusunda)
+            does: >-
+              Arama sayfasının sorgusunu kurar (ad 3 kat önemli, açıklama da aranır, fuzziness AUTO) ve OpenSearch'e gönderir
+              (t0'daki istek). Her aramadan sonra arama kaydına tek satır yazar: aranan metin, fuzziness açık mı, bulunan ürün sayısı, süre;
+              ziyaretçinin kimliği yazılmaz. Kataloğa yazmaz. Bugün tıklamaları (hangi sonuca tıklandı) kaydetmiyor: izlenen bir
+              karar; kalite şimdilik test seti ve sıfır sonuçlarla ölçülüyor.
+            box: "Arama sorgusunu gönderir; her aramadan sonra arama kaydına bir satır yazar."
+            phases: [3, 4]
+            before: [Tarayıcı (arama kutusu), ayar]
+            after: [opensearch, searchlog]
+          - id: searchlog
+            name: Arama kaydı (CloudWatch Logs)
+            kind: aws
+            what: AWS'in kayıt deposu (bir log grubu)
+            does: >-
+              Her aramanın satırını 90 gün saklar (temsilî süre); kayıt şifreli, okuma izni sadece ekipte, çünkü arama metni bir
+              isim gibi kişisel bilgi taşıyabilir. İki metric filter bütün aramaları ve sıfır sonuçluları sayar; haftalık Logs
+              Insights sorusu en sık sıfır sonuç veren aramaları listeler. Test setinin yeni soruları da buradan seçilir.
+            box: "Her aramanın satırı; sıfır sonuçlular sayılır, haftalık listesi çıkarılır."
+            phases: [2, 3, 4]
+            before: web
+            after: [monitor, release, Ekip (haftalık sıfır sonuç raporu)]
+          - id: s3
+            name: S3 (ilk yükleme klasörü)
+            kind: aws
+            what: Amazon S3 bucket'ı
+            does: İlk yüklemede koleksiyonun dışa aktarılan kopyasının geçici olarak durduğu yer.
+            box: İlk yüklemenin geçici kopyası.
+            phases: [2]
+            before: osi
+            after: "aynı pipeline (dosyaları geri okur, index'e yükler)"
+          - id: dlq
+            name: Hata klasörü (S3 DLQ)
+            kind: aws
+            what: Amazon S3 bucket'ı
+            does: OpenSearch'ün birkaç denemeden sonra da kabul etmediği dokümanları saklar; akış durmaz, ekip onları sonra işler.
+            box: Kabul edilmeyen dokümanları saklar; akış durmaz.
+            phases: [4]
+            before: osi
+            after: Ekip (inceler, yeniden gönderir)
+          - id: monitor
+            name: CloudWatch alarmları
+            kind: aws
+            what: AWS'in izleme servisi
+            does: >-
+              Sıfır sonuç oranını, arama süresini (SearchLatency), test setinin gece sonucunu ve pipeline'ın hata sayaçlarını
+              izler; eşik aşılınca ekibe alarm gönderir.
+            box: "Sıfır sonuç oranı, arama süresi, test seti, pipeline hataları; alarm verir."
+            phases: [2, 3, 4]
+            before: [searchlog, release, opensearch, osi]
+            after: Ekip (alarm)
+        sim_title: "Simülasyon: hata toleransı nasıl kuruldu, nasıl izleniyor?"
+        sim:
+          kind: pipeline
+          title: Ayarlar ve yayın → katalogdan index'e zincir → arama, arama kaydı ve izleme
+          caption: >-
+            OpenSearch kutusunda iki tablo var: dokümanlar ve ad alanının ters index'i. İkisi de kesit: t0'daki simülasyonun 6
+            ürünü ve 4 terimi (katalogda 200 ürün; 5 kulaklığın beşi de kesitte, 7 klavyeden sadece P0141). Terimlerde ürün adları yer kazanmak için sadece ürün numarasıyla yazıldı. Önce
+            ayarların yayına çıkışı, ilk yükleme ve test setinin ilk ölçümü, sonra yeni bir ürünün zincirden geçişi, ziyaretçilerin
+            aramaları ve gece testi, en sonda tutarlılık ve onarım oynuyor. 4. aşamada "Örnek durum" diye başlayan kareler bu
+            zincirde yaşanmış durumlar; "Olsaydı" diye başlayanlar yaşanmadı, yaşansaydı ne olacağını gösteriyor. Test setindeki
+            sonuç sayıları ve süreler canlı index'ten; temsilî değerler: arama kaydındaki kaç kez sayıları, haftalık toplamlar,
+            sınırlar (%5, 50 ms, 3 hafta), "headset" araması ve saklama süreleri. Son karede index, t0'daki simülasyonun başladığı hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım}
+          rows:
+            - {id: writers, title: "Ürünü yazan ve arama ayarlarını yayına çıkaran"}
+            - {id: rules, title: "Arama ayarları: tek depo, iki dosya (sorgu kodu ve index şablonu)"}
+            - {id: chain, title: "Katalogdan arama index'ine (zero-ETL zinciri, Adım 5)", flow: true}
+            - {id: helpers, title: "Arayan, kaydeden, izleyen ve yandaki işler", side: true}
+          summary: >-
+            Index'i zero-ETL zinciri doldurdu; uygulama kataloğa yazmadı, arama motoruna da ürün göndermedi. Hata toleransı index'te
+            değil sorguda: fuzziness AUTO, prefix_length 0, max_expansions 50, ad ve açıklama bulanık. Ayarlar kod deposunda
+            duruyor, yayın hattı onları test setiyle deniyor, arama kaydı sıfır sonuçlu aramaları sayıyor. Eş anlamlı listesi bugün
+            boş; bir eş anlamlı products_v2 ile yayına çıkar ve alias'la geri alınabilir. Son durum: kesitte 6 ürün; "kulaklik"
+            terimi 5 ürünü gösteriyor, "kulaklk" diye bir terim yok; t0'daki simülasyonun başladığı durum.
+          boxes:
+            - id: admin
+              row: writers
+            - id: release
+              row: writers
+              tables:
+                - name: "test seti (kesit; gerçek aramalardan seçildi)"
+                  cols: [arama, beklenen, sonuç]
+                  rows:
+                    - {key: t_kulaklk, arama: kulaklk, beklenen: "bütün kulaklıklar, başka ürün yok", sonuç: "", hidden: true}
+                    - {key: t_kulkalik, arama: "kulkalik (harf yer değişmiş)", beklenen: "bütün kulaklıklar, başka ürün yok", sonuç: "", hidden: true}
+                    - {key: t_pulaklik, arama: "pulaklik (ilk harf yanlış)", beklenen: "bütün kulaklıklar, başka ürün yok", sonuç: "", hidden: true}
+                    - {key: t_klavey, arama: klavey, beklenen: klavyeler (P0141 dahil), sonuç: "", hidden: true}
+                    - {key: t_131, arama: "131", beklenen: P0131 ilk sırada, sonuç: "", hidden: true}
+                    - {key: t_headset, arama: headset, beklenen: "bütün kulaklıklar, başka ürün yok", sonuç: "", hidden: true}
+            - id: ayar
+              row: rules
+              tables:
+                - name: "yayındaki ayarlar (sürüm 1)"
+                  cols: [ayar, değer, ne demek]
+                  rows:
+                    - {key: a_fz, ayar: fuzziness, değer: AUTO, ne demek: "1–2 harfli kelime birebir; 3–5 harfli 1, daha uzun 2 harf farkla", hidden: true}
+                    - {key: a_pl, ayar: prefix_length, değer: "0 (varsayılan)", ne demek: "ilk harfteki hata da affedilir", hidden: true}
+                    - {key: a_mx, ayar: max_expansions, değer: "50 (varsayılan)", ne demek: "hatalı kelime en çok 50 benzer terime genişler", hidden: true}
+                    - {key: a_tr, ayar: fuzzy_transpositions, değer: "açık (varsayılan)", ne demek: "yer değiştiren iki harf 1 fark sayılır", hidden: true}
+                    - {key: a_fl, ayar: bulanık alanlar, değer: "name^3, description", ne demek: "category ve brand (keyword) asla bulanık değil", hidden: true}
+                    - {key: a_syn, ayar: eş anlamlılar, değer: "(boş)", ne demek: "sıfır sonuç raporu karar verir", hidden: true}
+            - id: docdb
+              row: chain
+              tables:
+                - name: "shop.products (kesit: t0'daki 6 ürün; katalogda 200)"
+                  cols: [_id, name]
+                  rows:
+                    - {_id: P0136, name: Bosphorus Kablosuz Kulaklık 136}
+                    - {_id: P0081, name: Kapadokya Kablosuz Kulaklık 81}
+                    - {_id: P0031, name: Alpen Kablosuz Kulaklık 31}
+                    - {_id: P0001, name: Alpen Kablosuz Kulaklık 1}
+                    - {_id: P0196, name: Nordwind Kablosuz Kulaklık 196, hidden: true}
+                    - {_id: P0141, name: Anadolu Mekanik Klavye 141}
+            - id: stream
+              row: chain
+            - id: osi
+              row: chain
+            - id: opensearch
+              row: chain
+              tables:
+                - name: "products (takma ad) → products_v1: dokümanlar (kesit)"
+                  cols: [_id, name]
+                  rows:
+                    - {_id: P0136, name: Bosphorus Kablosuz Kulaklık 136, hidden: true}
+                    - {_id: P0081, name: Kapadokya Kablosuz Kulaklık 81, hidden: true}
+                    - {_id: P0031, name: Alpen Kablosuz Kulaklık 31, hidden: true}
+                    - {_id: P0001, name: Alpen Kablosuz Kulaklık 1, hidden: true}
+                    - {_id: P0196, name: Nordwind Kablosuz Kulaklık 196, hidden: true}
+                    - {_id: P0141, name: Anadolu Mekanik Klavye 141, hidden: true}
+                - name: "ters index, ad alanı (kesit: t0'daki 4 terim)"
+                  cols: [terim, ürünler]
+                  rows:
+                    - {terim: kablosuz, ürünler: "P0136 · P0081 · P0031 · P0001", hidden: true}
+                    - {terim: klavye, ürünler: P0141, hidden: true}
+                    - {terim: kulaklik, ürünler: "P0136 · P0081 · P0031 · P0001", hidden: true}
+                    - {terim: mekanik, ürünler: P0141, hidden: true}
+            - id: web
+              row: helpers
+            - id: searchlog
+              row: helpers
+              tables:
+                - name: "arama kaydı (kesit; son 7 gün; fuzziness ve süre sütunları gösterilmiyor)"
+                  cols: [arama, bulunan, kaç kez]
+                  rows:
+                    - {key: l_kulaklik, arama: kulaklik, bulunan: 5, kaç kez: 212, hidden: true}
+                    - {key: l_kulaklk, arama: kulaklk, bulunan: 5, kaç kez: 31, hidden: true}
+                    - {key: l_kablosz, arama: kablosz, bulunan: 5, kaç kez: 17, hidden: true}
+                    - {key: l_kulak, arama: kulak, bulunan: 0, kaç kez: 9, hidden: true}
+                    - {key: l_headset, arama: headset, bulunan: 0, kaç kez: 6, hidden: true}
+            - id: s3
+              row: helpers
+            - id: dlq
+              row: helpers
+            - id: monitor
+              row: helpers
+          frames:
+            - phase: 2
+              who: release
+              lit: [ayar, release, opensearch]
+              packet: {at: opensearch, text: "PUT _index_template/products · PUT products_v1 · alias: products → products_v1"}
+              show: {ayar: [a_fz, a_pl, a_mx, a_tr, a_fl, a_syn]}
+              fresh: {ayar: [a_fz, a_pl, a_mx, a_tr, a_fl, a_syn]}
+              note: {ayar: "sürüm 1 · eş anlamlı: 0", release: "kurulan: şablon + products_v1 + alias", opensearch: "boş"}
+              say: >-
+                Index henüz yok. Ekip arama ayarlarını kod deposuna yazdı: sorgu tarafında fuzziness AUTO ve varsayılan
+                prefix_length, max_expansions; index tarafında Adım 5'teki tr_folded analyzer'ı ve boş bir eş anlamlı listesi.
+                Yayın hattı index şablonunu ve products_v1'i kurdu, products adını (alias) ona verdi. Fuzziness için index'te
+                ayrıca bir şey kurulmadı: o, aramanın bir ayarı.
+            - phase: 2
+              who: osi
+              lit: [docdb, osi, s3]
+              packet: {at: s3, text: "dışa aktarma: shop.products (kesitte 5 doküman)"}
+              note: {ayar: "", release: "", s3: "5 doküman (kesitte)"}
+              say: >-
+                Katalog dolu: ürünler DocumentDB'ye Adım 1'deki içe aktarma işiyle gelmişti. Pipeline ilk yüklemeye başladı: koleksiyonun bütün dokümanlarını bir kez okudu ve geçici olarak S3'e yazdı.
+                Değişiklik akışındaki yerini de not etti; yükleme sürerken gelen değişiklikleri sonra oradan alacak.
+            - phase: 2
+              who: osi
+              lit: [s3, osi, opensearch]
+              packet: {at: osi, text: "index products_v1/_doc/P0136 … (5 doküman)"}
+              show: {opensearch: [P0136, P0081, P0031, P0001, P0141, kablosuz, klavye, kulaklik, mekanik]}
+              fresh: {opensearch: [P0136, P0081, P0031, P0001, P0141, kablosuz, klavye, kulaklik, mekanik]}
+              note: {s3: "", opensearch: "5 doküman · terimler tr_folded", osi: "yazılan 5 · hatalı 0"}
+              say: >-
+                Pipeline dokümanları ürün numarasıyla index'e yazdı. OpenSearch adları tr_folded'dan geçirdi: "Kulaklık"
+                index'e "kulaklik" olarak girdi. Index'te "kulaklk" gibi hatalı yazımlar yok ve olmayacak; hatalı kelimeyi
+                index'teki doğru terime bağlayan iş arama anında yapılır.
+            - phase: 2
+              who: release
+              lit: [release, opensearch]
+              packet: {at: opensearch, text: "test seti: 5 arama, products adına"}
+              show: {release: [t_kulaklk, t_kulkalik, t_pulaklik, t_klavey, t_131]}
+              fresh: {release: [t_kulaklk, t_kulkalik, t_pulaklik, t_klavey, t_131]}
+              set: {release: {t_kulaklk: {sonuç: "4 ✓"}, t_kulkalik: {sonuç: "4 ✓"}, t_pulaklik: {sonuç: "4 ✓"}, t_klavey: {sonuç: "7 ✓"}, t_131: {sonuç: "✓ (P0131: 4,59 · sonraki: 3,41)"}}}
+              note: {osi: "", opensearch: "", release: "ilk ölçüm: 5 arama · geçen 5"}
+              say: >-
+                Arama ziyaretçiye açılmadan önce yayın hattı test setini çalıştırdı. Sorular gerçek yazım hatalarından seçildi:
+                bir harf eksik, iki harf yer değiştirmiş, ilk harf yanlış. Hepsi geçti; kulaklık aramaları 4 ürün buldu, dördü de
+                kulaklık; beşinci kulaklık henüz katalogda yok. "131" sorusu bir uyarı: fuzziness AUTO 3 haneli bir sayıda 1 fark kabul
+                eder, bu yüzden 131, 136, 121 gibi sayılar da eşleşir (canlı index'te 23 ürün); test sadece P0131'in hâlâ ilk
+                sırada olduğunu kontrol eder.
+            - phase: 2
+              who: searchlog
+              lit: [searchlog, monitor]
+              packet: {at: searchlog, text: "log grubu: lm-search · metric filter: her satır → Arama · { $.total = 0 } → SifirSonuc"}
+              note: {release: "", searchlog: "0 satır · saklama 90 gün", monitor: "alarmlar: SifirSonuc / Arama > %5 (24 saat, en az 100 arama) · SearchLatency p95 > 50 ms"}
+              say: >-
+                Mağaza açılmadan arama kaydının yeri, iki sayaç (bütün aramalar ve sıfır sonuçlular) ve iki alarm (sıfır sonuç
+                oranı, arama süresi) da kuruldu. Sıra önemli:
+                metric filter geriye dönük saymaz, sadece kurulduktan sonra gelen satırları sayar.
+            - phase: 3
+              who: admin
+              lit: [admin, docdb]
+              show: {docdb: [P0196]}
+              fresh: {docdb: [P0196]}
+              note: {searchlog: "", monitor: ""}
+              say: >-
+                Katalog ekibi yeni bir ürün ekledi: Nordwind Kablosuz Kulaklık 196. Katalog yönetim servisi dokümanı
+                DocumentDB'ye yazdı; arama motoruna hiçbir şey göndermedi.
+            - phase: 3
+              who: stream
+              lit: [docdb, stream]
+              packet: {at: stream, text: "insert shop.products P0196"}
+              say: DocumentDB bu eklemeyi değişiklik akışına yazdı.
+            - phase: 3
+              who: osi
+              lit: [stream, osi, opensearch]
+              packet: {at: osi, text: "index products_v1/_doc/P0196"}
+              show: {opensearch: [P0196]}
+              fresh: {opensearch: [P0196, kablosuz, kulaklik]}
+              set: {opensearch: {kablosuz: {ürünler: "P0136 · P0081 · P0031 · P0001 · P0196"}, kulaklik: {ürünler: "P0136 · P0081 · P0031 · P0001 · P0196"}}}
+              note: {osi: "yazılan 1 · hatalı 0", opensearch: "6 doküman (kesitte)"}
+              say: >-
+                Pipeline değişikliği akıştan okudu ve dokümanı index'e yazdı; birkaç saniye sürdü. "kablosuz" ve "kulaklik"
+                terimleri artık P0196'yı da gösteriyor.
+            - phase: 3
+              who: web
+              lit: [web, opensearch, searchlog]
+              packet: {at: opensearch, text: "multi_match \"kulaklk\" · fuzziness AUTO → 5 ürün (P0196 dahil) · took 11 ms"}
+              show: {searchlog: [l_kulaklk]}
+              fresh: {searchlog: [l_kulaklk]}
+              note: {osi: "", opensearch: "", searchlog: "+1 satır: kulaklk · 5 · 11 ms"}
+              say: >-
+                Bir ziyaretçi "kulaklk" aradı. Uygulama sorguyu fuzziness AUTO ile gönderdi; OpenSearch 7 harfli bu kelime için
+                2 harfe kadar farkı kabul etti ve 1 harf uzaktaki "kulaklik" terimini buldu. Yeni ürün de geldi: hata toleransı
+                için index'te ek bir iş yapılmadı. Uygulama aramadan sonra arama kaydına bir satır yazdı.
+            - phase: 3
+              who: searchlog
+              lit: [web, searchlog, monitor]
+              show: {searchlog: [l_kulaklik, l_kablosz, l_kulak, l_headset]}
+              fresh: {searchlog: [l_kulaklik, l_kablosz, l_kulak, l_headset]}
+              note: {searchlog: "7 gün: 1.240 arama · sıfır sonuç 38", monitor: "sıfır sonuç oranı %3,1 (sınır %5, 24 saatlik) → alarm yok"}
+              say: >-
+                Hafta boyunca her arama bir satır bıraktı. Çoğu bir ürün buldu; bazıları hiç bulamadı ("kulak", "headset").
+                Metric filter sıfır sonuçluları saydı; oran sınırın altında, alarm yok.
+            - phase: 3
+              who: release
+              lit: [release, opensearch, monitor]
+              packet: {at: opensearch, text: "gece: test seti, 5 arama"}
+              set: {release: {t_kulaklk: {sonuç: "5 ✓"}, t_kulkalik: {sonuç: "5 ✓"}, t_pulaklik: {sonuç: "5 ✓"}}}
+              fresh: {release: [t_kulaklk, t_kulkalik, t_pulaklik]}
+              note: {searchlog: "", release: "gece: 5 arama · geçen 5", monitor: "test seti: 5/5 · arama süresi p95: 14 ms (sınır 50 ms)"}
+              say: >-
+                Gece yayın hattı test setini yine çalıştırdı; kimse ayarlara dokunmasa da çalışır, çünkü katalog değişir. Hepsi
+                geçti; kulaklık aramaları artık 5 ürün buluyor. CloudWatch arama süresini de izliyor: bulanık arama 11 ms, aynı
+                kelimenin birebir araması 4 ms sürdü (canlı ölçümler, her istekte değişir).
+            - phase: 4
+              who: osi
+              lit: [stream, osi, opensearch]
+              packet: {at: osi, text: "aynı değişiklik yine geldi → aynı _id, aynı belge sürüm numarası"}
+              mark: {opensearch: {P0196: fix}}
+              note: {release: "", monitor: "", osi: "yazılan 1 · yeni doküman 0"}
+              say: >-
+                Örnek durum: pipeline aynı değişikliği ikinci kez gönderdi. Doküman ürün numarasıyla yazıldığı için aynı dokümanın
+                üstüne yazıldı; ikinci bir P0196 oluşmadı, kulaklık aramaları 6 değil yine 5 ürün buldu.
+            - phase: 4
+              who: dlq
+              lit: [osi, dlq, monitor]
+              mark: {opensearch: {P0196: ""}}
+              note: {osi: "", dlq: "doküman: 0", monitor: "pipeline hatalı kayıt: 0 · DLQ: 0"}
+              say: >-
+                Örnek durum: bu hafta hata klasöründe 0 doküman. Olsaydı: OpenSearch bir dokümanı kabul etmeseydi pipeline onu birkaç denemeden sonra hata klasörüne (DLQ) yazardı, diğer
+                ürünler akmaya devam ederdi. Böyle bir ürün aramada hiç çıkmazdı; hiçbir fuzziness onu bulamaz,
+                çünkü index'te yoktur.
+            - phase: 4
+              who: searchlog
+              lit: [searchlog, release, monitor]
+              packet: {at: searchlog, text: "filter total = 0 | stats count(*) as n by q | sort n desc | limit 20"}
+              mark: {searchlog: {l_kulak: dup, l_headset: dup}}
+              show: {release: [t_headset]}
+              fresh: {release: [t_headset]}
+              set: {release: {t_headset: {sonuç: "0 ✗ (bekliyor)"}}}
+              note: {dlq: "", monitor: "", searchlog: "haftalık rapor: sıfır sonuç 38 · ilk iki: kulak 9, headset 6", release: "test setine 1 soru eklendi"}
+              say: >-
+                Örnek durum: haftalık sıfır sonuç raporu çıktı. "kulak" bir yazım hatası değil, yarım kelime: 5 harfli kelimede 1
+                fark kabul edilir, "kulaklik" 3 harf uzakta. Bu iş fuzziness'in değil öneri listesinin; arama kutusunda
+                "kulak" yazınca kulaklıklar zaten listeleniyor, değişiklik yok. "headset" ise harfleri hiç benzemeyen bir eş
+                anlamlı; fuzziness onu asla bulamaz. Soru test setine "bekliyor" işaretiyle eklendi: yayını durdurmaz.
+                3 hafta üst üste ilk 20'de kalırsa (temsilî kural) katalog ekibinin onayıyla eş anlamlı listesine girer.
+            - phase: 4
+              who: release
+              lit: [ayar, release, osi, opensearch]
+              packet: {at: opensearch, text: "olsaydı: PUT products_v2 (search_analyzer: tr_folded + eş anlamlılar) · ikinci pipeline doldurur"}
+              set: {ayar: {a_syn: {değer: "olsaydı: headset ⇒ kulaklik", ne demek: "sürüm 2, sadece aramada (search_analyzer)"}}}
+              fresh: {ayar: [a_syn]}
+              mark: {searchlog: {l_kulak: "", l_headset: ""}}
+              note: {searchlog: "", release: "", ayar: "olsaydı: sürüm 2", opensearch: "olsaydı: products_v2 dolduruluyor · products hâlâ v1'de"}
+              say: >-
+                Olsaydı: "headset" listeye eklenseydi. Ekip eş anlamlıyı kod deposuna yazar; yayın hattı yeni ayarla products_v2'yi
+                kurar ve ikinci bir pipeline onu ilk yükleme ve akışla doldurur. Eş anlamlı sadece arama sırasında çalışır:
+                "headset" araması "kulaklik" terimini de sorar, ürünlerin terimleri değişmez. Ziyaretçiler bu sırada hâlâ
+                products_v1'de arıyor.
+            - phase: 4
+              who: release
+              lit: [release, opensearch, monitor]
+              packet: {at: opensearch, text: "olsaydı: test seti v1 ve v2'de → POST _aliases { remove v1, add v2 }"}
+              set: {release: {t_headset: {sonuç: "olsaydı: v2'de 5 ✓"}}}
+              fresh: {release: [t_headset]}
+              note: {ayar: "", opensearch: "olsaydı: products → products_v2 · v1 ve pipeline'ı 7 gün çalışır", release: "olsaydı: v2: 6/6 · v1: 5/6 (headset bekliyor)"}
+              say: >-
+                Olsaydı: yayın hattı test setini iki index'te de çalıştırırdı. v2 "headset"i bulur ve daha önce geçen soruların hiçbirini
+                kaybetmezse products adı tek komutla v2'ye çevrilir; iki işlem birlikte olur, arama kesilmez. Bir soru
+                kaybedilseydi yayın orada dururdu ve ziyaretçi hiçbir şey fark etmezdi.
+            - phase: 4
+              who: monitor
+              lit: [monitor, release, opensearch]
+              packet: {at: opensearch, text: "olsaydı: POST _aliases { remove v2, add v1 } → geri alındı"}
+              set: {ayar: {a_syn: {değer: "(boş)", ne demek: "sıfır sonuç raporu karar verir"}}, release: {t_headset: {sonuç: "0 ✗ (bekliyor)"}}}
+              note: {release: "", monitor: "olsaydı: sıfır sonuç oranı %3,1 → %6,4 → alarm", opensearch: "olsaydı: products → products_v1 (tek komut)"}
+              say: >-
+                Olsaydı: yayından sonra sıfır sonuç oranı alarm sınırını aşsaydı (test setinde olmayan bir arama bozulmuş), ekip
+                products adını tek komutla v1'e geri çevirirdi. v1 bu sırada eskimemiştir: kendi pipeline'ı products_v1'e adıyla yazmaya 7
+                gün devam eder, yeni ürünler ona da gelir. Ayar dosyasında da değişiklik geri alınır.
+            - phase: 4
+              who: monitor
+              lit: [ayar, opensearch, monitor]
+              packet: {at: monitor, text: "izlenen karar: prefix_length 0 · arama süresi p95 14 ms (sınır 50 ms)"}
+              note: {monitor: "p95 14 ms → prefix_length 0 kalıyor", opensearch: ""}
+              say: >-
+                Örnek durum: bu haftanın süre ölçümü, izlenen bir karar için. prefix_length 0 olduğu için "pulaklik" gibi ilk
+                harfi yanlış aramalar da bulunuyor; bedeli, OpenSearch'ün yakın terimleri her harfle başlayanlar arasında
+                araması (prefix_length 1 olsaydı sadece aynı harfle başlayanlara bakardı). 200 ürünlük index'te bu ucuz. Arama süresi sınırı
+                aşarsa plan hazır: prefix_length 1 yapılır; o zaman "pulaklik" bulunmaz, test seti bunu gösterir ve soru
+                bilerek "kabul edilen kayıp" diye işaretlenir.
+            - phase: 4
+              who: opensearch
+              lit: [opensearch]
+              note: {monitor: "", opensearch: "products → products_v1 · 6 doküman (kesitte)"}
+              say: >-
+                Hazır: index t0'daki simülasyonun başladığı hâlde. "kulaklik" terimi 5 ürünü gösteriyor, "kulaklk" diye bir terim
+                yok. Sayfa "kulaklk" araması fuzziness AUTO ile açılınca bu 5 ürün bulunacak; "Exact words" seçilince hiçbiri.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Önce ziyaretçilerin gerçekte nasıl yanlış yazdığı incelenir, sonra her hata türü için doğru araç seçilir: Türkçe
+              harf için analyzer, harf hatası için fuzziness, başka kelime için eş anlamlı, yarım kelime için öneri listesi.
+              Kararlar tek yerde durur: kod deposundaki arama ayarlarında.
+            cards:
+              - title: Hangi hata, hangi araçla?
+                text: >-
+                  Her hata türü ayrı bir araçla çözülür; biri diğerinin işini yaparsa ya yavaşlar ya yanlış ürün getirir.
+                  Örneklerin sonuçları canlı index'ten.
+                map:
+                  cols: [Ziyaretçi yazdı, Araç, Neden bu araç]
+                  rows:
+                    - ["kulaklik (Türkçe harfsiz)", "tr_folded analyzer (Adım 5)", "Harf sadeleştirme hem ürün yazılırken hem aramada çalışır; birebir eşleşme ve en yüksek puan (4,65)."]
+                    - ["kulaklk (1 harf eksik)", "fuzziness AUTO", "Index'teki \"kulaklik\" 1 harf uzakta; eşleşir ama daha düşük puanla (3,99)."]
+                    - ["kulkalik (harf yer değişmiş)", "fuzziness, transpositions açık", "Yer değiştiren iki harf tek fark sayılır; 5 ürün bulundu."]
+                    - ["kulak (yarım kelime)", "öneri listesi (match_phrase_prefix)", "Fuzziness kelimeyi tamamlamaz: \"kulaklik\" 3 harf uzakta, sonuç 0. Öneri listesi kelimenin başıyla arar; 5 kulaklık."]
+                    - ["headset (başka kelime)", eş anlamlı listesi, "Harfler benzemez; hiçbir harf farkı ayarı onu bulamaz. Canlı index'te sonuç 0."]
+              - title: "fuzziness AUTO: kelime uzunluğuna göre tolerans"
+                text: >-
+                  Düzenleme mesafesi analyzer'dan çıkan terimde ölçülür; "Kulaklk" önce "kulaklk" olur. AUTO kısa kelimelere
+                  hiç, orta kelimelere 1, uzun kelimelere 2 harf fark tanır; kısa kelimede bir harf farkı bile başka bir kelime
+                  demektir. Bedeli de kısa kelimelerde görünür: 3 harfli "131" 1 fark alır ve 136, 121 gibi sayıları da getirir.
+                  Ekleme, silme, değiştirme ve yan yana iki harfin yer değiştirmesi birer fark sayılır.
+                map:
+                  cols: [Terimin uzunluğu, Kabul edilen fark, Örnek]
+                  rows:
+                    - ["1–2 harf", "0 (birebir)", "\"tv\" sadece \"tv\"yi bulur."]
+                    - ["3–5 harf", "1", "\"kulak\" (5): \"kulaklik\" 3 harf uzakta, eşleşmez. \"131\" (3): 136, 121 eşleşir."]
+                    - ["6 harf ve üstü", "2", "\"kulaklk\" (7): \"kulaklik\" 1 harf uzakta, eşleşir. \"kulklk\" 2 harf uzakta, o da eşleşir (puan 3,1)."]
+              - title: Sorgunun ayarları ve bedeli
+                text: >-
+                  Bulanık arama, hatalı kelimeye yakın terimleri index'te arar ve bulduklarını sorguya ekler. prefix_length baştaki
+                  kaç harfin birebir tutacağını, max_expansions en çok kaç benzer terim ekleneceğini söyler. OpenSearch'e göre
+                  büyük bir max_expansions, hele prefix_length 0 iken, aramayı yavaşlatabilir. Bu mağazada ikisi varsayılanda:
+                  index küçük, ilk harf hataları da bulunuyor; bedeli arama süresiyle izleniyor (4. aşama).
+                code:
+                  - {code: "\"multi_match\": { \"query\": q, \"fields\": [\"name^3\", \"description\"],", tag: Uygulamanın içinde, say: "Adda ve açıklamada ara; adda geçen 3 kat önemli."}
+                  - {code: "  \"fuzziness\": \"AUTO\" }", tag: Uygulama → OpenSearch, say: "Kelime uzunluğuna göre 0, 1 ya da 2 harf farkı kabul et."}
+                  - {code: "// prefix_length: 0, max_expansions: 50, fuzzy_transpositions: true (varsayılan)", tag: OpenSearch'ün içinde, say: "Yazılmayan ayarlar varsayılan değerleriyle çalışır; karar ayar dosyasında yazılı."}
+              - title: Hangi alanlar bulanık, hangileri asla?
+                text: >-
+                  Sadece serbest metin alanları (name, description: text) bulanık aranır. category ve brand keyword'dür, olduğu
+                  gibi tutulur ve filtre içindir; bulanık bir kategori filtresi "Elektronik" seçen birine başka kategoriden ürün
+                  gösterirdi. Puan sırası da korunur: birebir eşleşme bulanıktan yüksek puan alır, adda geçen açıklamada
+                  geçenden 3 kat önemlidir. Açıklama da bulanık arandığı için, bir ürünün açıklamasında "kulaklik"a 2 harf
+                  yakın bir kelime geçseydi o ürün de gelirdi; canlı index'te "kulaklk" sadece 5 kulaklığı getiriyor. Simülasyon
+                  yer kazanmak için sadece ad alanını gösteriyor.
+              - title: Eş anlamlılar index'te değil, aramada
+                text: >-
+                  Eş anlamlı listesi index şablonunda, sadece aramada çalışan bir analyzer'a (search_analyzer) konur. Böylece
+                  ürünlerin terimleri değişmez; liste değişince sadece aramanın davranışı değişir. Liste bugün boş: hangi kelimenin
+                  gireceğine sıfır sonuç raporu karar verir.
+                code:
+                  - {code: "\"tr_syn\": { \"type\": \"synonym_graph\", \"synonyms\": [] }", tag: OpenSearch'ün içinde, say: "Eş anlamlı süzgeci; listesi bugün boş."}
+                  - {code: "\"tr_search\": { \"tokenizer\": \"standard\", \"filter\": [\"tr_lower\", \"asciifolding\", \"tr_syn\"] }", tag: OpenSearch'ün içinde, say: "tr_folded'ın aynısı, sonuna eş anlamlılar eklenmiş."}
+                  - {code: "\"name\": { \"type\": \"text\", \"analyzer\": \"tr_folded\", \"search_analyzer\": \"tr_search\" }", tag: OpenSearch'ün içinde, say: "Ürün tr_folded ile yazılır, arama tr_search ile yapılır."}
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              Index boşken kataloğun tamamı bir kez taşınır (Adım 5'teki gibi pipeline'ın kendisi yapar). Bu sayfa için önemli
+              olan yüklemenin sonrası: arama ziyaretçiye açılmadan önce bir kez ölçülür ve kaydın yeri hazırlanır.
+            cards:
+              - title: Gerçek aramalardan bir test seti
+                text: >-
+                  Test setinin ilk soruları mağazanın eski sitesinin arama kayıtlarından ve katalog ekibinin bildiği hatalardan
+                  seçilir (mağaza açıldıktan sonra yenileri arama kaydından gelir): en sık
+                  aramalar, en sık yazım hataları, zor durumlar ("131" gibi sayılar). Her sorunun yanında beklenen sonuç durur.
+                  Yayın hattı soruları products adına sorar; sonuç ilk ölçüm olarak kaydedilir ve sonraki her değişiklik buna göre
+                  karşılaştırılır.
+                code:
+                  - {code: "- { q: \"kulaklk\", beklenen: { type: \"kulaklik\" } }", tag: Yayın hattının içinde, say: "Beklenen liste her çalışmada katalogdan alınır (türü kulaklık olan ürünler); hepsi gelmeli, başka ürün gelmemeli."}
+                  - {code: "- { q: \"131\", beklenen: P0131, ilk: 1 }", tag: Yayın hattının içinde, say: "Sayı aramasında doğru ürün birinci olmalı."}
+                  - {code: "r = os.search(index=hedef, body=sorgu(q))", tag: [Yayın hattı → OpenSearch, OpenSearch → Yayın hattı], say: "sorgu() uygulamanın kodundan gelir (yeni değişiklikte yeni sürümü). hedef: gece products, yeni sürüm denenirken products_v2."}
+                  - {code: "if not gecti(r, beklenen): durdur(\"test seti: \" + q)", tag: Yayın hattının içinde, say: "Daha önce geçen bir soru kalırsa yayın çıkmaz; \"bekliyor\" işaretliler durdurmaz."}
+              - title: Arama kaydı mağaza açılmadan kurulur
+                text: >-
+                  Uygulama her aramadan sonra tek bir satır yazar: aranan metin, fuzziness açık mı, bulunan sayı, süre.
+                  Ziyaretçinin kimliği yazılmaz. İki sayaç (metric filter) ilk aramadan önce kurulur, çünkü geriye dönük saymaz: biri
+                  bütün aramaları, biri sıfır sonuçluları sayar; oran ikisinin bölümüdür.
+                code:
+                  - {code: "log.info(json.dumps({ \"q\": q, \"fuzzy\": fuzzy, \"total\": total, \"took\": r[\"took\"] }))", tag: Uygulama → CloudWatch Logs, say: "Her arama bir satır."}
+                  - {code: "metric filter: { $.q = * } → Arama (1)", tag: CloudWatch Logs'un içinde, say: "Her arama satırı bir sayar."}
+                  - {code: "metric filter: { $.total = 0 } → SifirSonuc (1)", tag: CloudWatch Logs'un içinde, say: "Bulunan 0 ise ikinci sayaç bir artar."}
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              Yeni ürünler birkaç saniyede index'e gelir (Adım 5'teki zincir). Hata toleransı onlar için ayrıca bir şey
+              istemez; aramalar ise her gün arama kaydını ve test setini besler.
+            cards:
+              - title: Yeni ürün, hatalı yazımla da hemen bulunur
+                text: >-
+                  Katalog yönetim servisi ürünü sadece DocumentDB'ye yazar; değişiklik akışı ve pipeline onu index'e taşır.
+                  OpenSearch adı tr_folded'dan geçirir ve terimleri ters index'e yazar. Bulanık eşleşme arama anında yapıldığı
+                  için ürün index'e girdiği anda "kulaklk" araması onu da bulur; her ürün için hatalı yazımların listesi
+                  tutulmaz.
+                code:
+                  - {code: "db.products.insert_one({ \"_id\": \"P0196\", \"name\": \"Nordwind Kablosuz Kulaklık 196\", … })", tag: Katalog yönetim servisi → DocumentDB, say: "Yeni ürün kataloğa yazılır; gerisini zincir yapar."}
+              - title: Her gece test seti, sürekli sıfır sonuç oranı
+                text: >-
+                  Ayarlara kimse dokunmasa da katalog değişir: yeni bir ürünün adı bir hatalı yazıma daha yakın olabilir. Bu
+                  yüzden test seti her gece de çalışır. CloudWatch iki sayıya bakar: sıfır sonuç oranı (sıfır sonuçlu aramalar /
+                  bütün aramalar) ve arama süresi (OpenSearch'ün SearchLatency ölçümü). Ayrıca sınırı aşan aramalar OpenSearch'ün
+                  yavaş arama kaydına (search slow log) düşer.
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              Değişiklik iki kez gelirse, doküman reddedilirse, ziyaretçiler hiç bulamadığı bir şeyi ararsa, bir eş anlamlı
+              eklenecekse ya da bir değişiklik bir şeyi bozarsa ne olur? Her biri için zincirde bir parça vardır; her parçanın ne
+              zaman çalıştığı ve neyi yakalamadığı aşağıda.
+            cards:
+              - title: Aynı değişiklik iki kez, kabul edilmeyen doküman
+                text: >-
+                  Doküman ürün numarasıyla yazılır; aynı değişiklik tekrar gelirse aynı dokümanın üstüne yazılır, kopya ürün
+                  oluşmaz. Kabul edilmeyen doküman hata klasörüne (DLQ) gider, alarm çalar. Ne zaman: her değişiklikte, birkaç
+                  saniye içinde. Yakalamadığı: DLQ'daki ürün aramada hiç çıkmaz; fuzziness index'te olmayan bir ürünü bulamaz. Değişiklik
+                  akışının saklama süresi Adım 5'te 7 güne çıkarıldı (varsayılan 3 saat); pipeline bundan uzun durursa aradaki değişiklikler okunamaz; index ilk yüklemeyle
+                  yeniden kurulur (Adım 5).
+              - title: "Sıfır sonuç raporu: ne eksik?"
+                text: >-
+                  Her hafta Logs Insights en sık sıfır sonuç veren aramaları listeler. Ekip her birine bir karar verir: eş anlamlı
+                  mı (headset), yarım kelime mi (kulak: öneri listesi zaten bulur), katalogda olmayan bir ürün mü (katalog
+                  ekibine gider)? Seçilenler test setine eklenir. Ne zaman: haftada bir; oran alarmı ise son 24 saate sürekli bakar. Yakalamadığı:
+                  yanlış ürün getiren aramalar. "131" 23 ürün buluyor ve sıfır sonuç değil; onu sadece test seti gösterir (tıklama
+                  kaydı bugün yok).
+                code:
+                  - {code: "filter total = 0 | stats count(*) as n by q | sort n desc | limit 20", tag: [Ekip → CloudWatch Logs, CloudWatch Logs → Ekip], say: "Son 7 günde en sık sıfır sonuç veren 20 arama."}
+              - title: Bir arama değişikliği alias'la yayına çıkar
+                text: >-
+                  Eş anlamlı, analyzer ya da alan değişikliği yeni bir index sürümüyle çıkar: products_v2 yeni ayarla kurulur ve
+                  ikinci bir pipeline onu ilk yükleme ve akışla doldurur. Yayın hattı test setini iki index'te de çalıştırır.
+                  v2 hiçbir soruyu kaybetmezse products adı tek komutla v2'ye çevrilir. Eş anlamlıları index'i yeniden kurmadan
+                  güncellemenin bir yolu da var: liste OpenSearch Service'e bir dosya (paket) olarak yüklenir ve dosya değişince
+                  arama kendiliğinden yeni listeyi kullanır. Ekip bu yolu seçmiyor, çünkü o zaman eski ve yeni liste yan yana
+                  durmaz:
+                  yeni sürüm iki index'i yan yana sınamayı ve tek komutla geri dönmeyi sağlıyor. Alias trafiği bir seferde
+                  çevirir; trafiğin bir kısmını önce yeni index'e yollamak (kademeli yayın) bu boyutta gerekmiyor: sıfır sonuç
+                  alarmı ve tek komutla geri dönüş yeterli görülüyor.
+                code:
+                  - {code: "PUT products_v2   (şablondan, eş anlamlı listesi sürüm 2)", tag: Yayın hattı → OpenSearch, say: "Yeni ayarlarla yeni index."}
+                  - {code: "POST _aliases { \"actions\": [ { \"remove\": { \"index\": \"products_v1\", \"alias\": \"products\" } },", tag: Yayın hattı → OpenSearch, say: "products adı eski index'ten alınır…"}
+                  - {code: "  { \"add\": { \"index\": \"products_v2\", \"alias\": \"products\" } } ] }", tag: Yayın hattı → OpenSearch, say: "…ve aynı komutta yenisine verilir; arama kesilmez."}
+              - title: Geri alma tek komut
+                text: >-
+                  Eski index ve onun pipeline'ı 7 gün çalışmaya devam eder; pipeline products_v1'e adıyla yazdığı için yeni ürünler
+                  ona da gelir. Bedeli: 7 gün iki index ve iki pipeline. 7 gün sonra yayın hattı v1'i ve pipeline'ını siler. Sıfır sonuç oranı ya da
+                  ziyaretçi şikâyeti bir sorun gösterirse aynı komut ters yönde gönderilir ve products adı v1'e döner. Sorgu
+                  tarafındaki bir değişiklik (ör. prefix_length) ise index'te değil uygulamanın kodunda durur; o, uygulamanın bir
+                  önceki sürümü yeniden yayına alınarak geri alınır. Ne zaman: alarmdan dakikalar sonra. Yakalamadığı: 7 gün
+                  geçtikten sonra fark edilen sorun; o zaman düzeltme yeni bir sürümle (v3) çıkar.
+                code:
+                  - {code: "POST _aliases { \"actions\": [ { \"remove\": { \"index\": \"products_v2\", \"alias\": \"products\" } }, { \"add\": { \"index\": \"products_v1\", \"alias\": \"products\" } } ] }", tag: Ekip → OpenSearch, say: "products adı yeniden eski index'e."}
+              - title: "İzlenen karar: prefix_length 0"
+                text: >-
+                  Bugün ilk harf hataları da bulunuyor ("pulaklik", 5 ürün). Bedeli: OpenSearch yakın terimleri her harfle başlayanlar
+                  arasında arıyor; prefix_length 1 olsaydı sadece aynı harfle başlayanlara bakardı. Arama süresinin p95'i 50 ms sınırını (temsilî) aşarsa prefix_length 1 yapılır; test seti o gün
+                  "pulaklik" sorusunu kaybeder ve bu kayıp bilerek kabul edilir. Ne zaman: süre alarmı dakikalar içinde, test seti
+                  her gece. Yakalamadığı: test setinde olmayan bir hata türü; onu ancak sıfır sonuç raporu zamanla gösterir.
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
