@@ -2847,7 +2847,7 @@ EXTRA_TABLES["s3_keys"] = {"cols": ["key", "size (bytes)", "Content-Type"], "row
 def s3_prefix(lang):
     pre = "uploads/v-7f3a/"
     steps = [{"say": T(lang, "A bucket is flat: it holds keys and objects, and no folders. A slash in a key is a normal character.",
-                       "Bir bucket düzdür: key'ler ve object'ler tutar, klasör tutmaz. Bir key'deki slash normal bir karakterdir."),
+                       "Bir bucket düzdür: key'ler ve nesneler tutar, klasör tutmaz. Bir key'deki slash normal bir karakterdir."),
               "marks": {}, "out": [], "count": {"keys returned": 0, "common prefixes": 0}}]
     out, m = [], {}
     for i, (k, size, ct) in enumerate(S3_KEYS):
@@ -2876,26 +2876,26 @@ def s3_prefix(lang):
 def s3_versions(lang):
     key = "uploads/v-7f3a/photo.jpg"
     v = []
-    steps = [{"say": T(lang, f"Versioning is on for the bucket. The key {key} has no object yet.", f"Bucket'ta versioning açık. {key} key'inin henüz object'i yok."),
+    steps = [{"say": T(lang, f"Versioning is on for the bucket. The key {key} has no object yet.", f"Bucket'ta sürümler (versioning) açık. {key} key'inin henüz nesnesi yok."),
               "marks": {}, "rows": {"v": []}, "out": [], "count": {"versions": 0}}]
     v.insert(0, ["3HL4kqtJ", "PUT", "194,002 bytes", T(lang, "yes", "evet")])
     steps.append({"say": T(lang, "PUT photo.jpg: S3 stores the object and gives it the version id 3HL4kqtJ. It is the current version.",
-                           "PUT photo.jpg: S3 object'i saklar ve ona 3HL4kqtJ version id'sini verir. Güncel version budur."),
+                           "PUT photo.jpg: S3 nesneyi saklar ve ona 3HL4kqtJ sürüm id'sini verir. Güncel sürüm budur."),
                   "marks": {"v": {0: "new"}}, "rows": {"v": deepcopy(v)}, "out": [["GET " + key, "3HL4kqtJ, 194,002 bytes"]], "count": {"versions": 1}})
     v[0][3] = T(lang, "no", "hayır")
     v.insert(0, ["QUpfdndh", "PUT", "201,377 bytes", T(lang, "yes", "evet")])
     steps.append({"say": T(lang, "The visitor uploads a new photo with the same key. S3 does not overwrite the old object. It adds a new version, QUpfdndh, on top. A GET without a version id returns the newest version.",
-                           "Ziyaretçi aynı key ile yeni bir fotoğraf yükler. S3 eski object'in üstüne yazmaz. Üstüne yeni bir version ekler: QUpfdndh. Version id'siz bir GET en yeni version'ı döndürür."),
+                           "Ziyaretçi aynı key ile yeni bir fotoğraf yükler. S3 eski nesnenin üstüne yazmaz. Üstüne yeni bir sürüm ekler: QUpfdndh. Sürüm id'siz bir GET en yeni sürümü döndürür."),
                   "marks": {"v": {0: "new", 1: "read"}}, "rows": {"v": deepcopy(v)}, "out": [["GET " + key, "QUpfdndh, 201,377 bytes"]], "count": {"versions": 2}})
     v[0][3] = T(lang, "no", "hayır")
     v.insert(0, ["Uk2a9mcE", "DELETE marker", "-", T(lang, "yes", "evet")])
     steps.append({"say": T(lang, "DELETE without a version id: S3 deletes nothing. It adds a delete marker as the newest version. A normal GET now returns 404 Not Found.",
-                           "Version id'siz DELETE: S3 hiçbir şey silmez. En yeni version olarak bir delete marker ekler. Normal bir GET artık 404 Not Found döndürür."),
+                           "Sürüm id'siz DELETE: S3 hiçbir şey silmez. En yeni sürüm olarak bir silme işareti (delete marker) ekler. Normal bir GET artık 404 Not Found döndürür."),
                   "marks": {"v": {0: "bad"}}, "rows": {"v": deepcopy(v)}, "out": [["GET " + key, "404 Not Found"]], "count": {"versions": 3}})
     steps.append({"say": T(lang, "GET with versionId=3HL4kqtJ still returns the first photo. To restore it, copy that version to the same key, or delete the delete marker. In Lale Market, a lifecycle rule deletes a version 1 day after it stops being the current version.",
-                           "versionId=3HL4kqtJ ile GET hâlâ ilk fotoğrafı döndürür. Onu geri getirmek için o version'ı aynı key'e kopyala ya da delete marker'ı sil. Lale Market'te bir lifecycle kuralı, bir version'ı güncel olmaktan çıktıktan 1 gün sonra siler."),
+                           "versionId=3HL4kqtJ ile GET hâlâ ilk fotoğrafı döndürür. Onu geri getirmek için o sürümü aynı key'e kopyala ya da silme işaretini sil. Lale Market'te bir lifecycle kuralı, bir sürümü güncel olmaktan çıktıktan 1 gün sonra siler."),
                   "marks": {"v": {0: "bad", 2: "match"}}, "rows": {"v": deepcopy(v)}, "out": [["GET " + key, "404 Not Found"], ["GET ...?versionId=3HL4kqtJ", "3HL4kqtJ, 194,002 bytes"]], "count": {"versions": 3}})
-    return {"tables": [{"id": "v", "name": T(lang, f"versions of {key} (newest first)", f"{key} version'ları (en yeni önce)"), "cols": ["VersionId", T(lang, "request", "istek"), T(lang, "size", "boyut"), "IsLatest"], "rows": [], "key": [0], "ref": []}],
+    return {"tables": [{"id": "v", "name": T(lang, f"versions of {key} (newest first)", f"{key} sürümleri (en yeni önce)"), "cols": ["VersionId", T(lang, "request", "istek"), T(lang, "size", "boyut"), "IsLatest"], "rows": [], "key": [0], "ref": []}],
             "out": {"name": T(lang, "what a reader gets", "bir okuyucunun aldığı"), "cols": [T(lang, "request", "istek"), T(lang, "response", "cevap")]}, "steps": steps}
 
 
@@ -2927,6 +2927,65 @@ def s3_presign(lang):
             "out": {"name": T(lang, "responses", "cevaplar"), "cols": [T(lang, "time", "zaman"), T(lang, "result", "sonuç")]}, "steps": steps}
 
 
+SVC.setdefault("s3gda", "S3 Glacier Deep Archive")          # storage class of S3, twin of S3 Standard (S3 page, model 2, card 2)
+SVC.setdefault("s3gfr", "S3 Glacier Flexible Retrieval")    # storage class of S3, twin of S3 Standard (S3 page, card 2)
+SVC.setdefault("s3x", "S3 Express One Zone")                # directory bucket, not a twin (S3 page, cards 5, 6, 7, 9)
+SVC.setdefault("s3t", "S3 Tables")                          # table bucket (Apache Iceberg), not a twin (S3 page, card 3)
+
+# The teaching data of the Turkish S3 page (model 2): eight objects of the Lale Market bucket. The sizes of products/P0001
+# and the scratch object are live values (HeadObject and PutObject, 2026-10-31); the other rows are short examples.
+S3_OBJECTS = [["products/P0001.jpg", 49156, "image/jpeg", "STANDARD", "name, category, author, license"],
+              ["products/P0002.jpg", 41333, "image/jpeg", "STANDARD", "name, category, author, license"],
+              ["products/P0044.jpg", 46870, "image/jpeg", "STANDARD", "name, category, author, license"],
+              ["uploads/v-3c8d/photo.jpg", 230411, "image/jpeg", "STANDARD", "product-id, uploaded-by"],
+              ["uploads/v-7f3a/invoice.pdf", 88120, "application/pdf", "STANDARD", "product-id, uploaded-by"],
+              ["uploads/v-7f3a/photo.jpg", 194002, "image/jpeg", "STANDARD", "product-id, uploaded-by"],
+              ["logs/2026/10/30/web-01.json.gz", 5242880, "application/gzip", "STANDARD_IA", "-"],
+              ["backups/shop/2026/09.dump", 1319413953331, "application/octet-stream", "DEEP_ARCHIVE", "database, taken-at"]]
+EXTRA_TABLES["s3_objects"] = {"cols": ["key", "size (bytes)", "Content-Type", "storage class", "x-amz-meta-*"], "rows": S3_OBJECTS}
+
+
+def s3_cond(lang):
+    """Two sellers write the same key: an unconditional PUT (last writer wins), If-None-Match: * and If-Match: <ETag>.
+    The ETags are the live values of the demo object scratch/e2e-s3-demo.txt (2026-10-31)."""
+    key = "uploads/v-7f3a/invoice.pdf"
+    e1, e2 = "1670fe54", "8b8ef4b3"
+    reqs = [["A", "PUT", "-", "fatura-A.pdf"], ["B", "PUT", "-", "fatura-B.pdf"],
+            ["A", "PUT", "If-None-Match: *", "fatura-A.pdf"], ["B", "PUT", "If-None-Match: *", "fatura-B.pdf"],
+            ["A", "PUT", f"If-Match: {e1}", "fatura-A2.pdf"], ["B", "PUT", f"If-Match: {e1}", "fatura-B2.pdf"]]
+    steps = [{"say": T(lang, f"Two browser tabs (A and B) of one seller write the key {key} at almost the same time. First without a condition, then with the two conditional headers.",
+                       f"Bir satıcının iki tarayıcı sekmesi (A ve B) {key} key'ine neredeyse aynı anda yazar. Önce koşulsuz, sonra iki koşul başlığıyla."),
+              "marks": {}, "out": [], "count": {"accepted": 0, "refused (412)": 0}}]
+    out = [["1", "A", "200 OK", "fatura-A.pdf"]]
+    steps.append({"say": T(lang, "Round 1, no condition. A writes first and gets 200 OK. The object is now fatura-A.pdf.",
+                           "Tur 1, koşulsuz. A önce yazar ve 200 OK alır. Nesne artık fatura-A.pdf'tir."),
+                  "marks": {"r": {0: "match"}}, "out": deepcopy(out), "count": {"accepted": 1, "refused (412)": 0}})
+    out.append(["1", "B", "200 OK", T(lang, "fatura-B.pdf (A's file is replaced)", "fatura-B.pdf (A'nın dosyasının yerine geçti)")])
+    steps.append({"say": T(lang, "B writes the same key and also gets 200 OK. S3 uses last-writer-wins: B's file replaces A's file, and nobody gets an error. With versioning, A's file stays as an older version; without versioning it is lost.",
+                           "B aynı key'e yazar ve o da 200 OK alır. S3 son yazan kazanır kuralını uygular: B'nin dosyası A'nınkinin yerine geçer ve kimse hata almaz. Versioning açıksa A'nın dosyası eski bir sürüm olarak kalır, kapalıysa kaybolur."),
+                  "marks": {"r": {0: "skip", 1: "bad"}}, "out": deepcopy(out), "outmarks": {1: "bad"}, "count": {"accepted": 2, "refused (412)": 0}})
+    out = [["2", "A", "200 OK", T(lang, f"fatura-A.pdf, ETag {e1}", f"fatura-A.pdf, ETag {e1}")]]
+    steps.append({"say": T(lang, "Round 2, a new key with If-None-Match: *. The header means: write only if no object has this key. The key is free, so A writes and S3 returns the ETag of the new object.",
+                           "Tur 2, yeni bir key ve If-None-Match: *. Başlığın anlamı: bu key'de nesne yoksa yaz. Key boş, bu yüzden A yazar ve S3 yeni nesnenin ETag'ini döndürür."),
+                  "marks": {"r": {2: "match"}}, "out": deepcopy(out), "count": {"accepted": 1, "refused (412)": 0}})
+    out.append(["2", "B", "412 Precondition Failed", T(lang, "nothing changed", "hiçbir şey değişmedi")])
+    steps.append({"say": T(lang, "B sends the same conditional PUT. The key now exists, so S3 refuses with 412 Precondition Failed. The test and the write are one step: no request can come between them. B knows that A was first.",
+                           "B aynı koşullu PUT'u gönderir. Key artık dolu, bu yüzden S3 412 Precondition Failed ile reddeder. Test ve yazma tek adımdır; araya başka bir istek giremez. B, A'nın önce geldiğini öğrenir."),
+                  "marks": {"r": {2: "match", 3: "bad"}}, "out": deepcopy(out), "outmarks": {1: "bad"}, "count": {"accepted": 1, "refused (412)": 1}})
+    out = [["3", "A", "200 OK", T(lang, f"fatura-A2.pdf, new ETag {e2}", f"fatura-A2.pdf, yeni ETag {e2}")]]
+    steps.append({"say": T(lang, f"Round 3, an update. A and B both read the object and saw the ETag {e1}. A writes with If-Match: {e1}. The ETag is still the same, so S3 writes. The object gets a new ETag, {e2}.",
+                           f"Tur 3, bir güncelleme. A ve B nesneyi okudu ve ETag'i {e1} gördü. A, If-Match: {e1} ile yazar. ETag hâlâ aynı, bu yüzden S3 yazar. Nesnenin ETag'i artık {e2}'dir."),
+                  "marks": {"r": {4: "match"}}, "out": deepcopy(out), "count": {"accepted": 1, "refused (412)": 0}})
+    out.append(["3", "B", "412 Precondition Failed", T(lang, "B reads again, then decides", "B yeniden okur, sonra karar verir")])
+    steps.append({"say": T(lang, f"B writes with the old ETag {e1}. The object changed in between, so S3 refuses with 412. This is optimistic locking without a lock: B reads the new object and decides again. The same test was run on the live bucket.",
+                           f"B eski ETag {e1} ile yazar. Nesne arada değişti, bu yüzden S3 412 ile reddeder. Bu, kilit olmadan optimistic locking'dir: B yeni nesneyi okur ve yeniden karar verir. Aynı deneme canlı bucket'ta yapıldı."),
+                  "marks": {"r": {4: "match", 5: "bad"}}, "out": deepcopy(out), "outmarks": {1: "bad"}, "count": {"accepted": 1, "refused (412)": 1}})
+    return {"tables": [{"id": "r", "name": T(lang, "requests, in time order", "istekler, zaman sırasıyla"),
+                        "cols": [T(lang, "tab", "sekme"), T(lang, "request", "istek"), T(lang, "condition", "koşul"), T(lang, "body", "gövde")], "rows": reqs, "key": [0], "ref": []}],
+            "out": {"name": T(lang, "responses and the object", "cevaplar ve nesne"), "cols": [T(lang, "round", "tur"), T(lang, "tab", "sekme"), T(lang, "response", "cevap"), T(lang, "object now", "nesnenin şimdiki hâli")]},
+            "steps": steps}
+
+
 S3_CANDS = ["Amazon S3", "Aurora PostgreSQL", "DynamoDB", "DocumentDB", "ElastiCache"]
 
 
@@ -2952,9 +3011,14 @@ def s3(lang):
                                         ("Reduce only if enough stock is left", "Sadece yeterli stok kaldıysa azalt"),
                                         ("Durable source of truth", "Kalıcı source of truth")], S3_CANDS, w2),
         "prefix": s3_prefix(lang), "versions": s3_versions(lang), "presign": s3_presign(lang),
+        # model 2, the Turkish page: five weighted_scorecard simulations built from the M2 cards (e2e_usecases_w.S3_W) and the
+        # conditional write race. decide_images and decide_stock stay for the untouched English s3.html.
+        **({uc["sim"]: weighted_scorecard(lang, uc) for uc in _ucw.S3_W if uc["sim"]} if lang == "tr" else {}),
+        **({"cond": s3_cond(lang)} if lang == "tr" else {}),
     }
     return {k: _localize(v, lang) for k, v in spec.items()}
 
 
 COUNT_TR.update({"keys returned": "dönen key", "common prefixes": "common prefix", "versions": "version", "allowed": "izin verilen", "refused": "reddedilen"})
+COUNT_TR.update({"accepted": "kabul edilen", "refused (412)": "reddedilen (412)", "versions": "sürüm"})   # "sürüm": the Turkish S3 page's word (model 2)
 SIMS["s3"] = s3
