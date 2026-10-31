@@ -6691,54 +6691,758 @@ steps:
           - [find_one, "Tek bir doküman getiren okuma."]
           - [Projection, "Okumada hangi alanların döneceğini seçmek. 1 \"getir\" demek; yazılmayan alanlar gelmez."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde ürün dokümanı için hazırlık
+      t1:
+        title: Önceden ne vardı? Ürün dokümanı bu şekle nasıl geldi, görsel sayfaya nasıl geliyor?
         intro: >-
-          Ürün sayfası hiç açılmadan, dokümanın şekli ve hangi ekranın hangi alanları okuyacağı belirlenir. Aşağıdaki beş adım bu
-          hazırlığın sırasıdır.
-        text:
-          - title: Önce ekranların soruları yazılır
-            text: >-
-              Ürün sayfası "bu ürünün her şeyi", kart ve listeler "ad, fiyat, puan, stok" ister. İki soru aynı dokümandan,
-              farklı projection'larla cevaplanır.
-            code: |-
-              db.products.findOne({ _id: "P0001" })                                         // ürün sayfası
-              db.products.findOne({ _id: "P0001" }, { name: 1, price: 1, rating: 1, stock: 1 }) // kart
-          - title: Birlikte okunan bilgi birlikte saklanır
-            text: >-
-              Ürün sayfası özellikleri ve etiketleri her zaman ürünle birlikte gösterir; bu yüzden onlar ayrı koleksiyonda değil,
-              dokümanın içinde durur. Böylece sayfa tek okumayla, JOIN olmadan çizilir.
-            code: |-
-              { _id: "P0001", name: "…", price: 3373.84, tags: ["hızlı kargo", "çevreci"],
-                attributes: { renk: "siyah", garanti_ay: 12, agirlik_kg: 2.45 }, description: "…" }
-          - title: Sınırsız büyüyen listeler ayrılır
-            text: >-
-              Yorumlar ya da fiyat geçmişi gibi zamanla sınırsız büyüyen listeler dokümanın içine konmaz; ayrı bir koleksiyonda,
-              ürün numarasıyla tutulur. Bir doküman en fazla 16 MB olabilir ve büyük doküman her okumada daha çok veri taşır.
-          - title: Her ekran kendi projection'ını kullanır
-            text: >-
-              Liste ve kartlar sadece gereken alanları ister. Böylece hem ağdan daha az veri geçer hem uygulama sunucusunun
-              belleği daha az dolar. Uzun açıklama gibi büyük alanlar sadece ürün sayfasında okunur.
-          - title: Okuma kopyalara dağıtılır
-            text: >-
-              Ürün sayfası çok okunur. Okuma tercihi secondaryPreferred olur: okumalar replica'lara gider, ana kopya yazmalara
-              kalır. _id ile okuma her zaman index'le, tek bir dokümana doğrudan gider.
-      feed:
-        title: Veri nereden geliyor?
-        writes: >-
-          Katalog yönetimi: ürün ekleyen, fiyat, stok ve açıklama güncelleyen arka ofis ekranları ya da tedarikçi dosyalarını
-          aktaran bir iş. Hepsi uygulama üzerinden yazar.
-        reads: Uygulama, ürün sayfası, kartlar ve sepete ekleme sırasında ürün bilgisi için.
-        kind: >-
-          Uygulama orkestrasyonu. DocumentDB başka bir veritabanından kendiliğinden veri çekmez. Kendi değişikliklerini ise
-          change streams ile dışarı verebilir.
-        with: >-
-          Ürün sayfası beş veritabanına dokunur: ürünün kendisi DocumentDB'den, görseli nesne deposundan (S3), "baktın" kaydı ve
-          "son baktıkların" bir olay tablosundan (Keyspaces), öneriler bir graf veritabanından (Neptune), oturum bellekten
-          (ElastiCache). Sayfa bunları ayrı isteklerle alır ve tarayıcı birleştirir.
-        best: >-
-          Katalog tek yerde tutulur. Ürün bilgisinin kopyası başka yerlere (sepet, olay kaydı, arama index'i) sadece gereken
-          alanlarla ve yazıldığı anki değeriyle konur; asıl değer her zaman katalogdan okunur.
+          Ürün sayfasını açmadan önce DocumentDB'de Alpen Kablosuz Kulaklık 1'in (P0001) dokümanı zaten hazır: 12 alan,
+          JSON hâliyle 406 bayt. Fotoğrafı da S3'te, products/P0001.jpg anahtarında (48 KB). Burada bu hazırlığın gerçek bir
+          sistemde nasıl yapıldığını görüyorsun: dokümana hangi alanların girdiğine ve hangilerinin bilerek dışarıda
+          kaldığına (alış fiyatı, tedarikçi kodu, yorumların kendisi) nasıl karar verildiğini, dokümanın büyümesinin nasıl
+          sınırlandığını, kartın okuduğu 7 alanın nerede yazılı olduğunu, yeni bir alanın sayfaya nasıl güvenle eklendiğini ve
+          fotoğrafın S3'ten tarayıcına nasıl geldiğini. Önce zincirin bileşenleri, sonra bir simülasyon, sonra dört aşama
+          (tasarım, ilk yükleme, sürekli besleme, tutarlılık ve onarım).
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1", "t0'daki \"Card fields only\" (sadece kart alanları) tıklamasından önceki zaman. Ürün sayfasının ilk açılışı (bütün doküman) da tıklamadan önceydi; t0'daki simülasyon onu \"t-1 · İstek 1\" şeridinde gösterecek. Bu bölüm o istekten de önceki hazırlığı anlatır: dokümanın ve fotoğrafın oraya nasıl geldiğini."]
+          - ["Ekip, katalog ekibi ve tedarikçi", "Ekip: mağazanın sistemini kuran ve işleten mühendisler; alarmlara onlar bakar. Katalog ekibi: ürün ekleyen ve değiştiren çalışanlar; kod yazmaz, arka ofis ekranını kullanır. Tedarikçi: ürünleri mağazaya satan firma; ürün bilgilerini her gece bir dosyayla gönderir."]
+          - ["Index ve adındaki 1 ve -1", "Index, bir ya da birkaç alana göre sıralı tutulan ayrı bir liste; kitabın sonundaki dizin gibi. Veritabanı aradığı dokümana bütün koleksiyonu okumadan gider. Index'in adı alanlarından ve yönünden kurulur: category_1_rating_-1, kategori küçükten büyüğe (1), aynı kategoride puan büyükten küçüğe (-1) demek. _id_ her koleksiyonda kendiliğinden olan _id index'idir."]
+          - ["Küme, primary ve replica", "Küme (cluster): bir veritabanının birlikte çalışan sunucuları. Primary yazan sunucu, replica sadece okuyan kopyası; bir dükkânın kasası ve vitrini gibi. Bütün yazmalar (rating dahil) primary'ye gider; Uygulama'nın okumaları önce replica'ya."]
+          - ["Plan ve explain (Adım 3)", "explain veritabanına \"bu sorguyu nasıl çalıştırırsın?\" diye sorar; cevap plandır (hangi index'le, kaç doküman okuyarak). \"Index ve plan kontrolü\" bileşeninin adı buradan gelir (Adım 3); bu sayfada kuralı kurma, sözleşme testi ve gece denetimi de onun işi."]
+          - ["Koleksiyon, doküman ve alan", "DocumentDB'de koleksiyon bir dosya dolabı (ör. products), doküman içindeki tek bir kayıt (bir ürün), alan dokümanın bir bilgisi (name, price). Bu bölümde üç koleksiyon var: products (mağazanın göreceği ürün bilgisi), product_supplier (sadece arka ofisin göreceği tedarikçi bilgisi) ve reviews (müşteri puanları)."]
+          - ["Projection ve kart alanları (CARD)", "Projection: okumada hangi alanların döneceğini seçmek (Kavram bölümü). Kart alanları: liste ve kartların okuduğu 7 alan (name, price, rating, category, brand, tags, stock). Uygulamanın kodunda CARD adıyla tek bir yerde yazılı; kategori sayfası (Adım 3) da ürün sayfasının \"Card fields only\" isteği de aynı listeyi kullanır."]
+          - ["Ürün dokümanı sözleşmesi", "Ürün dokümanında hangi alanların olabileceğini, türlerini, sınırlarını ve her alanı kimin okuduğunu (sayfa, kart) yazan tek liste; bir kira sözleşmesi gibi: iki taraf da neyin içeride olduğunu bilir. Doğrulama kuralı, kart alanlarının testi ve gece denetimi bu listeden üretilir."]
+          - ["Özellik sözlüğü (Adım 4)", "attributes bölümündeki özelliklerin (renk, garanti_ay, agirlik_kg) adlarını, türlerini, izinli değerlerini ve tedarikçilerin farklı yazımlarını tutan liste. Sözleşme attributes'un içi için bu sözlüğe bakar."]
+          - ["İç alan", "Mağazanın işine yarayan ama müşterinin görmemesi gereken bilgi: alış fiyatı (cost_price), tedarikçinin ürün kodu (supplier_code). Bu bölümde product_supplier koleksiyonunda durur, products dokümanında değil."]
+          - ["Puan özeti ve sınırsız liste", "Puan (rating) müşterilerin verdiği yıldızların ortalamasıdır, 1 ondalıkla. Yorumların kendisi zamanla sınırsız çoğalır (bir ürüne binlerce); böyle bir listeye sınırsız liste denir. Dokümana sadece özet girer, liste reviews koleksiyonunda durur."]
+          - ["Bayt ve doküman boyutu", "Bayt, verinin en küçük ölçü birimlerinden biri; bir harf çoğu zaman 1 bayt, Türkçe harfler 2. Bu sayfadaki 406 ve 184 bayt, dokümanın JSON hâlinin uzunluğu (Uygulama ölçer). DocumentDB'de bir doküman en fazla 16 MB olabilir; bu ekibin kendi sınırı çok daha küçük: 4 KB (temsilî)."]
+          - ["Doğrulama kuralı (validator, $jsonSchema)", "Koleksiyona konan giriş kontrolü; kapıdaki bilet kontrolü gibi. Burada kullanılan anahtar kelimeler: bsonType (tür), maxLength (en fazla kaç karakter), maxItems (bir listede en fazla kaç eleman), additionalProperties: false (listede olmayan alan giremez). Kurala uymayan yazma \"Document failed validation\" hatasıyla durur."]
+          - ["collMod, upsert ve $set", "collMod: var olan koleksiyonun kuralını değiştiren komut; dokümanlar yerinde kalır. Upsert: \"bu numarayla doküman varsa güncelle, yoksa yarat\". $set: dokümanın sadece yazılan alanlarını değiştirir, diğerlerine dokunmaz."]
+          - ["$bsonSize ve collStats", "$bsonSize: bir dokümanın veritabanındaki boyutunu bayt olarak veren komut parçası. collStats: koleksiyonun doküman sayısını ve ortalama doküman boyutunu (avgObjSize) veren komut."]
+          - ["S3, anahtar, sürüm (versioning) ve S3 olayı", "S3, AWS'in dosya deposu. Dosyalar bir kovada (İngilizcesi bucket) durur; her dosyanın tam adı anahtarıdır (products/P0001.jpg). Sürüm tutma açık bir kovada aynı anahtara yeni dosya yazılınca eskisi silinmez, eski sürüm olarak kalır; istenirse geri getirilir. S3 olayı: kovaya yeni dosya gelince S3'ün gönderdiği haber; bir Lambda'yı başlatabilir."]
+          - ["Önceden imzalı adres (presigned URL) ve AWS Lambda", "Önceden imzalı adres: kısa süre geçerli, tek bir dosyaya yükleme izni taşıyan S3 adresi (Adım 1). Lambda: bir olay gelince kısa bir kodu çalıştıran AWS servisi; sunucuyu AWS yönetir."]
+          - ["Görsel adresi ve Cache-Control", "Görsel adresi: tarayıcının fotoğrafı istediği adres, /s3/api/img/P0001. Arkasında Uygulama'nın küçük bir bölümü var: S3'ten dosyayı okur ve tarayıcıya verir (görsel vekili, image proxy). Cache-Control: cevaba eklenen \"bunu ne kadar saklayabilirsin\" notu. public, max-age=300: tarayıcı (ve aradaki önbellekler) dosyayı 300 saniye, yani 5 dakika saklayıp yeniden sormadan kullanabilir."]
+          - ["CDN ve CloudFront", "CDN: dosyaların kopyasını kullanıcılara yakın sunucularda tutan ağ; mahalle bakkalındaki stok gibi, her seferinde depoya gidilmez. CloudFront AWS'in CDN'i; Cache-Control'deki süreye uyar."]
+          - ["Varyant", "Aynı fotoğrafın farklı boyda bir kopyası (ör. kart için küçük, büyütme için büyük)."]
+          - ["Dağıtım hattı (CI/CD) ve sözleşme testi", "Dağıtım hattı: yeni kodun yayına çıkmadan önce geçtiği otomatik adımlar. Sözleşme testi: kart alanlarının ve sayfanın cevabının sözleşmeye uyduğunu kontrol eden test; bir test kalırsa kod yayına çıkmaz. Aynı hat her gece zamanlanmış bir çalışma da yapar (gece denetimi): kimse kod değiştirmese de veri her gün değişir."]
+          - ["CloudWatch, hata klasörü ve sürekli yedek (PITR)", "CloudWatch: AWS'in ölçüm ve alarm servisi. Hata klasörü: kabul edilmeyen satırların sebebiyle bırakıldığı S3 klasörü. PITR (point-in-time recovery): veritabanını geçmişteki bir saniyeye, yeni bir kümede geri açabilme."]
+          - ["Kesit ve temsilî değer", "Kesit: simülasyonda gösterilen kayıtlar; burada t0'daki tek doküman (P0001) ve ona bağlı kayıtlar. Katalogda 200 ürün var. Temsilî: canlı sistemden gelmeyen, anlatım için seçilmiş örnek değer; her yerde böyle işaretli."]
+          - ["Kod kartlarındaki sözcükler", "JSON: verinin metin hâli ({ ad: değer }); BSON: DocumentDB'nin aynı veriyi diskte tuttuğu ikili hâli. JPEG ve PNG: iki fotoğraf dosyası biçimi. img etiketi: sayfada bir fotoğrafı gösteren HTML parçası. 404 ve NoSuchKey: \"böyle bir dosya yok\" cevabı. ObjectCreated: S3'ün \"yeni dosya geldi\" olayı. EC2: AWS'in sanal sunucusu. aggregate: birkaç adımlı hesap ($match: süz, $group: grupla, $avg: ortalama al, $project: her dokümandan bir değer çıkar, $$ROOT: dokümanın tamamı). insert_many: çok kaydı birden ekle. createIndex: index kur. mongoexport: koleksiyonu dosyaya döken araç. BulkWriteError, code 121: toplu yazmada kurala takılan satırların hatası. assert: \"bu doğru değilse testi durdur\". product_id: Uygulama cevabı gönderirken _id'nin adını product_id yapar; /docdb/api/product/P0001 tarayıcının ürünü istediği adres."]
+          - ["Görev adımları", "\"Adım 1\", \"Adım 4\" gibi adlar bu görevin (mağazadaki 37 adımın) adımlarıdır. Simülasyonun sayacındaki \"Adım 1 / 21\" ise simülasyonun karesidir."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra"
+          sütunu veriyi kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim kodumuz" etiketli
+          parçaları mağazanın ekibi yazar. Katalog parçaları Adım 1, 3 ve 4'teki zincirin aynısı. Bu sayfada öne çıkanlar:
+          dokümanın şeklini yazan ürün dokümanı sözleşmesi, iç alanları ve yorumları ayrı koleksiyonlara ayıran içe aktarma
+          işi, sözleşmeyi her yayında test eden dağıtım hattı ve fotoğrafın yolu (görsel kovası, görsel kontrol işi, görsel
+          adresi). Aynı parçalar aşağıdaki simülasyonda birer kutu: üst sırada yazanlar, sonra kurallar, ortada depolar, sonra
+          sayfaya verenler, altta yandaki işler.
+        inventory:
+          - id: staging
+            name: S3 (içe aktarma klasörü)
+            kind: aws
+            what: Amazon S3 bucket'ı
+            does: >-
+              Eski katalog sisteminin dışa aktardığı ürün dosyaları (ilk yükleme) ve tedarikçilerin her gece gönderdiği dosyalar
+              buraya gelir. Bir satırda mağazanın bilgileriyle tedarikçinin iç bilgileri karışık durur (ad ve fiyatın yanında
+              alış fiyatı). Yeni dosya gelince S3 olayı içe aktarma işini başlatır.
+            box: "Ürün dosyaları gelir; satırda iç bilgiler de var. Yeni dosya işi başlatır."
+            phases: [2, 3, 4]
+            before: Eski katalog sistemi, tedarikçiler
+            after: importer
+          - id: importer
+            name: İçe aktarma işi (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod
+            does: >-
+              Dosyayı satır satır okur ve her alanı sözleşmeye göre yerine koyar: mağazanın alanlarını products'a (özellikleri
+              sözlükle eşleyerek), alış fiyatını ve tedarikçi kodunu product_supplier'a yazar; ilk yüklemede eski yorumları
+              reviews'e taşır ve fotoğrafları 480×480 JPEG olarak görsel kovasına kopyalar. Ürün numarasıyla upsert eder;
+              reddedilen satırı hata klasörüne, sayılarını CloudWatch'a yazar.
+            box: "Alanları sözleşmeye göre ayırır: mağaza bilgisi → products, iç bilgi → product_supplier; upsert."
+            phases: [2, 3, 4]
+            before: [staging, sozlesme, sozluk]
+            after: [docdb, images, rejects, monitor]
+          - id: admin
+            name: Katalog yönetim servisi
+            kind: code
+            what: arka ofis programı (ürün ekranlarının arka ucu)
+            does: >-
+              Katalog ekibinin ekranda değiştirdiği bilgiyi (ör. açıklama) sözleşmenin sınırlarıyla kontrol eder ve ürün
+              numarasıyla DocumentDB'ye yazar. Fotoğraf için S3'ten 15 dakika geçerli, tek dosyalık bir yükleme adresi verir;
+              ekran fotoğrafı yüklemeden önce 480×480'e küçültür.
+            box: "Ekrandan gelen değişikliği sınırlarla kontrol edip yazar; fotoğrafa yükleme adresi verir."
+            phases: [3, 4]
+            before: [Katalog ekibi (arka ofis ekranı), sozlesme]
+            after: [docdb, images]
+          - id: indexjob
+            name: Index ve plan kontrolü (dağıtım hattı)
+            kind: code
+            what: dağıtım hattında (CI/CD) çalışan kod
+            does: >-
+              Doğrulama kuralını sözleşmeden ve sözlükten üretip koleksiyonlara koyar, index'leri kurar. Her yayından önce
+              sözleşme testini çalıştırır: kart alanları sözleşmede "kart" diye işaretli mi, sayfanın cevabında sözleşme dışı ya
+              da iç bir alan var mı. Her gece doküman boyutlarını ve fotoğrafı olmayan ürünleri sayar. Sonuçları CloudWatch'a
+              yazar.
+            box: "Kuralı sözleşmeden üretir; her yayında sözleşme testi, her gece boyut ve fotoğraf denetimi."
+            phases: [1, 2, 3, 4]
+            before: [Ekip (yeni ekran, yeni alan), sozlesme, sozluk]
+            after: [docdb, monitor]
+          - id: sozlesme
+            name: Ürün dokümanı sözleşmesi
+            kind: code
+            what: kod deposundaki sürümlü dosya
+            does: >-
+              Ürün dokümanının her alanını türü, sınırı ve okuyanıyla (sayfa, kart) yazar; iç alanların ve yorumların bu
+              dokümana girmediğini, nerede durduğunu da yazar. Değişikliği ekip yapar, dosya dağıtım hattından geçerek yayına
+              çıkar. Doğrulama kuralı, içe aktarma işinin ayırması ve sözleşme testi buradan üretilir.
+            box: "Her alan: tür, sınır, kim okur (sayfa / kart); iç alanlar ve yorumlar dışarıda."
+            phases: [1, 2, 3, 4]
+            before: Ekip (değişiklik isteği)
+            after: [indexjob, importer, admin]
+          - id: sozluk
+            name: Özellik sözlüğü
+            kind: code
+            what: kod deposundaki sürümlü dosya (Adım 4)
+            does: >-
+              attributes bölümünün özelliklerini (renk, garanti_ay, agirlik_kg), türlerini, izinli değerlerini ve tedarikçi
+              yazımlarını tutar. Sözleşme attributes'un içi için buna bakar.
+            box: "attributes'un içi: 3 özellik, izinli değerler, eş anlamlılar (Adım 4)."
+            phases: [1, 2, 3]
+            before: Ekip ve katalog ekibi (değişiklik isteği)
+            after: [indexjob, importer]
+          - id: docdb
+            name: DocumentDB (shop.products, shop.product_supplier, shop.reviews)
+            kind: aws
+            what: katalog veritabanı (bir primary, bir replica)
+            does: >-
+              products'ta mağazanın göreceği ürün bilgisi, product_supplier'da aynı ürün numarasıyla iç bilgiler, reviews'te
+              müşteri puanları durur. products'un doğrulama kuralı sözleşmede olmayan alanı, sınırı aşan açıklamayı ve
+              listeyi kapıda durdurur.
+            box: "Mağaza bilgisi, iç bilgi ve puanlar üç ayrı koleksiyonda; kural sözleşme dışını durdurur."
+            phases: [1, 2, 3, 4]
+            before: [importer, admin, web, indexjob]
+            after: [web, backup, indexjob]
+          - id: images
+            name: S3 (ürün görselleri)
+            kind: aws
+            what: Amazon S3 bucket'ı (sürüm tutma açık)
+            does: >-
+              Her ürünün tek fotoğrafı products/<ürün no>.jpg anahtarında, 480×480 JPEG. Adres ürün numarasından kurulur;
+              dokümanda yazmaz. Aynı anahtara yeni fotoğraf gelince eskisi sürüm olarak saklanır.
+            box: "products/<ürün no>.jpg, 480×480; eski fotoğraflar sürüm olarak saklanır."
+            phases: [1, 2, 3, 4]
+            before: [importer, admin]
+            after: [imgcheck, imgproxy]
+          - id: web
+            name: Uygulama (mağaza sayfaları)
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucusunda)
+            does: >-
+              Ürün sayfası açılınca bütün dokümanı, kartlar ve "Card fields only" için kod içindeki CARD listesindeki 7 alanı
+              okur (t0'daki istek; replica'dan). Müşteri bir ürüne puan verince puanı reviews'e yazar, ürünün ortalamasını
+              yeniden hesaplar ve sadece rating alanını günceller. product_supplier'ı hiç okumaz.
+            box: "Ürünü okur (bütün ya da CARD); puan gelince özeti (rating) günceller; iç bilgiyi okumaz."
+            phases: [3, 4]
+            before: Tarayıcı (ürün sayfası, kartlar, puan verme)
+            after: docdb
+          - id: imgproxy
+            name: Görsel adresi (/s3/api/img)
+            kind: code
+            what: Uygulama'nın görsel bölümü (görsel vekili)
+            does: >-
+              Tarayıcı fotoğrafı /s3/api/img/<ürün no> adresinden ister. Bu bölüm adresi products/<ürün no>.jpg anahtarına
+              çevirir, dosyayı S3'ten okur ve "public, max-age=300" notuyla gönderir: tarayıcı onu 5 dakika yeniden sormadan
+              kullanır. Dosya yoksa 404 döner ve bunu sayar.
+            box: "S3'ten okur, \"5 dakika sakla\" notuyla verir; 404'leri sayar."
+            phases: [3, 4]
+            before: [Tarayıcı (img etiketi), images]
+            after: [Tarayıcı, monitor]
+          - id: imgcheck
+            name: Görsel kontrol işi (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod
+            does: >-
+              products/ altına yeni bir dosya gelince S3 olayıyla başlar. Dosyanın JPEG, 480×480 ve 100.000 bayttan küçük (temsilî
+              sınır) olduğunu kontrol eder. Uymazsa bir önceki sürümü geri getirir ve alarm verir.
+            box: "Yeni fotoğraf: JPEG mi, 480×480 mi, 100.000 bayttan küçük mü? Değilse önceki sürümü geri getirir."
+            phases: [3, 4]
+            before: images
+            after: [images, monitor]
+          - id: monitor
+            name: CloudWatch alarmları
+            kind: aws
+            what: AWS'in izleme servisi
+            does: >-
+              İçe aktarma işinin sayılarını (reddedilenleri sebebiyle), sözleşme testinin ve gece denetiminin sonucunu, görsel
+              kontrol işinin sonuçlarını ve görsel adresinin 404 oranını izler; eşik aşılınca ekibe alarm gönderir.
+            box: "Reddedilenler, sözleşme testi, gece denetimi, görsel kontrolü ve 404 oranı; alarm verir."
+            phases: [2, 3, 4]
+            before: [importer, indexjob, imgcheck, imgproxy]
+            after: Ekip (alarm)
+          - id: rejects
+            name: Hata klasörü (S3)
+            kind: aws
+            what: Amazon S3 bucket'ı
+            does: >-
+              Kabul edilmeyen satırları sebebiyle saklar (ör. sözleşme dışı alan); diğer satırlar beklemeden yazılır. Ekip
+              sebebi düzeltip satırı yeniden gönderir.
+            box: Reddedilen satırlar, sebebiyle.
+            phases: [4]
+            before: importer
+            after: Ekip (düzeltir, yeniden gönderir)
+          - id: backup
+            name: DocumentDB sürekli yedeği (PITR)
+            kind: aws
+            what: DocumentDB'nin yedekleme özelliği
+            does: >-
+              Kataloğu saklama süresi içindeki (1–35 gün) herhangi bir saniyeye, yeni bir kümede geri açar. Yanlış bir toplu
+              değişiklik birçok ürünün açıklamasını bozarsa doğru değerler oradan geri yazılır.
+            box: Kataloğu geçmişteki bir saniyeye yeni bir kümede açar.
+            phases: [4]
+            before: docdb
+            after: Ekip (geri yükleme)
+        sim_title: "Simülasyon: ürün dokümanı bu şekle nasıl geldi, fotoğraf sayfaya nasıl geliyor?"
+        sim:
+          kind: pipeline
+          title: Yazanlar → sözleşme ve sözlük → DocumentDB ve S3 → Uygulama ve görsel adresi → yandaki işler
+          caption: >-
+            DocumentDB kutusunda dört tablo var: index listesi, P0001'in products dokümanı (alan alan; "kart" sütunu CARD
+            listesindeki 7 alanı gösterir), aynı ürünün product_supplier kaydı ve reviews koleksiyonundan birkaç puan. Hepsi
+            kesit: t0'daki tek doküman, P0001 (katalogda 200 ürün). Değerler t0'daki gibi tam; açıklama tek satırda. Önce kuralın
+            kurulması ve ilk yükleme, sonra yeni bir açıklama, yeni bir fotoğraf, bir puan, gece dosyası, sayfanın okumaları ve
+            bir yayının sözleşme testi, en sonda tutarlılık ve onarım oynuyor. 4. aşamada "Örnek durum" diye başlayan kareler bu
+            zincirde yaşanmış durumlar; "Olsaydı" diye başlayanlar yaşanmadı, yaşansaydı ne olacağını gösteriyor. Canlı
+            sistemden: dokümanın alanları ve değerleri, 406 ve 184 bayt, fotoğrafın 49.156 baytı, 480×480 ve Cache-Control
+            notu. Temsilî: eski açıklama, tedarikçi kodu, alış fiyatları, puanlar ve tarihleri, puan sayısı (25, sonra 26), sürüm
+            adları, sınırlar (120 ve 2.000 karakter, 10 etiket, 4 KB, 100.000 bayt, %1). Son karede depolar, ürün sayfasının açıldığı
+            andaki (t0) hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım}
+          rows:
+            - {id: writers, title: "Ürünü, iç bilgiyi ve fotoğrafı yazanlar; kuralı kuran ve test eden"}
+            - {id: rules, title: "Dokümanın şekli: sözleşme ve özellik sözlüğü"}
+            - {id: stores, title: "Ürün sayfasının okuduğu depolar"}
+            - {id: serve, title: "Sayfaya veren ve puanı yazan: Uygulama ve görsel adresi"}
+            - {id: helpers, title: "Yandaki işler: görsel kontrolü, izleme, hata klasörü, yedek", side: true}
+          summary: >-
+            Dokümanın şeklini sözleşme belirledi: mağazanın göreceği 12 alan products'ta, alış fiyatı ve tedarikçi kodu
+            product_supplier'da, puanların kendisi reviews'te; dokümanda sadece özetleri (rating). Doğrulama kuralı sözleşme
+            dışı alanı ve sınırı aşan açıklamayı kapıda durdurdu, sözleşme testi her yayında kart alanlarını ve sayfanın
+            cevabını kontrol etti. Fotoğraf tek boyda (480×480) S3'te; görsel kontrol işi her yeni dosyayı denetledi, görsel
+            adresi onu "5 dakika sakla" notuyla verdi. Son durum: P0001'in dokümanı 12 alan, 406 bayt; kart alanları 7; fotoğraf
+            48 KB. t0'daki simülasyonun başladığı durum.
+          boxes:
+            - id: staging
+              row: writers
+            - id: importer
+              row: writers
+            - id: admin
+              row: writers
+            - id: indexjob
+              row: writers
+            - id: sozlesme
+              row: rules
+              tables:
+                - name: "products alanları (sözleşme sürüm 3, temsilî)"
+                  cols: [alan, tür ve sınır, kim okur]
+                  rows:
+                    - {key: k_name, alan: name, tür ve sınır: "metin, ≤ 120 karakter", kim okur: "sayfa + kart", hidden: true}
+                    - {key: k_price, alan: price, tür ve sınır: "ondalık sayı, ≥ 0", kim okur: "sayfa + kart", hidden: true}
+                    - {key: k_rating, alan: rating, tür ve sınır: "0–5, puanların özeti", kim okur: "sayfa + kart", hidden: true}
+                    - {key: k_cat, alan: category, tür ve sınır: "5 kategoriden biri", kim okur: "sayfa + kart", hidden: true}
+                    - {key: k_brand, alan: brand, tür ve sınır: metin, kim okur: "sayfa + kart", hidden: true}
+                    - {key: k_tags, alan: tags, tür ve sınır: "metin listesi, ≤ 10", kim okur: "sayfa + kart", hidden: true}
+                    - {key: k_stock, alan: stock, tür ve sınır: "tam sayı, ≥ 0", kim okur: "sayfa + kart", hidden: true}
+                    - {key: k_desc, alan: description, tür ve sınır: "metin, ≤ 2.000 karakter", kim okur: sadece sayfa, hidden: true}
+                    - {key: k_attr, alan: attributes, tür ve sınır: özellik sözlüğüne göre, kim okur: sadece sayfa, hidden: true}
+                    - {key: k_type, alan: type, tür ve sınır: metin, kim okur: "katalog ekranı (sayfa çizmez)", hidden: true}
+                    - {key: k_color, alan: color, tür ve sınır: "attributes.renk'in eski kopyası", kim okur: "okuyanı ölçülüyor; kaldırılacak", hidden: true}
+                    - {key: k_int, alan: "supplier_code, cost_price", tür ve sınır: "— (bu dokümanda yok)", kim okur: "arka ofis → product_supplier", hidden: true}
+                    - {key: k_rev, alan: puanların kendisi, tür ve sınır: "— (bu dokümanda yok)", kim okur: "→ reviews; dokümanda özet: rating", hidden: true}
+            - id: sozluk
+              row: rules
+            - id: docdb
+              row: stores
+              tables:
+                - name: "index listesi (üç koleksiyonun index'leri)"
+                  cols: [index, kimin için]
+                  rows:
+                    - {key: ix_id, index: "products · _id_", kimin için: "ürün sayfası ve kart (tek ürün)", hidden: true}
+                    - {key: ix_cr, index: "products · category_1_rating_-1", kimin için: "kategori sayfası (Adım 3)", hidden: true}
+                    - {key: ix_sup, index: "product_supplier · _id_", kimin için: "arka ofis (tek ürün)", hidden: true}
+                    - {key: ix_rid, index: "reviews · _id_", kimin için: "tek bir puan kaydı", hidden: true}
+                    - {key: ix_rev, index: "reviews · product_id_1_created_at_-1", kimin için: "puan özeti; ürünün puanları", hidden: true}
+                - name: "shop.products: P0001 (kesit: t0'daki 1 doküman, 12 alan; katalogda 200)"
+                  cols: [alan, değer, kart]
+                  rows:
+                    - {key: p_id, alan: _id, değer: P0001, kart: "✓ (hep gelir)", hidden: true}
+                    - {key: p_name, alan: name, değer: Alpen Kablosuz Kulaklık 1, kart: "✓", hidden: true}
+                    - {key: p_cat, alan: category, değer: Elektronik, kart: "✓", hidden: true}
+                    - {key: p_brand, alan: brand, değer: Alpen, kart: "✓", hidden: true}
+                    - {key: p_type, alan: type, değer: Kablosuz Kulaklık, kart: "—", hidden: true}
+                    - {key: p_price, alan: price, değer: "3373.84", kart: "✓", hidden: true}
+                    - {key: p_stock, alan: stock, değer: "128", kart: "✓", hidden: true}
+                    - {key: p_color, alan: color, değer: siyah, kart: "—", hidden: true}
+                    - {key: p_rating, alan: rating, değer: "4.8", kart: "✓", hidden: true}
+                    - {key: p_attr, alan: attributes, değer: "{ renk: siyah, garanti_ay: 12, agirlik_kg: 2.45 }", kart: "—", hidden: true}
+                    - {key: p_tags, alan: tags, değer: "[hızlı kargo, çevreci]", kart: "✓", hidden: true}
+                    - {key: p_desc, alan: description, değer: "Alpen markalı siyah kablosuz kulaklık. Elektronik kategorisinde, şık bir ürün.", kart: "—", hidden: true}
+                - name: "shop.product_supplier: P0001 (kesit; sadece arka ofis okur)"
+                  cols: [alan, değer]
+                  rows:
+                    - {key: s_id, alan: _id, değer: P0001, hidden: true}
+                    - {key: s_code, alan: supplier_code, değer: "ALP-KK-0001 (temsilî)", hidden: true}
+                    - {key: s_cost, alan: cost_price, değer: "2410.00 (temsilî)", hidden: true}
+                - name: "shop.reviews (kesit: P0001'in son puanları; P0001'de ilk yüklemede 25, sonra 26; temsilî)"
+                  cols: [_id, product_id, stars, created_at]
+                  rows:
+                    - {_id: r-0118, product_id: P0001, stars: "5", created_at: "2026-09-12", hidden: true}
+                    - {_id: r-0153, product_id: P0001, stars: "4", created_at: "2026-10-03", hidden: true}
+                    - {_id: r-0190, product_id: P0001, stars: "5", created_at: "2026-10-21", hidden: true}
+                    - {_id: r-0207, product_id: P0001, stars: "5", created_at: "2026-10-30", hidden: true}
+            - id: images
+              row: stores
+              tables:
+                - name: "ürün görselleri (kesit: P0001; katalogda 200)"
+                  cols: [anahtar, boyut, sürüm]
+                  rows:
+                    - {key: img1, anahtar: products/P0001.jpg, boyut: "48 KB · 480×480 JPEG", sürüm: "v2 (güncel)", hidden: true}
+            - id: web
+              row: serve
+            - id: imgproxy
+              row: serve
+            - id: imgcheck
+              row: helpers
+            - id: monitor
+              row: helpers
+            - id: rejects
+              row: helpers
+            - id: backup
+              row: helpers
+          frames:
+            - phase: 2
+              who: indexjob
+              lit: [sozlesme, sozluk, indexjob, docdb]
+              packet: {at: docdb, text: "createCollection(\"products\", { validator: { $jsonSchema: { additionalProperties: false, … description: { maxLength: 2000 }, tags: { maxItems: 10 } } } }) · createCollection(\"product_supplier\") · createCollection(\"reviews\") · createIndex × 2"}
+              show: {sozlesme: [k_name, k_price, k_rating, k_cat, k_brand, k_tags, k_stock, k_desc, k_attr, k_type, k_color, k_int, k_rev], docdb: [ix_id, ix_cr, ix_sup, ix_rid, ix_rev]}
+              fresh: {sozlesme: [k_name, k_price, k_rating, k_cat, k_brand, k_tags, k_stock, k_desc, k_attr, k_type, k_color, k_int, k_rev], docdb: [ix_id, ix_cr, ix_sup, ix_rid, ix_rev]}
+              note: {sozlesme: "products: 11 alan + _id = 12 · kart: 7 (+ _id)", indexjob: "kurulan: 3 koleksiyon + kural + 2 index", docdb: "5 index (3'ü _id_) · 0 doküman"}
+              say: >-
+                Koleksiyonlar henüz yok. Ekip önce ürün dokümanı sözleşmesini yazdı: products'ta hangi alanlar olacak, türleri ve
+                sınırları ne, her birini kim okuyacak. Liste ve kartlar 7 alan okuyacak, ürün sayfası hepsini. Alış fiyatı ve
+                tedarikçi kodu bu dokümana girmeyecek; puanların kendisi de. Dağıtım hattı doğrulama kuralını bu listeden üretti ve
+                üç koleksiyonu kurdu: products, product_supplier ve reviews. İki index kurdu (kategori + puan; reviews'te ürün +
+                tarih); _id index'lerini DocumentDB kendisi kurar.
+            - phase: 2
+              who: staging
+              lit: [staging]
+              packet: {at: staging, text: "eski-katalog/products-0001.json · { urun_no: \"P0001\", ad: \"Alpen Kablosuz Kulaklık 1\", …, tedarikci_kodu: \"ALP-KK-0001\", alis_fiyati: \"2410,00\", yorumlar: [ 25 puan ] }"}
+              note: {sozlesme: "", indexjob: "", docdb: ""}
+              say: >-
+                Eski katalog sistemi ürünlerini dosyalara döktü; dosyalar S3'teki içe aktarma klasörüne kondu. Eski sistemde her
+                şey tek satırdaydı: ad, fiyat ve açıklamanın yanında tedarikçi kodu, alış fiyatı ve ürüne verilen bütün puanlar.
+                S3 olayı içe aktarma işini başlattı. Kesitte bu dosyanın tek ürününü, P0001'i izleyeceğiz.
+            - phase: 2
+              who: importer
+              lit: [staging, importer, sozlesme, sozluk, docdb, monitor]
+              packet: {at: importer, text: "products ← updateOne({ _id: \"P0001\" }, { $set: { name, category, brand, type, price, stock, color, rating, attributes, tags, description } }, upsert) · product_supplier ← { supplier_code, cost_price } · reviews ← 25 × { product_id, stars, created_at }"}
+              show: {docdb: [p_id, p_name, p_cat, p_brand, p_type, p_price, p_stock, p_color, p_rating, p_attr, p_tags, p_desc, s_id, s_code, s_cost, r-0118, r-0153, r-0190]}
+              fresh: {docdb: [p_id, p_name, p_cat, p_brand, p_type, p_price, p_stock, p_color, p_rating, p_attr, p_tags, p_desc, s_id, s_code, s_cost, r-0118, r-0153, r-0190]}
+              set: {docdb: {p_desc: {değer: "Alpen kablosuz kulaklık. (eski açıklama, temsilî)"}}}
+              note: {docdb: "P0001: products 12 alan · product_supplier 2 alan · reviews 25 kayıt (kesitte 3)", importer: "P0001: 11 alan → products · 2 alan → product_supplier · 25 puan → reviews", monitor: "ilk yükleme: okunan 200 · yazılan 200 · reddedilen 0"}
+              say: >-
+                İçe aktarma işi her satırı sözleşmeye göre üçe ayırdı. Mağazanın alanları products'a gitti (özellikleri Adım 4'teki
+                gibi sözlükle eşledi). Tedarikçi kodu ve alış fiyatı aynı ürün numarasıyla product_supplier'a gitti. 25 puan tek tek
+                reviews'e yazıldı; dokümana sadece özet girdi: iş 25 puanın ortalamasını kendisi hesapladı (rating 4.8) ve eski sistemin özetiyle karşılaştırdı; ikisi aynı. Eski sistemin açıklaması
+                kısaydı; katalog ekibi onu 3. aşamada yenileyecek. Katalogdaki öteki 199 ürün de aynı yoldan geldi.
+            - phase: 2
+              who: importer
+              lit: [importer, images]
+              packet: {at: images, text: "satırdaki foto: \"eski-gorseller/1.png\" (1200×1200) → 480×480 JPEG → PUT products/P0001.jpg"}
+              show: {images: [img1]}
+              fresh: {images: [img1]}
+              set: {images: {img1: {boyut: "52 KB · 480×480 JPEG (temsilî)", sürüm: "v1"}}}
+              note: {docdb: "", monitor: "", images: "kopyalanan: 200 fotoğraf (kesitte 1)", importer: "fotoğraf: 200 küçültüldü · 0 hata"}
+              say: >-
+                Aynı iş eski sistemin fotoğraflarını görsel kovasına kopyaladı; hangi dosyanın hangi ürüne ait olduğu satırın foto alanında yazıyor. Her fotoğrafı tek bir boya, 480×480 piksel JPEG'e
+                küçülttü; anahtarı ürün numarasından kurdu: products/P0001.jpg. Dokümana adres yazılmadı; tarayıcı adresi ürün
+                numarasından kendisi kurar. Kovada sürüm tutma açık; bu dosya ilk sürüm (v1).
+            - phase: 2
+              who: indexjob
+              lit: [indexjob, docdb, images, monitor]
+              packet: {at: indexjob, text: "collStats(\"products\") → count 200, avgObjSize ≈ 400 B · fotoğrafı olmayan ürün: 0 · sözleşme testi: ilk çalışma"}
+              note: {images: "", importer: "", indexjob: "ilk denetim: 200 doküman · 4 KB'ı aşan 0 · fotoğrafsız ürün 0 · sözleşme dışı alan 0", monitor: "alarmlar kuruldu: reddedilen > 0 · denetimde fark · 404 oranı"}
+              say: >-
+                Mağaza açılmadan önce plan kontrolü yüklemeyi saydı. Ortalama doküman 400 bayt civarında; ekibin sınırı olan 4
+                KB'ı aşan doküman yok. Kovadaki fotoğraf sayısı ürün sayısıyla aynı: 200. Sözleşme testi ilk kez çalıştı ve geçti.
+                Alarmlar bu andan sonra çalışır.
+            - phase: 3
+              who: admin
+              lit: [admin, sozlesme, docdb]
+              packet: {at: docdb, text: "updateOne({ _id: \"P0001\" }, { $set: { description: \"Alpen markalı siyah kablosuz kulaklık. …\" } }) · 81 karakter ≤ 2.000 ✓"}
+              set: {docdb: {p_desc: {değer: "Alpen markalı siyah kablosuz kulaklık. Elektronik kategorisinde, şık bir ürün."}}}
+              fresh: {docdb: [p_desc]}
+              note: {indexjob: "", monitor: "", admin: "yazılan 1 · reddedilen 0", docdb: "P0001: 12 alan · JSON hâliyle 406 bayt"}
+              say: >-
+                Mağaza açıldı. Katalog ekibi ekranda P0001'in açıklamasını yeniledi. Katalog yönetim servisi uzunluğu sözleşmenin
+                sınırıyla kontrol etti ve sadece description alanını $set ile yazdı; diğer alanlara dokunmadı. Doküman şimdi t0'da
+                göreceğin hâlde: 12 alan, 406 bayt.
+            - phase: 3
+              who: admin
+              lit: [admin, images]
+              packet: {at: images, text: "generate_presigned_url(\"put_object\", Key: \"products/P0001.jpg\", 15 dk) → çalışanın tarayıcısı: PUT products/P0001.jpg (480×480, 49.156 bayt)"}
+              set: {images: {img1: {boyut: "48 KB · 480×480 JPEG", sürüm: "v2 (güncel) · v1 saklı"}}}
+              fresh: {images: [img1]}
+              note: {admin: "", docdb: "", images: "P0001: yeni sürüm v2 · v1 saklı"}
+              say: >-
+                Katalog ekibi yeni, daha iyi bir fotoğraf çekti. Ürün ekranı fotoğrafı yüklemeden önce 480×480'e küçülttü; servis 15 dakika
+                geçerli, sadece products/P0001.jpg'ye yükleme izni veren bir adres verdi. Çalışanın tarayıcısı dosyayı doğrudan
+                S3'e yükledi (Adım 1'deki yol). Anahtar aynı kaldı; eski fotoğraf silinmedi, v1 sürümü olarak saklandı.
+            - phase: 3
+              who: imgcheck
+              lit: [images, imgcheck, monitor]
+              packet: {at: imgcheck, text: "S3 olayı: ObjectCreated products/P0001.jpg → JPEG ✓ · 480×480 ✓ · 49.156 bayt ≤ 100.000 ✓"}
+              note: {images: "", imgcheck: "bugün: kontrol edilen 1 · geçen 1 · geri alınan 0", monitor: "görsel kontrolü: geri alınan 0 → alarm yok"}
+              say: >-
+                Yeni dosya gelince S3 bir olay gönderdi; görsel kontrol işi başladı. Dosya JPEG, 480×480 ve 49.156 bayt (48 KB; 1 KB = 1.024 bayt): üç kontrol de
+                geçti. İş hiçbir şeyi değiştirmedi; sadece sonucu CloudWatch'a yazdı.
+            - phase: 3
+              who: web
+              lit: [web, docdb]
+              packet: {at: docdb, text: "reviews.insertOne({ _id: \"r-0207\", product_id: \"P0001\", stars: 5, created_at: … }) · aggregate($match P0001, $avg stars) → 4.77 → $set { rating: 4.8 }"}
+              show: {docdb: [r-0207]}
+              fresh: {docdb: [r-0207, p_rating]}
+              note: {imgcheck: "", monitor: "", web: "1 puan yazıldı · ortalama yeniden hesaplandı", docdb: "reviews: P0001 için 26 kayıt · products: sadece rating yazıldı (4.8 → 4.8)"}
+              say: >-
+                Bir müşteri teslim aldığı kulaklığa 5 yıldız verdi. Uygulama puanı dokümana değil, reviews'e yeni bir kayıt olarak
+                yazdı (kaydın numarasını, r-0207, kendisi verdi). Sonra P0001'in bütün puanlarının ortalamasını aldı (ürün + tarih index'iyle, sadece bu ürünün kayıtları
+                okunur): 4.77, 1 ondalıkla 4.8. products'ta sadece rating alanını yazdı; değer aynı kaldı. Doküman puan sayısı
+                arttıkça büyümez.
+            - phase: 3
+              who: importer
+              lit: [staging, importer, sozlesme, docdb, monitor]
+              packet: {at: importer, text: "tedarikci/2026-10-30.json · { urun_no: \"P0001\", alis_fiyati: \"2385,50\" } → product_supplier.updateOne({ _id: \"P0001\" }, { $set: { cost_price: 2385.50 } })"}
+              set: {docdb: {s_cost: {değer: "2385.50 (temsilî)"}}}
+              fresh: {docdb: [s_cost]}
+              note: {web: "", docdb: "products değişmedi · product_supplier: cost_price güncellendi", monitor: "gece dosyası: okunan 1 · yazılan 1 · reddedilen 0", importer: "P0001: 1 alan → product_supplier"}
+              say: >-
+                Gece tedarikçinin dosyası geldi: P0001'in alış fiyatı düştü. Sözleşmeye göre bu bir iç alan; iş onu
+                product_supplier'a yazdı. products dokümanına dokunulmadı: ürün sayfası bütün dokümanı okusa da alış fiyatı
+                tarayıcına hiçbir zaman gitmez.
+            - phase: 3
+              who: web
+              lit: [web, docdb]
+              packet: {at: docdb, text: "find_one({ _id: \"P0001\" }) → 12 alan · 406 bayt · find({ category: \"Elektronik\" }, CARD) → her kartta 7 alan + _id (P0001: 184 bayt) (replica)"}
+              mark: {docdb: {p_name: fix, p_cat: fix, p_brand: fix, p_price: fix, p_stock: fix, p_rating: fix, p_tags: fix, p_id: fix}}
+              note: {importer: "", monitor: "", docdb: "", web: "bu kesitte 2 okuma: bütün doküman 406 bayt · P0001'in kartı 184 bayt (canlı ölçüm)"}
+              say: >-
+                Sıradan bir gün. Biri ürün sayfasını açtı: Uygulama _id ile bütün dokümanı okudu, 12 alan (406 bayt). Biri de
+                Elektronik kategori sayfasını açtı: Uygulama kategori listesini kategori index'iyle tek sorguda okudu (Adım 3) ve
+                kodun içindeki CARD listesini kullandı; P0001'in kartı için sadece işaretli 7 alan ve _id geldi (184 bayt). t0'daki
+                "Card fields only" isteği aynı CARD listesiyle tek ürünü _id ile okur. İki okuma da product_supplier'a ve reviews'e hiç gitmedi.
+            - phase: 3
+              who: imgproxy
+              lit: [imgproxy, images]
+              packet: {at: imgproxy, text: "GET /s3/api/img/P0001 → GetObject products/P0001.jpg → 200 · 49.156 bayt · Cache-Control: public, max-age=300"}
+              mark: {docdb: {p_name: "", p_cat: "", p_brand: "", p_price: "", p_stock: "", p_rating: "", p_tags: "", p_id: ""}}
+              note: {web: "", imgproxy: "son 5 dakika: görsel isteği 1.240 · 404 0 (temsilî)", images: "okunan: products/P0001.jpg (v2)"}
+              say: >-
+                Sayfa fotoğrafı ayrı bir istekle /s3/api/img/P0001 adresinden istedi. Görsel adresi anahtarı kurdu, dosyayı
+                S3'ten okudu ve "public, max-age=300" notuyla gönderdi. Tarayıcı fotoğrafı 5 dakika saklar: o sürede aynı ürüne
+                dönersen ya da kartında aynı fotoğrafı görürsen istek hiç gitmez. Yeni bir fotoğraf yüklenirse, eskisini görmüş
+                biri onu en çok 5 dakika daha görebilir.
+            - phase: 3
+              who: indexjob
+              lit: [indexjob, sozlesme, docdb, monitor]
+              packet: {at: indexjob, text: "sözleşme testi: CARD (7) ⊆ \"kart\" alanları ✓ · bütün doküman cevabı ⊆ sözleşme ✓ · cost_price, supplier_code cevapta yok ✓"}
+              note: {imgproxy: "", images: "", indexjob: "bu yayın: 3 kontrolün 3'ü geçti", monitor: "sözleşme testi: geçti → yayın çıktı"}
+              say: >-
+                Ekip ürün sayfasının kodunda küçük bir değişiklik yayına çıkarmak istedi. Dağıtım hattı önce sözleşme testini
+                çalıştırdı: koddaki CARD listesinin 7 alanı sözleşmede "kart" diye işaretli; P0001'in gerçek cevabında sözleşmede
+                olmayan bir alan yok; alış fiyatı ve tedarikçi kodu cevapta yok. Üçü de geçti, yayın çıktı.
+            - phase: 4
+              who: importer
+              lit: [staging, importer, docdb, monitor]
+              packet: {at: importer, text: "aynı dosya yine geldi → product_supplier.updateOne(P0001, { $set: { cost_price: 2385.50 } }) → eşleşen 1, değişen 0"}
+              mark: {docdb: {s_cost: fix}}
+              note: {indexjob: "", docdb: "", monitor: "aynı dosya (2. kez): okunan 1 · eşleşen 1 · değişen 0"}
+              say: >-
+                Örnek durum: S3 olayı aynı dosya için ikinci kez geldi (S3 olayları en az bir kez teslim edilir; nadiren iki kez).
+                İş satırı ürün numarasıyla yazdığı için aynı kaydı buldu; değer zaten aynıydı, hiçbir şey değişmedi. İkinci bir
+                P0001 oluşmadı.
+            - phase: 4
+              who: importer
+              lit: [importer, sozlesme, docdb, rejects, monitor]
+              packet: {at: docdb, text: "olsaydı: products.updateOne(P0001, { $set: { cost_price: 2385.50 } }) → Document failed validation (additionalProperties: false)"}
+              mark: {docdb: {s_cost: ""}}
+              note: {rejects: "olsaydı: 1 satır · P0001 · sözleşme dışı alan: cost_price", monitor: "olsaydı: reddedilen 1 (sözleşme dışı alan) → alarm", docdb: "olsaydı: products değişmedi"}
+              say: >-
+                Olsaydı: içe aktarma işinin yeni bir sürümünde bir hata olsaydı ve alış fiyatını products'a yazmaya kalksaydı.
+                Doğrulama kuralı sözleşmede olmayan bir alanı kabul etmez; yazma durur, alış fiyatı dokümana ve oradan tarayıcıya
+                hiç ulaşmaz. İş satırı sebebiyle hata klasörüne yazar, alarm gider. Ekip işi düzeltir, satırı yeniden gönderir.
+            - phase: 4
+              who: admin
+              lit: [admin, sozlesme, docdb]
+              packet: {at: admin, text: "olsaydı: description 12.400 karakter > 2.000 → ekran: \"açıklama çok uzun\" · DocumentDB'ye gitmedi"}
+              note: {rejects: "", monitor: "", docdb: "", admin: "olsaydı: reddedilen 1 · sebep: açıklama çok uzun"}
+              say: >-
+                Olsaydı: bir çalışan tedarikçinin bütün kataloğunu yanlışlıkla bir ürünün açıklama kutusuna yapıştırsaydı (12.400
+                karakter). Katalog yönetim servisi sözleşmedeki sınırı (2.000) kontrol eder ve yazmaz; ekranda sebebi gösterir.
+                Servis bunu atlasa bile doğrulama kuralının maxLength'i yazmayı durdururdu. Açıklama her ürün sayfası açılışında
+                taşındığı için büyümesi her okumayı pahalılaştırır.
+            - phase: 4
+              who: indexjob
+              lit: [indexjob, docdb, images, monitor]
+              packet: {at: indexjob, text: "aggregate([{ $project: { b: { $bsonSize: \"$$ROOT\" } } }, { $group: { _id: null, ort: { $avg: \"$b\" }, enbuyuk: { $max: \"$b\" } } }]) · fotoğrafsız ürün: 0"}
+              note: {admin: "", indexjob: "bu gece: 200 doküman · ortalama ≈ 400 B · en büyük < 1 KB · 4 KB'ı aşan 0 · fotoğrafsız 0", monitor: "gece denetimi: 0 → alarm yok"}
+              say: >-
+                Örnek durum: her gece plan kontrolü her dokümanın boyutunu ölçer; ortalamayı ve en büyüğünü bir önceki geceyle
+                karşılaştırır, 4 KB'ı aşanları sayar. Ayrıca her ürün için kovada bir fotoğraf var mı diye bakar. Bu gece: aşan 0,
+                fotoğrafsız 0. Bir alan sessizce büyümeye başlasaydı (ör. etiketler) en büyük doküman gece gece büyür ve sınırı
+                geçince alarm çalardı.
+            - phase: 4
+              who: imgcheck
+              lit: [images, imgcheck, monitor]
+              packet: {at: imgcheck, text: "olsaydı: products/P0001.jpg v3 · PNG · 3000×3000 · 5,1 MB ✗ → CopyObject(v2 → güncel) · alarm"}
+              set: {images: {img1: {boyut: "olsaydı: v3 5,1 MB PNG → v2 geri getirildi (48 KB)", sürüm: "olsaydı: v4 = v2'nin kopyası"}}}
+              fresh: {images: [img1]}
+              note: {indexjob: "", monitor: "olsaydı: görsel kontrolü: geri alınan 1 → alarm", imgcheck: "olsaydı: kontrol edilen 1 · geri alınan 1", images: "olsaydı: v1, v2, v3 saklı"}
+              say: >-
+                Olsaydı: biri ekranın küçültme adımını atlayıp 5 MB'lık bir PNG yükleseydi. Görsel kontrol işi üç kontrolde de
+                kalırdı. Bir önceki sürümü (v2) kopyalayıp yeniden güncel yapardı; kötü dosya silinmez, sürüm olarak kalır. Alarm
+                giderdi. Arada birkaç saniye büyük dosyayı alan ziyaretçi olabilirdi; tarayıcısı onu en çok 5 dakika tutar.
+            - phase: 4
+              who: imgproxy
+              lit: [imgproxy, images, monitor]
+              packet: {at: imgproxy, text: "olsaydı: GET /s3/api/img/P0175 → NoSuchKey → 404 · son 5 dk: 404 / görsel isteği = 41 / 1.240 = %3,3 > %1"}
+              note: {imgcheck: "", images: "", imgproxy: "olsaydı: son 5 dakika: 1.240 istek · 41 tane 404", monitor: "olsaydı: 404 oranı %3,3 (sınır %1, 5 dakikada) → alarm"}
+              say: >-
+                Olsaydı: yeni bir ürün (P0175, kesitin dışında) fotoğrafı yüklenmeden yayına çıksaydı. Görsel adresi dosyayı
+                bulamaz, 404 döner; sayfada fotoğrafın yeri boş kalır. Görsel adresi her isteği ve her 404'ü CloudWatch'a sayar; CloudWatch
+                her 5 dakikada 404'leri bütün görsel isteklerine böler, oran %1'i geçince alarm çalar. Gece denetimi de "fotoğrafsız ürün: 1" der. Ekip fotoğrafı
+                yükler; tarayıcılar 404'ü saklamadığı için fotoğraf hemen görünür.
+            - phase: 4
+              who: backup
+              lit: [docdb, backup]
+              packet: {at: backup, text: "olsaydı: restore-db-cluster-to-point-in-time → katalog-geri · description'lar oradan dışa aktarılır → içe aktarma işi geri yazar"}
+              note: {imgproxy: "", monitor: "", backup: "olsaydı: geri dönüş, ör. son 7 gün içinde bir saniye"}
+              say: >-
+                Olsaydı: bir toplu değişiklik yanlışlıkla yüzlerce ürünün açıklamasını boşaltsaydı. Doğrulama kuralı bunu durdurmaz:
+                boş bir açıklama sözleşmeye uyar. Ekip sürekli yedekle kataloğu bozulmadan bir saniye önceki hâliyle yeni bir
+                kümede açar, doğru açıklamaları bir dosyaya dışa aktarır ve içe aktarma işiyle her zamanki yoldan geri yazar.
+            - phase: 4
+              who: docdb
+              lit: [docdb, images]
+              set: {images: {img1: {boyut: "48 KB · 480×480 JPEG", sürüm: "v2 (güncel) · v1 saklı"}}}
+              note: {backup: "", docdb: "P0001: 12 alan · 406 bayt · kart alanları 7", images: "products/P0001.jpg · 48 KB"}
+              say: >-
+                Hazır. "Olsaydı" karelerindeki kötü fotoğraf yaşanmadı; kova bugünkü hâline döndü (güncel sürüm v2). P0001'in
+                dokümanı 12 alan, JSON hâliyle 406 bayt; 7'si kart alanı. Alış fiyatı product_supplier'da, puanlar reviews'te.
+                Fotoğraf 480×480, 48 KB. t0'daki simülasyon bu dokümanla başlıyor: sayfa açılınca bütün doküman, "Card fields
+                only" ile sadece işaretli alanlar gelecek.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Önce ekranların soruları yazılır, sonra ürün dokümanına neyin gireceğine ve neyin bilerek dışarıda kalacağına karar
+              verilir. Kararlar tek bir yerde durur: ürün dokümanı sözleşmesinde.
+            cards:
+              - title: "Ekranların soruları: bütün doküman ve kart alanları"
+                text: >-
+                  Ürün sayfası bir ürünün neredeyse her şeyini çizer: ad, puan, fiyat, açıklama, marka, kategori, stok, özellikler,
+                  etiketler. Liste ve kartlar sadece 7 alan gösterir. İki soru da aynı dokümandan, _id ile tek okumayla cevaplanır;
+                  fark projection'da. Kart alanları kodda tek bir yerde yazılıdır (CARD); kategori sayfası da ürün sayfasının
+                  kart isteği de bu listeyi kullanır. Liste iki yerde ayrı ayrı yazılsaydı biri değişince öteki unutulurdu.
+                code_title: Uygulamanın kodundan (engines/docdb.py, kısaltılmış)
+                code:
+                  - {code: "CARD = {\"name\": 1, \"price\": 1, \"rating\": 1, \"category\": 1, \"brand\": 1, \"tags\": 1, \"stock\": 1}", tag: Uygulamanın içinde, say: "Kart alanlarının tek listesi; 1 \"getir\" demek."}
+                  - {code: "d = db().products.find_one({\"_id\": pid}, None if full else CARD)", tag: [Uygulama → DocumentDB, DocumentDB → Uygulama], say: "Ürün sayfası: bütün doküman; kart: sadece listedeki alanlar (t0'daki istek)."}
+              - title: Dokümana ne girer, ne girmez?
+                text: >-
+                  Ürün sayfası bütün dokümanı okur ve tarayıcıya gönderir. Bu yüzden dokümandaki her alan müşterinin tarayıcısına
+                  kadar gider; tarayıcının geliştirici araçlarında okunabilir. Kural basit: products dokümanında sadece müşterinin
+                  görebileceği bilgi durur. Alış fiyatı ve tedarikçi kodu aynı ürün numarasıyla product_supplier'da durur; onu
+                  sadece arka ofis okur. "Sayfada göstermeyiz, projection'la çıkarırız" demek yetmez: tek bir unutulmuş projection
+                  alış fiyatını herkese gösterir. type sayfada çizilmez ama gizli de değildir; katalog ekranı kullanır. color,
+                  attributes.renk'ten önceki eski alandır; ekip kod deposunda color'ı okuyan satır arar ve sözleşme testi yeni bir
+                  okuyan eklenmesini durdurur. Okuyanı kalmayınca kaldırılacak (3. aşama).
+                map:
+                  cols: [Alan, Nerede, Kim okur]
+                  rows:
+                    - ["name, price, rating, category, brand, tags, stock", "products", "Ürün sayfası ve kartlar (CARD)."]
+                    - ["description, attributes", "products", "Sadece ürün sayfası; kart okumaz."]
+                    - ["type, color", "products", "Sayfa çizmez; type katalog ekranı için, color kaldırılmayı bekleyen eski kopya."]
+                    - ["supplier_code, cost_price", "product_supplier (aynı _id)", "Sadece arka ofis; mağaza sayfaları hiç okumaz."]
+                    - ["puanların kendisi (stars, created_at)", "reviews (product_id ile)", "Puan özeti hesabı; dokümanda sadece rating."]
+                    - ["fotoğraf", "S3: products/<_id>.jpg", "Tarayıcı, görsel adresinden; dokümanda adres yok."]
+              - title: Sınırsız listeler dokümanın dışında, boyut sınırla
+                text: >-
+                  Bir ürüne zamanla binlerce puan verilebilir. Puanlar dokümanın içinde bir liste olsaydı, doküman her puanla büyür
+                  ve ürün sayfası her açılışta hepsini taşırdı; kartlar projection'la çıkarsa bile veritabanı her seferinde büyük
+                  dokümanı okurdu. DocumentDB'de bir doküman en fazla 16 MB olabilir, ama sorun çok daha önce başlar. Bu yüzden
+                  puanlar reviews'te, ürün numarası ve tarihle index'li; dokümanda sadece özet (rating) var. Ekip sınırları
+                  sözleşmeye yazar: açıklama en fazla 2.000 karakter, en fazla 10 etiket, doküman 4 KB (temsilî). Bugün P0001
+                  406 bayt.
+                code:
+                  - {code: "db.reviews.createIndex({ product_id: 1, created_at: -1 })", tag: Index ve plan kontrolü → DocumentDB, say: "Bir ürünün puanları birlikte ve en yenisi başta durur."}
+                  - {code: "db.reviews.aggregate([{ $match: { product_id: \"P0001\" } }, { $group: { _id: null, ort: { $avg: \"$stars\" } } }])", tag: [Uygulama → DocumentDB, DocumentDB → Uygulama], say: "Özet: bu ürünün puanlarının ortalaması."}
+                  - {code: "db.products.updateOne({ _id: \"P0001\" }, { $set: { rating: 4.8 } })", tag: Uygulama → DocumentDB, say: "Dokümana sadece özet yazılır; doküman büyümez."}
+              - title: Doğrulama kuralı sözleşmeden üretilir
+                text: >-
+                  Adım 1'deki kural (ad, 5 kategoriden biri, sayı olarak fiyat) ve Adım 4'teki attributes kuralı burada iki şeyle
+                  genişler: sözleşmede olmayan alan giremez (additionalProperties: false; _id de listededir) ve büyüyebilen
+                  alanların sınırı vardır. Kural her eklemede ve güncellemede çalışır.
+                code_title: Doğrulama kuralı (kısaltılmış)
+                code:
+                  - {code: "validator: { $jsonSchema: { bsonType: \"object\", additionalProperties: false,", tag: Index ve plan kontrolü → DocumentDB, say: "Sözleşmede olmayan bir alan dokümana giremez (ör. cost_price)."}
+                  - {code: "  required: [\"name\", \"category\", \"price\"],", tag: DocumentDB'nin içinde, say: "Bu üç alan zorunlu (Adım 1)."}
+                  - {code: "  properties: { _id: {…}, name: { bsonType: \"string\", maxLength: 120 }, …,", tag: DocumentDB'nin içinde, say: "Her alanın türü ve sınırı sözleşmeden."}
+                  - {code: "    description: { maxLength: 2000 }, tags: { bsonType: \"array\", maxItems: 10 } } } }", tag: DocumentDB'nin içinde, say: "Açıklama en fazla 2.000 karakter, en fazla 10 etiket."}
+              - title: "Fotoğraf: tek anahtar, tek boy, 5 dakikalık önbellek"
+                text: >-
+                  Fotoğrafın adresi ürün numarasından kurulur (products/P0001.jpg); dokümanda yazmaz. Tek boy yeter: ürün sayfası
+                  fotoğrafı 420 piksellik büyük bir kutuda (t0'daki "büyük görsel"), kartlar 240 piksellik kutuda gösterir; ama çoğu telefon ekranı iki kat
+                  yoğundur ve 240'lık kutu için 480 piksel ister. 480×480 bir JPEG (P0001: 48 KB) ikisine de yeter. Tarayıcı
+                  fotoğrafı görsel adresinden ister; görsel adresi onu S3'ten okuyup "5 dakika sakla" notuyla verir. Bekleyen iki
+                  karar: ürün sayfasına büyütülebilir bir fotoğraf (ör. 1.200 piksel) eklenince görsel kontrol işi her yüklemede
+                  boy boy varyantlar üretir; görsel istekleri Uygulama'yı yormaya başlayınca görsel adresinin önüne CloudFront
+                  konur. CloudFront da aynı Cache-Control notuna uyar.
+                code:
+                  - {code: "obj = s3().get_object(Bucket=…, Key=f\"products/{pid}.jpg\")", tag: [Görsel adresi → S3, S3 → Görsel adresi], say: "Anahtar ürün numarasından kurulur, dosya S3'ten okunur."}
+                  - {code: "Response(obj[\"Body\"].read(), mimetype=\"image/jpeg\", headers={\"Cache-Control\": \"public, max-age=300\"})", tag: Görsel adresi → Tarayıcı, say: "Fotoğraf \"5 dakika sakla\" notuyla gider."}
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              Mağaza açılmadan önce eski katalog bir kez taşınır. Sıra bilerek böyledir: önce sözleşme, kural ve index'ler,
+              sonra veri ve fotoğraflar, sonra sayım.
+            cards:
+              - title: Önce sözleşme ve kural, sonra veri
+                text: >-
+                  Kural sözleşmeden üretildiği için önce sözleşme yazılır. Kural baştan durduğu için eski sistemden gelen bir iç
+                  alan ya da sınırı aşan bir açıklama ilk günden products'a giremez. Index'ler de veriden önce kurulur; AWS büyük
+                  bir yüklemeden önce index'leri kurmayı önerir.
+                code:
+                  - {code: "db.createCollection(\"products\", { validator: { $jsonSchema: kural(sozlesme, sozluk) } })", tag: Index ve plan kontrolü → DocumentDB, say: "Koleksiyon, sözleşmeden üretilen kuralla."}
+                  - {code: "db.createCollection(\"product_supplier\") · db.createCollection(\"reviews\")", tag: Index ve plan kontrolü → DocumentDB, say: "İç bilgiler ve puanlar için iki koleksiyon daha."}
+              - title: Bir satır, üç koleksiyon
+                text: >-
+                  Eski sistemde her şey tek satırdaydı. İçe aktarma işi her alanı sözleşmedeki yerine koyar: mağazanın alanları
+                  products'a, iç alanlar aynı ürün numarasıyla product_supplier'a, puanlar tek tek reviews'e. Hepsi ürün
+                  numarasıyla upsert edilir; dosya ikinci kez işlenirse kopya oluşmaz.
+                code:
+                  - {code: "urun, ic = sozlesme.ayir(satir)   # mağaza alanları / iç alanlar", tag: İçe aktarma işinin içinde, say: "Satırı sözleşmeye göre ikiye ayırır."}
+                  - {code: "UpdateOne({ \"_id\": no }, { \"$set\": urun }, upsert=True)  → products", tag: İçe aktarma işi → DocumentDB, say: "Mağazanın göreceği alanlar."}
+                  - {code: "UpdateOne({ \"_id\": no }, { \"$set\": ic }, upsert=True)  → product_supplier", tag: İçe aktarma işi → DocumentDB, say: "supplier_code ve cost_price, aynı ürün numarasıyla."}
+                  - {code: "db.reviews.insert_many([{ \"product_id\": no, \"stars\": p[\"yildiz\"], \"created_at\": p[\"tarih\"] } for p in satir[\"yorumlar\"]])", tag: İçe aktarma işi → DocumentDB, say: "Puanlar dokümana değil, kendi koleksiyonuna."}
+              - title: Fotoğraflar tek boyda, ürün numarasıyla
+                text: >-
+                  Aynı iş her fotoğrafı 480×480 JPEG'e küçültür ve products/<ürün no>.jpg anahtarıyla görsel kovasına yazar. Kovada
+                  sürüm tutma baştan açılır; böylece sonradan yanlış bir dosya yazılırsa eskisi geri getirilebilir.
+                code:
+                  - {code: "s3.put_object(Bucket=…, Key=f\"products/{no}.jpg\", Body=kucult(foto, 480), ContentType=\"image/jpeg\")", tag: İçe aktarma işi → S3, say: "Tek boy, anahtar ürün numarasından."}
+              - title: Yükleme sayılır ve ölçülür
+                text: >-
+                  İş okunan, yazılan ve reddedilen satır sayılarını CloudWatch'a yazar; okunan = yazılan + reddedilen olmalı.
+                  Plan kontrolü ortalama doküman boyutunu ölçer, kovadaki fotoğraf sayısını ürün sayısıyla karşılaştırır ve
+                  sözleşme testini ilk kez çalıştırır. İlk ölçüm kaydedilir; gece denetimi bundan sonra bu sayılarla karşılaştırır.
+                code:
+                  - {code: "db.runCommand({ collStats: \"products\" })   # count, avgObjSize", tag: [Index ve plan kontrolü → DocumentDB, DocumentDB → Index ve plan kontrolü], say: "Doküman sayısı ve ortalama boyut."}
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              Mağaza açıldıktan sonra ürün dört yoldan değişir: ürün ekranı, fotoğraf yükleme, müşterinin puanı ve gece gelen
+              tedarikçi dosyası. Yeni bir alan ise belli bir sırayla eklenir.
+            cards:
+              - title: Ekrandan sadece değişen alan
+                text: >-
+                  Katalog ekibi açıklamayı değiştirince katalog yönetim servisi uzunluğu sözleşmenin sınırıyla kontrol eder ve
+                  sadece o alanı $set ile yazar. Bütün dokümanı yeniden yazmak, aynı anda başka bir yerden yazılan bir alanı (ör.
+                  rating) eski değeriyle ezebilirdi.
+                code:
+                  - {code: "db.products.update_one({ \"_id\": \"P0001\" }, { \"$set\": { \"description\": yeni } })", tag: Katalog yönetim servisi → DocumentDB, say: "Sadece açıklama değişir; diğer alanlar yerinde kalır."}
+              - title: Yeni fotoğraf, kontrol ve 5 dakika
+                text: >-
+                  Ekran fotoğrafı 480×480'e küçültür, servis 15 dakikalık bir yükleme adresi verir, dosya doğrudan S3'e gider.
+                  Anahtar aynı kaldığı için sayfanın ve kartların adresi değişmez. Görsel kontrol işi yeni dosyayı kontrol eder.
+                  Eski fotoğrafı görmüş bir tarayıcı onu en çok 5 dakika daha gösterebilir (max-age=300); süre kısa tutulur ki
+                  yeni fotoğraf çabuk görünsün.
+                code:
+                  - {code: "url = s3.generate_presigned_url(\"put_object\", Params={ \"Bucket\": …, \"Key\": \"products/P0001.jpg\" }, ExpiresIn=900)", tag: Katalog yönetim servisi → S3, say: "15 dakika geçerli, tek dosyalık yükleme adresi."}
+                  - {code: "if img.format != \"JPEG\" or img.size != (480, 480) or boyut > 100_000: geri_al(onceki_surum)", tag: Görsel kontrol işinin içinde, say: "Uymayan dosyanın yerine önceki sürüm geri gelir."}
+              - title: Puan reviews'e, özet dokümana
+                text: >-
+                  Müşteri puan verince Uygulama puanı reviews'e yeni bir kayıt olarak yazar, ürünün ortalamasını index'le sadece o
+                  ürünün kayıtlarından hesaplar ve products'ta sadece rating'i günceller. Doküman puan sayısıyla büyümez; kartlar
+                  ve kategori sırası (Adım 3) güncel özeti okur.
+                code:
+                  - {code: "db.reviews.insert_one({ \"product_id\": \"P0001\", \"stars\": 5, \"created_at\": simdi })", tag: Uygulama → DocumentDB, say: "Yeni puan kendi koleksiyonuna."}
+              - title: Yeni bir alan sayfaya güvenle nasıl gelir?
+                text: >-
+                  Ör. ürün sayfası "kargo süresi" göstermek istesin. Sıra hep aynıdır. 1) Sözleşmeye yeni satır: ad (shipping_days),
+                  tür (tam sayı), sınır, kim okur (sadece sayfa). 2) Dağıtım hattı kuralı collMod ile genişletir; koleksiyon
+                  boşaltılmaz. 3) İçe aktarma işi ve ekran alanı yazmaya başlar; eski ürünlerde alan yoktur. 4) Sayfa kodu alanı
+                  varsa gösterir, yoksa satırı çizmez. 5) Kartta da gösterilecekse CARD'a eklenir. Her adımda sözleşme testi
+                  çalışır: CARD'daki bir alan sözleşmede "kart" değilse ya da cevapta sözleşme dışı bir alan varsa yayın durur. Sıra
+                  ters olursa (önce veri) kural yeni alanı reddeder. Alan kaldırmak ters sırayla yapılır: önce okuyanlar bırakır,
+                  sonra $unset, en son sözleşme ve kural; color bu yoldadır.
+                code:
+                  - {code: "db.runCommand({ collMod: \"products\", validator: { $jsonSchema: kural(sozlesme, sozluk) } })", tag: Index ve plan kontrolü → DocumentDB, say: "Kural yeni alanı da kabul edecek şekilde genişler."}
+                  - {code: "assert set(CARD) <= sozlesme.alanlar(okur=\"kart\")", tag: Index ve plan kontrolünün içinde, say: "Kart alanlarının hepsi sözleşmede kart diye işaretli mi?"}
+                  - {code: "assert set(cevap(\"/docdb/api/product/P0001\")) <= sozlesme.alanlar() | {\"product_id\"}", tag: [Index ve plan kontrolü → Uygulama, Uygulama → Index ve plan kontrolü], say: "Sayfanın gerçek cevabında sözleşme dışı (ör. iç) alan var mı?"}
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              Aynı dosya iki kez gelirse, bir iç alan dokümana sızmaya kalkarsa, doküman büyürse, yanlış bir fotoğraf yüklenirse,
+              fotoğraf eksikse ya da toplu bir değişiklik açıklamaları bozarsa ne olur? Her biri için zincirde bir parça vardır;
+              her parçanın ne zaman çalıştığı, neyi yakalamadığı ve ekibin ne yaptığı aşağıda.
+            cards:
+              - title: Aynı dosya iki kez gelirse
+                text: >-
+                  S3 olayları en az bir kez teslim edilir; nadiren aynı olay iki kez gelir. İş her satırı ürün numarasıyla yazdığı
+                  için ikinci geliş aynı kayıtları bulur; kopya ürün oluşmaz. Ne zaman: her dosyada, yazma anında. Yakalamadığı:
+                  puanlar tek tek eklendiği için ilk yükleme dosyası ikinci kez işlenirse puanlar çift yazılır; bu yüzden iş
+                  işlediği dosyanın adını kaydeder ve aynı dosyayı ikinci kez işlemez. Onarım: çift puanlar dosya adıyla bulunup
+                  silinir, özet yeniden hesaplanır.
+              - title: Bir iç alan dokümana sızmaya kalkarsa
+                text: >-
+                  İki kapı var. İçe aktarma işi iç alanları sözleşmeye göre product_supplier'a yazar. Bir hata yüzünden products'a
+                  yazmaya kalkarsa doğrulama kuralı (additionalProperties: false) yazmayı durdurur; satır hata klasörüne gider,
+                  alarm çalar. Ne zaman: yazma anında. Yakalamadığı: sözleşmede var olan bir alana yanlış bilgi yazılması (ör.
+                  description'a tedarikçi notu); onu sözleşme testi göremez, katalog ekibi ya da bir müşteri fark eder. Onarım: ekip
+                  işi düzeltir, satırı yeniden gönderir; yanlış metni katalog ekibi ekrandan düzeltir.
+                code:
+                  - {code: "except BulkWriteError as e:  # code 121: Document failed validation", tag: DocumentDB → İçe aktarma işi, say: "Reddedilen satırlar cevapta tek tek döner."}
+                  - {code: "    s3.put_object(Bucket=\"lm-import-rejects\", Key=f\"{dosya}.rejects.json\", Body=…)", tag: İçe aktarma işi → S3, say: "Satırlar ve sebepleri hata klasörüne."}
+              - title: Doküman büyürse
+                text: >-
+                  Sınırlar (2.000 karakter, 10 etiket) yazma anında ekranda ve kuralda durur. Gece denetimi her dokümanın boyutunu
+                  ölçer; en büyük doküman gece gece büyüyorsa ya da 4 KB'ı aşan varsa alarm verir. Ne zaman: yazma anında ve her
+                  gece; sorun en geç ertesi sabah görülür. Yakalamadığı: sınırın altında kalan ama gereksiz bir alan; onu sözleşmeyi
+                  gözden geçiren ekip fark eder. Onarım: büyüyen bilgi kendi koleksiyonuna taşınır (puanlar gibi), dokümanda
+                  özeti kalır.
+                code:
+                  - {code: "db.products.aggregate([{ $project: { b: { $bsonSize: \"$$ROOT\" } } }, { $match: { b: { $gt: 4096 } } }, { $count: \"asan\" }])", tag: [Index ve plan kontrolü → DocumentDB, DocumentDB → Index ve plan kontrolü], say: "4 KB'ı aşan doküman sayısı; 0 değilse alarm."}
+              - title: Yanlış ya da eksik fotoğraf
+                text: >-
+                  Görsel kontrol işi her yeni dosyayı birkaç saniye içinde kontrol eder; JPEG değilse, 480×480 değilse ya da
+                  100.000 baytı aşıyorsa önceki sürümü geri getirir ve alarm verir. Eksik fotoğrafı görsel adresi yakalar: her isteği ve 404'ü sayar,
+                  CloudWatch her 5 dakikada 404'leri bütün görsel isteklerine böler, oran %1'i aşınca alarm çalar; gece denetimi de fotoğrafsız ürünleri
+                  sayar. Yakalamadığı: kurallara uyan ama başka bir ürünün fotoğrafı. Onu katalog ekibi ya da müşteri fark eder.
+                  Onarım: doğru fotoğraf yüklenir ya da S3'teki doğru sürüm geri getirilir; tarayıcılar eskisini en çok 5 dakika
+                  daha gösterir.
+                code:
+                  - {code: "s3.copy_object(Bucket=b, Key=k, CopySource={ \"Bucket\": b, \"Key\": k, \"VersionId\": onceki })", tag: Görsel kontrol işi → S3, say: "Önceki sürüm kopyalanır ve yeniden güncel olur; kötü dosya sürüm olarak kalır."}
+              - title: Toplu bir değişiklik açıklamaları bozarsa
+                text: >-
+                  Boş ya da yanlış bir açıklama sözleşmeye uyar; kural onu durdurmaz. Gece denetiminin sayıları (ortalama boyut
+                  birden düştü) ekibi uyarır. Ekip sürekli yedekle kataloğu bozulmadan önceki bir saniyeyle yeni bir kümede açar;
+                  doğru açıklamalar oradan bir dosyaya dışa aktarılır (mongoexport; sadece _id ve description) ve içe aktarma işiyle geri yazılır. Dosyada sadece açıklama olduğu için iş sadece onu $set eder; o arada değişen fiyat ve stok ezilmez. Saklama süresi
+                  1 ile 35 gün arasında seçilir (katalog için ör. 7 gün). Yakalamadığı: geri dönülen saniyeden sonra yapılan doğru
+                  değişiklikler yedekte yoktur. Onarım: ekip onları yeniden uygular.
+                code:
+                  - {code: "aws docdb restore-db-cluster-to-point-in-time --source-db-cluster-identifier <katalog> \\", tag: Ekip → AWS, say: "Kataloğun eski hâli…"}
+                  - {code: "  --db-cluster-identifier katalog-geri --restore-to-time <bozulmadan önceki saniye>", tag: Ekip → AWS, say: "…yeni bir kümede açılır."}
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
