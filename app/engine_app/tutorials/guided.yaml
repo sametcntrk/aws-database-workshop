@@ -7650,62 +7650,743 @@ steps:
           - [Clustering key, "Partition içindeki sırayı belirleyen alan. Bu tabloda event_time, yeniden eskiye."]
           - [Keyspaces, "Amazon'un Apache Cassandra uyumlu, sunucusuz geniş sütunlu (wide column) veritabanı."]
           - [Uygulama, "Mağazanın arka uç programı. Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde olay tablosu için hazırlık
+      t1:
+        title: Önceden ne vardı? "Baktı" satırları ve persona'ların geçmişi tabloya nasıl geldi?
         intro: >-
-          Ürün sayfası hiç açılmadan, olay tablosu bu sayfanın sorusuna göre kurulur. Keyspaces'te soruyu tablo kurulurken
-          seçersin; sonradan değiştirmek yeni bir tablo demektir. Aşağıdaki beş adım bu hazırlığın sırasıdır.
-        text:
-          - title: Önce sayfanın sorusu yazılır
-            text: >-
-              Keyspaces'te (ve Cassandra'da) tasarım sorudan başlar. Şeridin sorusu her ziyarette aynıdır: "bu kişinin son
-              hareketleri, en yeni önce, en fazla 40". Başka bir soru ("bu ürüne kimler baktı?") ayrı bir tablo ister.
-            code: |-
-              SELECT product_id, detail, event_type FROM dbws.activity_by_user WHERE user_id = ? LIMIT 40
-          - title: Tablo bu soruya göre kurulur
-            text: >-
-              Partition key user_id: bir kişinin bütün satırları bir arada durur. Clustering key event_time, yeniden eskiye:
-              en yeni satır en üstte. TTL de tabloda tanımlanır: her satır 7 gün sonra kendiliğinden silinir. Okurken ORDER BY
-              ya da silme işi gerekmez.
-            code: |-
-              CREATE TABLE dbws.activity_by_user (
-                user_id text, event_time timestamp, event_id uuid,
-                event_type text, product_id text, detail text,
-                PRIMARY KEY ((user_id), event_time, event_id)
-              ) WITH CLUSTERING ORDER BY (event_time DESC) AND default_time_to_live = 604800;
-          - title: Partition key yükü dağıtmalı
-            text: >-
-              Tek bir partition saniyede en fazla 3.000 okuma (RCU) ve 1.000 yazma (WCU) birimi alır. user_id iyi bir
-              seçimdir, çünkü yük binlerce kişiye dağılır. "Bugünün tarihi" gibi herkesin aynı değeri yazdığı bir partition
-              key bütün yükü tek partition'a yığar. CloudWatch'ta StoragePartitionThroughputCapacityExceeded bunu gösterir.
-          - title: Partition sınırsız büyümemeli
-            text: >-
-              Olaylar yıllarca birikirse bir kişinin defteri çok büyür. TTL eski satırları siler; geçmişin tamamı lazımsa
-              partition key'e bir zaman parçası eklenir ve her ay yeni bir defter açılır.
-            code: |-
-              PRIMARY KEY ((user_id, month), event_time, event_id)   -- ör. month = '2026-10'
-          - title: Satır, okunurken lazım olanı kendisi taşır
-            text: >-
-              Keyspaces'te JOIN yoktur. Bu yüzden olay satırı yazılırken ürünün adı ve kategorisi de detail alanına kopyalanır;
-              şerit çizilirken katalog yeniden sorulmaz. Bedeli: ürünün adı sonradan değişirse eski satırlar eski adı gösterir.
-              Satırlar hiç güncellenmez, sadece eklenir (append-only).
-      feed:
-        title: Veri nereden geliyor?
-        writes: >-
-          Uygulama. Kullanıcı bir ürüne bakınca, sepete ekleyince ya da sipariş verince uygulama bir olay satırı yazar.
-        reads: Yine uygulama, kişiye özel ekranlar için ("son baktıkların", "hareketlerim").
-        kind: >-
-          Uygulama orkestrasyonu. Keyspaces başka bir veritabanından kendiliğinden veri çekmez, başka bir veritabanına da
-          kendiliğinden veri göndermez; yazan da okuyan da uygulamadır.
-        with: >-
-          Ürün sayfası Keyspaces'in yanında dört veritabanı daha kullanır: ürünün kendisi bir doküman veritabanından
-          (DocumentDB), görseller nesne deposundan (S3, büyük sistemlerde bir CDN ile), öneriler bir graf veritabanından
-          (Neptune), oturum bellekte duran bir veritabanından (ElastiCache). Olay satırı bunların hiçbirine bağlanmaz;
-          ihtiyaç duyduğu ürün adını yazılırken kopya olarak alır.
-        best: >-
-          Trafik büyüyünce uygulama olayı tabloya doğrudan değil, önce bir olay akışına bırakır (Amazon Kinesis Data Streams
-          ya da Amazon MSK). Küçük bir tüketici program akıştan okuyup tabloya yazar. Böylece sayfa yazmanın bitmesini
-          beklemez, ani yükler akışta tamponlanır ve aynı olaylar analiz gibi başka hedeflere de dağıtılabilir.
+          Ürün sayfası açılmadan önce dbws.activity_by_user tablosu zaten dolu. Her ziyaretçinin (bu tarayıcının, 7f3a…) ve
+          her müşterinin (persona'ların, ör. C00001 Ayşe) kendi partition'ı var; satırlar en yenisi başta duruyor ve her
+          satırın bir ömrü (TTL) var. Burada bu tablonun gerçek bir sistemde nasıl kurulduğunu ve nasıl beslendiğini
+          görüyorsun: tablonun bu sayfanın sorusuna göre tasarımı, persona'ların geçmişinin arşivden nasıl geri yüklendiği,
+          "baktı" satırının neden Uygulama'dan doğrudan, "satın aldı" satırının neden sipariş zincirinden geldiği, aynı olay
+          iki kez gelince ne olduğu, eski satırların nasıl silindiği ve bir şey bozulursa nasıl onarıldığı. Önce zincirin
+          bileşenleri, sonra bir simülasyon, sonra dört aşama (tasarım, ilk yükleme, sürekli besleme, tutarlılık ve onarım).
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1 ve T anı", "t-1: sayfanın açılmasından (t0) önceki zaman. T anı: tablonun yayına girdiği an; bu bölümde 30 Eki 20:00 (temsilî). T'den önceki olaylar arşivden geri yüklenir, T'den sonrakiler canlı yazılır. Eski site: mağazanın T'den önceki sitesi; giriş yapmış müşterilerin olaylarını müşteri numarasıyla arşive yazıyordu."]
+          - ["Ekip", "Mağazanın sistemini kuran ve işleten mühendisler. Bir kez çalışan kurulum komutlarını onlar gönderir, alarmlara onlar bakar."]
+          - ["Ziyaretçi, müşteri ve persona", "Ziyaretçi: bir tarayıcı; kimliği lm_visitor çerezinde (ör. 7f3a…). Müşteri: sipariş veren kişi, numarası C00001 gibi. Persona: görevin başında seçtiğin müşteri (ör. C00001 Ayşe Yılmaz, C00002 Mert). Tabloda ikisinin de kendi partition'ı var: user_id bazen ziyaretçi kimliği, bazen müşteri numarası. Tarayıcının ikinci çerezi lm_persona, seçilen müşterinin numarasını taşır. Eski sitenin kayıtlarından sadece müşteri numarası olanlar geri yüklenir; bu tarayıcı (7f3a…) mağazaya T'den sonra geldi, eski kaydı yok."]
+          - ["Olay ve olay türleri", "Olay (event): bir kişinin mağazada yaptığı tek bir şey. Türleri (event_type): view (ürüne baktı), search (aradı), add_to_cart ve remove_from_cart (sepete ekledi, çıkardı), wishlist (istek listesine ekledi), purchase (satın aldı). Her satır bir ürün taşır; search satırındaki ürün, aramanın sonucunda tıklanan üründür."]
+          - ["Primary key ve üzerine yazma (upsert)", "Bir satırın tam kimliği: user_id + event_time + event_id. Keyspaces'te aynı kimlikle ikinci bir INSERT yeni satır açmaz, aynı satırın üzerine yazar; tıpkı aynı dosya adıyla kaydedilen bir belgenin eskisinin yerine geçmesi gibi."]
+          - ["event_id ve idempotency", "event_id: olayın numarası (uuid, 36 karakterlik benzersiz bir kimlik). Idempotency: aynı olay kaç kez yazılırsa yazılsın sonuç bir kez yazılmış gibi olur; bunun için aynı olay her seferinde aynı event_id ve event_time ile gelmelidir."]
+          - ["TTL ve kalan ömür", "TTL (time to live): satırın ömrü, saniye olarak. Tablonun varsayılanı 604.800 saniye (7 gün). Ömür satırın yazıldığı andan sayılır; geçmişten yüklenen bir satıra bu yüzden kalan ömrü (7 gün − olayın yaşı) verilir. Süresi dolan satır okumalarda görünmez."]
+          - ["WRU, RRU ve on-demand", "WRU: 1 KB'a kadar bir satırı yazmanın birimi. RRU: 4 KB'a kadar bir satırı LOCAL_QUORUM ile okumanın birimi (LOCAL_ONE ile yarısı). On-demand: kapasite ayarlamazsın, kullandığın birim kadar ödersin; ısındıkça otomatik büyür. Provisioned: saniyedeki kapasiteyi önceden sen ayarlarsın; otomatik ölçekleme (auto scaling) bu ayarı trafiğe göre kendisi değiştirir. Kısma (throttle): kapasiteyi aşan isteğin geri çevrilmesi; uygulama biraz bekleyip yeniden dener."]
+          - ["Warm throughput (ön ısıtma)", "Tablonun beklemeden karşılayabileceği hız. Yeni bir on-demand tablo saniyede 4.000 yazma ve 12.000 okuma birimiyle başlar; büyük bir yüklemeden önce ekip bu değeri yükseltebilir (ek ücretli)."]
+          - ["LOCAL_QUORUM", "Keyspaces her satırı üç kopya olarak, ayrı veri merkezlerinde tutar. LOCAL_QUORUM: üç kopyadan en az ikisi \"tamam\" demeden cevap verilmez. Keyspaces'te bütün yazmalar böyledir. LOCAL_ONE: tek kopyanın cevabı yeter; okuması yarı fiyatına ama en son yazılan satırı kaçırabilir (Adım 26)."]
+          - ["Sıcak partition (hot partition)", "Yükün tek bir partition'a yığılması; bütün kasalar boşken tek kasada kuyruk olması gibi. Bir partition saniyede en fazla 1.000 yazma ve 3.000 okuma birimi alır."]
+          - ["Transaction (iş paketi), COMMIT ve outbox", "Transaction: birlikte kaydedilmesi gereken yazmaların paketi; COMMIT onu kalıcı yapar, ya hepsi kaydolur ya hiçbiri. Outbox: siparişle aynı pakette yazılan \"sipariş verildi\" olayı satırı; giden mektup kutusu gibi (Adım 33)."]
+          - ["Değişiklik kaydı (WAL), AWS DMS ve CDC", "WAL: Aurora'nın kaydettiği her değişikliği sırayla yazdığı defter. CDC (change data capture): bu defteri okuyup her değişikliği başka bir yere taşımak. AWS DMS bunu yapan AWS servisidir. Okuma kopyası (reader): Aurora'nın sadece okuma yapan ikinci sunucusu; ağır okumalar siparişleri yazan sunucuyu yormaz."]
+          - ["Kinesis Data Streams, Lambda ve tüketici", "Kinesis: olayların sırayla konduğu ve bir süre (varsayılan 24 saat) saklandığı bant. Lambda: bir olay gelince kısa bir kodu çalıştıran AWS servisi. Tüketici: banttan olay alıp işleyen kod."]
+          - ["En az bir kez (at-least-once), DLQ ve IteratorAge", "Akış bir olayı kaybetmez ama bazen iki kez verir. DLQ (hata kuyruğu): işlenemeyen olayların bırakıldığı yer. IteratorAge: tüketicinin işlediği son olayın akışa ne kadar önce girdiği; tüketici ne kadar gerideyse o kadar büyük."]
+          - ["Keyspaces CDC akışı ve KCL", "Keyspaces'in kendi değişiklik akışı: tabloya yazılan her satırın bir kaydı, 24 saate kadar saklanır. NEW_IMAGE: akışa satırın yazıldıktan sonraki hâli konur (öncesi değil). KCL (Kinesis Client Library): bu akışı okuyan programları yazmak için AWS'in kütüphanesi."]
+          - ["S3, olay arşivi ve Parquet", "S3: AWS'in dosya deposu; dosyalar bir kovada (bucket) durur. Olay arşivi: mağazanın bütün olaylarının yıllarca saklandığı kova (tablo sadece son 7 günü tutar). Parquet: çok satırı sıkıştırılmış, sütun sütun tutan dosya biçimi."]
+          - ["AWS Glue", "Büyük dosyaları okuyup başka bir yere yazan işleri sunucu kurmadan çalıştıran AWS servisi (içinde Apache Spark çalışır)."]
+          - ["AWS WAF", "Mağazanın kapısındaki güvenlik görevlisi: yük dengeleyicinin (ALB) önünde istekleri kurallara göre süzer; ör. bir adresten çok hızlı gelen istekleri bir süre durdurur."]
+          - ["CloudWatch ve sürekli yedek (PITR)", "CloudWatch: AWS'in ölçüm ve alarm servisi. Bu bölümdeki ölçü adları: WriteTimeout (yazmanın cevabı zamanında gelmedi), WriteThrottleEvents (kısılan yazma sayısı), StoragePartition\u200bThroughput\u200bCapacityExceeded (tek partition'ın sınırını aşan istek sayısı). PITR (point-in-time recovery): tabloyu son 35 gün içindeki herhangi bir saniyeye, yeni bir tablo olarak geri açabilme."]
+          - ["Kesit, temsilî, Örnek durum ve Olsaydı", "Kesit: simülasyonda gösterilen satırlar; burada t0'daki 9 satır (ve 4. aşamada silinen bir satır). Temsilî: canlı sistemden gelmeyen, anlatım için seçilmiş değer. \"Örnek durum\" diye başlayan kareler bu zincirde yaşanan durumlar, \"Olsaydı\" diye başlayanlar yaşanmayan ama yaşansaydı ne olacağını gösteren durumlar."]
+          - ["Keyspaces'in türü", "Geniş sütunlu (wide column): satırlar bir anahtara göre gruplanır ve grubun içinde sıralı durur; her kişinin ayrı defteri gibi. Apache Cassandra uyumlu: Cassandra adlı açık kaynak veritabanının dilini (CQL) konuşur. Sunucusuz: sunucu kiralamaz, yönetmezsin; kullandığın kadar ödersin."]
+          - ["Diğer adlar", "EC2: AWS'in kiralık sanal sunucusu. ECS Fargate: bir programı sunucu yönetmeden sürekli çalıştıran AWS servisi. Spark: çok büyük dosyaları birçok makinede birden işleyen program. EventBridge Scheduler: bir işi belli saatte (ör. her gece) başlatan AWS servisi; çalar saat gibi. IP adresi: internette bir bilgisayarın adresi. DocumentDB: ürünlerin durduğu doküman veritabanı (Adım 9). Graf: müşteri ve ürünlerin ağını tutan veritabanı, Neptune (Adım 11)."]
+          - ["Kod kartlarındaki sözcükler", "SELECT … FROM … WHERE … LIMIT 40: şu tablodan, şu koşula uyan satırlardan en fazla 40'ını oku. INSERT INTO … VALUES: tabloya satır yaz. JOIN: iki tabloyu ortak alanla birleştir. count(*) ve GROUP BY 1: ilk sütuna göre grup grup say. USING (order_id): iki tabloyu order_id'si aynı olan satırlardan birleştir. interval '7 days': 7 günlük süre. text, timestamp, uuid: sütunun türü (metin, zaman, kimlik). NS: uuid5'in sabit başlangıç değeri; aynı NS ve aynı girdi hep aynı kimliği verir. filter: arşivden koşula uyanları seç. INSERT_TTL: tüketicinin önceden hazırladığı, USING TTL'li INSERT komutu. uuid4(): rastgele yeni bir kimlik; uuid5(…): aynı girdiden hep aynı kimliği üreten kimlik. now(): şu anki zaman. execute(): komutu Keyspaces'e gönder. is_idempotent: \"bu komut tekrar gönderilebilir\" işareti. USING TTL: bu satıra tablonun varsayılanı yerine verilen ömür. CUSTOM_PROPERTIES: Keyspaces'e özgü tablo ayarları; PAY_PER_REQUEST on-demand demek. ALTER TABLE: var olan tablonun ayarını değiştir. RESTORE TABLE: yedekten yeni tablo aç. aws_s3.query_export_to_s3: Aurora'nın bir sorgunun sonucunu S3'e dosya olarak yazması. BEGIN / COMMIT: iş paketinin başı ve sonu. Records, base64, json, rec[\"kinesis\"][\"data\"]: Lambda'nın akıştan aldığı olay paketi, içindeki tek olay ve onu okunur hâle getirme."]
+          - ["Görev adımları", "\"Adım 25\", \"Adım 33\" gibi adlar bu görevin (mağazadaki 37 adımın) adımlarıdır. Simülasyonun sayacındaki \"Adım 1 / 22\" ise simülasyonun karesidir."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra"
+          sütunu veriyi kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim kodumuz" etiketli
+          parçaları mağazanın ekibi yazar. Tabloya iki yoldan yazılır: "baktı", "aradı", "sepete ekledi" gibi satırları
+          Uygulama doğrudan yazar; "satın aldı" satırları sipariş zincirinden (Adım 11 ve 33'teki Aurora → DMS → Kinesis
+          zincirinin aynısı) gelir. Persona'ların T anından önceki geçmişi bir kez, S3'teki olay arşivinden geri yüklenir;
+          tabloya yazılan her yeni satır da Keyspaces'in değişiklik akışıyla aynı arşive gider. Aynı parçalar aşağıdaki
+          simülasyonda birer kutu: üst sırada yeni olayları yazanlar, sonra ilk yükleme, ortada tablo, sonra arşive giden yol,
+          altta yandaki işler.
+        inventory:
+          - id: web
+            name: Uygulama (mağaza sayfaları)
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucusunda)
+            does: >-
+              Ürün sayfası açılınca (ve arama, sepet, istek listesi işlemlerinde) ziyaretçinin partition'ına bir satır yazar:
+              event_id ve event_time'ı istek gelince bir kez verir, satırı LOCAL_QUORUM ile doğrudan Keyspaces'e yazar. Sipariş
+              gelince siparişi ve "sipariş verildi" olayını Aurora'ya yazar; satın alma satırını kendisi yazmaz.
+            box: "\"Baktı\" satırını doğrudan yazar; siparişi ve olayını Aurora'ya yazar."
+            phases: [2, 3, 4]
+            before: Tarayıcı (ürün sayfası, sipariş butonu)
+            after: [keyspaces, aurora]
+          - id: aurora
+            name: Aurora PostgreSQL (shop)
+            kind: aws
+            what: sipariş veritabanı
+            does: >-
+              Siparişlerin asıl kaydı (orders, order_items) ve olay kutusu (outbox). İlk yüklemede T anından önceki 7 günün
+              sipariş kalemlerini S3'teki arşive dosya olarak döker. Karşılaştırma işi doğru satın alma sayılarını buradan okur.
+            box: "Siparişlerin asıl kaydı + outbox; ilk yüklemede sipariş geçmişini arşive döker."
+            phases: [2, 3, 4]
+            before: web
+            after: [wal, archive, reconcile]
+          - id: wal
+            name: Aurora'nın değişiklik kaydı (WAL)
+            kind: aws
+            what: Aurora'nın içinde, bir ayarla açılır
+            does: COMMIT edilen her değişikliği sırayla yazar. DMS bu kaydı okur.
+            box: Her COMMIT'i sırayla yazar; DMS buradan okur.
+            phases: [2, 3]
+            before: aurora
+            after: dms
+          - id: dms
+            name: AWS DMS (CDC görevi)
+            kind: aws
+            what: AWS'in değişiklik yakalama servisi
+            does: >-
+              Değişiklik kaydından outbox'a eklenen satırları okur ve her birini Kinesis akışına bir kayıt olarak koyar. T anında
+              başlatılır; o andan sonraki her sipariş bu yoldan gelir.
+            box: "Outbox'a eklenen her satırı akışa koyar; T anında başladı."
+            phases: [2, 3]
+            before: wal
+            after: kinesis
+          - id: kinesis
+            name: Kinesis Data Streams (lm-order-events)
+            kind: aws
+            what: olay akışı
+            does: >-
+              Sipariş olaylarını sırayla saklar (varsayılan 24 saat). Aynı akışı başka tüketiciler de okur (graf, Adım 11;
+              canlı sıralama, Adım 33); her biri kendi hızında.
+            box: Sipariş olaylarını sırayla saklar; her tüketici kendi hızında okur.
+            phases: [2, 3, 4]
+            before: dms
+            after: actcons
+          - id: actcons
+            name: Etkinlik tüketicisi (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod
+            does: >-
+              Akıştan sipariş olayını alır; her kalem için bir purchase satırı yazar: müşterinin partition'ına ve siparişi veren
+              tarayıcının partition'ına. event_id'yi sipariş no ve ürün no'dan üretir (uuid5), event_time sipariş zamanıdır;
+              aynı olay iki kez gelirse aynı satırın üzerine yazar.
+            box: "Her kalem için purchase satırı: müşteri + tarayıcı partition'ı; aynı olay aynı satıra düşer."
+            phases: [2, 3, 4]
+            before: kinesis
+            after: [keyspaces, dlq]
+          - id: archive
+            name: S3 (olay arşivi)
+            kind: aws
+            what: Amazon S3 bucket'ı
+            does: >-
+              Mağazanın bütün olayları yıllarca burada durur: eski sitenin olay kayıtları (clickstream/), Aurora'dan dökülen
+              sipariş geçmişi (orders/) ve tablodan gelen yeni satırlar (cdc/). Tablo ya da bir partition kaybolursa buradan
+              yeniden kurulur.
+            box: "Bütün olaylar, yıllarca: eski site kayıtları, sipariş geçmişi, tablodan gelen yeni satırlar."
+            phases: [2, 3, 4]
+            before: [aurora, archiver, Eski site]
+            after: backfill
+          - id: backfill
+            name: Geri doldurma işi (AWS Glue)
+            kind: code
+            what: AWS Glue'da çalışan Spark işi
+            does: >-
+              Arşivden T anından önceki son 7 günün olaylarını okur; 7 günden eskileri atlar. Her olaya sabit bir event_id ve kalan
+              ömrünü (USING TTL) verip müşterinin partition'ına yazar. Aynı iş bozulan bir partition'ı arşivden yeniden kurar.
+            box: "Arşivden son 7 gün: kalan ömürle (USING TTL) yazar; eskileri atlar."
+            phases: [2, 4]
+            before: archive
+            after: [keyspaces, monitor]
+          - id: keyspaces
+            name: Keyspaces (dbws.activity_by_user)
+            kind: aws
+            what: geniş sütunlu veritabanı (Cassandra uyumlu), on-demand
+            does: >-
+              Kişi başına olaylar (partition: user_id), en yenisi başta (event_time DESC). Her satır üç kopya; varsayılan ömür 7
+              gün, süresi dolan satır okumalarda görünmez. Sürekli yedek (PITR) ve değişiklik akışı (CDC) açık.
+            box: "Kişi başına olaylar, en yenisi başta; satırlar 7 gün yaşar."
+            phases: [1, 2, 3, 4]
+            before: [web, actcons, backfill]
+            after: [cdc, pitr, "Son baktıkların şeridi (t0)"]
+          - id: cdc
+            name: Keyspaces CDC akışı
+            kind: aws
+            what: Keyspaces'in değişiklik akışı (Keyspaces Streams)
+            does: >-
+              Tabloya yazılan her satırın yeni hâlini (NEW_IMAGE) sırayla kaydeder ve 24 saate kadar saklar. Süresi dolan satır
+              için de "TTL ile silindi" diye bir kayıt düşer. Tablonun kapasitesini kullanmaz.
+            box: "Her yeni satırın kaydı, 24 saat; TTL silmeleri de görünür."
+            phases: [2, 3, 4]
+            before: keyspaces
+            after: archiver
+          - id: archiver
+            name: Arşiv tüketicisi (KCL)
+            kind: code
+            what: ECS Fargate'te sürekli çalışan küçük program
+            does: >-
+              CDC akışını okur, yeni satırları birkaç dakikalık paketler hâlinde Parquet dosyası olarak arşive yazar. TTL
+              silmelerini ve T anından önceki (zaten arşivde olan) satırları atlar.
+            box: "Akıştaki yeni satırları dosya dosya arşive yazar; TTL silmelerini atlar."
+            phases: [2, 3, 4]
+            before: cdc
+            after: [archive, monitor]
+          - id: dlq
+            name: Hata kuyruğu (SQS DLQ)
+            kind: aws
+            what: Amazon SQS kuyruğu
+            does: >-
+              Etkinlik tüketicisinin tekrar tekrar işleyemediği bir olayın yerini (akıştaki sıra numarasını) saklar; akış durmaz,
+              ekip olayı sonra işler.
+            box: İşlenemeyen olayın yerini saklar; akış durmaz.
+            phases: [4]
+            before: actcons
+            after: Ekip (inceler, yeniden gönderir)
+          - id: monitor
+            name: CloudWatch alarmları
+            kind: aws
+            what: AWS'in izleme servisi
+            does: >-
+              Tüketicinin gecikmesini (IteratorAge), DLQ'daki mesajları, Keyspaces'in sıcak partition ve kısma sayılarını,
+              yazma hatası oranını, geri doldurmanın ve arşiv tüketicisinin sayılarını izler; eşik aşılınca ekibe alarm verir.
+            box: "Gecikme, DLQ, sıcak partition, hata oranı, yükleme sayıları; alarm verir."
+            phases: [2, 3, 4]
+            before: [actcons, dlq, keyspaces, backfill, archiver, waf]
+            after: Ekip (alarm)
+          - id: waf
+            name: AWS WAF (hız kuralı)
+            kind: aws
+            what: ALB'nin önündeki istek süzgeci
+            does: >-
+              Bir IP adresinden kısa sürede gelen istek sayısı eşiği aşınca o adresi bir süre durdurur. Tek bir sahte ziyaretçinin
+              (bot) binlerce "baktı" satırıyla tek bir partition'ı ısıtmasını kapıda keser.
+            box: "Bir adresten çok hızlı gelen istekleri kapıda durdurur."
+            phases: [4]
+            before: Tarayıcı ve botlar
+            after: [web, monitor]
+          - id: pitr
+            name: Keyspaces sürekli yedeği (PITR)
+            kind: aws
+            what: Keyspaces'in yedekleme özelliği
+            does: >-
+              Tabloyu son 35 gün içindeki herhangi bir saniyeye, yeni bir tablo olarak geri açar. Yanlış bir silme ya da toplu
+              yazmadan sonra doğru satırlar oradan geri kopyalanır.
+            box: Tabloyu geçmişteki bir saniyeye yeni bir tablo olarak açar.
+            phases: [4]
+            before: keyspaces
+            after: Ekip (geri yükleme)
+          - id: reconcile
+            name: Gece karşılaştırma işi
+            kind: code
+            what: her gece çalışan program (EventBridge Scheduler + Lambda)
+            does: >-
+              Son 7 günde sipariş veren her müşteri için Aurora'daki sipariş kalemlerini Keyspaces'teki purchase satırlarıyla
+              karşılaştırır; eksik satırı aynı event_id ile yazar; fazla satırı (yalnızca yanlış kimlikle yazılırsa olur) ekibe raporlar.
+            box: "Aurora'daki satın almalarla purchase satırlarını karşılaştırır, eksiği yazar."
+            phases: [4]
+            before: [aurora, keyspaces]
+            after: [keyspaces, Ekip (fark raporu)]
+        sim_title: "Simülasyon: \"baktı\" satırları ve persona'ların geçmişi tabloya nasıl geldi?"
+        sim:
+          kind: pipeline
+          title: Uygulama ve sipariş zinciri → Keyspaces ← arşivden geri doldurma; Keyspaces → CDC → arşiv
+          caption: >-
+            Keyspaces kutusundaki tablo kesit: t0'daki 9 satır, üç partition (C00002 Mert, bu tarayıcı 7f3a…, C00001 Ayşe); 4.
+            aşamada ömrü dolup silinen bir Ayşe satırı da var. Tabloda binlerce partition var. Ürün adları t0'daki gibi
+            kısaltılmış (gerçek detail alanında marka ve kategori de yazar: "Anadolu Algoritmalar 84 · Kitap"). TTL sütunu satıra
+            yazılırken verilen ömür. Önce tablonun kurulması ve arşivden geri doldurma, sonra bu tarayıcının üç "baktı" satırı ve
+            bir siparişin her kutudan geçişi, en sonda tutarlılık ve onarım oynuyor. 4. aşamada "Örnek durum" diye başlayan
+            kareler bu zincirde yaşanan durumlar; "Olsaydı" diye başlayanlar yaşanmadı, yaşansaydı ne olacağını gösteriyor.
+            Canlı sistemden: Ayşe ve Mert'in satırları (zaman, tür, ürün), tablo ayarları (7 gün, on-demand, PITR). Temsilî: T
+            anı (30 Eki 20:00), bu tarayıcının satırları (t0'daki örnekler), sipariş no O004812 ve müşterisi C00007 (kesitin
+            dışında), dosya adları, sayılar ve sınırlar. Son karede tablo, ürün sayfasının açıldığı andaki (t0) hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım}
+          rows:
+            - {id: writers, title: "Yeni olayları yazanlar: Uygulama (baktı) ve sipariş zinciri (satın aldı)", flow: true}
+            - {id: load, title: "İlk yükleme: arşivden geri doldurma"}
+            - {id: stores, title: "Sayfanın okuduğu tablo"}
+            - {id: after, title: "Tablodan arşive: değişiklik akışı", flow: true}
+            - {id: helpers, title: "Yandaki işler: hata kuyruğu, izleme, hız kuralı, yedek, karşılaştırma", side: true}
+          summary: >-
+            Tabloyu sayfanın sorusu belirledi: kişi başına partition, en yenisi başta, 7 günlük ömür. Persona'ların T anından
+            önceki geçmişini geri doldurma işi arşivden bir kez, kalan ömürleriyle yükledi. Bu tarayıcının "baktı" satırlarını
+            Uygulama doğrudan yazdı; "satın aldı" satırını sipariş zinciri getirdi. İkinci kez gelen olay aynı event_id ile
+            aynı satıra düştü, ömrü dolan satır okumalardan çıktı, yeni satırlar CDC ile arşive gitti. Son durum: kesitte 9 satır,
+            t0'daki simülasyonun başladığı durum.
+          boxes:
+            - id: web
+              row: writers
+            - id: aurora
+              row: writers
+              tables:
+                - name: "outbox (kesit: bu tarayıcının siparişi)"
+                  cols: [order_id, customer_id, visitor_id, items]
+                  rows:
+                    - {order_id: O004812, customer_id: C00007, visitor_id: "7f3a…", items: P0021, hidden: true}
+            - id: wal
+              row: writers
+            - id: dms
+              row: writers
+            - id: kinesis
+              row: writers
+            - id: actcons
+              row: writers
+            - id: archive
+              row: load
+              tables:
+                - name: "olay arşivi (kesit; dosya adları temsilî)"
+                  cols: [dosya, içinde]
+                  rows:
+                    - {key: ar1, dosya: "clickstream/2026/10/…", içinde: "eski sitenin olay kayıtları (search, view, …)"}
+                    - {key: ar2, dosya: "orders/2026-10-30.parquet", içinde: "Aurora'dan dökülen sipariş kalemleri (purchase)", hidden: true}
+                    - {key: ar3, dosya: "cdc/2026/10/31/…parquet", içinde: "tablodan gelen yeni satırlar (7f3a… view, purchase)", hidden: true}
+            - id: backfill
+              row: load
+            - id: keyspaces
+              row: stores
+              tables:
+                - name: "dbws.activity_by_user (kesit: t0'daki 9 satır, 3 partition; tabloda binlerce partition)"
+                  cols: [user_id, event_time, event_type, "product_id · detail", TTL]
+                  rows:
+                    - {key: m1, user_id: "C00002 (Mert)", event_time: "30 Eki 10:10", event_type: view, "product_id · detail": "P0125 Ege Güneş Gözlüğü 125", TTL: "6 g 14 sa", hidden: true}
+                    - {key: m2, user_id: "C00002 (Mert)", event_time: "30 Eki 09:22", event_type: purchase, "product_id · detail": "P0004 Rhein Bulut Mimarisi 4", TTL: "6 g 13 sa", hidden: true}
+                    - {key: v4, user_id: "7f3a… (bu tarayıcı)", event_time: "2 dk önce", event_type: purchase, "product_id · detail": "P0021 Akıllı Saat", TTL: "7 g", hidden: true}
+                    - {key: v3, user_id: "7f3a… (bu tarayıcı)", event_time: "3 dk önce", event_type: view, "product_id · detail": "P0021 Akıllı Saat", TTL: "7 g", hidden: true}
+                    - {key: v2, user_id: "7f3a… (bu tarayıcı)", event_time: "5 dk önce", event_type: view, "product_id · detail": "P0131 Mekanik Klavye", TTL: "7 g", hidden: true}
+                    - {key: v1, user_id: "7f3a… (bu tarayıcı)", event_time: "6 dk önce", event_type: view, "product_id · detail": "P0021 Akıllı Saat", TTL: "7 g", hidden: true}
+                    - {key: a1, user_id: "C00001 (Ayşe)", event_time: "30 Eki 15:13", event_type: search, "product_id · detail": "P0084 Algoritmalar", TTL: "6 g 19 sa", hidden: true}
+                    - {key: a2, user_id: "C00001 (Ayşe)", event_time: "30 Eki 06:34", event_type: purchase, "product_id · detail": "P0147 Kahve Makinesi", TTL: "6 g 10 sa", hidden: true}
+                    - {key: a3, user_id: "C00001 (Ayşe)", event_time: "30 Eki 00:47", event_type: search, "product_id · detail": "P0173 Dambıl Seti", TTL: "6 g 4 sa", hidden: true}
+                    - {key: a0, user_id: "C00001 (Ayşe)", event_time: "23 Eki 20:56", event_type: view, "product_id · detail": "P0104 Algoritmalar 104", TTL: "56 dk", hidden: true}
+            - id: cdc
+              row: after
+            - id: archiver
+              row: after
+            - id: dlq
+              row: helpers
+            - id: monitor
+              row: helpers
+            - id: waf
+              row: helpers
+            - id: pitr
+              row: helpers
+            - id: reconcile
+              row: helpers
+          frames:
+            - phase: 2
+              who: keyspaces
+              lit: [keyspaces, cdc]
+              packet: {at: keyspaces, text: "CREATE TABLE dbws.activity_by_user (…) WITH CLUSTERING ORDER BY (event_time DESC, event_id ASC) AND default_time_to_live = 604800 AND CUSTOM_PROPERTIES = { PAY_PER_REQUEST, PITR açık } · ALTER TABLE … WITH cdc = TRUE"}
+              note: {keyspaces: "tablo hazır · 0 satır · on-demand · ömür 7 gün", cdc: "açık · NEW_IMAGE"}
+              say: >-
+                Tablo henüz yok. Ekip tabloyu sayfanın sorusuna göre kurdu: partition user_id, sıra event_time (en yenisi başta),
+                her satıra varsayılan 7 günlük ömür. Kapasite on-demand, sürekli yedek (PITR) açık. Tablonun değişiklik akışını
+                (CDC) da açtı: bundan sonra yazılan her satırın bir kaydı akışa düşecek.
+            - phase: 2
+              who: backfill
+              lit: [archive, backfill, keyspaces]
+              packet: {at: backfill, text: "warm throughput: yazma 4.000 → 10.000 birim/sn (temsilî) · Glue işi: en fazla 8.000 yazma/sn"}
+              note: {keyspaces: "T'den önce ön ısıtıldı (en az 30 dk önce)", cdc: ""}
+              say: >-
+                Geri doldurma milyonlarca satırı birkaç saatte yazacak. Yeni bir on-demand tablo saniyede 4.000 yazma birimiyle
+                başlar; ekip T'den önce, yüklemeden en az 30 dakika önce tabloyu daha yüksek bir değere ön ısıttı (ek ücretli) ve Glue işinin
+                hızını bunun altında tuttu. Böylece canlı yazmalar yükleme yüzünden kısılmaz.
+            - phase: 2
+              who: dms
+              lit: [web, aurora, wal, dms, kinesis, actcons]
+              note: {keyspaces: "", dms: "T = 30 Eki 20:00'dan itibaren yakalıyor", actcons: "çalışıyor · 0 olay", web: "T'den itibaren yazıyor"}
+              say: >-
+                T anı (30 Eki 20:00, temsilî). Önce canlı besleme açıldı: Uygulama'nın tabloya yazan sürümü yayına girdi, DMS görevi
+                ve etkinlik tüketicisi başladı. T'den sonraki her olay canlı yoldan gelecek; T'den öncekileri ilk yükleme
+                getirecek. Bir olay iki yoldan da gelirse aynı event_id ile aynı satıra düşer; hiçbiri kaybolmaz.
+            - phase: 2
+              who: aurora
+              lit: [aurora, archive]
+              packet: {at: aurora, text: "aws_s3.query_export_to_s3('SELECT o.customer_id, o.created_at, o.order_id, i.product_id, p.name … WHERE o.created_at >= T − 7 gün AND o.created_at < T', 'orders/2026-10-30.parquet')"}
+              show: {archive: [ar2]}
+              fresh: {archive: [ar2]}
+              note: {dms: "", actcons: "", web: "", archive: "clickstream/ zaten vardı · orders/ eklendi"}
+              say: >-
+                Arşivde eski sitenin olay kayıtları (aramalar, bakmalar, sepet işlemleri) zaten yıllardır duruyor. Satın almaların
+                doğru kaynağı ise siparişler: Aurora, T anından önceki 7 günün sipariş kalemlerini okuma kopyasından okuyup arşive
+                bir dosya olarak döktü. Siparişleri yazan sunucu etkilenmedi.
+            - phase: 2
+              who: backfill
+              lit: [archive, backfill, keyspaces]
+              packet: {at: keyspaces, text: "INSERT INTO dbws.activity_by_user (user_id, event_time, event_id, event_type, product_id, detail) VALUES ('C00001', '2026-10-30 15:13', uuid5(…), 'search', 'P0084', 'Anadolu Algoritmalar 84 · Kitap') USING TTL 587580"}
+              show: {keyspaces: [m1, m2, a1, a2, a3, a0]}
+              fresh: {keyspaces: [m1, m2, a1, a2, a3, a0]}
+              note: {archive: "", keyspaces: "", backfill: "kesitte: okunan 7 · yazılan 6 · 7 günden eski, atlanan 1 (C00001 · 23 Eki 16:07 add_to_cart P0001) · hız ≤ 8.000/sn (temsilî)"}
+              say: >-
+                Glue işi arşivden T'den önceki son 7 günün olaylarını okudu ve her birini müşterinin partition'ına yazdı. Her
+                satıra kalan ömrünü verdi: Ayşe'nin 30 Eki 15:13'teki araması, iş T'den hemen sonra onu yazdığında 4 saat 47 dakikalıktı, ömrü 7 gün − 4 sa 47 dk =
+                587.580 saniye. 23 Eki 20:56'daki bakma 56 dakika daha yaşayacak; 23 Eki 16:07'deki sepete ekleme 7 günden eski,
+                hiç yazılmadı (eski site kayıtları gün gün dosyalarda, iş o günün dosyasını da okur). Satırlar partition'larında kendiliğinden en yenisi başa dizildi.
+            - phase: 2
+              who: monitor
+              lit: [backfill, keyspaces, monitor]
+              packet: {at: monitor, text: "SELECT … WHERE user_id = 'C00001' AND event_time >= T − 7 gün → arşivdeki aynı aralıkla karşılaştır"}
+              note: {backfill: "", monitor: "geri doldurma: okunan = yazılan + atlanan · kısma 0 · hata 0", keyspaces: "kesitte 6 satır · 2 partition"}
+              say: >-
+                İş okuduğu, yazdığı ve atladığı satır sayılarını CloudWatch'a yazdı: okunan = yazılan + atlanan. Ekip birkaç
+                müşterinin partition'ını sayfanın sorusunun aynısıyla okudu ve arşivdeki aynı 7 günle karşılaştırdı: eşit. Kısma
+                (throttle) olmadı.
+            - phase: 3
+              who: web
+              lit: [web, keyspaces]
+              packet: {at: keyspaces, text: "INSERT … VALUES ('7f3a…', <şimdi>, <yeni uuid>, 'view', 'P0021', 'Akıllı Saat · Elektronik') · LOCAL_QUORUM · 1 WRU"}
+              show: {keyspaces: [v1]}
+              fresh: {keyspaces: [v1]}
+              note: {monitor: "", keyspaces: ""}
+              say: >-
+                Bu tarayıcı (7f3a…) mağazada geziyor ve Akıllı Saat'in sayfasını açtı. Uygulama event_id'yi ve event_time'ı istek
+                gelir gelmez bir kez verdi ve satırı Keyspaces'e doğrudan yazdı. Üç kopyanın ikisi "tamam" deyince cevap döndü
+                (LOCAL_QUORUM); sayfanın hemen ardından okuyacağı şerit bu satırı görür. Satır tablonun varsayılan ömrünü aldı: 7 gün.
+            - phase: 3
+              who: web
+              lit: [web, keyspaces]
+              packet: {at: keyspaces, text: "INSERT … 'view', 'P0131' · INSERT … 'view', 'P0021' (her biri ayrı satır, 1 WRU)"}
+              show: {keyspaces: [v2, v3]}
+              fresh: {keyspaces: [v2, v3]}
+              say: >-
+                Sonra Mekanik Klavye'ye, sonra yine Akıllı Saat'e baktı. Her bakma ayrı bir satır; aynı ürüne ikinci bakma da. Uygulama
+                satırları güncellemez; her yeni olay yeni bir satır. Aynı olay yeniden yazılırsa aynı satırın üzerine düşer (4. aşama). Tekrarları şeritten ayıklamak t0'da Uygulama'nın işi.
+            - phase: 3
+              who: web
+              lit: [web, aurora]
+              show: {aurora: [O004812]}
+              fresh: {aurora: [O004812]}
+              say: >-
+                Ziyaretçi Akıllı Saat'i satın aldı. Siparişin müşterisi, bu tarayıcının lm_persona çerezindeki müşteri: burada C00007
+                (kesitin dışında, temsilî; t0'daki "ör. Ayşe" gibi bir örnek). Uygulama siparişi, kalemlerini ve outbox'a "sipariş verildi" olayını aynı iş paketinde Aurora'ya yazdı;
+                olayda tarayıcının kimliği (visitor_id) de var. COMMIT. Keyspaces'e kendisi yazmadı.
+            - phase: 3
+              who: dms
+              lit: [aurora, wal, dms, kinesis]
+              packet: {at: kinesis, text: "akıştaki kayıt: O004812 · C00007 · 7f3a… · [P0021] · created_at"}
+              note: {dms: "", actcons: "", web: ""}
+              say: >-
+                Aurora değişikliği değişiklik kaydına (WAL) yazdı; DMS outbox'a eklenen satırı gördü ve Kinesis akışına koydu (Adım
+                33'teki yol). Aynı kaydı graf ve sıralama tüketicileri de kendi hızlarında okuyor.
+            - phase: 3
+              who: actcons
+              lit: [kinesis, actcons, keyspaces]
+              packet: {at: actcons, text: "event_id = uuid5('O004812/P0021') · INSERT … ('7f3a…', created_at, event_id, 'purchase', 'P0021', …) USING TTL 604790 · aynısı 'C00007' için"}
+              show: {keyspaces: [v4]}
+              fresh: {keyspaces: [v4]}
+              note: {actcons: "bu olay: 1 kalem → 2 satır (7f3a… + C00007, kesitin dışında)"}
+              say: >-
+                Etkinlik tüketicisi olayı aldı. event_id'yi sipariş no ve ürün no'dan üretti; event_time siparişin zamanı. Ömrü de
+                o zamandan saydı (7 gün − 10 saniye). Satırı iki partition'a yazdı: tarayıcının (şerit ve "bu tarayıcının
+                hareketleri" için) ve müşterinin (persona geçmişi için, Adım 25). Satır bu tarayıcının partition'ının en üstüne, bakmaların üstüne girdi.
+            - phase: 3
+              who: cdc
+              lit: [keyspaces, cdc, archiver]
+              packet: {at: cdc, text: "değişiklik kayıtları: INSERT 7f3a… view P0021 · view P0131 · view P0021 · purchase P0021 · C00007 purchase P0021"}
+              note: {actcons: "", cdc: "son 5 dk: 5 yeni satır (kesitte 4 + C00007'nin satırı)"}
+              say: >-
+                Tabloya yazılan her satır Keyspaces'in değişiklik akışına da düştü; tablonun kapasitesinden bir şey harcanmadı.
+                Arşiv tüketicisi akışı okuyor. Geri doldurmanın yazdığı satırlar da saatler önce akışa düşmüştü; onlar T'den eski, zaten arşivde olduğu için tüketici onları o zaman atladı.
+            - phase: 3
+              who: archiver
+              lit: [cdc, archiver, archive]
+              packet: {at: archive, text: "PUT cdc/2026/10/31/…parquet (5 satır: kesitte 4 + C00007'nin satırı)"}
+              show: {archive: [ar3]}
+              fresh: {archive: [ar3]}
+              note: {cdc: "", archiver: "bu paket: okunan 5 · arşive 5 · atlanan 0"}
+              say: >-
+                Arşiv tüketicisi son birkaç dakikanın satırlarını tek bir Parquet dosyasına topladı ve arşive yazdı. Tablo sadece 7 gün tutar; arşiv yıllarca. Bir gün tablo yeniden kurulursa bu dosyalar da geri doldurmaya
+                girer.
+            - phase: 4
+              who: actcons
+              lit: [kinesis, actcons, keyspaces]
+              packet: {at: actcons, text: "aynı kayıt yine geldi → uuid5('O004812/P0021') aynı → aynı user_id + event_time + event_id → üzerine yazıldı"}
+              mark: {keyspaces: {v4: dup}}
+              note: {archiver: "", actcons: "bu kayıt 2. kez: yazılan 2 · yeni satır 0"}
+              say: >-
+                Örnek durum: akış aynı sipariş olayını ikinci kez verdi (en az bir kez teslim). Tüketici aynı event_id'yi ve aynı
+                event_time'ı üretti; tam kimlik aynı olduğu için Keyspaces yeni satır açmadı, aynı satırın üzerine yazdı. Ömür
+                yine siparişin zamanından sayıldığı için uzamadı. Şeritte ve persona geçmişinde tek bir satın alma var.
+            - phase: 4
+              who: web
+              lit: [web, keyspaces]
+              packet: {at: web, text: "INSERT … 'view', 'P0131' → WriteTimeout → aynı değerlerle yeniden (is_idempotent) → yazıldı"}
+              mark: {keyspaces: {v4: "", v2: fix}}
+              note: {actcons: "", web: "zaman aşımı 1 · yeniden deneme 1 · çift satır 0"}
+              say: >-
+                Örnek durum: Mekanik Klavye'nin satırı yazılırken cevap zamanında gelmedi; satırın yazılıp yazılmadığı belli değildi.
+                Uygulama komutu aynı event_id ve event_time ile bir kez daha gönderdi. İlk deneme yazılmışsa ikincisi aynı satırın
+                üzerine yazar; yazılmamışsa şimdi yazılır. İki durumda da tek satır.
+            - phase: 4
+              who: dlq
+              lit: [actcons, dlq]
+              mark: {keyspaces: {v2: ""}}
+              note: {web: "", dlq: "olsaydı: 1 mesaj · O004813 · items boş", actcons: "olsaydı: 3 deneme · hata"}
+              say: >-
+                Olsaydı: bir olay her denemede hata verseydi (ör. kalem listesi boş gelen bozuk bir olay). Lambda birkaç denemeden
+                sonra onu bırakır ve yerini SQS'teki hata kuyruğuna yazardı; arkadaki olaylar beklemezdi. Ekip olayı inceler,
+                düzeltir ve yeniden işletir; event_id aynı kaldığı için ikinci kez işlemek zarar vermez.
+            - phase: 4
+              who: waf
+              lit: [waf, web, keyspaces, monitor]
+              packet: {at: waf, text: "olsaydı: tek IP, tek lm_visitor → saniyede 1.500 \"baktı\" → partition sınırı 1.000 WRU/sn → hız kuralı: IP 5 dk durduruldu"}
+              note: {dlq: "", actcons: "", keyspaces: "olsaydı: StoragePartitionThroughputCapacityExceeded", monitor: "olsaydı: sıcak partition olayı > 0 → alarm"}
+              say: >-
+                Olsaydı: bir bot tek bir ziyaretçi kimliğiyle saniyede 1.500 ürün sayfası açsaydı. Bütün satırlar aynı partition'a
+                gider; bir partition saniyede en fazla 1.000 yazma birimi alır, fazlası kısılır. Diğer ziyaretçiler etkilenmez,
+                çünkü onların partition'ları ayrı. WAF'ın hız kuralı bu adresi kapıda durdururdu; CloudWatch sıcak partition
+                sayısı için alarm verirdi.
+            - phase: 4
+              who: monitor
+              lit: [actcons, dlq, keyspaces, archiver, monitor]
+              note: {keyspaces: "", monitor: "IteratorAge ≈ 1 sn · DLQ 0 · sıcak partition 0 · son 5 dk: hatalı yazma 2 / 18.400 = %0,01 (sınır %1)", archiver: "gecikme ≈ 3 dk"}
+              say: >-
+                Örnek durum: CloudWatch her 5 dakikada bir bakar. Tüketici akışın 1 saniye gerisinde, DLQ boş, sıcak partition yok.
+                Yazma hatalarını bütün yazmalara böler: 18.400'de 2, yani %0,01; sınır %1. Arşiv tüketicisinin gecikmesi 3 dakika.
+                Biri eşiği aşsaydı ekibe alarm giderdi (sayılar temsilî).
+            - phase: 4
+              who: keyspaces
+              lit: [keyspaces, cdc, archiver]
+              hide: {keyspaces: [a0]}
+              packet: {at: cdc, text: "değişiklik kaydı: C00001 · 23 Eki 20:56 · view P0104 · kaynak: TTL"}
+              note: {monitor: "", archiver: "TTL silmesi atlandı (satır arşivde duruyor)", keyspaces: "C00001 · 23 Eki 20:56: ömrü doldu → okumalarda yok"}
+              say: >-
+                Örnek durum: Ayşe'nin 23 Eki 20:56'daki satırı yazıldığı andan 56 dakika sonra ömrünü doldurdu. Keyspaces satırı o andan itibaren hiçbir okumada
+                vermez; diskten genellikle 10 gün içinde siler, o zamana kadar depolama ücreti sürer. Temizlik işi yazılmadı; TTL silmesi silinen
+                satırın boyutuna göre ücretlenir. CDC akışına "TTL ile silindi" kaydı düştü; arşiv tüketicisi onu atladı, olay arşivde kalır.
+            - phase: 4
+              who: reconcile
+              lit: [aurora, reconcile, keyspaces]
+              packet: {at: reconcile, text: "Aurora: son 7 günde sipariş veren müşteriler → kalem sayısı · Keyspaces: her müşterinin partition'ında purchase satırı sayısı"}
+              note: {cdc: "", archiver: "", keyspaces: "", reconcile: "kesitte 2 / 2 müşteri eşit (C00001, C00002) · C00007 de eşit (kesitin dışında) · eksik 0"}
+              say: >-
+                Örnek durum: her gece karşılaştırma işi son 7 günde sipariş veren her müşteri için iki sayıyı karşılaştırır: Aurora'daki
+                sipariş kalemleri ve Keyspaces'teki purchase satırları (son birkaç dakikanın siparişleri hariç, onlar hâlâ yolda
+                olabilir). Kesitte ikisi de eşit, kesitin dışındaki C00007 de. Eksik olsaydı satırı aynı event_id ile yazardı; fazla satır (yanlış kimlikle yazılmış) olsaydı ekibe raporlardı.
+            - phase: 4
+              who: pitr
+              lit: [keyspaces, pitr, backfill]
+              packet: {at: pitr, text: "olsaydı: RESTORE TABLE dbws.activity_geri FROM TABLE dbws.activity_by_user WITH restore_timestamp = '<silmeden 1 sn önce>'"}
+              note: {reconcile: "", pitr: "olsaydı: geri dönüş son 35 gün, saniye saniye", backfill: "olsaydı: C00001'i geri kopyalar (kalan ömürle)"}
+              say: >-
+                Olsaydı: yanlış bir bakım betiği Ayşe'nin partition'ını silseydi. Ekip sürekli yedekle tabloyu silmeden bir saniye
+                önceki hâliyle yeni bir tablo olarak açar; geri doldurma işi C00001'in satırlarını oradan kalan ömürleriyle ana
+                tabloya kopyalar. 35 günden eski bir hata için arşivden aynı iş yapılır.
+            - phase: 4
+              who: keyspaces
+              lit: [keyspaces]
+              note: {pitr: "", backfill: "", keyspaces: "kesitte 9 satır · 3 partition · t0 ile aynı"}
+              say: >-
+                Hazır. "Olsaydı" karelerindeki bot, bozuk olay ve silme yaşanmadı. Kesitte 9 satır: Mert'in 2, bu tarayıcının 4
+                (3 bakma, 1 satın alma), Ayşe'nin 3 satırı, her partition'da en yenisi başta. Ürün sayfası açılınca (t0) Uygulama
+                bu tabloya bir "baktı" satırı daha yazacak ve bu tarayıcının partition'ını okuyacak.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Keyspaces'te tablo sorudan başlar: önce sayfaların soruları yazılır, sonra tablo bu sorulara göre kurulur. Sonradan
+              başka bir soru gelirse yeni bir tablo gerekir. Burada ayrıca kimin, hangi yoldan yazacağına ve satırların ne kadar
+              yaşayacağına karar verilir.
+            cards:
+              - title: Sayfaların soruları
+                text: >-
+                  Tabloyu üç ekran okur ve üçünün sorusu aynıdır: "bu kişinin son olayları, en yenisi önce". Kişi bazen bu tarayıcı,
+                  bazen seçilen müşteridir; değişen sadece user_id. "Bu ürüne kimler baktı?" gibi bir soru bu tabloda sorulamaz:
+                  hangi partition'ın açılacağını bilmez. O soru gerekirse ürün başına ayrı bir tablo kurulur. Şerit zamanı göstermez; sırayı tablo verir, bu yüzden event_time'ı okumaz.
+                code:
+                  - {code: "SELECT product_id, detail, event_type FROM dbws.activity_by_user WHERE user_id = '7f3a…' LIMIT 40", tag: [Uygulama → Keyspaces], say: "Son baktıkların şeridi (bu sayfa, t0)."}
+                  - {code: "SELECT event_time, event_type, product_id, detail FROM dbws.activity_by_user WHERE user_id = '7f3a…' LIMIT 20", tag: [Uygulama → Keyspaces], say: "Hareketlerim sayfası, bu tarayıcı (Adım 25'in ilk okuması)."}
+                  - {code: "SELECT event_time, event_type, product_id, detail FROM dbws.activity_by_user WHERE user_id = 'C00001' LIMIT 20", tag: [Uygulama → Keyspaces], say: "Persona'nın geçmişi (Adım 25); aynı soru, başka partition."}
+              - title: Tablo bu sorulara göre kurulur
+                text: >-
+                  user_id partition key: bir kişinin bütün satırları aynı partition'da. event_time clustering key, yeniden eskiye:
+                  satırlar yazılırken yerine konur, okurken sıralama yapılmaz. event_id aynı saniyedeki iki olayı ayırır. Ömür, kapasite
+                  ve yedek de tablonun ayarıdır.
+                code:
+                  - {code: "CREATE TABLE dbws.activity_by_user (user_id text, event_time timestamp, event_id uuid,", tag: Ekip → Keyspaces, say: "Satırın kimliği: kim, ne zaman, hangi olay."}
+                  - {code: "  event_type text, product_id text, detail text, PRIMARY KEY ((user_id), event_time, event_id))", tag: Keyspaces'in içinde, say: "Partition user_id; içinde event_time ve event_id sırası."}
+                  - {code: "  WITH CLUSTERING ORDER BY (event_time DESC, event_id ASC) AND default_time_to_live = 604800", tag: Keyspaces'in içinde, say: "En yenisi başta; her satır 7 gün yaşar."}
+                  - {code: "  AND CUSTOM_PROPERTIES = { 'capacity_mode': { 'throughput_mode': 'PAY_PER_REQUEST' }, 'point_in_time_recovery': { 'status': 'enabled' } };", tag: Keyspaces'in içinde, say: "On-demand kapasite ve sürekli yedek."}
+              - title: Kaynaktan hedefe alan alan
+                text: >-
+                  Her satırın her alanı nereden gelir? Kural: aynı olay hangi yoldan, kaç kez gelirse gelsin aynı user_id, event_time
+                  ve event_id ile yazılmalı. Keyspaces'te JOIN yoktur; bu yüzden ürünün adı ve kategorisi detail alanına yazılırken
+                  kopyalanır (DocumentDB'den), şerit çizilirken katalog yeniden sorulmaz.
+                map:
+                  cols: [Kaynak, Hedef, Kural]
+                  rows:
+                    - ["ürün sayfası açılışı (Uygulama, lm_visitor çerezi)", "user_id = 7f3a… · event_type = view", "event_id (uuid4) ve event_time istek gelince bir kez verilir; yeniden denemede aynısı."]
+                    - ["arama, sepete ekle / çıkar, istek listesi", "event_type = search, add_to_cart, remove_from_cart, wishlist", "Aynı yol, aynı kurallar."]
+                    - ["ürünün adı ve kategorisi (DocumentDB)", "detail = \"Anadolu Algoritmalar 84 · Kitap\"", "Yazılırken kopyalanır; ad sonradan değişirse eski satır eski adı gösterir."]
+                    - ["sipariş olayı (Aurora outbox → Kinesis)", "event_type = purchase · iki partition: customer_id ve visitor_id", "event_id = uuid5(sipariş no / ürün no), event_time = sipariş zamanı."]
+                    - ["eski sitenin olay kayıtları (S3, clickstream/)", "müşterinin partition'ı (C00001 …)", "Sadece T'den önceki son 7 gün; event_id = uuid5(kayıttaki olay no); USING TTL = kalan ömür."]
+                    - ["sipariş geçmişi (Aurora → S3, orders/)", "purchase, müşterinin partition'ı", "Aynı uuid5 kuralı; canlı yoldan da gelirse aynı satıra düşer."]
+              - title: "Kim, hangi yoldan yazar: doğrudan mı, akışla mı?"
+                text: >-
+                  "Baktı" satırını Uygulama doğrudan yazar. Sebep: sayfa satırı yazdıktan hemen sonra şeridi okur ve az önce baktığın
+                  ürünü görmek ister; LOCAL_QUORUM yazma ve LOCAL_QUORUM okuma bunu garanti eder. Bir akış araya girseydi satır bir
+                  iki saniye sonra gelir, şerit onu göstermezdi. Tek satır 1 WRU'dur ve on-demand tablo ani yükü karşılar. Bir
+                  "baktı" satırı kaybolsa para kaybolmaz. "Satın aldı" satırı ise siparişten gelir: sipariş COMMIT edilmeden satır
+                  olmamalı. Uygulama siparişten sonra Keyspaces'e de yazsaydı (dual write) ikinci yazma başarısız olunca sipariş var,
+                  satır yok olurdu; outbox ve akış bunu önler. Arşive de Uygulama ayrıca yazmaz; tablonun kendi değişiklik akışı (CDC)
+                  taşır. Ne zaman değişir: olayları gerçek zamanlı okuyan başka tüketiciler çoğalırsa ya da yazmayı sayfadan ayırmak
+                  gerekirse, "baktı" olayları da önce bir akışa (Kinesis) yazılır; o zaman şerit kendi son satırını Uygulama'nın
+                  belleğinden ekler.
+              - title: Yük dağılımı, partition büyüklüğü ve kapasite
+                text: >-
+                  Bir partition saniyede en fazla 1.000 yazma ve 3.000 okuma birimi alır. user_id iyi bir partition key'dir: bir kişi
+                  dakikada birkaç olay üretir, yük binlerce kişiye dağılır. Keyspaces çok yüklenen bir partition'ı kendiliğinden ikiye
+                  de bölebilir. "Bugünün tarihi" gibi herkesin aynı değeri yazdığı bir anahtar bütün yükü tek partition'a yığardı.
+                  Keyspaces'te partition'ın boyut sınırı yok (satırın sınırı 1 MB); ama şerit LIMIT 40 ile sadece baştaki satırları
+                  okuduğu için partition büyüse de okuma pahalanmaz, ömür de onu 7 günle sınırlar. Geçmişin tamamı tabloda değil,
+                  arşivde durur; tabloda daha uzun tutmak gerekseydi partition key'e ay eklenirdi ((user_id, month)). Kapasite
+                  on-demand: mağaza trafiği gün içinde çok dalgalı, her yazma (1 KB'a kadar) 1 WRU, her LOCAL_QUORUM okuma (4 KB'a
+                  kadar) 1 RRU. Trafik düzenli ve tahmin edilebilir olunca provisioned kapasite ve otomatik ölçekleme daha ucuza
+                  gelebilir.
+              - title: Ömür (TTL) ve maliyeti
+                text: >-
+                  Satırlar 7 gün yaşar; eski satırı silen bir iş yazılmaz. Ömür satırın yazıldığı andan sayılır ve aynı satır yeniden
+                  yazılınca yeniden hesaplanır. Bu yüzden geçmişten yüklenen ya da akıştan geç gelen bir satıra USING TTL ile kalan
+                  ömrü verilir; yoksa 7 gün daha yaşar. Süresi dolan satır okumalarda görünmez; Keyspaces onu diskten genellikle 10 gün
+                  içinde siler, o zamana kadar depolama ücreti sürer. TTL silmeleri silinen satırın boyutuna göre ücretlenir. Elle
+                  silmek daha pahalı ve zor olurdu: Keyspaces partition'ları ucuzca listeleyemez, her silme bir yazma birimidir. TTL
+                  bir tabloda bir kez açılınca kapatılamaz; varsayılan 0 yapılırsa yeni satırlar süresiz yaşar.
+                code:
+                  - {code: "INSERT INTO dbws.activity_by_user (…) VALUES (…) USING TTL 587580;", tag: Geri doldurma işi → Keyspaces, say: "Bu satır 7 gün değil, kalan 6 gün 19 saat yaşar."}
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              Tablo yayına girdiğinde persona'ların geçmişi boş olmamalı: Adım 25'te persona'nın geçmişi okunacak. T anından önceki
+              son 7 günün olayları bir kez, S3'teki arşivden yüklenir. Sıra bilerek böyledir: önce tablo, sonra canlı besleme, sonra
+              geçmiş.
+            cards:
+              - title: "T anı: önce canlı besleme, sonra geçmiş"
+                text: >-
+                  T anında Uygulama'nın tabloya yazan sürümü yayına girer, DMS görevi ve etkinlik tüketicisi başlar. Geri doldurma T'den
+                  önceki olayları taşır. Sıra ters olsaydı (önce geçmiş, sonra canlı) aradaki saatlerin olayları hiç gelmezdi. Sınırdaki
+                  bir olay iki yoldan da gelirse aynı event_id ile aynı satıra düşer. Tablonun değişiklik akışı (CDC) tabloyla birlikte açılır; komutu 3. aşamada.
+              - title: Arşivde ne var?
+                text: >-
+                  Eski sitenin olay kayıtları (aramalar, bakmalar, sepet işlemleri) arşivde yıllardır durur. Satın almalar için doğru
+                  kaynak siparişlerin kendisidir: Aurora, son 7 günün sipariş kalemlerini okuma kopyasından okuyup arşive bir dosya
+                  olarak yazar. Uygulama yayına girmeden önceki bakmalar bu yüzden arşivden, satın almalar Aurora'dan gelir.
+                code:
+                  - {code: "SELECT * FROM aws_s3.query_export_to_s3(", tag: Ekip → Aurora, say: "Sorgunun sonucu S3'e dosya olarak yazılır."}
+                  - {code: "  'SELECT o.customer_id, o.created_at, o.order_id, i.product_id, p.name, p.category FROM orders o JOIN order_items i … WHERE o.created_at >= :T - interval ''7 days'' AND o.created_at < :T',", tag: Aurora'nın içinde, say: "T'den önceki son 7 günün sipariş kalemleri."}
+                  - {code: "  aws_commons.create_s3_uri('lm-event-archive', 'orders/2026-10-30', 'eu-central-1'));", tag: Aurora → S3, say: "Arşiv kovasına, orders/ altına."}
+              - title: "Geri doldurma işi: son 7 gün, kalan ömürle"
+                text: >-
+                  Glue işi arşivdeki iki kaynağı okur, T'den önceki son 7 günü alır ve her olayı müşterinin partition'ına yazar. Her
+                  olaya sabit bir event_id verir (arşivdeki olay no'sundan ya da sipariş no ve ürün no'dan uuid5): iş yarıda kalıp
+                  yeniden başlarsa aynı satırların üzerine yazar, kopya oluşmaz. Satırları aynı anda birçok
+                  işçiyle (paralel) yazar; kısılan bir yazmayı biraz bekleyip yeniden dener.
+                code_title: Geri doldurma işinden (kısaltılmış)
+                code:
+                  - {code: "olaylar = arsiv.filter(event_time >= simdi - 7 gün).filter(event_time < T)", tag: S3 → Geri doldurma işi, say: "Sadece T'den önceki ve yazıldığı anda 7 günden genç olaylar; ömrü bitmiş olan hiç yazılmaz."}
+                  - {code: "event_id = uuid5(NS, kaynak_no)        # aynı olay → hep aynı kimlik", tag: Geri doldurma işinin içinde, say: "İş yeniden çalışırsa aynı satıra yazar."}
+                  - {code: "ttl = 604800 - (simdi - event_time).saniye  # yazıldığı andaki kalan ömür", tag: Geri doldurma işinin içinde, say: "Ömür olayın zamanından, yazıldığı ana kadar sayılır."}
+                  - {code: "INSERT INTO dbws.activity_by_user (user_id, event_time, event_id, event_type, product_id, detail) VALUES (?, ?, ?, ?, ?, ?) USING TTL ?", tag: Geri doldurma işi → Keyspaces, say: "Müşterinin partition'ına, kalan ömrüyle."}
+              - title: Ön ısıtma ve hız
+                text: >-
+                  Yeni bir on-demand tablo saniyede 4.000 yazma ve 12.000 okuma birimini beklemeden karşılar. Geri doldurma bundan hızlı
+                  yazacaksa ekip tabloyu en az 30 dakika önce daha yüksek bir değere ön ısıtır (warm throughput; ek ücretli) ve Glue
+                  işinin hızını bunun altında tutar. Satırlar müşteriye göre karıştırılarak yazılır; aynı müşterinin bütün olaylarını
+                  arka arkaya yazmak tek partition'ı ısıtırdı. Maliyet basittir: her satır 1 KB'ın altında, yani 1 WRU.
+              - title: Yükleme kontrol edilir
+                text: >-
+                  İş okunan, yazılan ve atlanan satır sayılarını CloudWatch'a yazar; okunan = yazılan + atlanan olmalı ve kısma sayısı
+                  sıfır kalmalı. Ekip birkaç müşterinin partition'ını sayfanın sorusunun aynısıyla okur ve arşivdeki aynı 7 günle
+                  karşılaştırır.
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              T anından sonra tabloya iki yoldan yazılır: "baktı" ve benzeri satırları Uygulama doğrudan, "satın aldı" satırlarını
+              etkinlik tüketicisi sipariş zincirinden yazar. Tabloya yazılan her satır değişiklik akışıyla arşive de gider.
+            cards:
+              - title: Uygulama "baktı" satırını doğrudan yazar
+                text: >-
+                  Ürün sayfası açılınca tarayıcı "bu ürüne baktım" der; Uygulama satırı ziyaretçinin partition'ına yazar. event_id ve
+                  event_time istek gelince bir kez verilir; komut "tekrar gönderilebilir" diye işaretlidir. Uygulama'nın gerçek kodu
+                  t0'daki kod kartında.
+                code:
+                  - {code: "event_id, event_time = uuid4(), now()          # bir kez", tag: Uygulamanın içinde, say: "Olayın kimliği istek gelince verilir."}
+                  - {code: "stmt = prepare(\"INSERT INTO dbws.activity_by_user (…) VALUES (?, ?, ?, 'view', ?, ?)\"); stmt.is_idempotent = True", tag: Uygulamanın içinde, say: "Komut bir kez hazırlanır; yeniden denenebilir."}
+                  - {code: "execute(stmt, (visitor_id, event_time, event_id, product_id, detail))", tag: [Uygulama → Keyspaces, Keyspaces → Uygulama], say: "LOCAL_QUORUM: üç kopyanın ikisi yazınca cevap gelir."}
+              - title: Sipariş ve olayı birlikte yazılır
+                text: >-
+                  Sipariş ve "sipariş verildi" olayı aynı iş paketinde Aurora'ya yazılır (Adım 33). Olay, siparişi veren tarayıcının
+                  kimliğini de taşır; böylece satın alma hem müşterinin hem tarayıcının geçmişine girebilir.
+                code:
+                  - {code: "BEGIN; INSERT INTO orders … ; INSERT INTO order_items … ;", tag: Uygulama → Aurora, say: Sipariş ve kalemleri.}
+                  - {code: "INSERT INTO outbox (order_id, customer_id, visitor_id, items, created_at) VALUES ('O004812', 'C00007', '7f3a…', …);", tag: Uygulama → Aurora, say: "Aynı pakette olay; tarayıcının kimliği de içinde."}
+                  - {code: "COMMIT;", tag: Uygulama → Aurora, say: "Ya hepsi kalıcı olur ya hiçbiri; olay ancak sipariş varsa vardır."}
+              - title: Etkinlik tüketicisi iki satır yazar
+                text: >-
+                  Tüketici her kalem için bir purchase satırını iki partition'a yazar: müşterinin (persona geçmişi) ve tarayıcının (şerit
+                  ve "bu tarayıcının hareketleri"). Tek tablo, iki kopya: Keyspaces'te her soru kendi partition'ından okunur, bu yüzden
+                  aynı olayı iki yere yazmak normaldir. event_id sipariş no ve ürün no'dan üretilir, event_time siparişin zamanıdır.
+                code:
+                  - {code: "for rec in event[\"Records\"]: e = json.loads(base64.b64decode(rec[\"kinesis\"][\"data\"]))[\"data\"]", tag: Kinesis → Etkinlik tüketicisi, say: "Lambda akıştan bir paket olay alır."}
+                  - {code: "  for pid in e[\"items\"]: eid = uuid5(NS, f\"{e['order_id']}/{pid}\")", tag: Etkinlik tüketicisinin içinde, say: "Aynı sipariş kalemi → hep aynı kimlik."}
+                  - {code: "    ttl = 604800 - (now() - e[\"created_at\"]).saniye", tag: Etkinlik tüketicisinin içinde, say: "Ömür siparişin zamanından sayılır."}
+                  - {code: "    for uid in (e[\"customer_id\"], e[\"visitor_id\"]): execute(INSERT_TTL, (uid, e[\"created_at\"], eid, \"purchase\", pid, …, ttl))", tag: [Etkinlik tüketicisi → Keyspaces], say: "Müşterinin ve tarayıcının partition'ına birer satır."}
+              - title: "Tablodan arşive: değişiklik akışı (CDC)"
+                text: >-
+                  Tablonun CDC akışı açıktır: her yazılan satırın yeni hâli akışa düşer ve 24 saate kadar saklanır; tablonun kapasitesini
+                  kullanmaz. Arşiv tüketicisi (KCL ile yazılmış küçük bir program) akışı okur ve birkaç dakikalık satırları bir Parquet
+                  dosyası olarak arşive yazar. "TTL ile silindi" kayıtlarını ve T'den eski satırları atlar. Tüketici 24 saatten uzun
+                  durursa kayıtlar kaybolur; bu yüzden gecikmesi izlenir (4. aşama).
+                code:
+                  - {code: "ALTER TABLE dbws.activity_by_user WITH cdc = TRUE AND CUSTOM_PROPERTIES = { 'cdc_specification': { 'view_type': 'NEW_IMAGE' } };", tag: Ekip → Keyspaces, say: "Akış açılır: her satırın yazıldıktan sonraki hâli."}
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              Aynı olay iki kez gelirse, bir yazma zaman aşımına uğrarsa, bir olay işlenemezse, bir bot tek partition'ı ısıtırsa,
+              zincir geride kalırsa, satırlar eksik kalırsa ya da yanlış bir silme olursa ne olur? Her biri için zincirde bir parça
+              var; her parçanın ne zaman çalıştığı, neyi yakalamadığı ve ekibin ne yaptığı aşağıda.
+            cards:
+              - title: Aynı olay iki kez gelirse
+                text: >-
+                  Akış ve Lambda bir olayı en az bir kez teslim eder. Tüketici aynı olaydan hep aynı event_id ve event_time'ı ürettiği
+                  için ikinci geliş aynı satırın üzerine yazar; ömür de siparişin zamanından sayıldığı için uzamaz. Ne zaman: her
+                  yazmada. Yakalamadığı: aynı olay farklı bir event_id ile gelirse (ör. kimliği kendisi rastgele üreten hatalı bir
+                  sürüm) iki satır olur. Onarım: karşılaştırma işi fazla satırı görür; ekip yanlış kimlikli satırları siler ve sürümü
+                  düzeltir.
+              - title: Bir yazma zaman aşımına uğrarsa
+                text: >-
+                  Cevap zamanında gelmezse satırın yazılıp yazılmadığı bilinmez. Uygulama komutu aynı değerlerle bir kez daha gönderir;
+                  iki durumda da tek satır olur. Ne zaman: yazma anında, milisaniyeler içinde. Yakalamadığı: yeniden deneme de
+                  başarısız olursa o "baktı" satırı yazılmaz; sayfa yine açılır, şeritte o ürün eksik kalır. Onarım: yok; bir bakma
+                  kaybı kabul edilir, hata sayısı alarmda izlenir.
+              - title: Bir olay hiç işlenemezse
+                text: >-
+                  Bozuk bir olay her denemede hata verir. Lambda birkaç denemeden sonra onu bırakır ve yerini SQS'teki hata kuyruğuna
+                  yazar; arkadaki olaylar beklemez. Ne zaman: birkaç saniye içinde. Yakalamadığı: hata vermeyen ama yanlış olan olay
+                  (ör. yanlış müşteri numarası). Onarım: ekip olayı inceler, düzeltir ve yeniden işletir; event_id aynı olduğu için
+                  ikinci işleme zarar vermez. Akış olayı 24 saat sakladığı için ekip o süre içinde bakmalıdır.
+              - title: Bir bot tek partition'ı ısıtırsa
+                text: >-
+                  Bir partition saniyede en fazla 1.000 yazma birimi alır; fazlası kısılır ve Keyspaces bunu
+                  StoragePartitionThroughputCapacityExceeded ölçüsünde sayar. Diğer ziyaretçiler etkilenmez. WAF'ın hız kuralı bir
+                  adresten kısa sürede gelen istekler eşiği aşınca o adresi bir süre durdurur (ör. 5 dakikada 3.000 istek, temsilî).
+                  Ne zaman: kural birkaç dakikalık pencereyle sayar, ölçü dakikalık. Yakalamadığı: binlerce farklı adresten gelen bir
+                  bot; o tek partition'ı ısıtmaz ama yazma birimi harcar. Onarım: WAF'a bot kuralı eklenir; harcama alarmı ekibi uyarır.
+              - title: Zincir geride kalırsa
+                text: >-
+                  CloudWatch her 5 dakikada bakar: etkinlik tüketicisinin gecikmesi (IteratorAge), DLQ'daki mesaj sayısı, sıcak
+                  partition ve kısma sayıları (WriteThrottleEvents), hatalı yazmaların bütün yazmalara oranı (5 dakikada, sınır %1),
+                  arşiv tüketicisinin gecikmesi. Ne zaman: en geç 5 dakikada. Yakalamadığı: sessizce yanlış yazılan satırlar (ör. boş
+                  detail). Onarım: gecikmede tüketici hızlandırılır; Kinesis 24, CDC akışı 24 saat sakladığı için bu süre içinde hiçbir
+                  şey kaybolmaz.
+              - title: Satırlar eksik kalırsa
+                text: >-
+                  Her gece karşılaştırma işi son 7 günde sipariş veren müşterilerin Aurora'daki kalem sayısını Keyspaces'teki purchase
+                  satırlarıyla karşılaştırır. Keyspaces'te count() yoktur; iş partition'ın son 7 gününü okuyup kendisi sayar. Eksik
+                  satırı aynı event_id ile yazar. Ne zaman: her gece; eksik en geç ertesi sabah tamamlanır. Yakalamadığı: "baktı"
+                  satırları (Aurora'da karşılığı yok). Onarım: gerekirse bir müşterinin partition'ı arşivden geri doldurma işiyle
+                  yeniden kurulur.
+                code:
+                  - {code: "SELECT customer_id, count(*) FROM order_items JOIN orders USING (order_id) WHERE created_at >= now() - interval '7 days' GROUP BY 1;", tag: [Karşılaştırma işi → Aurora, Aurora → Karşılaştırma işi], say: "Müşteri başına doğru sayı."}
+                  - {code: "SELECT event_type, event_id FROM dbws.activity_by_user WHERE user_id = ? AND event_time >= ?;", tag: [Karşılaştırma işi → Keyspaces, Keyspaces → Karşılaştırma işi], say: "Aynı müşterinin son 7 günü; purchase'ları iş kendisi sayar."}
+              - title: Yanlış bir silme ya da toplu yazma olursa
+                text: >-
+                  Sürekli yedek tabloyu son 35 gün içindeki bir saniyeye yeni bir tablo olarak açar; ana tabloya dokunmaz ve kapasite
+                  harcamaz. Geri doldurma işi bozulan partition'ların satırlarını oradan kalan ömürleriyle ana tabloya kopyalar. Ne
+                  zaman: ekip fark edince. Yakalamadığı: geri dönülen saniyeden sonra yazılan doğru satırlar yedekte yoktur; onlar ana
+                  tabloda kalır, kopyalama onları silmez. 35 günden eski bir hata için arşiv kullanılır.
+                code:
+                  - {code: "RESTORE TABLE dbws.activity_geri FROM TABLE dbws.activity_by_user", tag: Ekip → Keyspaces, say: "Yedekten yeni bir tablo…"}
+                  - {code: "  WITH restore_timestamp = '2026-10-31T09:14:59Z';", tag: Keyspaces'in içinde, say: "…hatadan bir saniye önceki hâliyle (temsilî)."}
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
