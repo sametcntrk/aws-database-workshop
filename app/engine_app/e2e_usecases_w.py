@@ -6042,3 +6042,814 @@ REDSHIFT_W.append(wusecase("adhoc", 10,
 
 USECASES_W["redshift"] = REDSHIFT_W
 PAGE_SVC["redshift"] = "rs"
+
+
+# ====================================================================== Amazon S3 (page id "s3"), Turkish, model 2
+# Ten weighted cards of the S3 page. "s3" is an S3 general purpose bucket (the page's service). Twin decision (docs/s3.scope.md):
+#  - The storage classes of a general purpose bucket (Standard, Standard-IA, Intelligent-Tiering, Glacier Instant Retrieval,
+#    Glacier Flexible Retrieval, Glacier Deep Archive) are ONE engine: same bucket, key, API, consistency, versions, lifecycle,
+#    Object Lock. The class decides only where the bytes rest, how fast they come back and the price: packaging (R2, R3, R5).
+#    They are twins and get the same R1 points (card 2: "s3gda", "s3gfr"). On the other cards the "s3" candidate uses the class
+#    that the story needs through a lifecycle rule (Ö6); card 2 compares the classes themselves from the first day.
+#  - S3 Express One Zone ("s3x") is NOT a twin: a directory bucket has a hierarchical namespace, unsorted listing, append and
+#    rename, and no versioning, Object Lock, event notifications, lifecycle transitions or object tags. R1 is scored separately.
+#  - S3 Tables ("s3t") is NOT a twin: a table bucket stores Apache Iceberg tables (rows and snapshots), not objects as written.
+#  - S3 Vectors is not a candidate on this page (no workload of the ten cards asks for a similarity search); M5 names it.
+# Card 10 repeats DynamoDB card 9 ("files"): rows, weights and the points of DynamoDB and DocumentDB are copied in code
+# (decisions.md, "The same workload on two pages"); Aurora (77 on the DynamoDB page) gives its place to S3, the page's service.
+# Graded reductions of S3 (written once, M2 summary): no search inside objects (R1 · EY): 0 when the question is a date or a
+# prefix, -3 when a field is sometimes needed, -5 when text and field search is the work itself. No append and no in-place
+# write (R1 · OY): -1 when the stream is written as batch files, -2 when a live log is appended, -8 when in-place writes,
+# rename and append are the work itself. S3 Express One Zone single AZ (R3): -6 when it holds the only copy, -1 when a
+# full copy stays in S3 Standard.
+# Sources (read on 2026-10-31; hedges are the hedges of the source):
+#  - Objects 0 B to 50 TB, single PUT up to 5 GB, multipart up to 10,000 parts: https://aws.amazon.com/s3/faqs/,
+#    https://docs.aws.amazon.com/AmazonS3/latest/userguide/upload-objects.html, https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
+#  - Strong read-after-write consistency for GET, PUT, LIST, tags and metadata; concurrent writes: last writer wins:
+#    https://aws.amazon.com/s3/consistency/, https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html
+#  - Conditional writes If-None-Match / If-Match for PutObject, CompleteMultipartUpload, CopyObject; 412 Precondition Failed:
+#    https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-requests.html, https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html
+#  - "at least 3,500 PUT/COPY/POST/DELETE or 5,500 GET/HEAD requests per second per partitioned Amazon S3 prefix", 503 SlowDown while
+#    scaling: https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance-design-patterns.html
+#  - User-defined metadata ~2 KB, fixed at upload; up to 10 tags per object: https://aws.amazon.com/s3/faqs/
+#  - Object Lock compliance and governance modes, legal hold: https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html
+#  - Lifecycle transitions and expirations are asynchronous; objects under 128 KB do not transition by default:
+#    https://docs.aws.amazon.com/AmazonS3/latest/userguide/troubleshoot-lifecycle.html, https://docs.aws.amazon.com/AmazonS3/latest/userguide/lifecycle-transition-general-considerations.html
+#  - Event notifications "designed to be delivered at least once", "typically ... in seconds but can sometimes take a minute or longer":
+#    https://docs.aws.amazon.com/AmazonS3/latest/userguide/EventNotifications.html
+#  - Deep Archive: minimum 180 days, "default retrieval time of 12 hours", at least three AZs; Glacier Instant Retrieval: milliseconds,
+#    minimum 90 days: https://aws.amazon.com/s3/cost-optimization/, https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_s3.StorageClass.html
+#  - S3 Express One Zone: single AZ, "single-digit millisecond", "up to 10x faster than S3 Standard", 200,000 reads and 100,000 writes
+#    per second per directory bucket by default; append (write offset) and RenameObject; features not supported by directory buckets:
+#    https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-express-performance.html, https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-express-differences.html
+#  - S3 Tables: Iceberg tables, automatic compaction (Parquet, Avro, ORC): https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-maintenance.html
+#  - S3 Metadata journal and live inventory tables: https://aws.amazon.com/s3/faqs/
+#  - Amazon EFS: NFS v4, close-to-open consistency, advisory locking: https://docs.aws.amazon.com/efs/latest/ug/features.html
+#  - Price List API, eu-central-1, 2026-10-31: S3 Standard 0.0245 USD/GB-month (first 50 TB), 0.0235 (next 450 TB); Standard-IA 0.0135;
+#    Glacier Instant Retrieval 0.005 (+0.03 USD/GB retrieved); Glacier Deep Archive 0.0018 (standard retrieval 0.024 USD/GB);
+#    Express One Zone 0.118; S3 Tables 0.0282; PUT/COPY/POST/LIST 0.0054 USD per 1,000; GET 0.0043 USD per 10,000;
+#    Express One Zone GET 0.0000323 USD per 1,000; EFS Standard 0.36 USD/GB-month, Infrequent Access 0.0266, elastic
+#    throughput reads 0.04 USD/GB; CloudWatch Logs ingestion 0.63 USD/GB, storage 0.0324 USD/GB-month.
+for _k, _cat in (("s3", ("object storage", "object storage")), ("efs", ("shared file system", "paylaşılan dosya sistemi")),
+                 ("s3gda", ("object storage, archive class", "object storage, arşiv sınıfı")),
+                 ("s3gfr", ("object storage, archive class", "object storage, arşiv sınıfı")),
+                 ("s3x", ("single-AZ object storage (directory bucket)", "tek AZ'li object storage (directory bucket)")),
+                 ("s3t", ("Iceberg table storage", "Iceberg table storage'ı"))):
+    CATEGORY.setdefault(_k, _cat)
+    LINK.setdefault(_k, "s3")       # EFS, the S3 classes, S3 Express One Zone and S3 Tables have no page of their own; this page compares them
+
+_S3_D9 = next(u for u in DDB_W if u["id"] == "files")
+
+
+def _s3x(t):
+    """Remove the feature numbers of another page (Ö3 of DynamoDB is not Ö3 of S3)."""
+    return re.sub(r"\s*\((?:Ö\d(?:, )?)+\)", "", t)
+
+
+def _s3same(uc, c, mine):
+    assert [p for p, _ in mine] == [p for p, _ in uc["scores"][c]], f"{uc['id']}: {c} must keep the points of the other page"
+    return mine
+
+
+S3_W = []
+
+# 1 ---------------------------------------------------------------- product images
+S3_W.append(wusecase("images", 1, sim="w_images",
+    title="Ürün görselleri: bir kez yüklenir, milyonlarca kez gösterilir",
+    key="Key: products/<ürün id>/<boyut>.jpg. Değer: görselin byte'ları, Content-Type ve kullanıcı metadata'sı. Önünde CloudFront.",
+    story="Lale Market'te 20.000 ürün var ve her ürünün 3 ile 8 arası fotoğrafı, her fotoğrafın dört boyutu bulunuyor: yaklaşık 600.000 dosya, toplam 120 GB. "
+          "Bir dosya 50 KB ile 5 MB arasıdır. Ürün sayfaları tepe anında saniyede 3.000 görsel ister; CloudFront bunların yüzde 95'ini kendi önbelleğinden verir, "
+          "kaynağa saniyede yaklaşık 150 istek gelir. Satıcılar günde 2.000 yeni fotoğraf yükler ve her yüklemeden sonra küçük boyutları üreten bir iş çalışmalıdır. "
+          "Satıcılar orijinal dosyalarını saklamıyor: kaybolan bir görsel yeniden çekim demektir. Yanlış bir görselin üstüne yazılırsa eski görsel 30 gün geri getirilebilmeli. "
+          "Ürün kayıtları Aurora'da durur ve her ürün satırı görselin key'ini tutar. Ekip üç geliştiriciden oluşur, sunucu işletecek kimse yok.",
+    wnote="R1 toplam 42: değer bir dosyadır (VM 12), tarayıcı onu key ile ve bir URL üzerinden ister (EY 12), yükleme sonrası iş ve eski sürümler yaşam döngüsünün parçasıdır (YD 10). "
+          "R3 18 ile R1'den sonra en ağır satırdır: satıcının elinde ikinci bir kopya yoktur.",
+    rows=[row("VM", 12, "Değer bir fotoğraftır: 50 KB ile 5 MB arası binary dosya.",
+              "Her türden binary dosya (JPEG, PNG, WebP) 50 KB ile 5 MB arasında, olduğu gibi saklanmalı; Content-Type ve birkaç kısa etiket dosyayla birlikte durmalı.",
+              "Dosya parçalanıp başka bir biçime çevrilirse her görüntülemede yeniden birleştirilir ve tarayıcı yanlış türde byte alır."),
+          row("EY", 12, "Ürün sayfası görseli ürün id'sinden kurduğu key ile ister; başka bir soru yoktur.",
+              "Görsel ürün id'sinden kurulan key ile, bir HTTP URL'si olarak okunmalı; bir tarayıcı ya da bir CDN onu bu URL'den doğrudan alabilmeli.",
+              "Key ile okunamayan bir görsel için önce bir arama gerekir ve her sayfa açılışı bir istek daha bekler."),
+          row("OY", 8, "Görsel bir kez yazılır ve binlerce kez okunur; düzenleme yoktur.",
+              "Bir kez yaz, çok kez oku. Yeni bir fotoğraf eskisinin tamamının yerine geçer; dosyanın bir parçası hiç değişmez.",
+              "Okuma yolu bir yazma kilidini beklerse kampanya anında görseller geç açılır."),
+          row("YD", 10, "Yüklemeden sonra küçük boyutlar üretilmeli ve eski görsel 30 gün geri getirilebilmeli.",
+              "Yeni dosya geldiğinde boyutlandırma işi kendiliğinden başlamalı; üstüne yazılan görselin eski sürümü 30 gün kalmalı, sonra kendiliğinden silinmeli.",
+              "Tetikleyici yoksa uygulama her yüklemede işi kendisi çağırır ve unutulan bir yol küçük boyutsuz ürün bırakır; eski sürüm yoksa yanlış yükleme geri alınamaz."),
+          row("R2", 15, "Tepe anında saniyede 3.000 görsel, kaynağa 150 istek; 600.000 dosya.",
+              "Tepe anında CloudFront arkasında saniyede 150 kaynak isteği ve günde 2.000 yazma; dosya sayısı yılda iki katına çıkabilir, kapasite planlanmamalı.",
+              "Kaynak tepe anında yavaşlarsa CloudFront önbelleğinde olmayan her görsel geç gelir."),
+          row("R3", 18, "Satıcının orijinali yoktur: kaybolan görsel yeniden çekimdir.",
+              "Bir disk ya da bir Availability Zone kaybında hiçbir görsel kaybolmamalı.",
+              "Kaybolan bir görsel bir ürünün satıştan kalkması ve satıcıya yeniden çekim demektir."),
+          row("R4", 13, "Üç geliştirici var, sunucu işletecek kimse yok.",
+              "Sunucu, disk ve yama olmadan çalışmalı; ekip AWS SDK biliyor.",
+              "Bir web sunucusu katmanı ekip için gece nöbeti demektir."),
+          row("R5", 12, "120 GB az okunan değil, çok okunan veri; istekler CDN'den geçer.",
+              "120 GB her ay saklanır: GB başına saklama ucuz olmalı; istek ücreti CloudFront arkasında küçük kalmalı; sunucu saati ödenmemeli.",
+              "Saat başına ödenen sunucular gece de çalışır; pahalı disk 120 GB'ı her ay pahalı tutar.")],
+    cands=["s3", "efs", "aur"],
+    scores={
+        "s3": [sc(10, "Bir nesne her türden byte'tır ve 50 TB'a kadar olabilir (Ö1); Content-Type ve kullanıcı metadata'sı nesneyle birlikte saklanır (Ö3). Puan kırılmadı."),
+               sc(10, "GET products/P0001/800.jpg tek bir HTTP isteğidir (Ö1); bir tarayıcı ya da CDN nesneyi bu URL'den alır. Puan kırılmadı."),
+               sc(10, "PUT nesnenin tamamını yazar, okumalar kilit beklemez; güçlü tutarlılık yeni görseli hemen gösterir (Ö1, Ö4). Puan kırılmadı."),
+               sc(10, "Yeni nesne bir olay bildirimiyle boyutlandırma işini başlatır (Ö8); versioning eski görseli tutar (Ö5) ve lifecycle kuralı onu 30 gün sonra siler (Ö6). Puan kırılmadı."),
+               sc(10, "Prefix başına saniyede en az 5.500 GET; kapasite planı yoktur. Puan kırılmadı."),
+               sc(10, "Nesne bir Region'daki en az üç Availability Zone'da saklanır; 11 dokuzluk dayanıklılık için tasarlanmıştır. Puan kırılmadı."),
+               sc(9, "Sunucusuz; ekip SDK ile çalışır. 1 puan kırıldı: CloudFront için origin access control ve bucket policy yazılır."),
+               sc(10, "120 GB × 0,0245 USD yaklaşık 2,9 USD/ay; GET 10.000 istekte 0,0043 USD (Price List API, eu-central-1, 2026-10-31). Puan kırılmadı.")],
+        "efs": [sc(10, "Bir dosya sistemi her türden dosyayı olduğu gibi saklar. Puan kırılmadı."),
+                sc(7, "Dosya bir yol ile okunur. 3 puan kırıldı: dosya bir HTTP URL'si değildir; tarayıcıya ve CloudFront'a bir web sunucusu (örneğin nginx) üzerinden gider."),
+                sc(10, "Dosya bir kez yazılır, okumalar paralel çalışır. Puan kırılmadı."),
+                sc(3, "7 puan kırıldı: dosya sisteminde sürüm ve olay bildirimi yoktur; uygulama eski dosyayı kendisi saklar ve boyutlandırma işini kendisi tetikler."),
+                sc(9, "Elastic throughput yükle büyür. 1 puan kırıldı: her kaynak isteği bir web sunucusundan geçer ve web sunucuları tepe için önceden eklenen sabit kapasitedir (sunucuların işletilmesi R4'te)."),
+                sc(10, "Regional EFS veriyi birden fazla Availability Zone'da saklar. Puan kırılmadı."),
+                sc(4, "6 puan kırıldı: EC2 web sunucuları, mount target'lar, yamalar ve sunucu sayısı ekibin işidir."),
+                sc(3, "7 puan kırıldı: Standard storage GB-ay 0,36 USD, S3 Standard'ın yaklaşık 15 katı; web sunucuları ayrıca saat başına ödenir.")],
+        "aur": [sc(3, "bytea kolonu bir görseli tutabilir. 7 puan kırıldı: 5 MB'lık binary değerler table'ı, WAL'ı, yedekleri ve replica'ları büyütür."),
+                sc(7, "SELECT ile key'e göre okunur. 3 puan kırıldı: tarayıcıya bir URL değil, uygulama sunucusunun aktardığı byte'lar döner (EFS'in web sunucusuyla aynı kırılım)."),
+                sc(9, "Bir kez INSERT edilir. 1 puan kırıldı: görselin değişmesi row'un yeni bir sürümünü yazar ve eski sürüm VACUUM'a kalır (Aurora sayfasının kademesi: seyrek güncelleme 1 puan)."),
+                sc(4, "6 puan kırıldı: eski görsel için ayrı bir tarih table'ı, yeni görsel için bir trigger ya da kuyruk tetikleyicisi uygulamada yazılır."),
+                sc(5, "5 puan kırıldı: saniyede 150 görsel × ortalama 500 KB yaklaşık 75 MB/s'yi instance'lardan geçirir ve checkout ile aynı kaynağı paylaşır."),
+                sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                sc(6, "Aurora zaten çalışıyor; table eklemek kolaydır. 4 puan kırıldı: görselleri sunan uygulama yolu ve büyüyen database'in yedek ve geri yükleme süresi ekibin işidir."),
+                sc(4, "6 puan kırıldı: database storage'ı ve I/O, dosya saklamak için object storage'ın katlarıdır; okuma trafiği instance kapasitesi ister.")],
+    },
+    h2h={
+        "efs": "Paylaşılan dosya sistemi (EFS) ile kafa kafaya. EFS de dosyayı olduğu gibi saklar ve birden fazla Availability Zone'da tutar; görsel kaybolmaz (R3 eşit). "
+               "Ayrıştığı yer erişim ve yaşam döngüsüdür: EFS bir NFS dosya sistemidir, tarayıcı ona doğrudan ulaşamaz. Her görsel bir web sunucusundan geçer (R1 · EY ve R4), "
+               "sürüm ve olay bildirimi yoktur (R1 · YD), Standard storage GB-ay 0,36 USD ile S3 Standard'ın yaklaşık 15 katıdır (R5). "
+               "EFS'in dürüst üstünlüğü dosyayı yerinde değiştiren, kilit kullanan ve yolu bekleyen programlardadır (kart 6). "
+               "Hangi koşul değişseydi EFS seçilirdi: görselleri tarayıcı değil, aynı dosyaları yerinde düzenleyen ve yeniden adlandıran eski bir görsel işleme uygulaması kullansaydı ve kod değişemeseydi.",
+        "aur": "İlişkisel (Aurora) ile kafa kafaya. Aurora bu sistemde zaten çalışıyor ve ürün kaydı onda; görseli de aynı row'a koymak tek bir yedek ve tek bir transaction gibi görünür. "
+               "Ama engine bir dosya deposu değildir: 5 MB'lık bytea değerleri table'ı, WAL'ı ve replica'ları büyütür (R1 · VM), tarayıcıya byte'ları bir uygulama sunucusu taşır (R1 · EY) "
+               "ve saniyede 75 MB'lık görsel trafiği checkout ile aynı instance'ları kullanır (R2). "
+               "Aurora'nın doğru rolü görselin key'ini ve ürünün iş verisini tutmaktır; dosya S3'te kalır. "
+               "Hangi koşul değişseydi Aurora seçilirdi: görseller birkaç KB'lık ikonlar olsaydı, sayıları birkaç bin olsaydı ve ürün row'uyla aynı transaction'da yazılmaları bir kural olsaydı.",
+    },
+    verdict="Karar: S3 {s3}, EFS {efs}, Aurora {aur}. S3 R1'in 42 puanının tamamını alır: dosya bir nesnedir, key ile bir URL'den okunur, yükleme bir olay bildirimi üretir, eski sürüm versioning ile kalır. "
+            "S3 seçtiğimizde artımız: sunucu yoktur, CloudFront doğrudan bucket'tan okur, yanlış yükleme 30 gün geri alınır. "
+            "Eksimiz: ürün adı ve fiyat gibi aranan alanlar S3'te değil Aurora'da kalır; uygulama key'i Aurora'daki ürün row'unda tutar. "
+            "Doğru mimari ikisi birliktedir: dosya S3'te, key ve iş verisi Aurora'da, önünde CloudFront. Bir koşul değişseydi: dosyaları yerinde düzenleyen eski bir program kullansaydı EFS öne geçerdi."))
+
+# 2 ---------------------------------------------------------------- backups: the storage class itself (twins)
+S3_W.append(wusecase("backups", 2, sim="w_backups",
+    title="Veritabanı yedek dosyaları: yedi yıllık saklama, hangi depolama sınıfı?",
+    key="Key: backups/<database>/<yıl>/<ay>.dump. Aylık tam yedek, 1,2 TB. Aday satırları burada aynı bucket'ın üç depolama sınıfıdır.",
+    story="Lale Market her ayın son günü bütün veritabanlarının tam bir mantıksal yedeğini alır: tek bir 1,2 TB'lık dosya. Muhasebe kuralı bu dosyaları yedi yıl istiyor; "
+          "yedi yıl dolunca silinmeleri de gerekiyor. Yedi yılın sonunda 84 dosya, yaklaşık 100 TB birikir. Günlük geri yükleme bu dosyalardan yapılmaz; "
+          "onu veritabanının kendi sürekli yedeği karşılar. Bu dosyalar yılda bir ya da iki kez, bir denetim ya da hukuk talebi için açılır; talep yazılı gelir ve "
+          "cevap için 48 saat vardır, bazen aynı gün istenir. Dosya yüklendikten sonra değişmez ve kimse onu süresinden önce silememeli. "
+          "Bütçe sahibi bu arşiv için ayda 500 USD'ı aşmak istemiyor. Ekip S3 kullanıyor ve yeni bir servis öğrenmek istemiyor.",
+    wnote="R1 toplam 36 ve en ağır gruptur; ama üç aday aynı engine'dir ve R1'de eşittir. Kararı R5 (26) verir: 100 TB'ın yedi yıllık faturası bu iş yükünün asıl sorusudur. "
+          "R2 14: dosyanın ne kadar sürede geri geldiği de bir servis tasarımıdır.",
+    rows=[row("VM", 10, "Değer tek bir 1,2 TB'lık dosyadır.",
+              "1,2 TB'lık tek bir dosya parçalara bölünmeden tek bir değer olarak saklanmalı; yükleme gece bitecek kadar paralel olmalı.",
+              "Dosya parçalara bölünüp ayrı ayrı saklanırsa geri yüklemede bir parçanın eksik olması fark edilmeyebilir."),
+          row("OY", 8, "Dosya bir kez yazılır, yedi yıl hiç değişmez.",
+              "Bir kez yaz, hiç değiştirme; yılda bir ya da iki kez bütün dosyayı oku.",
+              "Değişebilen bir yedek kanıt değeri taşımaz."),
+          row("YD", 12, "Yedi yıl kural gereği saklanır ve sonra silinmelidir; süresinden önce silinmemelidir.",
+              "Dosya yedi yıl boyunca kimse tarafından silinememeli ya da üstüne yazılamamalı; yedi yıl dolunca kendiliğinden silinmeli.",
+              "Erken silinen bir yedek denetimde eksik kayıt, geç silinen bir yedek saklama kuralının ihlalidir."),
+          row("EY", 6, "Dosya yılda bir ya da iki kez, adıyla bulunur.",
+              "Dosya veritabanı adı ve ay ile kurulan key ile bulunmalı; içinde arama yoktur.",
+              "Key ile bulunamayan bir yedek için bütün arşiv listelenir."),
+          row("R2", 14, "Yazılı talep 48 saat verir; bazen aynı gün istenir.",
+              "Ayda bir 1,2 TB gece içinde yüklenmeli; geri yükleme 48 saat içinde, mümkünse aynı gün hazır olmalı.",
+              "Geri yükleme günler sürerse hukuk talebine zamanında cevap verilemez."),
+          row("R3", 14, "Yedek, veritabanı kaybolduğunda son çaredir.",
+              "Bir Availability Zone kaybında hiçbir yedek kaybolmamalı.",
+              "Kaybolan bir yedek, ihtiyaç anında hiç yedek olmaması demektir."),
+          row("R4", 10, "Ekip S3 biliyor ve yeni servis öğrenmek istemiyor.",
+              "Aynı bucket, aynı API ve aynı araçlar; ayrı bir arşiv sistemi işletilmemeli.",
+              "Ayrı bir arşiv sistemi yılda bir kullanılan bir runbook ve unutulan bir parola demektir."),
+          row("R5", 26, "100 TB yedi yıl boyunca her ay ödenir; bütçe ayda 500 USD.",
+              "Yedi yılın sonunda 100 TB (84 dosya × 1,2 TB) her ay saklanır: GB-ay fiyatı en düşük olmalı; yılda bir ya da iki 1,2 TB'lık geri getirme ücreti kabul edilir; dosya en az yedi yıl kalacağı için en kısa saklama süresi sorun değildir.",
+              "Yanlış sınıf seçilirse arşivin faturası yedi yıl boyunca her ay katlanır.")],
+    cands=["s3gda", "s3gfr", "s3"],
+    scores={
+        "s3gda": [sc(10, "Aynı S3 engine'i: tek nesne 50 TB'a kadar, çok parçalı yükleme paraleldir. Puan kırılmadı."),
+                  sc(10, "Nesne bir kez yazılır ve değişmez. Puan kırılmadı."),
+                  sc(10, "Object Lock compliance modu yedi yıl silmeyi ve üstüne yazmayı engeller; lifecycle kuralı (Expiration ve NoncurrentVersionExpiration birlikte, B4) kilit bitince siler. Sınıf bu özellikleri değiştirmez. Puan kırılmadı."),
+                  sc(10, "Key ile bulunur. Puan kırılmadı."),
+                  sc(7, "3 puan kırıldı: nesne önce RestoreObject ile geri getirilir; varsayılan geri getirme süresi 12 saattir, aynı gün istenen bir talepte pay az kalır."),
+                  sc(10, "En az üç Availability Zone'da saklanır, 11 dokuzluk dayanıklılık için tasarlanmıştır. Puan kırılmadı."),
+                  sc(10, "Aynı bucket ve aynı API; sınıf PUT isteğinde ya da bir lifecycle kuralında seçilir. Puan kırılmadı."),
+                  sc(10, "100 TB × 0,0018 USD yaklaşık 184 USD/ay; 1,2 TB'lık bir geri getirme yaklaşık 30 USD (Price List API, eu-central-1, 2026-10-31). En kısa saklama süresi 180 gündür ve yedi yıllık dosyaya dokunmaz. Puan kırılmadı.")],
+        "s3gfr": [sc(10, "Aynı S3 engine'i. Puan kırılmadı."),
+                  sc(10, "Nesne bir kez yazılır ve değişmez. Puan kırılmadı."),
+                  sc(10, "Object Lock ve lifecycle bu sınıfta da aynıdır. Puan kırılmadı."),
+                  sc(10, "Key ile bulunur. Puan kırılmadı."),
+                  sc(9, "1 puan kırıldı: nesne önce RestoreObject ile geri getirilir; geri getirme dakikalar ile saatler sürer ve aynı gün istenen bir talep için yeter."),
+                  sc(10, "Birden fazla Availability Zone'da saklanır. Puan kırılmadı."),
+                  sc(10, "Aynı bucket ve aynı API. Puan kırılmadı."),
+                  sc(8, "2 puan kırıldı: 100 TB × 0,00405 USD yaklaşık 415 USD/ay, Deep Archive'ın (184 USD) 2,25 katı; geri getirme ayrıca ödenir.")],
+        "s3": [sc(10, "Bir nesne 50 TB'a kadar olabilir ve çok parçalı yüklenir (Ö1). Puan kırılmadı."),
+               sc(10, "PUT nesnenin tamamını yazar ve nesne değişmez (Ö1). Puan kırılmadı."),
+               sc(10, "Object Lock compliance modu (Ö7) silmeyi engeller; lifecycle (Ö6, Expiration ve NoncurrentVersionExpiration birlikte) kilit bitince siler. Puan kırılmadı."),
+               sc(10, "Key ile bulunur (Ö1). Puan kırılmadı."),
+               sc(10, "Nesne milisaniyelerde okunur. Puan kırılmadı."),
+               sc(10, "En az üç Availability Zone. Puan kırılmadı."),
+               sc(10, "Varsayılan sınıftır; ek ayar yoktur. Puan kırılmadı."),
+               sc(1, "9 puan kırıldı: 100 TB'ın ilk 50 TB'ı 0,0245, sonrası 0,0235 USD ile yaklaşık 2.458 USD/ay, Deep Archive'ın 13 katı; bu dosyalar yılda bir ya da iki kez okunur.")],
+    },
+    h2h={
+        "s3gfr": "Arşiv sınıfı, esnek geri getirmeli (S3 Glacier Flexible Retrieval) ile kafa kafaya. Aynı engine, aynı bucket, aynı Object Lock ve aynı lifecycle: R1'de iki aday eşittir (36). "
+                 "Fark iki servis satırındadır. Flexible Retrieval dosyayı dakikalar ile saatler içinde geri getirir ve aynı gün gelen bir talebi karşılar (R2 9'a 7); Deep Archive'ın varsayılan geri getirmesi 12 saattir. "
+                 "Buna karşılık 100 TB'ın aylık faturası 415 USD'a karşı 184 USD'dır (R5); bu kartta talep yazılı ve 48 saat süreli olduğu için R5 kazanır, fark 2,4 puandır ve yakın bir yarıştır. "
+                 "Aynı engine'in milisaniye erişimli sınıfı Glacier Instant Retrieval da değerlendirildi: R2'de 10 alır ama 512 USD/ay ile 500 USD'lık bütçeyi aşar ve R5'te 7 ile 92,2 toplar; yılda bir açılan dosya için milisaniyeye ödenen fark gereksizdir. "
+                 "Hangi koşul değişseydi Glacier Flexible Retrieval seçilirdi: talepler çoğunlukla aynı gün cevap isteseydi; dosyalar ayda birkaç kez ve dakikalar içinde okunsaydı Glacier Instant Retrieval seçilirdi.",
+        "s3": "Object storage, varsayılan sınıf (S3 Standard) ile kafa kafaya. Bu sayfanın servisi burada varsayılan sınıfında yarışır: dosyayı yükleyip hiçbir sınıf ya da lifecycle kuralı seçmeyen bir ekibin durumu. "
+              "Engine aynıdır ve R1 eşittir; Standard dosyayı milisaniyelerde verir (R2) ve hiçbir ayar istemez. "
+              "Ama yılda bir ya da iki kez okunan 100 TB için ayda yaklaşık 2.458 USD ödenir; Deep Archive'ın 13 katı (R5). "
+              "Bu kart bir mimarın en ucuz kararını gösterir: aynı nesneyi yükleme anında doğru sınıfa koymak ya da bir lifecycle kuralıyla oraya taşımak. "
+              "Hangi koşul değişseydi S3 Standard seçilirdi: dosyalar birkaç gün tutulup silinseydi, her gün okunsaydı ya da sayıları ve boyutları faturayı önemsiz kılacak kadar küçük olsaydı.",
+    },
+    verdict="Karar: S3 Glacier Deep Archive {s3gda}, S3 Glacier Flexible Retrieval {s3gfr}, S3 {s3}. Üç aday aynı engine'dir ve R1'de eşittir; kararı R5 verir, R2 farkı daraltır (yakın yarış). "
+            "Yine de S3 Standard'da bırakırsak artımız: dosya her an milisaniyelerde açılır ve hiçbir ayar yoktur (Ö1). "
+            "Eksimiz: aynı arşiv için ayda yaklaşık 2.270 USD fazla ödenir; uygulama yüklemede sınıfı DEEP_ARCHIVE seçmeli ya da bir lifecycle kuralı (Ö6) yazmalı, geri yükleme runbook'u RestoreObject ile başlamalıdır. "
+            "Bir koşul değişseydi: talepler çoğunlukla aynı gün cevap isteseydi Glacier Flexible Retrieval kazanırdı."))
+
+# 3 ---------------------------------------------------------------- data lake raw zone
+S3_W.append(wusecase("datalake", 3,
+    title="Veri gölünün ham bölgesi: dosyalar geldiği gibi, yıllarca",
+    key="Key: raw/<kaynak>/dt=YYYY-MM-DD/<dosya>. CSV, JSON, gzip ve Parquet olduğu gibi. Athena ve Redshift Spectrum yerinde okur.",
+    story="Lale Market'in veri gölünde 40 TB ham veri var ve her ay 2 TB büyüyor. Partnerler günde yaklaşık 3.000 dosya gönderiyor: CSV ve JSON, 1 KB ile 2 GB arası; "
+          "web olayları beş dakikada bir gzip'li JSON dosyaları olarak geliyor. Ham dosyalar olduğu gibi kalmalı: bir dönüştürme işi hatalı çıkarsa her şey ham dosyadan yeniden üretilir. "
+          "Bir dosya geldiğinde temizleme işi kendiliğinden başlamalı. Partnerler dosyalarına ara sıra yeni bir alan ekliyor. "
+          "90 günden eski dosyalar nadiren okunur; beş yıl sonra silinmeleri gerekir. Analistler Athena ile, raporlar Redshift Spectrum ile aynı dosyaları yerinde okur "
+          "(Redshift sayfasının 10. kartı bu okuma tarafını puanlar). Veri ekibi üç kişi ve bir cluster işletmek istemiyor.",
+    wnote="R1 toplam 42: değer olduğu gibi saklanan bir dosyadır (VM 12), şema okurken uygulanır (ŞE 10), yeni dosya bir işi başlatır ve eski dosya ucuzlar ve silinir (YD 12). "
+          "R5 18 ile ikinci: 40 TB her ay büyür.",
+    rows=[row("VM", 12, "Kaynaklar CSV, JSON, gzip ve Parquet gönderir; ham dosya olduğu gibi kalmalıdır.",
+              "Her dosya biçimi, 1 KB ile 2 GB arası, byte byte olduğu gibi saklanmalı; bir dönüştürme hatasında ham dosyadan yeniden üretim yapılabilmeli.",
+              "Dosya saklanmadan önce başka bir biçime çevrilirse çevirideki bir hata ham veriyi de bozar ve geri dönülemez."),
+          row("ŞE", 10, "Partnerler dosyalarına ara sıra yeni alan ekliyor.",
+              "Yazarken şema istenmemeli; şema okurken (Athena ve Spectrum'un table tanımında) uygulanmalı ve yeni bir alan eski dosyaları bozmamalı.",
+              "Yazarken şema isteyen bir depo yeni alanlı dosyayı reddeder ve partner verisi eksik kalır."),
+          row("OY", 8, "Dosyalar sürekli eklenir; ara sıra aynı dosya yeniden gönderilir.",
+              "Yeni dosya yeni bir key'dir; aynı dosya yeniden gelirse eskisi kaybolmadan yenisi yazılmalı; dosyanın içi hiç düzenlenmez.",
+              "Yeniden gönderim eski dosyayı sessizce silerse hatalı bir partner dosyası doğru olanı yok eder."),
+          row("YD", 12, "Yeni dosya bir işi başlatmalı; beş yıl sonra silinmeli.",
+              "Dosya geldiği anda temizleme işi tetiklenmeli; beş yıl sonra kendiliğinden silinmeli. Eski dosyaların daha ucuz bir sınıfa geçmesinin fiyatı R5'te sayılır.",
+              "Tetikleyici yoksa bir zamanlayıcı bütün dosyaları tarar; silme kuralı yoksa saklama süresi kaçar."),
+          row("R2", 12, "Ayda 2 TB, günde 3.000 dosya, birçok paralel okuyucu.",
+              "Günde 3.000 dosya ve beş dakikada bir olay dosyası yazılmalı; Athena ve Spectrum aynı anda yüzlerce dosyayı paralel okuyabilmeli.",
+              "Paralel okuma sınırlanırsa çeyrek raporu saatler sürer."),
+          row("R3", 14, "Ham dosya tek kopyadır ve her şeyin yeniden üretim kaynağıdır.",
+              "Bir Availability Zone kaybında hiçbir ham dosya kaybolmamalı.",
+              "Kaybolan ham dosya, ondan üretilen bütün table'ların doğrulanamaması demektir."),
+          row("R4", 14, "Üç kişilik veri ekibi cluster işletmek istemiyor.",
+              "Sunucu ve cluster olmamalı; Athena ve Spectrum dosyaları yerinde okumalı; Glue Data Catalog zaten kullanılıyor.",
+              "Bir yükleme cluster'ı küçük ekibin bütün zamanını alır."),
+          row("R5", 18, "40 TB her ay 2 TB büyüyor; eski dosyalar nadiren okunur.",
+              "40 TB, her ay 2 TB büyür; dosyaların bir kısmı 128 KB'tan küçüktür: GB-ay fiyatı düşük olmalı; eski veri kendiliğinden daha ucuz sınıfa geçmeli; okuma için compute saati ödenmemeli.",
+              "Pahalı bir depoda 40 TB her ay pahalıdır ve büyüdükçe katlanır.")],
+    cands=["s3", "s3t", "rs"],
+    scores={
+        "s3": [sc(10, "Bir nesne her biçimden byte'tır ve olduğu gibi saklanır (Ö1). Puan kırılmadı."),
+               sc(10, "Object storage şema bilmez; şema Glue table tanımında, okurken uygulanır. Puan kırılmadı."),
+               sc(10, "Yeni dosya yeni key'dir; versioning yeniden gönderilen dosyanın eskisini tutar (Ö5). Puan kırılmadı."),
+               sc(10, "Yeni nesne bir olay bildirimiyle işi başlatır (Ö8); lifecycle kuralı beş yıl sonra siler (Ö6). Puan kırılmadı."),
+               sc(10, "Prefix başına saniyede en az 3.500 yazma ve 5.500 okuma; prefix sayısında sınır yoktur (Ö2). Puan kırılmadı."),
+               sc(10, "En az üç Availability Zone, 11 dokuzluk dayanıklılık için tasarlanmış. Puan kırılmadı."),
+               sc(10, "Athena ve Spectrum dosyaları yerinde okur; Glue kataloğu zaten vardır; sunucu yoktur. Puan kırılmadı."),
+               sc(9, "40 TB Standard'da ayda yaklaşık 1.000 USD, 90 gün sonra Standard-IA'da GB-ay 0,0135 USD. 1 puan kırıldı: 128 KB'tan küçük partner dosyaları varsayılan olarak sınıf değiştirmez ve her dosya istek başına ödenir.")],
+        "s3t": [sc(4, "Table bucket Apache Iceberg table'ları tutar. 6 puan kırıldı: ham CSV ve JSON dosyaları olduğu gibi saklanmaz; önce Parquet, Avro ya da ORC'ye çevrilip bir table'a yazılır."),
+                sc(6, "Iceberg şeması evrilebilir: kolon eklemek eski dosyaları bozmaz. 4 puan kırıldı: şema yazarken uygulanır; yeni alanlı dosya önce table şemasına eklenir."),
+                sc(9, "Her yükleme bir append commit'idir; eski snapshot'lar kalır. 1 puan kırıldı: küçük commit'ler compaction çalışana kadar küçük dosyalar bırakır."),
+                sc(6, "Snapshot'lar ve otomatik compaction vardır. 4 puan kırıldı: dosya bazında olay bildirimi yerine yükleme işinin kendisi commit eder; ham dosyanın beş yıllık saklaması table snapshot'larıyla değil ayrı bir bucket'la yapılır."),
+                sc(9, "Yüksek istek hızı için tasarlanmıştır. 1 puan kırıldı: günde 3.000 küçük commit compaction'ı sürekli meşgul eder."),
+                sc(10, "Birden fazla Availability Zone'da saklanır. Puan kırılmadı."),
+                sc(6, "Bakım (compaction, snapshot silme) yönetilir. 4 puan kırıldı: her kaynak için bir dönüştürme ve yükleme işi (Glue ya da Firehose) kurulur ve işletilir."),
+                sc(7, "3 puan kırıldı: GB-ay 0,0282 USD, S3 Standard'dan (0,0245) yüksektir ve daha ucuz bir sınıfa geçiş yoktur; compaction ayrıca ödenir.")],
+        "rs": [sc(3, "Redshift row'lar ve kolonlar saklar; JSON için SUPER tipi vardır. 7 puan kırıldı: dosya olarak saklama yoktur; ham dosya yüklemeden sonra kaybolur."),
+               sc(4, "6 puan kırıldı: yerel table'larda şema yazarken uygulanır; yeni alan bir ALTER ve yükleme işinin değişmesidir (okurken şema sadece S3'teki external table'larda vardır)."),
+               sc(6, "COPY toplu yüklemeyi iyi yapar. 4 puan kırıldı: yeniden gönderilen dosya için silme ve yeniden yükleme uygulamanın işidir."),
+               sc(3, "7 puan kırıldı: süre sonu silmesi yoktur, silme bir DELETE ve VACUUM'dur; yeni dosya bir işi tetiklemez."),
+               sc(9, "Serverless kapasiteyi yükle artırır. 1 puan kırıldı: günde 3.000 küçük dosyanın her biri ayrı bir COPY olursa yükleme kuyruğu uzar."),
+               sc(10, "Managed storage kalıcıdır. Puan kırılmadı."),
+               sc(5, "5 puan kırıldı: her kaynak için şema ve COPY işi yazılır ve işletilir; bu ekip için bir workgroup kurulur."),
+               sc(5, "Managed storage GB-ay 0,0256 USD ile S3'e yakındır. 5 puan kırıldı: her yükleme RPU-saat harcar ve eski veri daha ucuz bir sınıfa geçmez.")],
+    },
+    h2h={
+        "s3t": "Iceberg table storage'ı (S3 Tables) ile kafa kafaya. S3 Tables da S3'tür ama nesne değil table tutar: Iceberg table'ları, snapshot'ları ve otomatik compaction'ı vardır. "
+               "Bu yüzden R1'de ayrı puanlanır ve ham bölgede geride kalır: dosya olduğu gibi saklanmaz, önce bir table'a çevrilir (R1 · VM), şema yazarken uygulanır (R1 · ŞE) "
+               "ve dosya bazında olay bildirimi yerine yükleme işi commit eder (R1 · YD). Bir dönüştürme işi kurulur (R4) ve GB fiyatı biraz yüksektir (R5). "
+               "S3 Tables'ın dürüst üstünlüğü temizlenmiş bölgededir: satır bazında güncelleme, silme ve compaction'lı sorgular. "
+               "Hangi koşul değişseydi S3 Tables seçilirdi: iş ham dosyaları değil, temizlenmiş, şeması sabit ve satır bazında güncellenen table'ları tutmak olsaydı; o zaman VM ve ŞE satırları S3 Tables'ın lehine döner. Doğru mimaride ham bölge S3'te, temiz bölge S3 Tables'ta durur.",
+        "rs": "Data warehouse (Redshift) ile kafa kafaya. Redshift bu verinin raporlarını en iyi çalıştıran engine'dir, ama ham bölge bir rapor deposu değil bir dosya arşividir. "
+              "Redshift dosyayı row ve kolonlara çevirir ve ham dosya kaybolur (R1 · VM), yeni alan bir ALTER ve yükleme değişikliğidir (R1 · ŞE), "
+              "yaşa göre ucuzlama ve süre sonu silmesi yoktur (R1 · YD). Her kaynak için bir COPY işi işletilir (R4) ve her yükleme compute harcar (R5). "
+              "Redshift'in dürüst üstünlüğü bu dosyalardan beslenen düzenli raporlardadır; Spectrum aynı dosyaları S3'te yerinde de okur. "
+              "Hangi koşul değişseydi Redshift seçilirdi: ham dosyalar saklanmak zorunda olmasaydı ve her gün aynı raporlar aynı kolonlar üzerinde çalışsaydı.",
+    },
+    verdict="Karar: S3 {s3}, S3 Tables {s3t}, Redshift {rs}. Ham bölgenin işi dosyayı olduğu gibi, yıllarca ve ucuz saklamak ve her yeni dosyada bir işi başlatmaktır: S3 R1'in 42 puanının tamamını alır. "
+            "S3 seçtiğimizde artımız: her biçim kabul edilir (Ö1), şema okurken uygulanır, yeni dosya bir olay üretir (Ö8), lifecycle 90 gün sonra ucuzlatır ve beş yıl sonra siler (Ö6). "
+            "Eksimiz: dosyanın içi sorgulanamaz; okuma için Athena ya da Spectrum gerekir ve sorgular partition prefix'iyle yazılmalıdır; küçük dosyalar istek başına ödenir. "
+            "Doğru mimari üçü birliktedir: ham bölge S3'te, temiz table'lar S3 Tables'ta, düzenli raporlar Redshift'te. Bir koşul değişseydi: iş ham dosyaları değil, temizlenmiş, şeması sabit ve satır bazında güncellenen table'ları tutmak olsaydı S3 Tables öne geçerdi."))
+
+# 4 ---------------------------------------------------------------- log archive
+S3_W.append(wusecase("logs", 4, sim="w_logs",
+    title="Uygulama log'larının iki yıllık arşivi: nadiren sorulan sorular",
+    key="Key: logs/<servis>/yyyy/mm/dd/hh/<parça>.json.gz. Son 14 gün CloudWatch Logs'ta, arşiv iki yıl.",
+    story="Lale Market'in bütün servisleri günde yaklaşık 50 GB log üretir. Son 14 günün log'ları olay anında CloudWatch Logs'ta aranır; bu kısım bugün çalışıyor ve değişmeyecek. "
+          "Yeni kural log'ların iki yıl saklanmasını istiyor: iki yılın sonunda yaklaşık 36 TB. Arşive ayda yaklaşık beş soru gelir: güvenlik ekibi "
+          "\"14 Mart'ta bu request id'nin bütün satırları\" ya da \"mart ayında bu IP'nin bütün 5xx cevapları\" diye sorar; cevabın birkaç dakikada gelmesi yeterlidir. "
+          "Log'lar sadece eklenir, hiç değiştirilmez; iki yıl dolunca silinmelidir. Platform ekibi iki kişidir ve arşiv için yeni bir cluster istemiyor.",
+    wnote="R1 toplam 40: arşivin sorusu tarih ve metin içinde aramadır (EY 12) ve iki yıllık yaşam döngüsü kuraldır (YD 12). R5 22 ile ikinci: 36 TB nadiren okunan veri iki yıl boyunca ödenir. "
+          "R4 14: arşiv için yeni bir cluster istenmiyor.",
+    rows=[row("VM", 8, "Log satırları metin ya da JSON'dır ve sıkıştırılmış saklanır.",
+              "Satırlar JSON ya da düz metin olarak, sıkıştırılmış, kaybolmadan saklanmalı.",
+              "Satırların biçimi değişirse eski satırlar yeni araçlarla okunamaz."),
+          row("OY", 8, "Log sadece eklenir ve hiç değiştirilmez.",
+              "Saniyede binlerce satır sürekli eklenmeli; yazılan satır değişmemeli.",
+              "Ekleme yavaşsa log'lar uygulamada birikir ve bir çökmede kaybolur."),
+          row("EY", 12, "Arşivin sorusu bir gün ya da ay içinde request id, IP ya da hata metni aramaktır.",
+              "Soru tarih aralığı artı bir alan ya da metin içerir (request id, IP, \"5xx\"); ayda beş soru, cevap birkaç dakikada.",
+              "Metin ve alan araması yapılamazsa güvenlik ekibi dosyaları indirir ve kendi makinesinde arar."),
+          row("YD", 12, "İki yıl saklanmalı ve sonra silinmeli.",
+              "Log iki yıl dolunca kendiliğinden silinmeli; silme kuralı log'u yazan uygulamadan bağımsız çalışmalı. 30 günden eski log'un daha ucuz bir sınıfa geçmesinin fiyatı R5'te sayılır.",
+              "Silme kuralı yoksa saklama süresi aşılır ve bir temizlik işi yazılır."),
+          row("R2", 12, "Günde 50 GB, iki yılda 36 TB.",
+              "Günde 50 GB sürekli yazılmalı; bir aylık aralıktaki bir soru birkaç dakikada cevaplanmalı.",
+              "Bir aylık sorgu saatler sürerse olay incelemesi gecikir."),
+          row("R3", 12, "Denetim kanıtıdır; ama son 14 gün CloudWatch'ta ayrıca durur.",
+              "Bir Availability Zone kaybında arşivden log kaybolmamalı.",
+              "Kayıp log, denetimde boşluk demektir."),
+          row("R4", 14, "İki kişilik platform ekibi yeni cluster istemiyor; CloudWatch Logs zaten çalışıyor.",
+              "Arşiv için sunucu ya da cluster işletilmemeli; mevcut log akışına eklenmeli.",
+              "Yeni bir cluster iki kişilik ekibin nöbet yükünü ikiye katlar."),
+          row("R5", 22, "36 TB iki yıl boyunca her ay ödenir, ayda beş soru için.",
+              "İki yılın sonunda 36 TB saklanır: GB-ay fiyatı düşük olmalı; sorgu sadece çalıştığında ödenmeli; ingestion zaten ödendiği için fark saklamada aranmalı.",
+              "Arşiv sıcak fiyattan saklanırsa yılda binlerce dolar neredeyse hiç okunmayan veriye gider.")],
+    cands=["s3", "cw", "os"],
+    scores={
+        "s3": [sc(10, "Sıkıştırılmış JSON dosyaları olduğu gibi saklanır (Ö1). Puan kırılmadı."),
+               sc(9, "Firehose akışı beş dakikalık dosyalara böler ve her dosya yeni bir nesnedir. 1 puan kırıldı: object storage'da nesneye ekleme yoktur; akış dosya parçalarına bölünür."),
+               sc(5, "Tarih prefix'i bir günü ya da ayı doğrudan seçer (Ö2). 5 puan kırıldı: object storage nesnenin içinde aramaz; request id ve metin araması Athena gibi ayrı bir sorgu motorunun dosyaları taramasıdır."),
+               sc(10, "Lifecycle kuralı iki yıl sonra siler ve 30 gün sonra Glacier Instant Retrieval'a taşır (Ö6). Puan kırılmadı."),
+               sc(10, "Günde 50 GB küçük bir yazma yüküdür; Athena aylık prefix'i paralel tarar. Puan kırılmadı."),
+               sc(10, "En az üç Availability Zone. Puan kırılmadı."),
+               sc(8, "Sunucu yoktur. 2 puan kırıldı: CloudWatch'tan Firehose'a bir subscription filter, Firehose teslimi, bir Glue table'ı ve bir Athena workgroup'u kurulur."),
+               sc(10, "36 TB Glacier Instant Retrieval'da GB-ay 0,005 USD ile ayda yaklaşık 184 USD; Athena taranan TB başına yaklaşık 5 USD (Price List API ve Athena belgesi, 2026-10-31). Puan kırılmadı.")],
+        "cw": [sc(10, "Log olayları metin ya da JSON olarak saklanır. Puan kırılmadı."),
+               sc(10, "Log olayları log stream'e doğrudan eklenir. Puan kırılmadı."),
+               sc(6, "Logs Insights request_id gibi alanlarda field index kullanır ve alanla sorgular. 4 puan kırıldı: message içinde kelime araması bir filter'dır ve zaman aralığındaki her satırı tarar; aralık iki yıla yaklaştıkça sorgu uzar (OpenSearch sayfasının log kartıyla aynı kırılım)."),
+               sc(10, "Saklama süresi log group başına seçilir ve süre dolunca silinir. Puan kırılmadı; eski log'un daha ucuz bir yere geçmemesi R5'te sayıldı."),
+               sc(10, "Günde 50 GB zaten bu servise yazılıyor. Puan kırılmadı."),
+               sc(10, "Yönetilen servis, kalıcı saklama. Puan kırılmadı."),
+               sc(10, "Zaten çalışıyor: saklama süresini 14 günden iki yıla çıkarmak bir ayardır. Puan kırılmadı."),
+               sc(4, "Ingestion (GB başına 0,63 USD) zaten ödenir. 6 puan kırıldı: saklama GB-ay 0,0324 USD, Glacier Instant Retrieval'ın 6 katı; iki yılın sonunda ayda bin doların üzerindedir.")],
+        "os": [sc(8, "Log satırları JSON document olur. 2 puan kırıldı: bir alanın type'ı ilk yazmada sabitlenir; yanlış tahmin edilen bir type reindex ister (OpenSearch sayfasının kademesi: yalnız yeni alan gelirse 2 puan; log'lara yeni alanlar eklenir)."),
+               sc(9, "Toplu ekleme (bulk) iyi çalışır. 1 puan kırıldı: log'lar günlük index'lere döndürülür (rollover); shard planı R4'te sayıldı."),
+               sc(10, "Inverted index metin ve alan aramasını saniyelerde yapar. Puan kırılmadı."),
+               sc(10, "Index State Management index'leri yaşına göre siler. Puan kırılmadı; daha ucuz bir katman (UltraWarm, cold storage) ve iki yıllık index'lerin bedeli R5'te sayıldı."),
+               sc(9, "1 puan kırıldı: kapasite sabittir; iki yılda 36 TB'a büyüyen veri için node'lar önceden eklenir (OpenSearch sayfasının kuralı; node ve shard planı R4'te sayıldı)."),
+               sc(9, "Replica shard'lar ve saatlik otomatik snapshot. 1 puan kırıldı: domain kaybolursa son saatin log'ları CloudWatch'taki 14 günlük kopyadan dakikalar içinde yeniden yüklenir (OpenSearch sayfasının kuralı: dakikalar 1 puan)."),
+               sc(5, "5 puan kırıldı: arşiv için yeni bir domain, düğüm tipleri, shard'lar ve ISM politikaları kurulur ve işletilir."),
+               sc(1, "9 puan kırıldı: 36 TB'ı aranabilir tutan düğümler ve diskler saat başına ödenir; ayda beş soru için bütün yıl çalışır.")],
+    },
+    h2h={
+        "cw": "İzleme servisi (CloudWatch Logs) ile kafa kafaya. CloudWatch Logs bu kartta engine uyumunda öndedir: satırlar doğrudan eklenir, Logs Insights alan ve metinle arar, "
+              "saklama süresi bir ayardır (R1 35,2'ye 33,2; metin araması onda da zaman aralığını tarar). Sorgu ücretleri benzerdir: Athena TB başına yaklaşık 5 USD, Logs Insights GB başına 0,0063 USD, yani TB başına yaklaşık 6,5 USD. Zaten çalıştığı için R4'te de tam puan alır. Kaybettiği yer R5'tir: iki yıllık arşiv GB-ay 0,0324 USD ile saklanır, "
+              "S3'te Glacier Instant Retrieval'a geçen aynı log 0,005 USD'dır; iki yılın sonunda fark ayda bin dolar civarındadır. "
+              "Doğru mimari ikisi birliktedir: son 14 gün CloudWatch'ta aranır, kopyası Firehose ile S3'e akar ve iki yıl orada kalır. "
+              "Hangi koşul değişseydi CloudWatch seçilirdi: saklama süresi birkaç ay olsaydı; o zaman saklanan veri ve R5 farkı küçülür, Firehose, Glue ve Athena kurma işi (R4) ise S3'ün tarafında kalırdı.",
+        "os": "Search engine (OpenSearch) ile kafa kafaya. OpenSearch metin aramasında rakipsizdir: inverted index request id'yi ve hata metnini saniyelerde bulur (R1 · EY 10) ve bu kartta engine uyumunu kazanır (37,6). "
+              "Ama bu kartın sorusu ayda beştir ve cevap için birkaç dakika yeterlidir. 36 TB'ı aranabilir tutmak önceden eklenen node'lar ister (R2), bir domain'in ve shard planının işletilmesi iki kişilik ekibe yük olur (R4) "
+              "ve fatura ayda beş soru için bütün yıl ödenir (R5). OpenSearch'ün yeri son günlerin olay incelemesidir (OpenSearch sayfasının log kartları); iki yıllık arşivi aranabilir tutmak, nadiren açılan bir dolabı her gün aydınlatmaya benzer. "
+              "Hangi koşul değişseydi OpenSearch seçilirdi: arşivde günde yüzlerce arama yapılsaydı ve cevabın saniyelerde gelmesi bir kural olsaydı.",
+    },
+    verdict="Karar: S3 {s3}, CloudWatch {cw}, OpenSearch {os}. Engine uyumunda OpenSearch (37,6) ve CloudWatch Logs (35,2) S3'ün (33,2) önündedir, ama iki yıllık arşivde kararı R5 verir. "
+            "S3 seçtiğimizde artımız: lifecycle 30 gün sonra arşiv sınıfına taşır ve iki yıl sonra siler (Ö6), tarih prefix'i bir günü doğrudan seçer (Ö2), sorgu sadece çalıştığında ödenir. "
+            "Eksimiz: S3 nesnenin içinde aramaz; uygulama Firehose, bir Glue table'ı ve Athena kurmalı ve sorguları tarih partition'ıyla yazmalıdır. "
+            "Doğru mimari ikisi birliktedir: son 14 gün CloudWatch'ta, iki yıllık arşiv S3'te. Bir koşul değişseydi: saklama süresi birkaç ay olsaydı CloudWatch öne geçerdi."))
+
+# 5 ---------------------------------------------------------------- seller uploads with presigned URLs
+S3_W.append(wusecase("uploads", 5,
+    title="Satıcı yüklemeleri: tarayıcıdan doğrudan, imzalı URL ile",
+    key="Key: incoming/<satıcı id>/<yükleme id>/<dosya adı>. Tarayıcı imzalı bir PUT URL'siyle yükler; tarama sonrası media/ prefix'ine taşınır.",
+    story="8.000 satıcı panelden fotoğraf, video ve PDF fatura yüklüyor: günde 30.000 dosya, kampanya açılışlarında saniyede 50 yükleme. Dosya 100 KB ile 2 GB arasıdır. "
+          "Uygulama sunucusu dosyanın byte'larını taşımamalı: tarayıcı dosyayı doğrudan depoya yazmalı, uygulama sadece kısa ömürlü bir izin vermeli. "
+          "Aynı adla ikinci bir yükleme ilkinin üstüne yazmamalı. Yüklenen dosya önce bir karantina prefix'ine (incoming/) düşer; virüs taraması dosya gelir gelmez başlamalı ve "
+          "taranmamış dosyalar yedi gün sonra kendiliğinden silinmeli. Büyük videolar kesilirse kaldığı yerden devam etmeli. Satıcı dosyasının başka kopyası yoktur. "
+          "Panel ekibi dört geliştiricidir; sunucu işletmek istemiyor.",
+    wnote="R1 toplam 40: tarayıcının doğrudan yazıp okuması (EY 10), üstüne yazmama kuralı (TA 10) ve yüklemenin bir işi başlatması (YD 12) bu iş yükünün özüdür. "
+          "R3 16 ile ikinci: satıcının dosyasının başka kopyası yoktur.",
+    rows=[row("EY", 10, "Tarayıcı dosyayı uygulama sunucusundan geçirmeden yazmalı ve okumalı.",
+              "Tarayıcı bir dosyayı kısa ömürlü bir izinle doğrudan depoya yazmalı ve indirmeli; izin tek bir key ve tek bir işlemle sınırlı olmalı.",
+              "Byte'lar uygulama sunucusundan geçerse 2 GB'lık videolar sunucunun belleğini ve bant genişliğini doldurur."),
+          row("TA", 10, "Aynı adla ikinci yükleme ilkinin üstüne yazmamalı; tarayıcı yazdığı dosyayı hemen görmeli.",
+              "Yazma 'key yoksa yaz' koşuluyla yapılmalı; yazma biter bitmez tarama işi ve satıcı aynı dosyayı görmeli.",
+              "Sessiz bir üstüne yazma bir satıcının faturasını başka bir dosyayla değiştirir."),
+          row("OY", 8, "Videolar 2 GB'a kadar; kesilen yükleme baştan başlamamalı.",
+              "Büyük dosya parçalar hâlinde, paralel ve kaldığı yerden devam ederek yüklenmeli; dosyanın içi sonradan değişmez.",
+              "Kesilen 2 GB'lık bir yükleme baştan başlarsa satıcı paneli terk eder."),
+          row("YD", 12, "Tarama dosya gelir gelmez başlamalı; taranmamış dosya yedi gün sonra silinmeli.",
+              "Yeni dosya bir olayla tarama işini başlatmalı; karantinada kalan dosya yedi gün sonra kendiliğinden silinmeli.",
+              "Tetikleyici yoksa bir zamanlayıcı karantinayı tarar ve taranmamış bir dosya müşteriye ulaşabilir."),
+          row("R2", 14, "Günde 30.000 dosya, kampanya anında saniyede 50 yükleme.",
+              "Saniyede 50 eşzamanlı yükleme ve 2 GB'lık dosyalar; kapasite planlanmamalı.",
+              "Tepe anında yüklemeler reddedilirse satıcılar kampanyaya geç kalır."),
+          row("R3", 16, "Satıcının dosyasının başka kopyası yoktur.",
+              "Bir Availability Zone kaybında hiçbir yüklenen dosya kaybolmamalı.",
+              "Kaybolan bir fatura ya da ürün videosu satıcının yeniden yüklemesi ve güven kaybıdır."),
+          row("R4", 15, "Dört geliştirici sunucu işletmek istemiyor.",
+              "Sunucusuz çalışmalı; tarayıcı yüklemesi için gereken ayar az olmalı.",
+              "Yükleme sunucuları ekibin nöbet listesini uzatır."),
+          row("R5", 15, "Günde 30.000 dosya ve sürekli büyüyen bir arşiv.",
+              "Günde 30.000 PUT ve büyüyen bir arşiv: GB başına ve istek başına ödenmeli; sunucu saati ödenmemeli.",
+              "Saat başına ödenen yükleme sunucuları gece boş durur.")],
+    cands=["s3", "s3x", "efs"],
+    scores={
+        "s3": [sc(10, "Uygulama tek bir key ve tek bir işlem için imzalı bir PUT ya da GET URL'si üretir; tarayıcı doğrudan bucket'a yazar ve okur (Ö9). Puan kırılmadı."),
+               sc(10, "PUT If-None-Match: * key varsa 412 ile reddedilir; güçlü tutarlılık yeni nesneyi hemen gösterir (Ö4). Puan kırılmadı."),
+               sc(10, "Çok parçalı yükleme parçaları paralel ve kaldığı yerden yükler (Ö1). Puan kırılmadı."),
+               sc(10, "Yeni nesne bir olay bildirimiyle taramayı başlatır (Ö8); lifecycle kuralı incoming/ prefix'ini yedi gün sonra siler (Ö6). Puan kırılmadı."),
+               sc(10, "Prefix başına saniyede en az 3.500 yazma; saniyede 50 yükleme küçük bir yüktür. Puan kırılmadı."),
+               sc(10, "En az üç Availability Zone. Puan kırılmadı."),
+               sc(9, "Sunucusuz. 1 puan kırıldı: tarayıcı yüklemesi için bucket'a bir CORS kuralı yazılır."),
+               sc(10, "GB-ay 0,0245 USD ve 1.000 PUT için 0,0054 USD; sunucu yoktur. Puan kırılmadı.")],
+        "s3x": [sc(6, "Directory bucket aynı S3 API'sini kullanır. 4 puan kırıldı: istekler CreateSession ile alınan oturum yetkisiyle Zonal endpoint'e gider; bu sayfa directory bucket için tarayıcıya verilecek imzalı URL'yi belgede doğrulamadı ve kısa ömürlü izin bu oturum modeline göre kurulur."),
+                sc(10, "Koşullu yazma ve güçlü tutarlılık vardır. Puan kırılmadı."),
+                sc(10, "Çok parçalı yükleme vardır. Puan kırılmadı."),
+                sc(5, "Lifecycle süre sonu silmesi vardır. 5 puan kırıldı: directory bucket'ta S3 Event Notifications yoktur; tarama işi yeni dosyayı başka bir yoldan öğrenir."),
+                sc(10, "Directory bucket varsayılan olarak saniyede 100.000 yazmaya kadar ölçeklenir. Puan kırılmadı."),
+                sc(4, "6 puan kırıldı: veri tek bir Availability Zone'dadır; o AZ'nin kaybında satıcının tek kopyası kaybolabilir."),
+                sc(9, "Sunucusuz. 1 puan kırıldı: bucket bir AZ'de oluşturulur ve istemciler o AZ'nin Zonal endpoint'ini kullanır (oturum yetkisi R1.1'de sayıldı)."),
+                sc(4, "6 puan kırıldı: GB-ay 0,118 USD, S3 Standard'ın yaklaşık 5 katı; hız bu iş yükünde bir şey kazandırmaz.")],
+        "efs": [sc(2, "8 puan kırıldı: tarayıcı bir NFS dosya sistemine yazamaz ve imzalı bir izin yoktur; yazma da okuma da bir uygulama sunucusundan geçer (kademe: sadece okuma bir sunucudan geçiyorsa 3, tarayıcının doğrudan yazması isteniyorsa 8)."),
+                sc(8, "O_CREAT ve O_EXCL ile 'yoksa oluştur' yapılır. 2 puan kırıldı: başka bir istemci dosyayı ancak yazan onu kapattıktan sonra tam görür (close-to-open)."),
+                sc(6, "4 puan kırıldı: dosya sisteminde parça parça, kaldığı yerden devam eden bir yükleme işlemi yoktur; kesilen 2 GB'lık yüklemenin devam mantığını uygulama yazar."),
+                sc(2, "8 puan kırıldı: dosya sisteminde olay bildirimi ve süre sonu silmesi yoktur; tarama tetikleyicisi ve temizlik işi uygulamada yazılır."),
+                sc(9, "Elastic throughput yükle büyür. 1 puan kırıldı: her yükleme bir web sunucusundan geçer ve web sunucuları tepe için önceden eklenen sabit kapasitedir (sunucuların işletilmesi R4'te)."),
+                sc(10, "Regional EFS birden fazla Availability Zone'da saklar. Puan kırılmadı."),
+                sc(4, "6 puan kırıldı: yükleme sunucuları, mount target'lar, yamalar ve sunucu sayısı ekibin işidir."),
+                sc(3, "7 puan kırıldı: Standard storage GB-ay 0,36 USD, S3 Standard'ın yaklaşık 15 katı; yükleme sunucuları saat başına ödenir.")],
+    },
+    h2h={
+        "s3x": "Tek AZ'li object storage (S3 Express One Zone) ile kafa kafaya. S3 Express One Zone aynı S3 API'sini kullanır ve tek haneli milisaniyelerde cevap verir; "
+               "koşullu yazma ve çok parçalı yükleme onda da vardır. Ama farklı bir bucket türüdür: olay bildirimi yoktur (R1 · YD), istekler oturum tabanlı yetkiyle Zonal endpoint'e gider (R1 · EY) "
+               "ve veri tek bir Availability Zone'da durur; satıcının tek kopyası için bu ciddi bir risktir (R3). GB fiyatı da yaklaşık beş katıdır (R5). "
+               "Bu iş yükü hız istemez, dayanıklılık ve tetikleyici ister. "
+               "Hangi koşul değişseydi S3 Express One Zone seçilirdi: yüklenen dosyalar aynı AZ'deki bir işlem kümesinin saniyede binlerce kez okuduğu geçici ara dosyalar olsaydı ve kaynağı başka yerde dursaydı.",
+        "efs": "Paylaşılan dosya sistemi (EFS) ile kafa kafaya. EFS dosyayı kalıcı ve birden fazla AZ'de saklar (R3 eşit) ve 'yoksa oluştur' kuralını O_EXCL ile verir. "
+               "Ama bu kartın özü tarayıcının doğrudan yazmasıdır ve bir NFS dosya sistemine tarayıcı yazamaz: her byte bir uygulama sunucusundan geçer (R1 · EY 2). "
+               "Olay bildirimi ve süre sonu silmesi yoktur (R1 · YD), sunucuları ekip işletir (R4) ve GB fiyatı yaklaşık 15 katıdır (R5). EFS'in dürüst üstünlüğü, dosyayı açıp yerinde değiştiren sunucu programlarıdır (kart 6). "
+               "Hangi koşul değişseydi EFS seçilirdi: dosyaları tarayıcı değil, aynı VPC'deki sunucularda çalışan ve dosya yolu bekleyen bir program yükleseydi ve dosyayı yerinde düzenleseydi.",
+    },
+    verdict="Karar: S3 {s3}, S3 Express One Zone {s3x}, EFS {efs}. S3 R1'in 40 puanının tamamını alır: imzalı URL tarayıcıya tek bir key için kısa bir izin verir, If-None-Match üstüne yazmayı engeller, "
+            "yeni nesne taramayı başlatır ve lifecycle karantinayı temizler. "
+            "S3 seçtiğimizde artımız: uygulama sunucusu byte taşımaz (Ö9), kesilen video kaldığı yerden devam eder (Ö1), sunucu yoktur. "
+            "Eksimiz: imzalı URL'yi taşıyan herkes onu süresi dolana kadar kullanabilir; uygulama süreyi dakikalarla sınırlamalı, URL'yi log'lamamalı ve dosya türünü tarama sonrası kendisi doğrulamalıdır. "
+            "Bir koşul değişseydi: dosyalar aynı AZ'deki bir işlem kümesinin geçici ara dosyaları olsaydı S3 Express One Zone öne geçerdi."))
+
+# 6 ---------------------------------------------------------------- shared working directory (clear loss)
+S3_W.append(wusecase("shared", 6, sim="w_shared",
+    title="Görsel düzenleme sunucularının ortak çalışma klasörü",
+    key="Yol: /work/<iş id>/<dosya>. Dosya açılır, ortasından değiştirilir, sonuna eklenir, geçici adla yazılıp yeniden adlandırılır, kilitlenir.",
+    story="Lale Market eski bir görsel düzenleme uygulamasını devraldı: altı EC2 sunucusunda çalışan bir PHP ve ImageMagick programı. Program dosyaları bir yol ile açar, "
+          "büyük TIFF dosyalarının ortasındaki katmanları yerinde değiştirir, iş günlüğünü bir dosyanın sonuna ekler, sonucu geçici bir adla yazıp yeniden adlandırır "
+          "ve iki sunucunun aynı dosyayı aynı anda düzenlemesini bir dosya kilidiyle önler. Çalışma kümesi 2 TB'tır; dosyalar 1 MB ile 200 MB arasıdır. "
+          "Bir günün düzenlemeleri kaybolursa tasarım ekibi o günü yeniden yapar. Kodun yeniden yazılması için altı ay bütçe yok; ekip programı olduğu gibi taşımak istiyor.",
+    wnote="R1 toplam 42: programın yaptığı yerinde yazma, ekleme ve yeniden adlandırma (OY 14) ve dosya kilidi (TA 12) bu iş yükünün özüdür. "
+          "R4 20 ile ikinci: kod değişemez, bu yüzden programın beklediği arayüz (yol ve POSIX çağrıları) bir operasyon şartıdır.",
+    rows=[row("OY", 14, "Program dosyanın ortasını değiştirir, sonuna ekler ve yeniden adlandırır.",
+              "Bir dosyanın ortasındaki byte'lar yerinde değişmeli, sonuna ekleme yapılmalı, geçici dosya tek adımda yeniden adlandırılmalı.",
+              "Her küçük değişiklik bütün dosyanın yeniden yazılması olursa 200 MB'lık bir TIFF'in bir katmanı için 200 MB yazılır."),
+          row("TA", 12, "İki sunucu aynı dosyayı aynı anda düzenlememeli.",
+              "Bir sunucu dosyayı kilitleyebilmeli; diğer sunucu kilidi görmeli; kapatılan dosyanın son hâli diğer sunucularda görünmeli.",
+              "Kilit yoksa iki sunucunun değişikliği birbirini ezer ve düzenleme kaybolur."),
+          row("EY", 10, "Program dosyaları bir yol ve klasör listesiyle bulur.",
+              "Dosyalar /work/<iş id>/ gibi bir yolla açılmalı; klasör listelenmeli ve yeniden adlandırılabilmeli.",
+              "Yol yoksa programın her dosya çağrısı değişir."),
+          row("VM", 6, "Dosyalar 1 MB ile 200 MB arası TIFF ve PNG'dir.",
+              "200 MB'a kadar binary dosyalar olduğu gibi saklanmalı.",
+              "Dosya boyutu sınırlanırsa büyük işler bölünür."),
+          row("R2", 12, "Altı sunucu, 2 TB çalışma kümesi, gün içinde sürekli okuma ve yazma.",
+              "Altı sunucu aynı anda okuyup yazmalı; küçük okumalar düşük gecikmeli olmalı.",
+              "Her küçük okuma yavaşsa bir düzenleme dakikalar sürer."),
+          row("R3", 12, "Bir günün düzenlemeleri kaybolursa o gün yeniden yapılır.",
+              "Bir Availability Zone kaybında çalışma dosyaları kaybolmamalı.",
+              "Kayıp bir gün, tasarım ekibinin bir günü demektir."),
+          row("R4", 20, "Kod altı ay değişemez; program olduğu gibi taşınmalı.",
+              "Program kod değişmeden çalışmalı: aynı yollar, aynı dosya çağrıları, aynı kilitler.",
+              "Kodun yeniden yazılması altı aylık bir projedir ve bütçesi yoktur."),
+          row("R5", 14, "2 TB çalışma kümesi; eski işler nadiren açılır.",
+              "2 TB her ay saklanır: GB-ay fiyatı makul olmalı; nadiren açılan eski işler daha ucuz bir sınıfa geçebilmeli.",
+              "Pahalı bir depo 2 TB'ı her ay pahalı tutar.")],
+    cands=["efs", "s3", "s3x"],
+    scores={
+        "efs": [sc(10, "NFS dosyanın ortasına yazmayı, sonuna eklemeyi ve tek adımda yeniden adlandırmayı verir. Puan kırılmadı."),
+                sc(9, "NFS v4 dosya kilitleri ve close-to-open tutarlılık vardır. 1 puan kırıldı: kilitler advisory'dir; kilidi kontrol etmeyen bir program onu görmez."),
+                sc(10, "Yol, klasör listesi ve klasör yeniden adlandırma vardır. Puan kırılmadı."),
+                sc(10, "Dosya boyutu bu iş yükü için sınır değildir. Puan kırılmadı."),
+                sc(9, "Altı sunucu aynı dosya sistemini paylaşır ve throughput yükle büyür. 1 puan kırıldı: çok sayıda küçük metadata işlemi gecikmeyi büyütür."),
+                sc(10, "Regional EFS birden fazla Availability Zone'da saklar. Puan kırılmadı."),
+                sc(10, "Altı sunucu dosya sistemini mount eder; kod değişmez. Puan kırılmadı."),
+                sc(6, "4 puan kırıldı: 2 TB Standard'da GB-ay 0,36 USD ile ayda yaklaşık 737 USD; lifecycle eski dosyaları Infrequent Access'e (0,0266) taşıyarak bunu azaltır.")],
+        "s3": [sc(2, "8 puan kırıldı: object storage'da nesnenin ortasına yazma, sonuna ekleme ve yeniden adlandırma yoktur; her değişiklik bütün nesnenin yeniden yazılmasıdır (Ö1), yeniden adlandırma kopyala ve sil'dir."),
+               sc(4, "Güçlü tutarlılık ve koşullu yazma (If-Match) vardır (Ö4). 6 puan kırıldı: dosya kilidi yoktur; iki yazıcının yarışını uygulama ETag ile kendisi çözer."),
+               sc(6, "Prefix ile listeleme sıralıdır (Ö2). 4 puan kırıldı: klasör gerçek değildir; klasörü yeniden adlandırmak altındaki her nesneyi kopyalayıp silmektir."),
+               sc(10, "Nesne 50 TB'a kadar olabilir (Ö1). Puan kırılmadı."),
+               sc(8, "Bucket yükle ölçeklenir. 2 puan kırıldı: her küçük okuma ayrı bir HTTP isteğidir; çok sayıda küçük okuma dosya sistemine göre yavaştır."),
+               sc(10, "En az üç Availability Zone. Puan kırılmadı."),
+               sc(2, "8 puan kırıldı: program S3 API'sine yeniden yazılmalıdır; bir mount aracı yerinde yazmayı ve kilidi vermez."),
+               sc(9, "2 TB × 0,0245 USD ayda yaklaşık 50 USD. 1 puan kırıldı: her küçük okuma ve yazma istek başına ödenir.")],
+        "s3x": [sc(5, "Directory bucket'ta nesneye ekleme (write offset) ve tek adımda RenameObject vardır. 5 puan kırıldı: nesnenin ortasına yazma yoktur; katman değişikliği bütün nesnenin yeniden yazılmasıdır."),
+                sc(4, "Güçlü tutarlılık ve koşullu yazma vardır. 6 puan kırıldı: dosya kilidi yoktur."),
+                sc(7, "Directory bucket klasörleri hiyerarşik tutar. 3 puan kırıldı: POSIX izinleri ve yol semantiği yoktur; liste sıralı da değildir."),
+                sc(10, "Dosya boyutu sınır değildir. Puan kırılmadı."),
+                sc(10, "Tek haneli milisaniye gecikme, aynı AZ'deki sunucular için tasarlanmış. Puan kırılmadı."),
+                sc(4, "6 puan kırıldı: veri tek bir Availability Zone'dadır; o AZ'nin kaybında çalışma dosyalarının tek kopyası kaybolabilir."),
+                sc(3, "7 puan kırıldı: program S3 API'sine ya da bir mount aracının sınırlı semantiğine göre değiştirilir; kilit kodda yeniden yazılır."),
+                sc(7, "3 puan kırıldı: 2 TB × 0,118 USD ayda yaklaşık 242 USD; eski işler daha ucuz bir sınıfa geçmez.")],
+    },
+    h2h={
+        "s3": "Object storage (S3) ile kafa kafaya. Bu sayfanın servisi burada net kaybeder ve kaybı engine'den gelir: nesne bir bütündür. Ortasına yazma, sonuna ekleme, "
+              "yeniden adlandırma ve dosya kilidi yoktur (R1 · OY 2, TA 4). Programın her çağrısı değişmek zorundadır (R4 2). "
+              "S3'ün dürüst üstünlükleri burada da geçerlidir: 2 TB ayda yaklaşık 50 USD'dır (R5), veri üç AZ'de durur (R3) ve sınırsız büyür. "
+              "Ama bu iş yükü bir dosya sistemi bekliyor ve kod değişemiyor. "
+              "Hangi koşul değişseydi S3 seçilirdi: program yeniden yazılsaydı ve her işi 'oku, işle, sonucu yeni bir nesne olarak yaz' biçiminde yapsaydı; o zaman S3 daha ucuz ve daha dayanıklı olurdu.",
+        "s3x": "Tek AZ'li object storage (S3 Express One Zone) ile kafa kafaya. S3 Express One Zone S3'ün dosya sistemine en yakın biçimidir: hiyerarşik klasörler, nesneye ekleme ve tek adımda yeniden adlandırma vardır, "
+               "gecikme tek haneli milisaniyedir (R2). Ama nesnenin ortasına yazma ve dosya kilidi yine yoktur (R1 · OY, TA), kod değişir (R4) "
+               "ve çalışma dosyaları tek bir AZ'de durur (R3). Bu yüzden toplamda S3 ile neredeyse eşittir ve EFS'in çok gerisindedir. "
+               "Hangi koşul değişseydi S3 Express One Zone seçilirdi: program yeni yazılsaydı, dosyaları sadece sonuna ekleyip yeniden adlandırsaydı, kilide ihtiyaç duymasaydı ve hız ana şart olsaydı.",
+    },
+    verdict="Karar: EFS {efs}, S3 {s3}, S3 Express One Zone {s3x}. EFS R1'in 42 puanının 40,8'ini alır: yerinde yazma, ekleme, yeniden adlandırma ve dosya kilidi bir dosya sisteminin çekirdeğidir. "
+            "Yine de S3 seçersek artımız: 2 TB ayda yaklaşık 50 USD (Ö1), sınırsız büyüme, üç AZ, sürümler (Ö5). "
+            "Eksimiz: program yeniden yazılır; her katman değişikliği bütün dosyanın yeniden yazılmasıdır; kilidi uygulama ETag ve koşullu yazma (Ö4) ile kendisi kurar. "
+            "Bir koşul değişseydi: program 'oku, işle, yeni nesne yaz' biçiminde yeniden yazılsaydı S3 öne geçerdi."))
+
+# 7 ---------------------------------------------------------------- product videos with lifecycle
+S3_W.append(wusecase("videos", 7,
+    title="Ürün videoları: ilk ay çok izlenir, sonra soğur",
+    key="Key: videos/<ürün id>/<çözünürlük>.mp4. Oynatıcı byte aralıklarıyla okur. Intelligent-Tiering ya da yaşa göre lifecycle; ürün silinince video silinir.",
+    story="Lale Market'te 15.000 ürün videosu var: her biri 30 MB ile 300 MB arası, toplam yaklaşık 1,8 TB; her ay 600 yeni video ekleniyor. "
+          "Bir video ilk 30 gün çok izlenir, 90 günden sonra nadiren açılır. Oynatıcı videoyu baştan sona indirmez; byte aralıklarıyla parça parça okur ve kullanıcı ileri sardığında ortadan başlar. "
+          "Önünde CloudFront vardır; kampanya günlerinde izlenme on katına çıkar. Satıcının videosunun başka kopyası yoktur. "
+          "Bir ürün katalogdan kaldırılınca videosu da silinmeli. Hangi videonun ne zaman soğuyacağı önceden bilinmiyor. Ekip sunucu işletmek istemiyor.",
+    wnote="R1 toplam 42: videonun yaşa göre kendiliğinden ucuzlaması ve silinmesi (YD 14) ve byte aralığıyla okunması (EY 12) bu iş yükünün engine sorularıdır. "
+          "R5 18 ile ikinci: ilk aydan sonra videoların çoğu soğuktur.",
+    rows=[row("VM", 10, "Değer 30 MB ile 300 MB arası bir video dosyasıdır.",
+              "300 MB'a kadar video dosyaları olduğu gibi saklanmalı.",
+              "Dosya bölünerek saklanırsa oynatıcı parçaları kendisi birleştirir."),
+          row("EY", 12, "Oynatıcı videoyu byte aralıklarıyla okur ve ortadan başlayabilir.",
+              "Video key ile bir URL'den, istenen byte aralığı kadar okunmalı; ileri sarmada ortadan başlanabilmeli.",
+              "Aralık okuması yoksa her ileri sarmada bütün dosya iner."),
+          row("YD", 14, "Video ilk ay sıcak, sonra soğuk; ne zaman soğuyacağı bilinmiyor; silinen videonun izi kalmamalı.",
+              "Okunmayan video bir kuralla kendiliğinden başka bir katmana geçmeli ve okununca geri gelmeli; uygulama bir ürünün videosunu silince eski sürümü de bir kuralla temizlenmeli. Katmanlar arasındaki fiyat farkı R5'te sayılır.",
+              "Kural yoksa uygulama her videonun okunma zamanını izler ve taşır; eski sürümler birikir."),
+          row("OY", 6, "Video bir kez yüklenir, değişmez.",
+              "Bir kez yaz, çok kez oku.",
+              "Okuma yolu yazma kilidi beklerse oynatıcı takılır."),
+          row("R2", 14, "Kampanya günlerinde izlenme on katına çıkar.",
+              "CloudFront arkasında kampanya anında on kat okuma karşılanmalı; kapasite planlanmamalı.",
+              "Kaynak tepe anında yavaşlarsa önbellekte olmayan videolar takılır."),
+          row("R3", 14, "Satıcının videosunun başka kopyası yoktur.",
+              "Bir Availability Zone kaybında hiçbir video kaybolmamalı.",
+              "Kaybolan bir video ürün sayfasının boş kalmasıdır."),
+          row("R4", 12, "Ekip sunucu işletmek istemiyor.",
+              "Sunucusuz; CloudFront doğrudan depodan okumalı.",
+              "Bir video sunucu katmanı ekibe nöbet getirir."),
+          row("R5", 18, "1,8 TB'ın çoğu ilk aydan sonra soğuktur.",
+              "1,8 TB saklanır ve her ay 600 video eklenir: soğuk video düşük GB-ay fiyatından ödenmeli; sıcak video için ek ücret küçük olmalı.",
+              "Bütün videolar sıcak fiyattan saklanırsa fatura gereksiz yere katlanır.")],
+    cands=["s3", "efs", "s3x"],
+    scores={
+        "s3": [sc(10, "Nesne 50 TB'a kadar olabilir (Ö1). Puan kırılmadı."),
+               sc(10, "GET isteği Range başlığıyla istenen byte aralığını döndürür (Ö1). Puan kırılmadı."),
+               sc(10, "Intelligent-Tiering okunmayan nesneyi kendiliğinden ucuz katmana taşır ve okununca geri getirir (Ö6); uygulamanın sildiği videonun eski sürümünü lifecycle kuralı temizler (Ö5, Ö6). Puan kırılmadı."),
+               sc(10, "Bir kez yazılır; okumalar kilit beklemez (Ö1). Puan kırılmadı."),
+               sc(10, "Prefix başına saniyede en az 5.500 GET; CloudFront önbelleği kaynağı korur. Puan kırılmadı."),
+               sc(10, "En az üç Availability Zone. Puan kırılmadı."),
+               sc(9, "Sunucusuz. 1 puan kırıldı: CloudFront için origin access control ve bucket policy yazılır."),
+               sc(10, "1,8 TB Standard'da ayda yaklaşık 45 USD'dır; Intelligent-Tiering soğuyan videoları daha ucuz katmana taşır. Puan kırılmadı.")],
+        "efs": [sc(10, "Dosya olduğu gibi saklanır. Puan kırılmadı."),
+                sc(7, "Dosyanın ortasından okumak dosya sisteminin temel işidir. 3 puan kırıldı: dosya bir HTTP URL'si değildir; tarayıcıya ve CloudFront'a bir web sunucusu üzerinden gider."),
+                sc(10, "EFS lifecycle okunmayan dosyayı Infrequent Access ve Archive sınıflarına taşır ve okununca geri getirir; sürüm olmadığı için uygulamanın sildiği dosya hemen gider. Puan kırılmadı."),
+                sc(10, "Bir kez yazılır. Puan kırılmadı."),
+                sc(9, "Elastic throughput yükle büyür. 1 puan kırıldı: her kaynak isteği bir web sunucusundan geçer ve web sunucuları tepe için önceden eklenen sabit kapasitedir (sunucuların işletilmesi R4'te)."),
+                sc(10, "Regional EFS birden fazla AZ'de saklar. Puan kırılmadı."),
+                sc(4, "6 puan kırıldı: EC2 web sunucuları, mount target'lar, yamalar ve sunucu sayısı ekibin işidir."),
+                sc(4, "6 puan kırıldı: sıcak dosyalar GB-ay 0,36 USD'dan ödenir, soğuyanlar Infrequent Access'e geçer; web sunucuları saat başına ödenir.")],
+        "s3x": [sc(10, "Nesne olarak saklanır. Puan kırılmadı."),
+                sc(10, "Byte aralığıyla okuma tek haneli milisaniyededir. Puan kırılmadı."),
+                sc(4, "6 puan kırıldı: directory bucket'ta okunmaya ya da yaşa göre katman geçişi yoktur; sadece yaşa göre süre sonu silmesi vardır."),
+                sc(10, "Bir kez yazılır. Puan kırılmadı."),
+                sc(9, "Yüksek istek hızı için tasarlanmıştır. 1 puan kırıldı: veri tek AZ'dedir; diğer AZ'lerden gelen okumalar AZ'ler arası trafiktir."),
+                sc(4, "6 puan kırıldı: veri tek bir Availability Zone'dadır; o AZ'nin kaybında satıcının tek kopyası kaybolabilir."),
+                sc(9, "Sunucusuz. 1 puan kırıldı: bucket bir AZ'de oluşturulur ve istemciler o AZ'nin Zonal endpoint'ini kullanır."),
+                sc(3, "7 puan kırıldı: 1,8 TB × 0,118 USD ayda yaklaşık 217 USD, Standard'ın yaklaşık 5 katı; soğuyan video ucuzlamaz.")],
+    },
+    h2h={
+        "efs": "Paylaşılan dosya sistemi (EFS) ile kafa kafaya. EFS dosyanın ortasından okumayı doğal olarak yapar ve kendi lifecycle'ıyla okunmayan dosyayı ucuz sınıflara taşır; "
+               "veri birden fazla AZ'dedir (R3 eşit). Ama tarayıcı ve CloudFront bir dosya sistemine doğrudan ulaşamaz: her istek bir web sunucusundan geçer (R1 · EY, R2, R4). "
+               "R1 · YD'de iki aday eşittir: ikisi de okunmayan dosyayı bir kuralla ucuz katmana taşır. Sıcak dosyalar ise EFS'te GB-ay 0,36 USD'dan ödenir (R5). Toplamda fark S3'ün çekirdek özelliklerinden değil, tarayıcıya giden yoldan ve fiyattan gelir. "
+               "Hangi koşul değişseydi EFS seçilirdi: videoları tarayıcılar değil, aynı VPC'deki bir transcode programı yerinde düzenleseydi ve program dosya yolu bekleseydi.",
+        "s3x": "Tek AZ'li object storage (S3 Express One Zone) ile kafa kafaya. S3 Express One Zone byte aralıklarını en hızlı okuyan S3 biçimidir. "
+               "Ama video için hız CloudFront'un önbelleğinden gelir; kaynakta milisaniyeler kazandırmaz. Directory bucket'ta okunmaya ya da yaşa göre katman geçişi yoktur (R1 · YD), "
+               "veri tek bir AZ'dedir ve satıcının tek kopyası için risktir (R3), GB fiyatı Standard'ın yaklaşık beş katıdır (R5). Hızın kendisi doğru bir özelliktir, ama bu iş yükünün darboğazı değildir. "
+               "Hangi koşul değişseydi S3 Express One Zone seçilirdi: videolar aynı AZ'deki bir işleme kümesinin saniyede binlerce kez okuduğu geçici kareler olsaydı ve asıl kopya S3 Standard'da dursaydı.",
+    },
+    verdict="Karar: S3 {s3}, EFS {efs}, S3 Express One Zone {s3x}. S3 R1'in 42 puanının tamamını alır: byte aralığıyla okuma ve okunmayan nesneyi kendiliğinden ucuzlatan sınıf yönetimi S3'ün çekirdeğidir. "
+            "S3 seçtiğimizde artımız: CloudFront doğrudan bucket'tan okur (Ö1), Intelligent-Tiering ne zaman soğuyacağı bilinmeyen videoları kendisi taşır (Ö6), silinen videonun eski sürümünü lifecycle temizler (Ö5). "
+            "Eksimiz: Intelligent-Tiering nesne başına küçük bir izleme ücreti alır; uygulama ürün silinince videoyu silmeyi bir olay işleyicisine bağlamalıdır. "
+            "Bir koşul değişseydi: videoları bir dosya yolu bekleyen bir program düzenleseydi EFS öne geçerdi."))
+
+# 8 ---------------------------------------------------------------- compliance archive (WORM)
+S3_W.append(wusecase("compliance", 8,
+    title="Denetim kayıtlarının değiştirilemez arşivi: yedi yıl, kimse silemez",
+    key="Key: audit/dt=YYYY-MM-DD/<parça>.parquet. Object Lock compliance modu, yedi yıl. İlk yıl Keyspaces'te çevrim içi (Keyspaces sayfası kart 4).",
+    story="Lale Market'in denetim kayıtları ilk yıl Keyspaces'te çevrim içi tutulur ve denetçi \"bu hesabın son 90 günü\" sorusunu orada saniyeler içinde sorar (Keyspaces sayfasının 4. kartı). "
+          "Bir yılı geçen kayıtlar her gece bir Parquet dosyası olarak arşive taşınır: yılda yaklaşık 3 TB, yedi yılda 21 TB. Düzenleyici kurum yedi yıl boyunca kayıtların "
+          "hiç kimse tarafından, yönetici hesabı dahil, silinememesini ve değiştirilememesini istiyor; yedi yıl dolunca silinmeleri gerekiyor. Bir soruşturma açılırsa ilgili günler "
+          "soruşturma bitene kadar silinmemeli. Denetçi yılda yaklaşık on kez bir tarih aralığı ister, bazen içinde bir hesap id'si arar; cevap için 24 saat vardır.",
+    wnote="R1 toplam 40: yedi yıllık saklama, süre sonu silmesi ve soruşturma kilidi (YD 16) ve kimsenin silememesi (TA 10) bu arşivin engine sorularıdır. "
+          "R5 22 ile ikinci: 21 TB yedi yıl ödenir ve nadiren okunur.",
+    rows=[row("YD", 16, "Yedi yıl saklama, sonra silme; soruşturmada süresiz kilit.",
+              "Her dosya yedi yıl saklanmalı ve sonra kendiliğinden silinmeli; soruşturma açılan günler süresi dolsa bile silinmemeli.",
+              "Erken silinen kayıt bir düzenleme ihlali, geç silinen kayıt bir saklama kuralı ihlalidir."),
+          row("TA", 10, "Yönetici dahil hiç kimse kaydı silememeli ya da değiştirememeli.",
+              "Yazılan dosya saklama süresi boyunca hiçbir kullanıcı, yönetici hesabı dahil, tarafından silinememeli ya da üstüne yazılamamalı; kuralı engine uygulamalı.",
+              "Yetkisi olan bir kişinin silebildiği bir arşiv denetimde kanıt sayılmaz."),
+          row("EY", 8, "Denetçi bir tarih aralığı ister, bazen bir hesap id'si arar.",
+              "Bir tarih aralığı doğrudan seçilmeli; o aralıkta bir hesap id'si birkaç dakikada bulunmalı; yılda on soru.",
+              "Tarih aralığı seçilemezse her soru bütün arşivi okur."),
+          row("VM", 6, "Kayıtlar günlük Parquet dosyalarıdır.",
+              "Günlük dosyalar olduğu gibi saklanmalı; içindeki şema yıllar içinde değişebilir.",
+              "Dosya biçimi değişince eski yıllar okunamaz hâle gelir."),
+          row("R2", 8, "Yılda 3 TB yazma, yılda on soru.",
+              "Gece bir dosya yazılmalı; on soru 24 saat içinde cevaplanmalı.",
+              "Arşivin yavaş olması 24 saatlik sürede sorun değildir; yazılamaması sorundur."),
+          row("R3", 16, "Arşiv denetimin tek kanıtıdır.",
+              "Bir Availability Zone kaybında hiçbir dosya kaybolmamalı.",
+              "Kaybolan kayıt denetimde açıklanamayan bir boşluktur."),
+          row("R4", 14, "Ekip Keyspaces ile S3'ü zaten işletiyor; yeni bir sistem istemiyor.",
+              "Arşiv sunucu ve cluster olmadan işletilmeli; kuralın kurulması bir kez yapılmalı.",
+              "Yeni bir arşiv sistemi yedi yıl boyunca işletilecek bir sistem daha demektir."),
+          row("R5", 22, "21 TB yedi yıl boyunca ödenir ve yılda on kez okunur.",
+              "Yedi yılda 21 TB saklanır: GB-ay fiyatı en düşük sınıflardan olmalı; okuma ücreti yılda on soru için kabul edilir.",
+              "Çevrim içi bir database'in fiyatıyla saklanan arşiv yedi yıl boyunca bütçeyi yer.")],
+    cands=["s3", "ks", "aur"],
+    scores={
+        "s3": [sc(10, "Lifecycle süre dolunca siler (Ö6): sürümler açık olduğu için Expiration bir silme işareti koyar, NoncurrentVersionExpiration retention'ı bitmiş sürümü kalıcı siler; legal hold soruşturma boyunca silmeyi durdurur (Ö7). Puan kırılmadı."),
+               sc(10, "Compliance modunda kilitli bir nesne sürümünü root kullanıcı dahil hiç kimse silemez ve üstüne yazamaz; süre kısaltılamaz (Ö7). Puan kırılmadı."),
+               sc(7, "Tarih prefix'i bir aralığı doğrudan seçer (Ö2). 3 puan kırıldı: object storage nesnenin içinde aramaz; hesap id'si için Athena dosyaları tarar."),
+               sc(10, "Parquet dosyaları olduğu gibi saklanır (Ö1). Puan kırılmadı."),
+               sc(10, "Gecelik bir dosya ve yılda on sorgu küçük bir yüktür. Puan kırılmadı."),
+               sc(10, "En az üç Availability Zone, 11 dokuzluk dayanıklılık için tasarlanmış. Puan kırılmadı."),
+               sc(9, "Sunucusuz. 1 puan kırıldı: Object Lock bucket oluşturulurken açılır ve versioning ister; Athena table'ı bir kez kurulur."),
+               sc(10, "Lifecycle dosyaları Glacier Instant Retrieval'a taşır: 21 TB × 0,005 USD ayda yaklaşık 108 USD. Daha ucuz Deep Archive seçilmez, çünkü Athena varsayılan olarak Flexible Retrieval ve Deep Archive'daki nesneleri okumaz; denetçi sorusu geri getirme beklemeden sorulur. Puan kırılmadı.")],
+        "ks": [sc(9, "Row TTL'i yedi yıl sonra siler. 1 puan kırıldı: soruşturma günlerinin row'ları süresi dolmasın diye yeni bir TTL ile yeniden yazılır (değiştirilemezlik R1.2'de sayıldı)."),
+               sc(3, "7 puan kırıldı: yetkisi olan her istemci UPDATE ve DELETE yapabilir; değiştirilemezlik engine'de değil, IAM ve CloudTrail süreciyle korunur."),
+               sc(10, "Partition key gün, clustering column hesap: aralık ve hesap tek sorguda bulunur. Puan kırılmadı."),
+               sc(9, "Kolon şeması tanımlanır. 1 puan kırıldı: kayıt şeması değişince yeni kolonlar eklenir."),
+               sc(10, "Serverless yazma ve okuma. Puan kırılmadı."),
+               sc(10, "Üç AZ'de üç kopya. Puan kırılmadı."),
+               sc(9, "Ekip Keyspaces'i ilk yıl için zaten işletir. 1 puan kırıldı: yedi yıllık ikinci bir table ve kapasite modu ayrıca izlenir."),
+               sc(2, "8 puan kırıldı: 21 TB çevrim içi bir database'in GB-ay fiyatından ödenir; arşiv sınıfı yoktur.")],
+        "aur": [sc(6, "Partition'lar zamanlanmış bir işle yedi yıl sonra düşürülür; iş soruşturma günlerini atlar. 4 puan kırıldı: kendiliğinden süre sonu yoktur; silme zamanlanmış bir iştir ve iş durursa eski kayıtlar kalır (Aurora sayfasının kademesi: partition düşüren iş 4 puan)."),
+                sc(4, "Bir trigger ya da yetki kuralı UPDATE ve DELETE'i engelleyebilir. 6 puan kırıldı: yeterli yetkili bir kullanıcı trigger'ı kapatabilir; değiştirilemezlik süreçle korunur."),
+                sc(10, "Tarih ve hesap üzerinde bir index ile SQL sorgusu. Puan kırılmadı."),
+                sc(8, "Kolon tipleri tanımlanır. 2 puan kırıldı: şema değişikliği bir migration'dır."),
+                sc(7, "3 puan kırıldı: yedi yılda milyarlarca row; table partitioning ve VACUUM bir tasarım işidir."),
+                sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                sc(7, "3 puan kırıldı: arşiv table'ları, partition'lar ve silme işi yedi yıl boyunca ekibin bakımındadır."),
+                sc(2, "8 puan kırıldı: 21 TB database storage'ında ve instance kapasitesiyle ödenir; arşiv sınıfı yoktur.")],
+    },
+    h2h={
+        "ks": "Wide-column (Keyspaces) ile kafa kafaya. Keyspaces bu kayıtların ilk yılında en iyi yerdir: denetçinin \"son 90 gün\" sorusu tek bir partition okumasıdır (Keyspaces sayfası kart 4). "
+              "Arşivde ise eksik engine'den gelir: saklama süresi boyunca silmeyi engelleyen bir kilit yoktur (R1 · TA); soruşturma günleri TTL'leri yenilenerek korunur (R1 · YD, küçük bir iş). "
+              "Yetkili bir istemci UPDATE ve DELETE yapabilir; değiştirilemezliği süreç korur. Yedi yıllık 21 TB çevrim içi fiyattan ödenir (R5). "
+              "Doğru mimari ikisi birliktedir: ilk yıl Keyspaces'te, sonra her gece S3'e ve Object Lock altında yedi yıl. "
+              "Hangi koşul değişseydi Keyspaces seçilirdi: düzenleme WORM istemeseydi ve denetçi yedi yılın tamamında saniyelik hesap sorguları yapsaydı.",
+        "aur": "İlişkisel (Aurora) ile kafa kafaya. Aurora tarih ve hesap sorgusunu bir index ile en rahat cevaplayan adaydır (R1 · EY 10) ve trigger'larla silmeyi zorlaştırabilir. "
+               "Ama yeterli yetkili bir kullanıcı trigger'ı kapatabilir: değiştirilemezlik engine'in değil sürecin garantisidir (R1 · TA). "
+               "TTL yoktur ve silme zamanlanmış bir iştir (R1 · YD), milyarlarca row'luk table yedi yıl bakım ister (R2, R4) ve fatura arşiv sınıfı olmadan ödenir (R5). Aurora'nın bu sistemdeki yeri arşiv değil, siparişlerin kayıt sistemidir. "
+               "Hangi koşul değişseydi Aurora seçilirdi: arşiv birkaç milyon kayıt olsaydı, düzenleme WORM istemeseydi ve kayıtlar başka table'larla JOIN'li raporlarda her gün kullanılsaydı.",
+    },
+    verdict="Karar: S3 {s3}, Keyspaces {ks}, Aurora {aur}. Arşivin özü kimsenin silememesi ve süresi dolunca silinmesidir: S3 R1'de 37,6 alır; Keyspaces 30,8, Aurora 26,4'te kalır. "
+            "S3 seçtiğimizde artımız: compliance modu root kullanıcıya bile silme izni vermez (Ö7), legal hold soruşturmayı korur, lifecycle yedi yıl sonra siler ve arşiv sınıfına taşır (Ö6). "
+            "Eksimiz: dosyanın içinde arama yoktur; uygulama Athena table'ını kurmalı ve soruları tarih prefix'iyle yazmalıdır; compliance modunda yanlış bir süre bile kısaltılamaz, ilk kurulum dikkatle test edilmelidir. "
+            "Doğru mimari ikisi birliktedir: ilk yıl Keyspaces, sonrası S3. Bir koşul değişseydi: düzenleme WORM istemeseydi Keyspaces tek başına yeterdi."))
+
+# 9 ---------------------------------------------------------------- ML training data (S3 Express One Zone wins)
+S3_W.append(wusecase("training", 9, sim="w_training",
+    title="Görsel arama modelinin eğitim verisi: 20 milyon küçük dosya, her epoch'ta yeniden",
+    key="Key: train/<shard>/<görsel id>.jpg. Asıl kopya S3 Standard'da; eğitim kopyası GPU'larla aynı AZ'de. Checkpoint 30 dakikada bir.",
+    story="Lale Market'in ML ekibi her hafta bir görsel arama modelini yeniden eğitiyor: 64 GPU, tek bir Availability Zone'da. Eğitim verisi 20 milyon ürün görselidir, "
+          "ortalama 100 KB, toplam 2 TB. Her epoch bütün dosyaları rastgele sırayla okur ve bir eğitim 10 epoch sürer; tepe anında saniyede yaklaşık 60.000 küçük okuma yapılır. "
+          "GPU'lar beklerse saatlik maliyet boşa gider. Verinin asıl kopyası zaten S3 Standard'dadır; eğitim kopyası kaybolursa oradan yeniden kopyalanır. "
+          "Eğitim 30 dakikada bir 5 GB'lık bir checkpoint yazar ve her dakika bir eğitim günlüğüne satır ekler. Ekip AWS SDK ve PyTorch biliyor; sunucu işletmek istemiyor.",
+    wnote="R1 toplam 36 ve en ağır gruptur; içinde en ağır satır küçük dosyaların ilk byte gecikmesidir (DA 14). R2 22 ile ikinci: saniyede 60.000 okuma GPU'ların beklemeden çalışmasının şartıdır. "
+          "R3 8 ile hafiftir: eğitim kopyasının asıl kopyası S3 Standard'dadır.",
+    rows=[row("DA", 14, "Her epoch 20 milyon küçük dosyayı okur; her okumanın ilk byte gecikmesi GPU'yu bekletir.",
+              "100 KB'lık bir dosyanın ilk byte'ı tek haneli milisaniyelerde gelmeli; rastgele sırada okuma yavaşlamamalı.",
+              "Her okuma onlarca milisaniye sürerse 64 GPU zamanının bir kısmını veri bekleyerek geçirir."),
+          row("EY", 8, "Dosyalar bir listedeki key ile rastgele sırayla okunur.",
+              "Her dosya key'i ile doğrudan okunmalı; liste bir kez çıkarılır.",
+              "Key ile okunamayan bir dosya için arama gerekir."),
+          row("OY", 8, "Okuma ağırlıklı; checkpoint yazılır ve günlüğe her dakika satır eklenir.",
+              "20 milyon dosya okunur; 30 dakikada bir 5 GB checkpoint yazılır; eğitim günlüğüne her dakika bir satır eklenir.",
+              "Günlüğe ekleme yapılamazsa her dakika bütün günlük yeniden yazılır."),
+          row("VM", 6, "Değer 100 KB'lık bir JPEG'dir.",
+              "Küçük binary dosyalar olduğu gibi saklanmalı.",
+              "Dosyalar başka biçime çevrilirse eğitim kodu değişir."),
+          row("R2", 22, "Tepe anında saniyede 60.000 okuma, 64 GPU.",
+              "Saniyede 60.000 okuma (100 KB ile yaklaşık 6 GB/s) ilk dakikadan itibaren karşılanmalı; eğitim başladığında ısınma beklenmemeli.",
+              "Okuma hızı sınıra çarparsa GPU'lar bekler ve eğitim günler uzar."),
+          row("R3", 8, "Eğitim kopyası kaybolursa asıl kopyadan yeniden üretilir.",
+              "Bir arızada eğitim kopyası kaybolabilir ama checkpoint kaybolmamalı; asıl veri S3 Standard'da kalır.",
+              "Kaybolan checkpoint bir eğitim gününün tekrarıdır."),
+          row("R4", 14, "Ekip SDK ve PyTorch biliyor; sunucu istemiyor.",
+              "Sunucusuz; veri hazırlığı bir kopyalama işinden ibaret olmalı.",
+              "Bir dosya sunucusu katmanı ML ekibine altyapı işi verir."),
+          row("R5", 20, "Ayda dört eğitim × 10 epoch × 20 milyon okuma: 800 milyon GET.",
+              "2 TB saklanır ve ayda 800 milyon GET yapılır: istek başına fiyat düşük olmalı; GPU'ların boşta beklediği saat de bir maliyettir.",
+              "Okuma başına yüksek fiyat 800 milyon okumada faturayı büyütür.")],
+    cands=["s3x", "s3", "efs"],
+    scores={
+        "s3x": [sc(10, "Tek haneli milisaniye ilk byte gecikmesi, S3 Standard'dan 10 kata kadar hızlı: AWS bunu directory bucket'ın kendi mimarisine, yüksek performanslı donanımına ve sadeleştirilmiş protokolüne bağlar. Puan kırılmadı."),
+                sc(10, "Key ile doğrudan okuma. Puan kırılmadı."),
+                sc(10, "Checkpoint yeni bir nesnedir; günlüğe nesneye ekleme (write offset) ile satır eklenir. Puan kırılmadı."),
+                sc(10, "Küçük dosyalar olduğu gibi saklanır. Puan kırılmadı."),
+                sc(10, "Directory bucket varsayılan olarak saniyede 200.000 okumaya kadar ölçeklenir; prefix'e göre ısınma yoktur. Puan kırılmadı."),
+                sc(9, "1 puan kırıldı: veri tek AZ'dedir; asıl kopya S3 Standard'da durduğu için kayıp bir yeniden kopyalamadır, checkpoint'ler ayrıca S3 Standard'a kopyalanır."),
+                sc(8, "2 puan kırıldı: S3 Standard'dan bir import ya da kopyalama işi çalıştırılır; istemciler Zonal endpoint'i kullanacak şekilde yapılandırılır."),
+                sc(10, "Storage 2 TB × 0,118 USD yaklaşık 242 USD/ay; 800 milyon GET 1.000'de 0,0000323 USD ile yaklaşık 26 USD; toplam S3 Standard'dan düşüktür ve GPU beklemesi azalır. Puan kırılmadı.")],
+        "s3": [sc(6, "4 puan kırıldı: küçük bir nesnenin ilk byte gecikmesi S3 Express One Zone'un 10 katına kadar çıkabilir; rastgele okumada GPU'lar bekler."),
+               sc(10, "Key ile doğrudan okuma (Ö1). Puan kırılmadı."),
+               sc(8, "Checkpoint yeni bir nesnedir (Ö1). 2 puan kırıldı: nesneye ekleme yoktur; günlük her dakika ya yeniden yazılır ya da dakika başına yeni bir nesne olur."),
+               sc(10, "Küçük dosyalar olduğu gibi saklanır (Ö1). Puan kırılmadı."),
+               sc(8, "2 puan kırıldı: prefix başına saniyede en az 5.500 GET; 60.000 okuma için key'ler en az 11 prefix'e yayılır ve S3 ölçeklenirken 503 SlowDown dönebilir (Ö2)."),
+               sc(10, "Asıl kopya zaten burada, en az üç AZ'de. Puan kırılmadı."),
+               sc(10, "Veri zaten S3 Standard'dadır; ek iş yoktur. Puan kırılmadı."),
+               sc(8, "Storage 2 TB × 0,0245 USD yaklaşık 50 USD/ay. 2 puan kırıldı: 800 milyon GET 10.000'de 0,0043 USD ile yaklaşık 344 USD/ay, toplamı S3 Express One Zone'dan yüksektir.")],
+        "efs": [sc(7, "Dosya sistemi küçük okumalarda düşük gecikmelidir. 3 puan kırıldı: 20 milyon dosyanın her açılışı NFS üzerinden ayrı bir metadata isteğidir."),
+                sc(10, "Yol ile doğrudan okuma. Puan kırılmadı."),
+                sc(10, "Dosyaya ekleme ve yazma doğaldır. Puan kırılmadı."),
+                sc(10, "Küçük dosyalar olduğu gibi saklanır. Puan kırılmadı."),
+                sc(10, "Frankfurt'ta bir dosya sisteminin varsayılan elastic okuma sınırı 60 GiB/s ve sık okunan veride 250.000 okuma IOPS'tur; 6 GB/s ve saniyede 60.000 okuma bunun içindedir. Puan kırılmadı."),
+                sc(10, "Regional EFS birden fazla AZ'de saklar. Puan kırılmadı."),
+                sc(8, "2 puan kırıldı: S3'ten kopyalama işi ve eğitim sunucularında mount target'lar kurulur."),
+                sc(2, "8 puan kırıldı: 2 TB Standard'da ayda yaklaşık 737 USD; elastic throughput okumaları GB başına 0,04 USD ile ayda 80 TB okumada yaklaşık 3.300 USD.")],
+    },
+    h2h={
+        "s3": "Object storage (S3) ile kafa kafaya. S3 Standard bu verinin asıl evidir ve en dayanıklı yeridir (R3); veri zaten orada olduğu için hiçbir iş gerektirmez (R4). "
+              "Ama bu kartta asıl soru küçük dosyaların ilk byte gecikmesidir: S3 Express One Zone aynı AZ'de ve tek haneli milisaniyelerde cevap verir, S3 Standard 10 kata kadar yavaş olabilir (R1 · DA 6). "
+              "Saniyede 60.000 okuma için key'ler prefix'lere yayılmalıdır (R2) ve 800 milyon GET'in fiyatı daha yüksektir (R5). "
+              "Hangi koşul değişseydi S3 Standard seçilirdi: dosyalar büyük olsaydı (örneğin 100 MB'lık shard'lar), okuma sıralı olsaydı ve GPU'lar veriyi önceden belleğe alabilseydi; o zaman gecikme önemini yitirir.",
+        "efs": "Paylaşılan dosya sistemi (EFS) ile kafa kafaya. EFS eğitim kodunun beklediği yolu ve dosyaya eklemeyi doğal olarak verir ve veriyi birden fazla AZ'de tutar. "
+               "Ama 20 milyon küçük dosyanın her açılışı NFS üzerinden bir metadata isteğidir (R1 · DA); okuma hızı varsayılan sınırların içindedir (R2 eşit). "
+               "Asıl fark faturadadır: 2 TB'ın saklaması ve her epoch'ta okunan 2 TB elastic throughput ücretiyle ayda binlerce dolar tutar (R5). Kod tarafında EFS en az değişikliği ister; bu kartta o avantaj fiyatı karşılamaz. "
+               "Hangi koşul değişseydi EFS seçilirdi: eğitim verisi birkaç GB olsaydı, birkaç sunucu aynı dosyaları yerinde güncelleseydi ve kod S3 API'sine hiç dokunamasaydı.",
+    },
+    verdict="Karar: S3 Express One Zone {s3x}, S3 {s3}, EFS {efs}. Kararı küçük dosyaların ilk byte gecikmesi (R1 · DA) ve saniyede 60.000 okuma (R2) verir. "
+            "Yine de S3 Standard'dan okursak artımız: veri zaten oradadır, en az üç AZ'de durur ve hiçbir kopyalama işi yoktur (Ö1). "
+            "Eksimiz: GPU'lar her küçük okumada daha uzun bekler; uygulama key'leri prefix'lere yaymalı, dosyaları büyük shard'lara paketlemeli ya da önceden okumalı (prefetch) ve günlüğü dakika başına yeni nesnelere yazmalıdır. "
+            "Doğru mimari ikisi birliktedir: asıl kopya S3 Standard'da, eğitim kopyası S3 Express One Zone'da, checkpoint'ler S3 Standard'a. "
+            "Bir koşul değişseydi: veri büyük shard dosyalarına paketlenseydi S3 Standard öne geçerdi."))
+
+# 10 --------------------------------------------------------------- file metadata (repeats DynamoDB card 9)
+S3_W.append(wusecase("metadata", 10,
+    title=_S3_D9["title"][1] + ": S3'ün nesne metadata'sı yeter mi?",
+    key=_S3_D9["key"][1] + " Dosyanın kendisi S3'te.",
+    story=_S3_D9["story"][1],
+    wnote=_S3_D9["wnote"][1] + " Bu kart DynamoDB sayfasının 9. kartıyla aynı iş yüküdür ve aynı satırları, ağırlıkları ve DynamoDB ile DocumentDB puanlarını taşır; "
+          "orada üçüncü olan Aurora (77) burada yerini bu sayfanın servisine bırakır.",
+    rows=[row(r["code"], r["w"], _s3x(r["wwhy"][1]), _s3x(r["want"][1]), _s3x(r["why"][1])) for r in _S3_D9["rows"]],
+    cands=["ddb", "doc", "s3"],
+    scores={
+        "ddb": _s3same(_S3_D9, "ddb", [sc(p, _s3x(w[1])) for p, w in _S3_D9["scores"]["ddb"]]),
+        "doc": _s3same(_S3_D9, "doc", [sc(p, _s3x(w[1])) for p, w in _S3_D9["scores"]["doc"]]),
+        "s3": [sc(7, "Key \"kullanıcı/klasör/dosya adı\" olursa ListObjectsV2 Prefix ile bir klasörü sıralı ve 1.000'erlik sayfalarla döndürür (Ö2). 3 puan kırıldı: liste sadece key, boyut ve tarih verir; durum ve tag gibi alanlar her nesne için ayrı bir HEAD ya da tag okumasıdır ve klasörü yeniden adlandırmak her nesneyi kopyalayıp silmektir."),
+               sc(7, "Kullanıcı metadata'sı ve en fazla 10 tag nesneyle birlikte durur (Ö3). 3 puan kırıldı: kullanıcı metadata'sı yaklaşık 2 KB'tır ve sadece metin taşır; türe özel sayılar ve listeler metne çevrilir (değiştirmenin bedeli R1.3'te)."),
+               sc(5, "CopyObject If-Match ile koşullu yapılır (Ö4). 5 puan kırıldı: durum metadata'daysa geçiş nesnenin kopyalanmasıdır; 5 GB'tan büyük dosyada çok parçalı kopya gerekir ve tag güncellemesinin koşulu yoktur."),
+               sc(9, "Olay bildirimleri oluşturma, silme ve tag değişikliklerini verir (Ö8); S3 Metadata journal table'ı değişiklikleri yakın gerçek zamanda tutar. 1 puan kırıldı: olaylar en az bir kez teslim edilir ve bazen bir dakika sürer."),
+               sc(6, "4 puan kırıldı: her liste sayfası ayrı bir HTTP isteğidir ve 5.000 dosyalık bir kullanıcının listesi beş istek ister; 100 ms'nin altında kalması garanti değildir."),
+               sc(10, "Metadata nesneyle birlikte en az üç AZ'de saklanır. Puan kırılmadı."),
+               sc(8, "Sunucusuz ve ekip SDK biliyor. 2 puan kırıldı: arama servisine aktaran bir olay işleyicisi (Lambda) ya da S3 Metadata tablosundan okuyan bir iş kurulur."),
+               sc(2, "8 puan kırıldı: LIST 1.000 istekte 0,0054 USD; mesai saatlerinde saniyede 5.000 liste (günde 10 saat, ayda 22 iş günü) ayda yaklaşık 4 milyar istek ve 21.000 USD'tır, gece trafiği buna eklenir.")],
+    },
+    h2h={
+        "doc": "Document (DocumentDB) ile kafa kafaya. DocumentDB R1'in iki satırında DynamoDB ile eşittir: her dosya kendi alanlarını taşır ve durum geçişi koşullu bir updateOne'dır. "
+               "Sıralı listede öndedir (10'a 9): bileşik index klasör adı değişince key'i yeniden yazmaz. Değişiklik akışında DynamoDB öndedir (10'a 9): change stream'lerin varsayılan saklaması kısadır. "
+               "R1'de DocumentDB 44'e 43,5 öndedir; kararı servis tasarımı verir: arama servisine aktaran tüketiciyi ekip işletir, DynamoDB'de aynı iş OpenSearch'e zero-ETL entegrasyonudur (R4), "
+               "tek primary ve instance boyutlandırması sunucu istemeyen bir ürün ekibine iş bırakır (R2). S3'e karşı DocumentDB'nin üstünlüğü metadata üzerinde esnek, birden çok alanlı sorgulardır; S3 metadata'ya göre hiç sorgulamaz. "
+               "Hangi koşul değişseydi DocumentDB seçilirdi: kullanıcılar metadata üzerinde esnek sorgular yapsaydı (\"son bir ayda yüklediğim 10 MB'tan büyük PDF'ler\") ve bu sorgular ayrı bir arama servisine gerek kalmadan database'te cevaplanmak istenseydi.",
+        "s3": "Object storage (S3) ile kafa kafaya. Dosyanın kendisi zaten S3'te; metadata'yı da nesnenin yanında tutmak tek bir yer gibi görünür. S3 bunun bir kısmını gerçekten yapar: "
+              "key'i \"kullanıcı/klasör/dosya\" olarak kurarsan prefix ile sıralı liste gelir, değişiklikler olay bildirimi ve S3 Metadata ile dışarı akar, veri en az üç AZ'dedir. "
+              "Ama nesne metadata'sı bir kayıt değildir: yükleme anında sabitlenir, değişmesi kopyalamadır (R1 · VM, TA) ve liste alanları getirmez (R1 · EY). "
+              "Asıl kayıp fiyattadır: saniyede 5.000 liste isteği ayda on binlerce dolar tutar (R5). "
+              "Hangi koşul değişseydi S3 seçilirdi: liste günde birkaç yüz kez açılsaydı, metadata yükleme anında belli olup hiç değişmeseydi ve analiz S3 Metadata tablosundan yapılsaydı.",
+    },
+    verdict="Karar: DynamoDB {ddb}, DocumentDB {doc}, S3 {s3}. Dosyanın baytları S3'e, onu anlatan kayıt bir database'e aittir: metadata sık değişir, sıralı listelenir ve saniyede binlerce kez okunur. "
+            "Yine de metadata'yı S3'te tutarsak artımız: tek bir yer, prefix ile sıralı liste (Ö2), olay bildirimiyle dışarı akan değişiklikler (Ö8). "
+            "Eksimiz: durum değişikliği nesnenin kopyalanmasıdır, liste alanları getirmez ve LIST istek başına ödenir; uygulama metadata'yı yükleme anında sabitlemeli ve sık okunan listeyi bir önbellekte tutmalıdır. "
+            "Doğru mimari ikisi birliktedir: dosya S3'te, metadata DynamoDB'de, ikisini aynı key bağlar. Bir koşul değişseydi: liste günde birkaç yüz kez açılsaydı, metadata yüklemeden sonra hiç değişmeseydi ve ayrı bir database istenmeseydi, liste yükü ve durum geçişi satırları düşer ve S3 tek başına yeterdi."))
+
+USECASES_W["s3"] = S3_W
+PAGE_SVC["s3"] = "s3"

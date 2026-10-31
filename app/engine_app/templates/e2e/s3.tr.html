@@ -1,239 +1,1104 @@
 {% extends "e2e/_base.html" %}
 {% import "e2e/_macros.html" as k with context %}
-{# Turkish version of s3.html. Terms stay in English; the explanations are Turkish. Keep both files in step. #}
+{# Turkish S3 page, model 2 (weighted use case cards from e2e_usecases_w.S3_W). Terms stay in English where the category uses them; the explanations are Turkish.
+   The English s3.html is the older model 1 page and stays untouched. #}
 {% block body %}
 
-<h2 id="goal" data-short="Ne öğreneceksin"><span class="sec">00</span>Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
-<p>Bölüm 01 mimarın kararını verir: Amazon S3 nereye oturur, nereye oturmaz. Sonra tutorial iki bölümden oluşur.
-   Bölüm 1, object storage'ı öğretir: bucket'lar, key'ler ve object'ler, prefix'ler, metadata, version'lar ve imzalı URL'ler. Bölüm 2, AWS servisini ve Lale Market'in onu nasıl kullandığını gösterir.</p>
-<p>Örnekler Lale Market'in ürün görsellerinden ve satıcı panelinden gelir. Bazen başka bir örnek bir fikri daha kolay gösterir. O zaman tutorial onu kullanır: bir vestiyer fişi, bir kargo dolabı, tarihli kopyaları olan bir fotoğraf albümü.</p>
+<h2 id="goal" data-short="Ne öğreneceksin" data-group="Başlarken">Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
+<p>Bu sayfa genel fikirden AWS servisine dört adımda gider:</p>
+<ol>
+  <li><b>Bölüm A, Temel.</b> Object storage nedir: bir dosyanın bir isim altında bütün olarak saklanması, isimlerin nasıl gruplandığı ve listelendiği, verinin makinelere nasıl dağıldığı, okuma ve yazma yolları, eski hâllerin tutulması, verinin yaşlanması ve silinmesi, bir yüklemenin başka bir programı haber etmesi. Her kavram bütün durumlarıyla bir tabloda verilir ve bölüm dokuz özelliğin (Ö1–Ö9) listesi ve MinIO / Google Cloud Storage / S3 matrisiyle biter.</li>
+  <li><b>Mimar gözüyle.</b> Object storage ne zaman doğru seçimdir, ne zaman değildir: on use case, her birinde ağırlıklı bir puan tablosu, en uygun servis en üstte, S3'ün kazandığı ve kaybettiği yerler, iki alternatifin aynı gereksinimlere cevabı ve yine de S3 seçersek artı ve eksilerimiz. Sonra AWS'teki dosya ve nesne depoları ve S3'ün içindeki seçenekler. Beş karar simülasyonu.</li>
+  <li><b>Bölüm B, İleri.</b> Pratikte Amazon S3: canlı bir nesne, GetObject, ListObjectsV2, imzalı URL'ler, koşullu yazma, sürümler, depolama sınıfları, Object Lock, olay bildirimleri, S3 Express One Zone, S3 Tables, maliyet.</li>
+  <li><b>Bölüm C, AWS servisi.</b> Bir dosya deposunu kendin çalıştırdığında ne yapman gerekir ve S3 senin için neyi yapar; Lale Market'teki gerçek depo.</li>
+</ol>
+<p>Örnekler Lale Market'in ürün görsellerinden, satıcı yüklemelerinden, log'larından ve yedeklerinden gelir. Başka bir örnek bir fikri daha kolay gösteriyorsa tutorial onu kullanır: bir vestiyer, bir kargo dolabı, tarihli kopyaları olan bir fotoğraf albümü.</p>
 <p>Bu tutorial'ın sonunda şunları yapabilirsin:</p>
 <ol>
-  <li>Hangi veri için object storage'ın doğru seçim olduğunu ve neden bir database'in olmadığını söylemek.</li>
-  <li>Bir bucket'ı, bir key'i, bir object'i ve onun metadata'sını açıklamak.</li>
-  <li>Prefix'leri ve S3'ün neden gerçek klasörleri olmadığını açıklamak.</li>
-  <li>Versioning'in bir yüklemede ve bir silmede ne yaptığını açıklamak.</li>
-  <li>Bir presigned URL'nin bir tarayıcıya private bir object'e nasıl kısa süreli erişim verdiğini açıklamak.</li>
-  <li>Bir veri türü için bir storage class ve bir lifecycle kuralı seçmek.</li>
+  <li>Bir veri parçasının bir dosya deposuna mı, bir dosya sistemine mi, bir database'e mi ait olduğunu söylemek ve nedenini açıklamak.</li>
+  <li>Bir uygulamanın sorularından isimlendirme kuralı tasarlamak ve bir listelemenin ne kadar okuyacağını tahmin etmek.</li>
+  <li>Aynı dosyaya aynı anda yazan iki isteği bir koşulla korumak ve silinen bir dosyayı geri getirmek.</li>
+  <li>Bir dosya türü için saklama sınıfı, yaşlanma kuralı ve gerekiyorsa silinemezlik kuralı seçmek.</li>
+  <li>S3, S3 Express One Zone, EFS ve bir database arasında bir iş yükü için seçim yapmak ve seçimi yakın bir yarışta savunmak.</li>
 </ol>
 <p>Dört tür kutu sana yardım eder. <b>Simülasyon</b>: Oynat'a ya da Sonraki adım'a bas. <b>Önce tahmin et</b>: cevabı açmadan önce kendi cevabını yaz.
    <b>Checkpoint</b>: tek doğru cevabı olan bir soru. <b>Analoji</b>: günlük hayattan bir resim.</p>
 
-<h2 id="architect" data-short="Mimar gözüyle: ne zaman"><span class="sec">01</span>Mimar gözüyle: S3 nereye oturur</h2>
-<p><b>Önce bu bölümü oku.</b> Kararı bu bölüm verir. Sonraki bölümler object storage'ın nasıl çalıştığını öğretir.</p>
-<p><b>Kısaca:</b> Amazon S3 her türden ve her boyuttan dosyayı object olarak saklar. Tam bir object'i tek bir istekle yazar ve onu key'i ile geri okursun.
-   S3 veriyi birkaç Availability Zone'da tutar, object sayısında sınır olmadan ölçeklenir ve bir tarayıcının bir object'i doğrudan indirmesine izin verir. Görsellerin, dokümanların, yedeklerin, log'ların ve data lake'lerin yeridir.
-   Bir database değildir: bir object'in bir kısmını değiştirmez ve içerik üzerinde query'si yoktur.</p>
-<p>Anahtar fikir {{ k.term("object") }}'tir: bir dosyanın byte'ları artı metadata, bir bucket'ta bir key altında saklanır. Tek bir istek bütün object'i yazar ya da okur.</p>
+<div class="part"><b>Bölüm A</b><h2 id="partA" data-short="Bölüm A: Temel">Temel: object storage fikri, bütün durumlarıyla</h2>
+<p>Bir dosyayı bir isim altında bütün olarak saklayan bir deponun her boyutta nasıl büyüdüğü ve bunun karşılığında nelerden vazgeçtiği. Bu bölüm her kavramı önce tanımlar, sonra o kavramın <b>bütün durumlarını</b> bir tabloda gösterir. Fikirler her object storage ürününde aynıdır; isimler kategorinin standart isimleridir ve sayfanın sonuna kadar değişmez.</p></div>
 
-<h3>Bir iş yükünde S3'ü işaret eden sinyaller</h3>
-<table class="data">
-  <thead><tr><th>Sinyal</th><th>Gerçek bir projede nasıl görünür</th><th>Onu cevaplayan özellik</th></tr></thead>
-  <tbody>
-    <tr><td>Kayıtlar değil, dosyalar</td><td>Görseller, PDF'ler, videolar, export'lar, model dosyaları.</td><td>50 TB'a kadar object'ler (Aralık 2025'ten beri; önceki sınır 5 TB) (bölüm 03)</td></tr>
-    <tr><td>Bir kez yaz, çok kez oku</td><td>Binlerce ziyaretçinin gördüğü bir ürün fotoğrafı.</td><td>Bütün object PUT ve GET, önünde bir CDN</td></tr>
-    <tr><td>Kullanıcılar doğrudan indirir</td><td>Bir tarayıcı bir görseli gösterir ya da bir faturayı indirir.</td><td>Presigned URL'ler, CloudFront (bölüm 06)</td></tr>
-    <tr><td>Veri hatalardan sağ çıkmalı</td><td>Bir satıcı doğru görselin üstüne yanlış bir görsel yükler.</td><td>Versioning (bölüm 05)</td></tr>
-    <tr><td>Veri yaşlandıkça soğur</td><td>90 günden sonra kimsenin okumadığı log'lar.</td><td>Storage class'lar ve lifecycle kuralları (bölüm 07)</td></tr>
-    <tr><td>Analitik için çok büyük veri setleri</td><td>Parquet dosyalarında yıllarca event.</td><td>Athena'nın ve Redshift'in sorgulayabildiği bir data lake</td></tr>
-  </tbody>
-</table>
-
-<h3>Use case'ler, nedeni ve özelliğiyle</h3>
-<table class="data">
-  <thead><tr><th>Use case</th><th>Veri</th><th>Neden object storage</th><th>İşi yapan özellik</th></tr></thead>
-  <tbody>
-    <tr><td>Ürün görselleri (Lale Market)</td><td>Ürün başına metadata'lı bir JPEG.</td><td>Çok okuyucu, az yazma.</td><td>products/&lt;id&gt;.jpg key'i, Content-Type, x-amz-meta-*</td></tr>
-    <tr><td>Satıcı yüklemeleri (Lale Market)</td><td>Satıcı panelinden gelen dosyalar.</td><td>Her dosya türü, eski version'lar korunur.</td><td>Ziyaretçi başına key prefix'i, versioning</td></tr>
-    <tr><td>Statik web siteleri ve uygulama varlıkları</td><td>HTML, CSS, JavaScript, font'lar.</td><td>Tarayıcılara, çoğunlukla bir CDN üzerinden sunulur.</td><td>Origin olarak S3 ile CloudFront</td></tr>
-    <tr><td>Yedekler ve arşivler</td><td>Database dump'ları, snapshot'lar, yasal kayıtlar.</td><td>Nadiren okunan veri için kalıcı ve ucuz.</td><td>Glacier storage class'ları, Object Lock</td></tr>
-    <tr><td>Data lake</td><td>Parquet ya da CSV olarak event'ler, export'lar ve log'lar.</td><td>Birçok engine'in okuyabildiği tek bir depo.</td><td>Athena, Redshift Spectrum, AWS Glue</td></tr>
-    <tr><td>Medya işleme</td><td>Yüklenen videolar ve dönüştürülmüş kopyaları.</td><td>Bir yükleme bir job başlatır, sonuç yeni bir object'tir.</td><td>Lambda'ya ya da SQS'e event notification'lar</td></tr>
-    <tr><td>Log saklama</td><td>Load balancer'ların ve CloudFront'un erişim log'ları.</td><td>Her gün büyür, haftalar sonra soğur.</td><td>Daha ucuz class'lara lifecycle kuralları</td></tr>
-    <tr><td>Machine learning verisi</td><td>Eğitim görselleri, model dosyaları.</td><td>Birçok worker'ın paralel okuduğu büyük dosyalar.</td><td>Yüksek paralel throughput</td></tr>
-  </tbody>
-</table>
-{{ k.fig("s3-object-storage-model.png", "genel bir object store. Bir uygulama bir API çağırır. Metadata node'ları object metadata'sını, storage node'ları veriyi tutar.") }}
-
-<h3>S3'ten uzaklaştıran sinyaller</h3>
-<table class="data">
-  <thead><tr><th>İş yükündeki sinyal</th><th>S3 neden zayıf bir seçim</th><th>Daha iyi seçim</th></tr></thead>
-  <tbody>
-    <tr><td>Bir kaydın tek bir field'ını değiştirmek</td><td>Bir PUT bütün object'i değiştirir.</td><td><a href="/e2etutorial/dynamodb">DynamoDB</a>, <a href="/e2etutorial/aurora">Aurora</a></td></tr>
-    <tr><td>İçerik üzerinde query'ler: "500 TL altındaki ürünler"</td><td>S3 object'leri içeriğe göre değil, key'e göre bulur.</td><td><a href="/e2etutorial/docdb">DocumentDB</a>, <a href="/e2etutorial/opensearch">OpenSearch</a></td></tr>
-    <tr><td>Tek bir birim olarak birkaç değişiklik</td><td>Object'ler arası transaction yok.</td><td><a href="/e2etutorial/aurora">Aurora</a></td></tr>
-    <tr><td>Bir milisaniyenin altında cevaplar</td><td>Her istek HTTPS üzerinden bölgesel bir servise gider.</td><td><a href="/e2etutorial/elasticache">ElastiCache</a></td></tr>
-    <tr><td>Dosya kilitli paylaşılan bir dosya sistemi</td><td>POSIX dosya sistemi semantiği yok.</td><td>Amazon EFS, Amazon FSx</td></tr>
-  </tbody>
-</table>
-
-<h3>Bir mimarın sorduğu sorular, bu sırayla</h3>
-<ol>
-  <li><b>Bir dosya mı, bir kayıt mı?</b> Dosyalar S3'e gider. Dosyayı tanımlayan kayıt (sahip, fiyat, durum) bir database'de kalır ve key'i saklar.</li>
-  <li><b>Onu kim, nasıl okuyor?</b> Private bir bucket ve presigned URL'ler ya da önünde bir CDN. Asla kazara public bir bucket değil.</li>
-  <li><b>Bir yazma bir hata olabilir mi?</b> O zaman versioning'i ve eski version'lar için bir lifecycle kuralını aç.</li>
-  <li><b>Bir ay sonra, bir yıl sonra ne sıklıkla okunuyor?</b> Bu storage class'ı ve lifecycle kurallarını seçer.</li>
-  <li><b>Key'ler nasıl görünüyor?</b> Listelemek istediğin parçaları key'in başına koy: <code>uploads/&lt;visitor&gt;/</code>.</li>
-  <li><b>Bir yüklemeden sonra bir şey olmalı mı?</b> O zaman sonraki adımı başlatmak için event notification'lar kullan.</li>
-</ol>
-
-<h3>AWS'te S3 ve akrabaları</h3>
-<table class="data">
-  <thead><tr><th>Seçenek</th><th>Nedir</th><th>Ne zaman seç</th></tr></thead>
-  <tbody>
-    <tr><td>Amazon S3 general purpose bucket</td><td>Bir Region'da object storage, veri birkaç Availability Zone'da.</td><td>Çoğu dosya. Lale Market bir bucket kullanır.</td></tr>
-    <tr><td>S3 Glacier storage class'ları</td><td>Arşiv verisi için S3 class'ları; daha düşük fiyat, daha yavaş ya da ücretli geri getirme.</td><td>Yıllarca tuttuğun yedekler ve kayıtlar.</td></tr>
-    <tr><td>Amazon EFS</td><td>Paylaşılan bir NFS dosya sistemi.</td><td>Birçok sunucunun dosya sistemi semantiğiyle aynı dosyalara ihtiyacı var.</td></tr>
-    <tr><td>Amazon EBS</td><td>Tek bir EC2 instance'ı için bir blok disk.</td><td>Bir sunucunun ya da kendi yönettiğin bir database'in diski.</td></tr>
-  </tbody>
-</table>
-
-<h3>Lale Market'te S3'ün yeri</h3>
-<p>Private bir bucket iki prefix tutar. <code>products/</code> her ürün için bir görsel tutar. Key'i ürün id'sidir, bu yüzden katalog onu bulmak için ek bir kolona ihtiyaç duymaz. <code>uploads/</code> ziyaretçilerin satıcı panelinde yüklediği dosyaları tutar.
-   Ürün sayfaları görselleri S3 Engine App üzerinden yükler ve satıcı paneli bir presigned URL de verebilir. Versioning açıktır ve bir lifecycle kuralı eski version'ları bir gün sonra siler.</p>
-
-<h3>Simülasyon: gereksinimler seçsin</h3>
-{{ k.sim("decide_images", "İş yükü 1: görseller ve satıcı dosyaları") }}
-{{ k.sim("decide_stock", "İş yükü 2: stok sayısı") }}
-
-{{ k.quiz("s3-a1", "Bir hastane 30 ile 300 MB arası röntgen görüntülerini on yıl tutmak istiyor. Doktorlar son ayın görüntülerini sık, eskileri nadiren açıyor. En iyi ne oturur?",
-   ["Bir arşiv storage class'ına lifecycle kuralı olan S3", "Görüntü başına bir item ile DynamoDB", "Görüntü başına bir key ile ElastiCache", "bytea kolonlu Aurora"],
-   0, "Büyük dosyalar, uzun yıllar ve yaşla azalan okumalar, storage class'ları ve lifecycle kurallarıyla S3'e uyar. Hastanın kaydı bir database'de kalır ve key'i saklar.") }}
-{{ k.quiz("s3-a2", "Bir ekip alışveriş sepetini S3'te bir JSON object'i olarak tutuyor ve her tıklamada bir miktarı değiştiriyor. Sorun nedir?",
-   ["S3 JSON saklayamaz", "Her değişiklik bütün object'i değiştirir ve koşullu field güncellemeleri ya da transaction'lar yoktur", "S3 object'leri bir saat sonra siler", "S3 object'leri uygulama tarafından okunamaz"],
-   1, "Bir sepet küçük parçaları sık değiştirir ve bir değişikliği kaybetmemelidir. Bu DynamoDB gibi bir database'in işidir.") }}
-
-<div class="part"><b>Bölüm 1</b><h2 id="part1" data-short="BÖLÜM 1: Object storage">Object storage: bucket'lar, key'ler ve object'ler</h2>
-<p>Key'ler ve prefix'ler, metadata, version'lar ve imzalı URL'ler.</p></div>
-
-<h2 id="why" data-short="Neden object storage?"><span class="sec">02</span>Neden object storage? Vestiyer</h2>
-<p>Bir dosya sisteminin klasörleri vardır ve bir program bir dosyayı açıp 1.000. byte'ı değiştirip kapatabilir. Bir blok disk daha da alt seviyededir: tek bir sunucu için numaralı bloklar saklar.
-   Object storage daha basittir. Tam bir object'i bir isim altına koyan bir işlemi ve onu geri alan bir işlemi vardır. Herhangi bir sayıda object'e büyüyebilmesinin ve aynı anda birçok okuyucuya hizmet edebilmesinin nedeni bu basit modeldir.</p>
+<h2 id="why" data-short="Neden object storage?"><span class="sec">A1</span>Neden object storage? Vestiyer</h2>
+<p>Bir tiyatronun vestiyerinde paltonu verirsin ve numaralı bir fiş alırsın. Rafı sen seçmezsin; palto asılıyken bir düğmesini de değiştiremezsin. Gösteri bitince fişi verirsin ve paltonun tamamını geri alırsın.
+   Görevli paltonun cebinde ne olduğunu bilmez; bilmesi de gerekmez. Bu yüzden vestiyer binlerce paltoyu aynı hızla alıp verir ve yer bitince yeni bir oda açar.</p>
 {% call k.callout("analogy", "Analoji") %}
-<p>Bir vestiyerde paltonu verirsin ve numaralı bir fiş alırsın. Rafı sen seçmezsin ve palto orada asılıyken bir düğmesini değiştiremezsin. Fişi gösterirsin ve bütün paltoyu geri alırsın.
-   S3 vestiyerdir, key fiştir, object de paltodur.</p>
+<p>Fiş bir isimdir, palto bir dosyadır. Bir object storage bir vestiyerdir: dosyayı bütün olarak alır, bir isimle geri verir ve dosyanın içine bakmaz.
+   Bir dosya sistemi ise kendi dolabındır: çekmeceyi açar, bir gömleği değiştirir, kapatırsın. A2 bu farkı adlarıyla tanımlar.</p>
+{% endcall %}
+<p>Veriyi saklamanın üç yaygın biçimi vardır. Bir <b>blok disk</b> tek bir sunucuya numaralı bloklar verir; üzerinde bir dosya sistemi kurulur. Bir <b>dosya sistemi</b> klasörler ve dosyalar verir; bir program dosyayı açar, 1.000. byte'ı değiştirir, sonuna ekler, yeniden adlandırır, kilitler. Bir <b>database</b> kayıtların içini bilir ve onlar üzerinde soru sorar. Object storage dördüncü bir takas yapar: daha az işlem verir, karşılığında her ölçekte ve doğrudan HTTP üzerinden çalışır.</p>
+<table class="data">
+  <caption>takas: object storage neyi verir, neyi alır</caption>
+  <thead><tr><th>Object storage'ın verdiği</th><th>Karşılığında aldığı</th><th>Bu sayfada nerede</th></tr></thead>
+  <tbody>
+    <tr><td>Her türden ve her boyuttan dosya, sayı sınırı olmadan</td><td>Dosyanın bir parçası yerinde değiştirilemez: her değişiklik bütün dosyanın yeniden yazılmasıdır</td><td>A2, A6</td></tr>
+    <tr><td>Her dosya bir HTTP adresidir; tarayıcı ve başka programlar doğrudan okur</td><td>Dosya sistemi çağrıları yoktur: yeniden adlandırma, kilit, sonuna ekleme</td><td>A5, A6, M3</td></tr>
+    <tr><td>Veri birçok makineye ve birkaç veri merkezine kendiliğinden dağılır</td><td>Dosyanın içinde arama ve birkaç dosya üzerinde transaction yoktur</td><td>A4, A5</td></tr>
+    <tr><td>Eski hâller, yaşlanma kuralları ve silinemezlik deponun kendisindedir</td><td>Kurallar zaman olarak kesin değildir; arka planda çalışırlar</td><td>A7, A8</td></tr>
+  </tbody>
+</table>
+<p>Hangi veri nereye gider? Aşağıdaki tablo bütün durumları listeler. Kural basittir: <b>dosya</b> object storage'a, <b>dosyayı anlatan kayıt</b> bir database'e gider.</p>
+<table class="data">
+  <caption>bütün durumlar: bir veri parçası nereye aittir</caption>
+  <thead><tr><th>Durum</th><th>Doğru yer</th><th>Neden</th><th>Lale Market'ten örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Bir kez yazılan, çok kez okunan bütün bir dosya</td><td>Object storage</td><td>Dosya bütün olarak yazılır ve okunur; sayı ve boyut sınırı yoktur</td><td>Ürün fotoğrafı</td></tr>
+    <tr><td>Büyük bir dosyanın bir parçasını okumak</td><td>Object storage</td><td>Byte aralığıyla okuma vardır (A5)</td><td>Bir videonun ortasından başlamak</td></tr>
+    <tr><td>Alanları sık değişen bir kayıt</td><td>Database</td><td>Object storage bir alanı yerinde değiştiremez</td><td>Sepet satırının adedi, ürünün fiyatı</td></tr>
+    <tr><td>Key ile saniyede binlerce kez okunan küçük değerler</td><td>Key-value database</td><td>Her nesne okuması bir HTTP isteğidir ve istek başına ödenir</td><td>Oturumlar, sayaçlar</td></tr>
+    <tr><td>Dosyaların içinde metin araması</td><td><b>Object storage tek başına yapamaz</b></td><td>Depo dosyanın içine bakmaz; bir arama motoru ya da bir sorgu motoru gerekir</td><td>Log'larda bir hata mesajı</td></tr>
+    <tr><td>Dosyanın ortasını değiştiren, kilitleyen bir program</td><td>Dosya sistemi</td><td>Yerinde yazma ve dosya kilidi dosya sisteminin işidir</td><td>Eski bir görsel düzenleme programı (M2 kart 6)</td></tr>
+  </tbody>
+</table>
+{{ k.fig("s3-object-storage-model.png", "genel bir object storage. Uygulama tek bir API çağırır. Solda bir katman her nesnenin adını ve onu anlatan bilgileri tutar, sağda storage düğümleri nesnenin byte'larını tutar. Aynı nesne A iki bilgi düğümünde ve iki storage düğümünde durur: bir düğüm kaybolsa da nesne okunur. Kesikli çizgi iki katmanın kendi aralarında konuştuğunu gösterir. A4 bu ayrımı ve kopyaları anlatır.") }}
+{% call k.ask("Object storage bir dosya sistemi değil mi? Bilgisayarımda da dosyalar var.") %}
+<p>İkisi de dosya saklar ama işlemleri farklıdır. Dosya sisteminde bir program dosyayı açar, ortasına yazar, kapatır, yeniden adlandırır, kilitler. Object storage'da sadece iki temel işlem vardır: bütün dosyayı bir isimle koy ve bütün dosyayı (ya da bir byte aralığını) o isimle al. Bu azlık, deponun milyarlarca dosyaya ve aynı anda binlerce okuyucuya büyümesinin nedenidir.</p>
+{% endcall %}
+{% call k.ask("O zaman neden her şeyi bir database'e koymuyoruz?") %}
+<p>Database'ler kayıtlar için tasarlanır: küçük, alanlı, sık değişen değerler. 5 MB'lık bir fotoğraf ya da 2 GB'lık bir video bir database'in table'ını, yedeğini ve kopyalarını büyütür; her okuma bir sunucunun belleğinden ve ağından geçer. Kuralı yukarıdaki tabloda gördün: dosya object storage'a, dosyanın adı ve iş verisi database'e.</p>
+{% endcall %}
+{{ k.quiz("s3-q0", "Hangisi object storage için en doğal iş yüküdür?",
+   ["Her tıklamada adedi değişen sepet satırları", "Satıcıların yüklediği ve binlerce ziyaretçinin gördüğü ürün fotoğrafları", "Saniyede 10.000 kez artan bir sayaç", "Dosyanın ortasını yerinde düzenleyen bir program"],
+   1, "Fotoğraf bir kez yazılır ve bütün olarak çok kez okunur. Diğer üçü bir alanın ya da bir byte aralığının yerinde değişmesini ister: database ya da dosya sistemi.") }}
+
+<h2 id="model" data-short="Nesne, bucket, key"><span class="sec">A2</span>Nesne, bucket ve key: bir dosyanın adresi ve içeriği</h2>
+<p>Object storage'ın temel birimi bir dosyadır, ama depo onu dosya olarak değil, bir isim altında saklanan bir byte dizisi olarak görür. Bu birimin, onu tutan kabın ve ismin standart adları vardır.</p>
+{{ k.concept("Nesne (object)",
+   "Object storage'ın sakladığı birim: bir dosyanın <b>byte'ları</b> ve o dosyayı anlatan <b>metadata</b>. Depo byte'ların içine bakmaz; bir fotoğraf, bir PDF ya da bir log dosyası onun için aynıdır. Bir nesne her zaman bütün olarak yazılır; boyutu 0 byte'tan çok büyük dosyalara kadar çıkabilir.",
+   "<code>products/P0001.jpg</code> adlı nesne 49.156 byte'lık bir JPEG'dir. Metadata'sında türü (<code>image/jpeg</code>), ürün adı ve görselin lisansı vardır.",
+   "Vestiyerdeki palto: içinde ne olduğu görevliyi ilgilendirmez, bütün olarak asılır ve bütün olarak geri verilir.") }}
+{{ k.concept("Bucket ve key",
+   "Nesneler bir kapta durur: <dfn>bucket</dfn>, benzersiz bir adı olan nesne kabı. Bir nesnenin bucket içindeki tam adı <dfn>key</dfn>'dir: bir metin, örneğin <code>products/P0001.jpg</code>. Bucket adı ve key birlikte bir nesnenin <b>adresidir</b>: aynı bucket'ta iki nesne aynı key'e sahip olamaz. Key'deki slash sıradan bir karakterdir; depo onu bir klasör olarak görmez (A3).",
+   "Bucket <code>dbws-images-179330777878-eu-central-1</code>, key <code>products/P0001.jpg</code>. Aynı key başka bir bucket'ta başka bir nesnedir.",
+   "Bir kargo dolabının adresi: dolap numarası (bucket) ve göz numarası (key). İkisi birlikte tam olarak tek bir gözü gösterir.") }}
+{{ k.concept("Metadata",
+   "Nesneyle birlikte saklanan, nesneyi anlatan isim ve değer çiftleri. İki türü vardır: <b>sistem metadata'sı</b> (boyut, tür, son değişiklik zamanı, içerik özeti) depo tarafından tutulur; <b>kullanıcı metadata'sı</b> yazarken senin eklediğin kısa metinlerdir. Ayrıca sonradan değiştirilebilen birkaç <b>tag</b> eklenebilir. Metadata nesneyle birlikte yazılır; nesnenin içine göre arama yapmaz.",
+   "<code>Content-Type: image/jpeg</code> sistem metadata'sıdır. <code>name: Alpen Kablosuz Kulaklik 1</code> ve <code>license: CC BY 4.0</code> kullanıcı metadata'sıdır.",
+   "Paltonun fişine yazılan not: \"kırmızı atkı var\". Not paltoyla birlikte durur, ama görevli notlara göre arama yapmaz.") }}
+<p>Bir nesneyi üç parçasıyla çizelim. Renkler bütün sayfada aynı kalır: bucket için <b>sarı</b>, key için <b>mavi</b>, byte'lar ve metadata için <b>gri</b>.</p>
+{{ k.anatomy([
+   {"pk": "dbws-images-…", "sk": "products/P0001.jpg", "attrs": [["byte'lar", "49.156 B JPEG"], ["Content-Type", "image/jpeg"], ["name", "Alpen Kablosuz Kulaklik 1"], ["license", "CC BY 4.0"]]},
+   {"pk": "dbws-images-…", "sk": "products/P0002.jpg", "attrs": [["byte'lar", "41.333 B JPEG"], ["Content-Type", "image/jpeg"], ["name", "…"]]},
+   {"pk": "dbws-images-…", "sk": "uploads/v-7f3a/invoice.pdf", "attrs": [["byte'lar", "88.120 B PDF"], ["Content-Type", "application/pdf"], ["product-id", "P0001"]]},
+   {"pk": "dbws-images-…", "sk": "logs/2026/10/30/web-01.json.gz", "attrs": [["byte'lar", "5 MB gzip"], ["Content-Type", "application/gzip"]]}],
+   "Lale Market bucket'ında dört nesne. Bucket ve key birlikte adresi verir; byte'lar ve metadata nesnenin içeriğidir. Görsel, PDF ve log dosyası aynı bucket'ta durur ve farklı metadata taşır: depo içeriğin türünü umursamaz.",
+   pk_name="bucket", sk_name="key",
+   labels={"primary": "Nesnenin adresi", "pk": "Bucket", "sk": "Key", "attrs": "Byte'lar ve metadata", "note": "metadata nesneden nesneye farklı olabilir", "items": "Nesneler"}) }}
+<p>Şemayı satır satır oku:</p>
+<ul>
+  <li>Dört satırın bucket'ı aynıdır. Bucket bir kaptır; erişim kuralları, şifreleme ve yaşlanma kuralları gibi ayarlar bucket'a bağlanır.</li>
+  <li>Key'ler farklıdır ve her biri tam olarak tek bir nesneyi adlandırır. <code>products/P0001.jpg</code> ile <code>products/P0002.jpg</code> iki ayrı nesnedir.</li>
+  <li>Üçüncü satır bir PDF'tir ve metadata'sında <code>product-id</code> vardır; ilk satırda yoktur. Kullanıcı metadata'sı nesneden nesneye farklı olabilir.</li>
+  <li>Dördüncü satır sıkıştırılmış bir log dosyasıdır. Depo onun JSON satırlarını görmez; sadece 5 MB'lık bir byte dizisi görür.</li>
+</ul>
+<table class="data">
+  <caption>bütün durumlar: bir nesnenin içeriği</caption>
+  <thead><tr><th>Durum</th><th>Depo ne yapar</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Herhangi bir türden dosya</td><td>Kabul eder; byte'ların anlamını bilmez</td><td>JPEG, PDF, Parquet, gzip, bir veritabanı yedeği</td></tr>
+    <tr><td>Boş bir nesne (0 byte)</td><td>Kabul eder; sadece metadata'sı vardır</td><td>Bir işin bittiğini gösteren <code>_SUCCESS</code> işareti</td></tr>
+    <tr><td>Çok büyük bir dosya</td><td>Kabul eder; tek istekte bir üst sınıra kadar, daha büyüğü parça parça (A6)</td><td>1,2 TB'lık aylık yedek</td></tr>
+    <tr><td>Nesnenin bir byte'ını değiştirmek</td><td><b>Yapamaz.</b> Yeni içerik bütün nesne olarak yeniden yazılır</td><td>Fotoğrafın bir köşesini düzeltmek bütün fotoğrafı yeniden yüklemektir</td></tr>
+    <tr><td>Nesnenin içinde ya da metadata'sında arama</td><td><b>Yapamaz.</b> Depo nesneleri sadece adlarıyla bulur; içerik için ayrı bir index ya da sorgu motoru gerekir (A5)</td><td>"Lisansı CC BY 4.0 olan görseller" sorusu</td></tr>
+    <tr><td>Kullanıcı metadata'sını sonradan değiştirmek</td><td><b>Yerinde yapamaz.</b> Metadata yazma anında sabitlenir; değiştirmek nesneyi yeni metadata ile kendi üstüne kopyalamaktır. Tag'ler ayrı bir istekle değişebilir</td><td>Görselin lisansını düzeltmek bir kopyalamadır</td></tr>
+  </tbody>
+</table>
+<table class="data">
+  <caption>bütün durumlar: bir nesnenin adresi</caption>
+  <thead><tr><th>Durum</th><th>Mümkün mü</th><th>Anlamı</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Aynı bucket, aynı key</td><td><b>Hayır</b>, iki nesne olamaz</td><td>İkinci yazma birincinin yerine geçer (ya da A7'deki sürümler açıksa üstüne yeni bir sürüm ekler)</td><td><code>products/P0001.jpg</code> iki kez yüklenirse tek nesne kalır</td></tr>
+    <tr><td>Aynı bucket, farklı key</td><td>Evet</td><td>İki ayrı nesne</td><td><code>products/P0001.jpg</code> ve <code>products/P0002.jpg</code></td></tr>
+    <tr><td>Farklı bucket, aynı key</td><td>Evet</td><td>İki ayrı nesne; key'in aynı olması bir ilişki kurmaz</td><td>Test ve canlı bucket'ında aynı key</td></tr>
+    <tr><td>Key'de slash</td><td>Evet</td><td>Slash sıradan bir karakterdir; A3 onun neden klasör gibi göründüğünü anlatır</td><td><code>uploads/v-7f3a/photo.jpg</code></td></tr>
+    <tr><td>Boş key</td><td><b>Hayır</b></td><td>Her nesnenin bir adı olmalıdır</td><td>—</td></tr>
+  </tbody>
+</table>
+<h3>Öğretici veri ve identifier'ları</h3>
+<p>Bu sayfanın örnekleri sekiz nesnelik bu küçük listeyi kullanır. İlk satırın boyutu canlı bucket'tan gelir; diğerleri kısa örneklerdir. <code>storage class</code> kolonu A8'de, son kolon A2'deki kullanıcı metadata'sıdır.</p>
+{{ k.sample("s3_objects", "Lale Market bucket'ı: öğretici kopya (8 nesne)", key=["key"]) }}
+<p>Her identifier'ın sahipliğini bir cümle olarak oku:</p>
+<table class="data">
+  <thead><tr><th>Identifier</th><th>Sahibi kim</th><th>Kim ödünç alır</th></tr></thead>
+  <tbody>
+    <tr><td>Ürün id'si (örneğin <code>P0001</code>)</td><td>Sahibi katalogdur; Aurora'daki ürün row'unda yaşar.</td><td>Key onu ödünç alır: <code>products/P0001.jpg</code>. Böylece ürün sayfası key'i bir arama yapmadan kurar. Depo ürünün var olduğunu kontrol etmez; bunu uygulama yapar.</td></tr>
+    <tr><td>Ziyaretçi id'si (örneğin <code>v-7f3a</code>)</td><td>Sahibi mağazadır; tarayıcı onu bir cookie'de tutar.</td><td>Yükleme key'leri onu öneki olarak ödünç alır: <code>uploads/v-7f3a/…</code>. Bir ziyaretçinin dosyaları böylece tek bir önekle listelenir (A3).</td></tr>
+    <tr><td>Bucket adı + key</td><td>Sahibi depodur: aynı adres iki nesneye verilmez.</td><td>Database'ler nesneye bu adresle başvurur; ürün row'u görselin key'ini tutar.</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Key neden products/ ile başlıyor? Bu deponun bir kuralı mı?") %}
+<p>Hayır, tasarımcının bir geleneğidir. Önek bir insana nesnenin türünü söyler ve aynı türden nesneleri listede yan yana getirir (A3). Depo sadece bir metin görür. Öneki olmayan bir key de aynı şekilde çalışır.</p>
+{% endcall %}
+{% call k.ask("Bir fotoğrafın adını sonradan değiştirebilir miyim?") %}
+<p>Doğrudan değiştiremezsin: key nesnenin adresidir. Yeni key ile bir kopya yazar ve eskisini silersin. A6'daki yazma tablosu bunu listeler; S3'ün tek AZ'li bir türü (S3 Express One Zone, B5) tek adımlık bir yeniden adlandırma sunar.</p>
+{% endcall %}
+{{ k.quiz("s3-q1", "Öğretici listeye bak. Hangisi bir nesnenin adresidir?",
+   ["Content-Type ve boyut", "Bucket adı ve key", "Kullanıcı metadata'sı", "Storage class"],
+   1, "Bucket ve key birlikte tam olarak tek bir nesneyi gösterir. Diğerleri nesnenin içeriğini ya da saklanma biçimini anlatır.") }}
+
+<h2 id="prefixes" data-short="Prefix ve listeleme"><span class="sec">A3</span>Klasör değil prefix: düz bir isim alanı ve sıralı listeleme</h2>
+<p>Bir dosya sisteminde klasörler gerçek nesnelerdir: bir klasörü yeniden adlandırırsın ve içindeki her dosya yeni yola geçer. Object storage'da bucket düzdür: key'ler tek bir uzun listede durur. Klasör gibi görünen şey key'lerin ortak başlangıcıdır.</p>
+{{ k.concept("Prefix",
+   "Bazı key'lerin ortak başlangıcı. <code>uploads/v-7f3a/</code>, bu metinle başlayan bütün key'lerin prefix'idir. Depo key'leri sıralı tutar; bu yüzden aynı prefix'e sahip key'ler listede yan yanadır ve tek bir istekle listelenir. Bir <b>delimiter</b> karakteri (genellikle slash) verilirse depo key'leri o karaktere kadar gruplar ve her grubu bir kez döndürür: konsolun gösterdiği \"klasörler\" budur.",
+   "<code>uploads/v-7f3a/invoice.pdf</code> ve <code>uploads/v-7f3a/photo.jpg</code> aynı prefix'i paylaşır. Delimiter <code>/</code> ile bucket'ın en üstünde iki grup görünür: <code>products/</code> ve <code>uploads/</code>.",
+   "Bir telefon rehberi: \"Kaya\" ile başlayan isimler yan yanadır, çünkü rehber alfabetiktir. \"Kaya\" bir klasör değildir; isimlerin başıdır.") }}
+<div class="flow">
+  <div class="box">liste isteği<small>prefix = uploads/v-7f3a/</small></div><span class="arrow">→</span>
+  <div class="box">sıralı key listesi<small>products/… · uploads/v-3c8d/… · <b>uploads/v-7f3a/…</b></small></div><span class="arrow">→</span>
+  <div class="box hit">yan yana iki key<small>invoice.pdf, photo.jpg</small></div><span class="arrow">→</span>
+  <div class="box">sayfa<small>en fazla 1.000 key; devamı için token</small></div>
+</div>
+<p class="flow-cap">Listeleme sıralı key listesinde prefix'in başladığı yere gider ve prefix bitene kadar okur. B2'deki simülasyon aynı altı key ile prefix ve delimiter'ı adım adım oynatır.</p>
+<table class="data">
+  <caption>bütün durumlar: listeleme</caption>
+  <thead><tr><th>İstek ne verir</th><th>Depo ne yapar</th><th>Ne döner</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Bir prefix</td><td>Sıralı listede prefix'in başına gider, prefix bitene kadar okur</td><td>O prefix'le başlayan key'ler, sıralı</td><td><code>uploads/v-7f3a/</code>: iki key</td></tr>
+    <tr><td>Prefix + delimiter</td><td>Key'leri delimiter'a kadar gruplar</td><td>Bir alt seviyedeki "klasörler" ve doğrudan nesneler</td><td>Delimiter <code>/</code>: <code>products/</code>, <code>uploads/</code></td></tr>
+    <tr><td>Bin key'den fazlası</td><td>Bir sayfa döndürür ve bir devam token'ı verir</td><td>Sayfa sayfa; her sayfa ayrı bir istek</td><td>20.000 ürün görseli: 20 istek</td></tr>
+    <tr><td>Hiçbir şey</td><td>Bütün bucket'ı sırayla listeler</td><td>Bütün key'ler, sayfa sayfa</td><td>Bir envanter işi</td></tr>
+    <tr><td>Bir sonek (".pdf ile bitenler")</td><td><b>Yapamaz.</b> Sıra key'in başına göredir; sonek yan yana durmaz</td><td>Uygulama bütün listeyi okur ve kendisi süzer</td><td>Bütün PDF'ler</td></tr>
+    <tr><td>Metadata'ya göre ("lisansı CC BY olanlar")</td><td><b>Yapamaz.</b> Liste key, boyut ve tarih döndürür; metadata için her nesneye ayrı bir istek gerekir</td><td>Bir dış index ya da metadata tablosu gerekir (B5)</td><td>Lisansa göre görseller</td></tr>
+    <tr><td>Bir "klasörü" yeniden adlandırma</td><td><b>Tek adımda yapamaz.</b> Prefix gerçek bir şey değildir</td><td>Altındaki her nesne yeni key'e kopyalanır ve eskisi silinir</td><td><code>uploads/v-7f3a/</code>'yı taşımak: her dosya için iki istek</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Konsolda klasör oluşturabiliyorum. O zaman klasör var mı?") %}
+<p>Konsol bir klasör oluşturduğunda aslında slash ile biten, 0 byte'lık bir nesne yazar ve listeyi slash'te gruplar. Depo için bu yine bir key'dir. Klasörü "silmek" o prefix'le başlayan her key'i silmektir; Lale Market'in reset düğmesi <code>uploads/</code> için bunu yapar.</p>
+{% endcall %}
+{% call k.ask("Key'i nasıl tasarlamalıyım?") %}
+<p>Uygulamanın listelemek istediği parçayı key'in başına koy. Bir ziyaretçinin dosyaları listelenecekse <code>uploads/&lt;ziyaretçi&gt;/</code>, bir günün log'ları okunacaksa <code>logs/yyyy/mm/dd/</code>. Bir database'te sorudan key tasarlamaya benzer: soruyu key'in başı cevaplar. A4 aynı önekin yükü de taşıdığını gösterir.</p>
+{% endcall %}
+{% call k.predict("Öğretici listede prefix = \"uploads/\" ve delimiter = \"/\" ile bir liste istersen ne döner?") %}
+<p>İki grup döner: <code>uploads/v-3c8d/</code> ve <code>uploads/v-7f3a/</code>. Nesnelerin kendisi dönmez, çünkü hepsi bir slash daha içerir ve delimiter onları bir alt seviyede gruplar.</p>
 {% endcall %}
 
-<h2 id="objects" data-short="Bucket, key, object"><span class="sec">03</span>Bucket'lar, key'ler, object'ler ve metadata</h2>
+<h2 id="placement" data-short="Yerleşim ve ölçek"><span class="sec">A4</span>Yerleşim ve ölçek: nesneler nerede durur, yük nasıl dağılır</h2>
+<p>Bir object storage iki ayrı işi yapar: nesnenin adını ve bilgisini bulmak (metadata) ve byte'larını saklamak (data). A1'deki görsel bu iki katmanı gösteriyordu. Büyük bir depo key listesini sıralı tutar ve listeyi <b>key aralıklarına</b> böler; her aralık kendi makineleri tarafından cevaplanır. Byte'lar ise birden fazla veri merkezine kopyalanır.</p>
+{{ k.concept("Key aralığına bölünme (partitioned prefix)",
+   "Depo sıralı key listesini ardışık parçalara böler ve her parçanın okuma ve yazma isteklerini ayrı makinelere verir. Bir prefix'e gelen istekler artınca depo o aralığı ikiye böler. Bölme anında depo kısa bir süre \"yavaşla\" cevabı verebilir; istemci biraz bekleyip yeniden dener. Kaç parça olacağına depo karar verir, sen key'i seçersin.",
+   "<code>logs/2026/10/30/</code> o günün bütün log yazmalarını alır; <code>products/</code> okumaları başka bir aralıkta durur. Saniyede 60.000 okuma gereken bir iş key'leri birkaç prefix'e yayar (M2 kart 9).",
+   "Büyük bir postanenin gişeleri: soyadı A–F bir gişede, G–M başka bir gişede. Bir harfe çok kişi gelirse o gişe ikiye bölünür.") }}
+<div class="parts">
+  <div><h4>aralık 1: backups/ … logs/</h4><span class="chip">backups/shop/2026/09.dump</span><span class="chip">logs/2026/10/30/web-01.json.gz</span></div>
+  <div class="on"><h4>aralık 2: products/</h4><span class="chip">products/P0001.jpg</span><span class="chip">products/P0002.jpg</span><span class="chip">products/P0044.jpg</span></div>
+  <div><h4>aralık 3: uploads/</h4><span class="chip">uploads/v-3c8d/photo.jpg</span><span class="chip">uploads/v-7f3a/invoice.pdf</span><span class="chip">uploads/v-7f3a/photo.jpg</span></div>
+</div>
+<p class="flow-cap">Öğretici sekiz nesnenin bir yerleşimi (örnek bir bölme; gerçek depo aralıkları yüke göre kendisi seçer). Ürün sayfalarının okumaları aralık 2'ye, yüklemeler aralık 3'e gider; biri diğerini yavaşlatmaz.</p>
+<div class="flow">
+  <div class="box pk">PUT<small>uploads/v-7f3a/photo.jpg</small></div><span class="arrow">→</span>
+  <div class="box">key aralığı<small>uploads/ aralığının makineleri</small></div><span class="arrow">→</span>
+  <div class="box">byte'lar<small>birden fazla veri merkezine yazılır</small></div><span class="arrow">→</span>
+  <div class="box hit">200 OK<small>bundan sonraki her okuma yeni nesneyi görür</small></div>
+</div>
+<p class="flow-cap">Bir yazmanın yolu. Cevap ancak byte'lar kalıcı olarak saklandıktan sonra gelir; A6 bunun okumalar için ne demek olduğunu anlatır.</p>
+{{ k.concept("Region ve Availability Zone",
+   "Bulut sağlayıcısının coğrafi bölgesi bir <b>Region</b>'dır (örneğin <code>eu-central-1</code>, Frankfurt). Her Region birkaç <b>Availability Zone</b> (AZ) içerir: birbirinden kilometrelerce uzak, ayrı elektrik ve ağ bağlantısı olan veri merkezi grupları. Bir depo nesneyi birden fazla AZ'ye kopyalarsa bir veri merkezinin yanması nesneyi kaybettirmez. <b>11 dokuzluk dayanıklılık</b> (%99,999999999) S3'ün tasarım hedefidir: 10 milyon nesne saklayan biri ortalama 10.000 yılda bir nesne kaybını bekler.",
+   "Lale Market'in bucket'ı <code>eu-central-1</code>'dedir; S3 Standard her nesneyi bu Region'ın en az üç AZ'sinde saklar.",
+   "Bir bankanın aynı şehirdeki üç ayrı şubesinde duran üç kasa: bir şube su basarsa diğer ikisi açıktır.") }}
+<table class="data">
+  <caption>bütün durumlar: yük ve yerleşim</caption>
+  <thead><tr><th>Durum</th><th>Ne olur</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Yük birçok prefix'e dağılmış</td><td>Her aralık kendi payını cevaplar; toplam hız prefix sayısıyla büyür</td><td>Günlere ayrılmış log key'leri</td></tr>
+    <tr><td>Tek bir prefix'e ani bir yük</td><td>Depo aralığı böler; bölme sürerken bazı istekler "yavaşla" cevabı alır ve yeniden denenir</td><td>Bir eğitim işinin aynı prefix'teki milyonlarca dosyayı birden okuması</td></tr>
+    <tr><td>Tek bir key'e çok sayıda yazma</td><td>Her yazma bütün nesnenin yeniden yazılmasıdır; bu bir sayaç ya da kayıt için yanlış yerdir</td><td>Her tıklamada güncellenen bir JSON sepeti</td></tr>
+    <tr><td>Byte'lar birden fazla veri merkezinde</td><td>Bir veri merkezi kaybolsa da nesne okunur</td><td>S3 Standard: en az üç Availability Zone</td></tr>
+    <tr><td>Byte'lar tek veri merkezinde</td><td>Daha yakın ve daha hızlıdır, ama o merkezin kaybında nesne kaybolabilir</td><td>S3 Express One Zone (B5)</td></tr>
+    <tr><td>Aralığı ya da makineyi seçmek</td><td><b>Yapamazsın.</b> Key'i sen seçersin, yerleşimi depo seçer</td><td>—</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Bir database'teki hot partition ile aynı şey mi?") %}
+<p>Fikir aynıdır: işin çoğu tek bir parçaya düşerse o parça sınırına çarpar. Fark, object storage'ın aralıkları yüke göre kendisinin bölmesidir; bu yüzden kalıcı bir sorun değil, ısınma süresince görülen bir yavaşlamadır. Key'lerin başını çeşitlendirmek ısınmayı kısaltır.</p>
+{% endcall %}
+{% call k.ask("Bütün bir Region kaybolursa ne olur?") %}
+<p>AZ kopyaları bir Region'ın içindedir; Region'ın tamamına karşı korumaz. Bunun için S3 Replication bir bucket'ın nesnelerini başka bir Region'daki (Cross-Region Replication) ya da başka bir hesaptaki bucket'a kopyalar; Object Lock'lu nesneler kilitleriyle birlikte kopyalanabilir. Bu sayfanın kartları R3'te sadece AZ kaybını sorar; bir Region kaybını kapsayan kural, kartın hikâyesine eklenirse ikinci bucket'ın bedeli R5'e yazılır.</p>
+{% endcall %}
+{% call k.ask("Kaç kopya tutulduğuna kim karar verir?") %}
+<p>Servis karar verir; sen sadece saklama sınıfını seçersin (A8). Aynı engine bir sınıfta veriyi en az üç veri merkezine, başka bir sınıfta tek merkeze koyar. Bu, M2'deki kartlarda R3 satırının konusudur.</p>
+{% endcall %}
+
+<h2 id="readpaths" data-short="Okuma yolları"><span class="sec">A5</span>Okuma yolları: adı bilen hızlı, içeriği arayan yolda kalır</h2>
+<p>Bir object storage'da bir okumanın maliyetini tek bir soru belirler: istek nesnenin adını biliyor mu? Biliyorsa depo nesneye doğrudan gider; bütün nesneyi ya da bir byte aralığını verir. Sadece adın başını biliyorsa listeler. Adı bilmiyor, içeriği arıyorsa depo yardım edemez.</p>
+<table class="data">
+  <caption>bütün durumlar: okuma yolları</caption>
+  <thead><tr><th>İstek ne verir</th><th>Depo ne yapar</th><th>Ne döner</th><th>S3'teki adı (B2)</th></tr></thead>
+  <tbody>
+    <tr><td><span class="c-pk">bucket</span> + <span class="c-sk">key</span></td><td>Nesneye doğrudan gider</td><td>Bütün nesne</td><td>GetObject</td></tr>
+    <tr><td>Bucket + key + byte aralığı</td><td>Nesnenin sadece o parçasını okur</td><td>İstenen byte'lar</td><td>GetObject, Range başlığı</td></tr>
+    <tr><td>Bucket + key, içerik istemeden</td><td>Sadece metadata'yı okur</td><td>Boyut, tür, kullanıcı metadata'sı</td><td>HeadObject</td></tr>
+    <tr><td>Bucket + prefix</td><td>Sıralı listede okur (A3)</td><td>Key'ler, boyutlar, tarihler; sayfa sayfa</td><td>ListObjectsV2</td></tr>
+    <tr><td>Kimlik bilgisi olmayan bir tarayıcı</td><td>İmzalı bir adresi kontrol eder ve süresi dolmadıysa izin verir</td><td>Nesne</td><td>Presigned URL</td></tr>
+    <tr><td>İçerikte bir kelime ya da metadata'da bir değer</td><td><b>Yapamaz.</b> Depo nesnelerin içine bakmaz</td><td>—</td><td>Bir sorgu motoru (Athena) ya da bir arama motoru (OpenSearch) dosyaları ayrıca okur</td></tr>
+  </tbody>
+</table>
+{{ k.concept("İmzalı URL (presigned URL)",
+   "Bir nesneye, tek bir işlem için ve bir süre sonuyla erişim veren adres. Yetkisi olan bir program URL'yi kendi kimlik bilgisiyle imzalar; imza ve süre URL'nin içindedir. URL'yi taşıyan herkes, süre dolana kadar o işlemi yapabilir. Depo private kalır; kimlik bilgisi olmayan bir tarayıcı sadece bu nesneyi, sadece bu işlemle okur ya da yazar.",
+   "Satıcı paneli <code>products/P0001.jpg</code> için 300 saniyelik bir GET URL'si imzalar; tarayıcı görseli doğrudan depodan indirir, uygulama sunucusu byte taşımaz.",
+   "Bir kargo dolabına SMS ile gelen tek kullanımlık kod: kodu bilen dolabı açar, ama sadece o gözü ve sadece belli bir saate kadar.") }}
+<div class="flow">
+  <div class="box">uygulama<small>imzalar: GET products/P0001.jpg, 300 s</small></div><span class="arrow">→</span>
+  <div class="box">tarayıcı<small>URL ile GET</small></div><span class="arrow">→</span>
+  <div class="box">depo<small>imza ve süre kontrolü</small></div><span class="arrow">→</span>
+  <div class="box hit">200 OK<small>süre içinde</small></div>
+</div>
+<div class="flow">
+  <div class="box">aynı URL<small>410. saniyede</small></div><span class="arrow">→</span>
+  <div class="box">depo<small>süre dolmuş</small></div><span class="arrow">→</span>
+  <div class="box miss">403<small>Request has expired</small></div>
+</div>
+<p class="flow-cap">İmzalı bir URL'nin iki sonucu. URL'yi oluşturmak depoya bir istek göndermez; imzayı uygulama kendi anahtarıyla hesaplar. B2'deki simülasyon aynı zaman çizelgesini oynatır.</p>
+{% call k.ask("Bir nesneyi metadata'sına göre bulmak istiyorum. Ne yapmalıyım?") %}
+<p>Metadata'yı ayrıca aranabilir bir yere yaz: yükleme anında bir database'e (key ve alanlar) ya da deponun kendi metadata tablosuna (S3 Metadata, B5). Soru sık ve hızlıysa database (M2 kart 10), seyrek ve analizse metadata tablosu ve bir sorgu motoru.</p>
+{% endcall %}
+{% call k.ask("İmzalı URL'yi bir log'a yazarsam ne olur?") %}
+<p>Log'u okuyan herkes nesneyi süre dolana kadar okuyabilir: URL'nin kendisi izindir. Bu yüzden süreyi dakikalarla sınırla ve URL'yi log'lama. Geçici kimlik bilgileriyle imzalanmış bir URL o kimlik bilgilerinin süresi dolunca da biter.</p>
+{% endcall %}
+{{ k.quiz("s3-q2", "Bir oynatıcı 300 MB'lık bir videonun 120. saniyesinden başlamak istiyor. En ucuz okuma hangisidir?",
+   ["Bütün nesneyi okuyup baştan saymak", "Key ile, istenen byte aralığını okumak", "Bucket'ı listeleyip videoyu bulmak", "Metadata'yı okuyup videoyu yeniden yüklemek"],
+   1, "Byte aralığıyla okuma nesnenin sadece istenen parçasını getirir. Liste ve metadata videonun byte'larını vermez.") }}
+
+<h2 id="writepaths" data-short="Yazma ve tutarlılık"><span class="sec">A6</span>Yazma yolları ve tutarlılık: her yazma bütün nesnedir</h2>
+<p>Okumada bir byte aralığı yeterliydi. Yazmada durum farklıdır: <b>her yazma bütün nesneyi yazar.</b> Depo "1.000. byte'ı değiştir", "sonuna ekle" ya da "adını değiştir" isteği kabul etmez. Bu kural bir dosya sisteminden gelen okuyucuyu en çok şaşırtan kuraldır.</p>
+<table class="data">
+  <caption>bütün durumlar: yazma yolları</caption>
+  <thead><tr><th>Durum</th><th>Ne verirsin</th><th>Depo ne yapar</th><th>S3'teki adı (B3)</th></tr></thead>
+  <tbody>
+    <tr><td>Yeni bir key</td><td>Key + bütün byte'lar + metadata</td><td>Nesneyi yazar</td><td>PutObject</td></tr>
+    <tr><td>Var olan bir key</td><td>Key + yeni byte'lar</td><td>Eski nesnenin yerine geçer; sürümler açıksa eskisini saklar (A7)</td><td>PutObject</td></tr>
+    <tr><td>Çok büyük bir dosya</td><td>Parçalar, sonra "bitir" isteği</td><td>Parçaları paralel kabul eder; kesilen parça yeniden gönderilir; bitince tek nesne olur</td><td>Multipart upload</td></tr>
+    <tr><td>Bir nesneyi başka bir key'e</td><td>Kaynak ve hedef key</td><td>Depo içinde kopyalar; byte'lar istemciden geçmez</td><td>CopyObject</td></tr>
+    <tr><td>Nesnenin ortasını değiştirmek</td><td>—</td><td><b>Yapamaz.</b> Bütün nesne yeniden yazılır</td><td>—</td></tr>
+    <tr><td>Nesnenin sonuna eklemek</td><td>—</td><td><b>Genel amaçlı bucket'ta yapamaz.</b> Akış dosya parçalarına bölünür; S3 Express One Zone eklemeye izin verir (B5)</td><td>—</td></tr>
+    <tr><td>Yeniden adlandırmak</td><td>—</td><td><b>Tek adımda yapamaz</b> (genel amaçlı bucket). Kopyala, sonra sil</td><td>CopyObject + DeleteObject</td></tr>
+    <tr><td>Silmek</td><td>Key</td><td>Nesneyi siler; sürümler açıksa bir silme işareti ekler (A7)</td><td>DeleteObject</td></tr>
+    <tr><td>İki nesneyi ya hep ya hiç yazmak</td><td>—</td><td><b>Yapamaz.</b> Her yazma tek bir nesnenin atomik işlemidir; birkaç nesne üzerinde transaction yoktur</td><td>—</td></tr>
+  </tbody>
+</table>
+{{ k.concept("Güçlü tutarlılık (strong read-after-write)",
+   "Bir yazma başarıyla bittikten sonra gelen her okuma ve her liste yeni hâli görür. Bir nesne yazıldı, üstüne yazıldı ya da silindiyse bir sonraki istek hemen son durumu alır. İki yazma <b>aynı anda</b> gelirse ikisi de başarılı olur ve sonuncusu kalır (<dfn>last writer wins</dfn>); hangisinin sonuncu olacağını istemci önceden bilemez.",
+   "Satıcı yeni fotoğrafı yükler ve sayfayı yeniler: yeni fotoğraf hemen görünür. İki sekme aynı anda aynı key'e yüklerse ikisi de 200 OK alır ve biri diğerinin dosyasının yerine geçer.",
+   "Bir panoya aynı yere iki kişinin aynı anda kâğıt asması: ikisi de astığını sanır, ama panoda sonra asılan görünür.") }}
+{{ k.fig("s3-consistency.png", "resmî örnek: client 1 color = red, sonra client 2 color = ruby yazar. İkinci yazma bittikten sonra başlayan iki okuma da ruby döndürür. Güçlü tutarlılık budur: yazma bittiyse okuma onu görür.") }}
+<p>Sessiz üstüne yazmayı önlemenin aracı <b>koşullu yazmadır</b>. Kural yazma isteğinin içine konur ve depo onu yazma anında test eder:</p>
+{{ k.concept("Koşullu yazma (conditional write)",
+   "Bir yazma isteğine eklenen ön koşul. İki biçimi vardır: <b>\"bu key boşsa yaz\"</b> (aynı ada ikinci yükleme reddedilir) ve <b>\"nesne okuduğum hâlindeyse yaz\"</b>. İkincisi nesnenin içerik özetini kullanır: <dfn>ETag</dfn>, her nesne sürümüne verilen ve içerik değişince değişen bir etiket. Koşul tutmazsa depo yazmaz ve 412 hatası döndürür. Test ve yazma tek adımdır; araya başka bir istek giremez.",
+   "Canlı bucket'ta bir deneme nesnesi \"key boşsa\" koşuluyla yazıldı (200, ETag <code>1670fe54…</code>); aynı istek ikinci kez 412 aldı. Sonra <code>1670fe54…</code> ETag'iyle bir güncelleme kabul edildi ve eski ETag'le gelen ikinci güncelleme 412 aldı (B3).",
+   "Bir otel odasının kapısında \"rahatsız etmeyin\" kartı: oda boşsa temizlik girer; kart varsa girmez ve geri döner.") }}
+<div class="flow">
+  <div class="box pk">istek A<small>PUT invoice.pdf, koşul: key boşsa</small></div><span class="arrow">→</span>
+  <div class="box">mevcut durum<small>key yok</small></div><span class="arrow">→</span>
+  <div class="box hit">yazıldı<small>200 OK, yeni ETag</small></div>
+</div>
+<div class="flow">
+  <div class="box pk">istek B, aynı key<small>PUT invoice.pdf, koşul: key boşsa</small></div><span class="arrow">→</span>
+  <div class="box">mevcut durum<small>key A'nın nesnesiyle dolu</small></div><span class="arrow">→</span>
+  <div class="box miss">reddedildi<small>412 Precondition Failed, nesne değişmedi</small></div>
+</div>
+<p class="flow-cap">Aynı koşulun iki sonucu: ilk istek yazar, ikincisi reddedilir ve A'nın önce geldiğini öğrenir. Koşul olmasaydı ikisi de 200 OK alırdı ve B'nin dosyası A'nınkinin yerine geçerdi. B3'teki simülasyon üç turu adım adım oynatır.</p>
+{{ k.fig("s3-conditional-write.png", "resmî örnek: client 1 büyük bir dosyayı parça parça yüklerken client 2 aynı key'e koşullu bir PutObject ile önce yazar. Client 1'in koşullu 'bitir' isteği 412 ile reddedilir: koşul parçaların değil, bitirme anının durumuna bakar.") }}
+<table class="data">
+  <caption>bütün durumlar: koşulun biçimleri</caption>
+  <thead><tr><th>Koşul</th><th>Ne sağlar</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Key boşsa yaz (<code>If-None-Match: *</code>)</td><td>Aynı ada ikinci yazmayı engeller: "ilk gelen alır", idempotency</td><td>Bir satıcının faturası başka bir sekmenin dosyasıyla değişmez</td></tr>
+    <tr><td>ETag okuduğumla aynıysa yaz (<code>If-Match</code>)</td><td>Optimistic locking: başkası arada değiştirdiyse yazma</td><td>Bir ayar dosyasını oku, değiştir, aynı ETag ile yaz</td></tr>
+    <tr><td>ETag eşleşiyorsa sil</td><td>Başkasının yeni yazdığı nesneyi yanlışlıkla silmeyi engeller</td><td>Temizlik işi sadece okuduğu sürümü siler</td></tr>
+    <tr><td>Bir alanın değerine göre yaz ("stok 3'ten büyükse")</td><td><b>Yapamaz.</b> Depo nesnenin içini bilmez; koşul sadece varlık ve ETag üzerinedir</td><td>Bu bir database'in koşullu yazmasıdır</td></tr>
+    <tr><td>Dosyayı kilitle ve sonra yaz</td><td><b>Yapamaz.</b> Kilit yoktur; koşullu yazma kilidin yerine geçer</td><td>Kilit isteyen eski program bir dosya sistemi ister (M2 kart 6)</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Koşullu yazma bir transaction mı?") %}
+<p>Hayır. Tek bir nesne için "test et ve yaz" tek adımdır, ama iki nesneyi birlikte yazan ya da birlikte geri alan bir işlem yoktur. Birkaç kaydın birlikte değişmesi bir database'in işidir.</p>
+{% endcall %}
+{% call k.ask("Koşulu bütün yazıcılara zorunlu kılabilir miyim?") %}
+<p>Evet, bir bucket kuralı koşulsuz yazmaları reddedebilir. Bir yazıcı koşul kullanıp diğeri kullanmazsa koşulsuz yazma koşullunun korumasını delebilir; bu yüzden paylaşılan bir prefix'te kuralı bucket'ta zorunlu kılmak daha güvenlidir.</p>
+{% endcall %}
+{{ k.quiz("s3-q3", "İki sekme aynı key'e koşulsuz PUT gönderiyor ve ikisi de 200 OK alıyor. Sonuç nedir?",
+   ["İki nesne yan yana durur", "Son yazanın nesnesi kalır, diğeri kaybolur ya da eski sürüm olur", "Depo ikisini birleştirir", "İkinci istek otomatik olarak reddedilir"],
+   1, "Aynı anda gelen yazmalarda son yazan kazanır ve kimse hata almaz. Sessiz kaybı \"key boşsa yaz\" ya da \"ETag aynıysa yaz\" koşulu önler.") }}
+
+<h2 id="versions" data-short="Sürümler"><span class="sec">A7</span>Sürümler: bir yazma eski nesneyi yok etmez</h2>
+{{ k.concept("Sürüm (version) ve silme işareti",
+   "Sürümler açık bir bucket'ta aynı key'e yapılan her yazma, kendi <b>sürüm id</b>'si olan yeni bir sürüm ekler; eskisi silinmez. Sürüm id'siz bir silme hiçbir byte'ı silmez: en üste bir <dfn>delete marker</dfn> (silme işareti) ekler ve normal okuma artık \"bulunamadı\" cevabı alır. Eski sürümler, sürüm id'leriyle silinene ya da bir yaşlanma kuralı (A8) onları silene kadar kalır.",
+   "Lale Market bucket'ında sürümler açık. Canlı denemede bir nesne iki kez yazıldı ve sonra silindi: listede iki sürüm ve bir silme işareti göründü; normal okuma 404 aldı (B3).",
+   "Hiçbir fotoğrafı çıkarmadığın bir albüm: yeni fotoğraf eskisinin üstüne yapıştırılır, \"silindi\" notu en üste. Üstteki sayfaları kaldırırsan eski fotoğraflar oradadır.") }}
+{{ k.fig("s3-versioning-put.png", "resmî örnek: sürümler açık bir bucket'a photo.gif'in ikinci PUT'u. Yeni sürüm (ID 121212) eskisinin (ID 111111) üstüne eklenir; eski sürüm kalır.") }}
+{{ k.fig("s3-versioning-delete.png", "resmî örnek: sürüm id'siz DELETE. photo.gif silinmez; en üste bir delete marker eklenir. Altındaki iki sürüm hâlâ oradadır ve sürüm id'leriyle okunabilir.") }}
+<table class="data">
+  <caption>bütün durumlar: sürümler</caption>
+  <thead><tr><th>Durum</th><th>Ne olur</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Sürümler kapalı, aynı key'e ikinci yazma</td><td>Eski nesne kaybolur</td><td>Yanlış görsel doğrusunu siler</td></tr>
+    <tr><td>Sürümler açık, ikinci yazma</td><td>Yeni sürüm eklenir, eskisi kalır; normal okuma en yeniyi verir</td><td>Satıcı yanlış görseli geri alır: production kuralında 30 gün (M2 kart 1), workshop bucket'ında maliyet için bir gün (B1)</td></tr>
+    <tr><td>Sürüm id'siz silme</td><td>Silme işareti eklenir; normal okuma 404 alır; veri durur</td><td>Yanlışlıkla silinen fatura geri gelir</td></tr>
+    <tr><td>Sürüm id'li silme</td><td>O sürüm kalıcı olarak silinir</td><td>Temizlik işi eski sürümü siler</td></tr>
+    <tr><td>Eski bir sürümü okumak</td><td>Sürüm id'si ile okunur</td><td><code>?versionId=…</code></td></tr>
+    <tr><td>Eski sürümü geri getirmek</td><td>Eski sürümü aynı key'e kopyala ya da silme işaretini sil</td><td>Yanlış silmenin geri alınması</td></tr>
+    <tr><td>Sürümleri tamamen kapatmak</td><td><b>Yapamaz.</b> Bir kez açılan sürümler sadece askıya alınır; var olan sürümler kalır</td><td>—</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Her sürüm yer kaplar mı?") %}
+<p>Evet, her sürüm ayrı bir nesne gibi saklanır ve ödenir. 5 MB'lık bir görseli on kez yüklersen 50 MB saklarsın. Bu yüzden sürümleri açan her bucket'a eski sürümleri bir süre sonra silen bir yaşlanma kuralı eklenir; Lale Market'te eski sürüm bir gün sonra silinir.</p>
+{% endcall %}
+{% call k.ask("Sürümler bir yedek yerine geçer mi?") %}
+<p>Kısmen. Yanlış yazmaya ve yanlış silmeye karşı korur, ama aynı bucket'ın içindedir: bucket'ı silmeye yetkisi olan biri sürümleri de silebilir. Silinemezlik için A8'deki kilit, başka bir bölge ya da hesap için kopya gerekir.</p>
+{% endcall %}
+{% call k.predict("Sürümler açık bir bucket'ta photo.jpg iki kez yüklendi ve sonra sürüm id'siz silindi. Kaç sürüm görünür ve normal bir okuma ne alır?") %}
+<p>İki sürüm ve bir silme işareti görünür. Normal okuma en üstte silme işaretini bulur ve 404 alır. Sürüm id'siyle okuyan biri iki fotoğrafı da alabilir.</p>
+{% endcall %}
+
+<h2 id="lifecycle" data-short="Yaşam döngüsü ve WORM"><span class="sec">A8</span>Yaşam döngüsü: saklama sınıfları, yaşlanma kuralları ve silinemezlik</h2>
+<p>Verinin çoğu yaşlandıkça soğur: bir log ilk hafta okunur, sonra neredeyse hiç. Object storage bunu iki araçla karşılar: aynı nesneyi daha ucuz ama daha yavaş geri gelen bir <b>sınıfa</b> taşımak ve süresi dolan nesneyi silmek. Üçüncü bir araç ise tersini yapar: bir nesnenin süresi dolmadan silinmesini engeller.</p>
+{{ k.concept("Saklama sınıfı (storage class)",
+   "Bir nesnenin byte'larının nasıl saklandığını söyleyen etiket: kaç veri merkezinde, ne kadar hızlı geri geldiği, en az kaç gün saklanması gerektiği ve GB başına fiyatı. Aynı bucket'taki nesneler farklı sınıflarda olabilir; key, okuma yolları ve sürümler sınıfa göre değişmez. Bazı arşiv sınıflarında nesne önce geri getirilir (saatler sürebilir), sonra okunur.",
+   "Öğretici listede ürün görselleri <code>STANDARD</code>, eski log <code>STANDARD_IA</code>, aylık yedek <code>DEEP_ARCHIVE</code> sınıfındadır.",
+   "Bir evin dolabı, bodrumu ve şehir dışındaki deposu: aynı eşya üçünde de durabilir; ne kadar çabuk ulaştığın ve kira farklıdır.") }}
+{{ k.concept("Yaşlanma kuralı (lifecycle rule)",
+   "Bucket'a yazılan, nesneleri yaşına (ya da eski sürüm olma süresine) göre başka bir sınıfa taşıyan ya da silen kural. Bir prefix ya da tag ile sınırlanabilir. Kural arka planda çalışır: süre dolduğu saniyede değil, bir süre sonra uygulanır.",
+   "Lale Market'in <code>expire-old-versions</code> kuralı eski sürümleri güncel olmaktan çıktıktan bir gün sonra siler. Log arşivinde bir kural 30 gün sonra arşiv sınıfına taşır ve iki yıl sonra siler (M2 kart 4).",
+   "Bir buzdolabındaki son kullanma tarihi: süre dolunca biri onu atar, ama tam o dakikada değil.") }}
+{{ k.fig("s3-lifecycle-waterfall.png", "resmî şema: genel amaçlı bucket'ın yedi saklama sınıfı yukarıdan aşağıya pahalı ve hızlıdan ucuz ve yavaşa sıralı (One Zone-IA tek AZ'li ucuz sınıftır, B4). Oklar bir yaşlanma kuralının yapabildiği geçişleri gösterir; oklar hep aşağı iner, kural bir nesneyi geri yukarı taşımaz. M2 kart 4'teki 30 günlük geçiş Standard'dan Glacier Instant Retrieval'a giden oktur. En altta Glacier Deep Archive: en ucuz, geri getirmesi saatler süren sınıf.") }}
+<table class="data">
+  <caption>bütün durumlar: yaşam döngüsü</caption>
+  <thead><tr><th>Durum</th><th>Ne olur</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Kural yok</td><td>Nesne yazıldığı sınıfta, biri silene kadar kalır</td><td>Ürün görselleri</td></tr>
+    <tr><td>Yaşa göre geçiş</td><td>N gün sonra daha ucuz sınıfa taşınır; key ve okuma aynı kalır</td><td>90 günlük log'lar Standard-IA'ya</td></tr>
+    <tr><td>Okunmaya göre otomatik geçiş</td><td>Okunmayan nesne kendiliğinden ucuz katmana, okununca geri gelir</td><td>Ne zaman soğuyacağı bilinmeyen videolar (Intelligent-Tiering, M2 kart 7)</td></tr>
+    <tr><td>Süre sonu silmesi</td><td>N gün sonra nesne silinir</td><td>İki yıllık log'lar</td></tr>
+    <tr><td>Eski sürümleri silmek</td><td>Güncel olmayan sürümler N gün sonra silinir</td><td>Lale Market: bir gün</td></tr>
+    <tr><td>Tam saniyesinde uygulama</td><td><b>Yapamaz.</b> Kurallar arka planda çalışır; nesne bir süre daha listede görünebilir</td><td>"Gece yarısında silinsin" kuralı bir süre sonra uygulanır</td></tr>
+    <tr><td>Çok küçük nesneleri taşımak</td><td>Varsayılan olarak 128 KB'tan küçük nesneler taşınmaz; taşıma ücreti kazancı aşar</td><td>1 KB'lık partner dosyaları</td></tr>
+  </tbody>
+</table>
+<p>Üçüncü araç bir düzenleme kuralından gelir: bazı kayıtlar belli bir süre boyunca kimse tarafından silinememeli ve değiştirilememelidir. Buna WORM denir: <i>write once, read many</i>.</p>
+{{ k.concept("WORM kilidi (retention ve legal hold)",
+   "Bir nesne sürümüne konan silinemezlik kuralı. <b>Retention</b> bir tarihe kadar geçerlidir: o tarihe kadar sürüm silinemez ve üstüne yazılamaz. Katı biçiminde (compliance) yönetici hesabı dahil hiç kimse kilidi kaldıramaz ve süreyi kısaltamaz; yumuşak biçiminde (governance) özel izni olan biri kaldırabilir. <b>Legal hold</b> süresizdir: bir soruşturma bitene kadar konur ve elle kaldırılır. Kilit sürümler üzerinde çalışır, bu yüzden sürümleri açık bir bucket ister.",
+   "Denetim arşivinde her günlük dosya yedi yıllık compliance retention ile yazılır; soruşturma açılan günlere legal hold konur (M2 kart 8).",
+   "Bir noterin mühürlü zarfı: zarf belli bir tarihe kadar açılamaz; mahkeme kararı varsa o tarih de beklenmez.") }}
+{{ k.fig("s3-object-lock-retention.png", "resmî örnek: biri 2027-01-01'de, biri 2027-02-01'de yazılan iki nesne, bir yıllık retention ile. Her nesnenin kendi 'retain-until' tarihi vardır: 2028-01-01 ve 2028-02-01. O tarihe kadar nesne silinemez.") }}
+{% call k.ask("Arşiv sınıfındaki bir nesneyi okumak ne kadar sürer?") %}
+<p>Sınıfa göre değişir. Hızlı arşiv sınıfı milisaniyelerde verir; en ucuz arşiv sınıfı nesneyi önce geri getirir ve S3'te bu varsayılan olarak 12 saat sürer. Bu yüzden sınıf seçimi "ne kadar sürede geri lazım?" sorusuyla başlar (M2 kart 2).</p>
+{% endcall %}
+{% call k.ask("Ucuz sınıfa taşıdım, ertesi gün sildim. Para kazandım mı?") %}
+<p>Hayır. Arşiv sınıflarının en kısa saklama süresi vardır (örneğin 90 ya da 180 gün); daha önce silinen nesne için kalan günler yine ödenir. Ucuz sınıf uzun yaşayan veri içindir.</p>
+{% endcall %}
+{{ k.quiz("s3-q4", "Bir düzenleme kayıtların yedi yıl boyunca yönetici dahil kimse tarafından silinmemesini istiyor. Hangi araç bunu engine'in kuralı yapar?",
+   ["Bir yaşlanma kuralı", "Compliance modunda retention", "Sürümleri açmak", "Ucuz bir arşiv sınıfı"],
+   1, "Yaşlanma kuralı silmeyi yapar, engellemez. Sürümler yetkili birinin silmesini engellemez. Compliance retention süresi boyunca kimseye silme izni vermez.") }}
+
+<h2 id="events" data-short="Olay bildirimleri"><span class="sec">A9</span>Olay bildirimleri: bir yükleme bir işi başlatır</h2>
+{{ k.concept("Olay bildirimi (event notification)",
+   "Depoda bir nesne oluşturulduğunda, silindiğinde, geri getirildiğinde ya da bir yaşlanma kuralı onu taşıdığında depo bir mesaj yayınlar. Başka bir program (bir fonksiyon, bir kuyruk) bu mesajı alır ve tepki verir. Yükleyen program sonraki işi bilmez; depo haber verir. Mesaj en az bir kez teslim edilir: aynı olay iki kez gelebilir.",
+   "Satıcı yeni bir fotoğraf yükler; depo bir \"nesne oluşturuldu\" mesajı yayınlar ve küçük boyutları üreten iş başlar (M2 kart 1).",
+   "Bir kargo dolabına paket bırakılınca alıcıya gelen SMS: dolabı sen kontrol etmezsin, dolap seni çağırır.") }}
+<div class="flow">
+  <div class="box pk">PUT<small>uploads/v-7f3a/photo.jpg</small></div><span class="arrow">→</span>
+  <div class="box">olay<small>ObjectCreated, key, boyut, ETag</small></div><span class="arrow">→</span>
+  <div class="box">kuyruk ya da fonksiyon<small>mesajı alır</small></div><span class="arrow">→</span>
+  <div class="box hit">tepki<small>virüs taraması, küçük boyutlar, metadata kaydı</small></div>
+</div>
+<p class="flow-cap">Bir olayın yolu. Yükleme ile tepki ayrılır: tepkiler eklenip çıkarılır, yükleme yolu değişmez. Mesaj genellikle saniyeler içinde gelir, bazen bir dakika ya da daha uzun sürer.</p>
+<table class="data">
+  <caption>bütün durumlar: hangi olay mesaj üretir</caption>
+  <thead><tr><th>Depodaki olay</th><th>Mesaj</th><th>Not</th></tr></thead>
+  <tbody>
+    <tr><td>Yeni nesne ya da üstüne yazma</td><td>Oluşturuldu</td><td>Yükleme sonrası işlerin tetikleyicisi</td></tr>
+    <tr><td>Silme ya da silme işareti</td><td>Silindi</td><td>Bir index'ten kaydı kaldırmak için</td></tr>
+    <tr><td>Arşivden geri getirme bitti</td><td>Geri getirildi</td><td>Saatler süren geri getirmenin sonunu beklemek için</td></tr>
+    <tr><td>Yaşlanma kuralının taşıması ya da silmesi</td><td>Yaşam döngüsü olayı</td><td>Denetim izi</td></tr>
+    <tr><td>Tag değişikliği</td><td>Tag olayı</td><td>Metadata değişikliğini dışarı vermek için</td></tr>
+    <tr><td>Bir okuma</td><td><b>Mesaj yok</b></td><td>Okumaları izlemek için erişim log'ları gerekir</td></tr>
+    <tr><td>Tam bir kez teslim</td><td><b>Garanti değil</b></td><td>En az bir kez: tüketici aynı olayı iki kez işlemeye hazır olmalı (örneğin key ve ETag ile)</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Bucket'ı her dakika listelesem olmaz mı?") %}
+<p>Olur, ama iki bedeli var. Büyük bir bucket'ta "son bir dakikada gelenler" sorusunun bir prefix'i yoksa her dakika bütün liste okunur ve her sayfa ücretlidir. Bir dakikalık gecikme de bazı işler için fazladır. Olay bildirimi sadece değişeni ve genellikle saniyeler içinde verir.</p>
+{% endcall %}
+{% call k.ask("Olay iki kez gelirse ne olur?") %}
+<p>Tüketici aynı işi iki kez yapar; örneğin aynı küçük boyutu iki kez üretir. Bu zararsızdır, çünkü sonuç aynı key'e yazılır. Para çeken ya da e-posta gönderen bir tüketici ise olayın key ve ETag'ini kaydedip ikinci geleni atlamalıdır.</p>
+{% endcall %}
+
+<h2 id="summary" data-short="Ö1–Ö9 özeti ve matris"><span class="sec">A10</span>Özet: object storage'ın dokuz özelliği ve hangi üründe olduğu</h2>
+<p>Bölüm A'nın her kavramı bir özelliğe karşılık gelir. Bu dokuz özellik sayfanın geri kalanının ortak dilidir: Mimar gözüyle bölümü her use case'i bu numaralarla anlatır ve M1 bu listeyi sinyaller ve sınırlarıyla genişletir.</p>
+<table class="data">
+  <caption>Ö1–Ö9: object storage'ın özellikleri</caption>
+  <thead><tr><th>No</th><th>Özellik</th><th>Tek cümleyle</th><th>Tanım</th></tr></thead>
+  <tbody>
+    <tr><td><b>Ö1</b></td><td>Key ile bütün nesneyi yazma ve okuma</td><td>Nesne bütün olarak yazılır, bütün olarak ya da byte aralığıyla okunur; büyük dosya parça parça yüklenir.</td><td>A2, A5, A6</td></tr>
+    <tr><td><b>Ö2</b></td><td>Düz isim alanı, prefix ve sıralı listeleme</td><td>Key'ler sıralıdır; ortak başlangıçları tek istekle listelenir ve yük key aralıklarına dağılır.</td><td>A3, A4</td></tr>
+    <tr><td><b>Ö3</b></td><td>Nesne metadata'sı ve tag'ler</td><td>Tür, boyut ve kısa kullanıcı bilgileri nesneyle birlikte durur.</td><td>A2</td></tr>
+    <tr><td><b>Ö4</b></td><td>Güçlü tutarlılık ve koşullu yazma</td><td>Biten yazmayı her okuma görür; "key boşsa" ve "ETag aynıysa" yazmaları sessiz kaybı önler.</td><td>A6</td></tr>
+    <tr><td><b>Ö5</b></td><td>Sürümler</td><td>Üstüne yazma ve silme eski hâli yok etmez.</td><td>A7</td></tr>
+    <tr><td><b>Ö6</b></td><td>Yaşlanma kuralları ve saklama sınıfları</td><td>Nesne yaşına göre ucuzlar ve süresi dolunca silinir.</td><td>A8</td></tr>
+    <tr><td><b>Ö7</b></td><td>WORM kilidi</td><td>Retention ve legal hold süresince nesne silinemez ve değiştirilemez.</td><td>A8</td></tr>
+    <tr><td><b>Ö8</b></td><td>Olay bildirimleri</td><td>Her yükleme ve silme bir mesaj olur; başka programlar tepki verir.</td><td>A9</td></tr>
+    <tr><td><b>Ö9</b></td><td>İmzalı URL</td><td>Kimlik bilgisi olmayan bir tarayıcı tek bir nesneye, kısa bir süre için doğrudan erişir.</td><td>A5</td></tr>
+  </tbody>
+</table>
+<p>Bu dokuz özellik her object storage ürününde aynı biçimde yoktur. Matris üç ürünü karşılaştırır: açık kaynak ve S3 uyumlu API'li MinIO, başka bir bulutun deposu Google Cloud Storage ve Amazon S3.</p>
+<table class="data fmatrix">
+  <caption>özellik × ürün matrisi: ✓ var · ½ kısmen ya da farklı biçimde · ✗ yok</caption>
+  <thead><tr><th>Özellik</th><th>MinIO</th><th>Google Cloud Storage</th><th>Amazon S3</th></tr></thead>
+  <tbody>
+    <tr><td><b>Ö1</b> Bütün nesne, byte aralığı, parçalı yükleme</td><td class="y">✓ S3 uyumlu PUT, GET ve multipart</td><td class="y">✓ Upload, ranged download, parçalı yükleme</td><td class="y">✓ PutObject, Range GET, multipart (B2, B3)</td></tr>
+    <tr><td><b>Ö2</b> Prefix ve sıralı liste</td><td class="y">✓ S3 uyumlu liste</td><td class="y">✓ Düz isim alanı; isteğe bağlı hiyerarşik namespace</td><td class="y">✓ ListObjectsV2; directory bucket'ta hiyerarşik ve sırasız (B5)</td></tr>
+    <tr><td><b>Ö3</b> Metadata ve tag</td><td class="y">✓ Kullanıcı metadata'sı ve tag'ler</td><td class="p">½ Özel metadata; S3'teki nesne tag'leriyle aynı model değil</td><td class="y">✓ Yaklaşık 2 KB metadata, 10 tag</td></tr>
+    <tr><td><b>Ö4</b> Güçlü tutarlılık ve koşullu yazma</td><td class="p">½ Güçlü tutarlılık; koşullu yazma desteği sürüme bağlı</td><td class="y">✓ Güçlü tutarlılık; generation ön koşulları</td><td class="y">✓ If-None-Match, If-Match (B3)</td></tr>
+    <tr><td><b>Ö5</b> Sürümler</td><td class="y">✓ Bucket versioning</td><td class="y">✓ Object versioning</td><td class="y">✓ Versioning, delete marker</td></tr>
+    <tr><td><b>Ö6</b> Yaşlanma ve sınıflar</td><td class="p">½ Süre sonu ve uzak bir katmana geçiş; ucuz arşiv sınıfı kendi donanımına bağlı</td><td class="y">✓ Standard, Nearline, Coldline, Archive ve lifecycle</td><td class="y">✓ Yedi sınıf ve lifecycle (B4)</td></tr>
+    <tr><td><b>Ö7</b> WORM</td><td class="y">✓ Object locking, governance ve compliance</td><td class="y">✓ Retention policy, bucket lock, object hold</td><td class="y">✓ Object Lock, legal hold (B4)</td></tr>
+    <tr><td><b>Ö8</b> Olay bildirimi</td><td class="y">✓ Bucket notification (webhook, kuyruklar)</td><td class="y">✓ Pub/Sub bildirimi</td><td class="y">✓ SNS, SQS, Lambda, EventBridge (B5)</td></tr>
+    <tr><td><b>Ö9</b> İmzalı URL</td><td class="y">✓ Presigned URL</td><td class="y">✓ Signed URL</td><td class="y">✓ Presigned URL, SDK ile 7 güne kadar (B2)</td></tr>
+  </tbody>
+</table>
+<p>Matris bir ürünün iyi ya da kötü olduğunu söylemez. MinIO'nun gücü kendi donanımında ve her bulutta aynı API'dır; yükü ve kopyaları sen işletirsin (C1). Soru her zaman şudur: iş yükü hangi özelliği istiyor? Mimar gözüyle bölümü bu soruyla başlar.</p>
+{{ k.quiz("s3-q5", "Bir ekip yedi yıl silinemez bir arşiv ve her yeni dosyada başlayan bir tarama istiyor. Matrise göre hangi iki özellik şart?",
+   ["Ö2 ve Ö9", "Ö7 ve Ö8", "Ö3 ve Ö5", "Ö1 ve Ö6"],
+   1, "Silinemezlik WORM kilididir (Ö7), yeni dosyada başlayan iş olay bildirimidir (Ö8). Diğerleri faydalıdır ama bu iki şartı karşılamaz.") }}
+
+<div class="part"><b>Mimar gözüyle</b><h2 id="architect" data-short="Mimar gözüyle">Mimar gözüyle: ne zaman object storage, ne zaman S3</h2>
+<p>Önce kategori: object storage ne zaman doğru seçimdir, alternatifleri neyi daha iyi yapar ve yine de S3 seçersek ne kazanıp ne kaybederiz. Sonra AWS'teki dosya ve nesne depoları ve S3'ün içindeki seçenekler.</p></div>
+
+<p><b>Kısaca:</b> object storage bir dosyayı bütün olarak, her boyutta ve her sayıda, doğrudan bir HTTP adresiyle saklar ve verir. Bu sadelik onu görsellerin, videoların, yedeklerin, log arşivlerinin ve veri göllerinin yeri yapar. Bir alanı yerinde değiştirmek, dosyanın içinde aramak ve bir dosyayı kilitleyip ortasından düzenlemek onun işi değildir.</p>
+<p>Önemli kelime yine {{ k.term("access pattern") }}'dir: uygulamanın sorduğu bir soru, o anda bildiği değerlerle birlikte. "P0001'in görselini ver" bir access pattern'dir ve key ile cevaplanır. "Lisansı CC BY olan bütün görseller" farklı bir access pattern'dir ve object storage onu tek başına cevaplamaz.</p>
+<p>Bu bölümdeki her karar aynı beş gereksinimle anlatılır. M2'deki kartlar ve M7'deki simülasyonlar aynı beş başlığı kullanır. Son sütun her gereksinimin cevabının nereden geldiğini söyler:</p>
+<table class="data">
+  <caption>R1–R5: her iş yükünün beş gereksinimi</caption>
+  <thead><tr><th>No</th><th>Gereksinim</th><th>Sorusu</th><th>Kaynağı</th></tr></thead>
+  <tbody>
+    <tr><td><b>R1</b></td><td>Engine uyumu: veri, erişim ve garanti modeli</td><td>İş yükünün verisi, soruları ve kuralları engine'in çalışma prensibine, algoritmasına ve sunduğu araçlara ne kadar uyuyor? Access pattern bu gereksinimin bir parçasıdır (R1 · EY).</td><td>engine'in doğası</td></tr>
+    <tr><td><b>R2</b></td><td>Ölçek ve trafik şekli</td><td>Saniyede kaç istek, ne kadar veri, trafik düz mü dalgalı mı, ilk byte ne kadar sürede ve bir arşiv ne kadar sürede geri gelmeli?</td><td>ikisi birlikte: engine'in ölçeklenme modeli ve servisin kapasite yönetimi</td></tr>
+    <tr><td><b>R3</b></td><td>Dayanıklılık</td><td>Bir arızada bu verinin kaybı ne demek: başka yerde kopyası olan bir eğitim dosyası mı, satıcının tek fotoğrafı mı?</td><td>üreticinin servis tasarımı</td></tr>
+    <tr><td><b>R4</b></td><td>Operasyon ve ekip</td><td>Kim işletecek, sunucu var mı, kod değişebilir mi, sistemde zaten çalışan bir depo var mı?</td><td>üreticinin servis tasarımı</td></tr>
+    <tr><td><b>R5</b></td><td>Maliyet modeli</td><td>GB-ay başına mı, istek başına mı, geri getirilen GB başına mı ödenir ve bu verinin yaşına ve okunma sıklığına uyar mı?</td><td>üreticinin servis tasarımı</td></tr>
+  </tbody>
+</table>
+{% call k.callout("why", "Neden R1 en ağır, R3–R5 neden daha hafif ama silinmez?") %}
+<p>R1'in cevabı platformdan bağımsızdır. R1 satırları yalnız engine'in kendisini puanlar; bir kırılım servisin paketlemesinden geliyorsa (bir saklama sınıfının fiyatı, arşivden geri getirme süresi, tek bir Availability Zone, CloudFront ayarı) R2–R5'e yazılır ve R1'de sayılmaz. Bir object storage'ın nesneyi bütün olarak yazması, içine bakmaması ve key'leri sıralı tutması, ister S3 olsun ister kendi makinende MinIO, aynıdır. Bu yüzden bir iş yüküne hangi engine'in uyduğu en çok R1'de görünür.</p>
+<p>R3–R5'in cevabı ise büyük ölçüde üreticinin tasarım kararıdır. Aynı S3 engine'i yedi saklama sınıfında sunulur: biri milisaniyelerde verir ve en az üç Availability Zone'da tutar, biri 12 saatte geri getirir ve GB başına 13 kat ucuzdur. Bu yüzden R3–R5'in ağırlığı R1 kadar yüksek olamaz. Ama silinmez: aynı engine'in sınıfları arasındaki seçim tam olarak bu satırlarda yapılır. Bu sayfanın 2. kartında üç sınıf R1'de birebir eşittir ve kararı R5 verir. Bir ayrım önemlidir: nesneyi yaşına ya da okunmasına göre taşıyan ve silen <b>kuralın</b> var olması engine'in aracıdır (R1 · YD); taşındığı sınıfın <b>fiyatı</b> R5'tir.</p>
+{% endcall %}
+<p>R1 tek bir puan değildir. Bir iş yükünde engine'e sorulan birkaç soru vardır ve her kart bu soruları aşağıdaki sabit katalogdan seçer: kimisinde dört alt madde, kimisinde beş. Kartta alt maddeler sırayla numaralanır ve katalog kodunu taşır, örneğin "R1.2 · EY Erişim yolu". Katalog bütün database sayfalarında aynıdır. S3 bir database değildir, ama aynı soruları cevaplar: aşağıdaki son kolon her kodun bir nesne için ne demek olduğunu söyler.</p>
+<table class="data">
+  <caption>R1 kataloğu: Engine uyumunun sekiz alt maddesi, nesneler için</caption>
+  <thead><tr><th>Kod</th><th>Alt madde</th><th>Ne sorar</th><th>S3'te ne demek</th></tr></thead>
+  <tbody>
+    <tr><td><b>VM</b></td><td>Veri modeli ve value tipi</td><td>Value'nun yapısı ne: structured, semi-structured, iç içe, blob, graph, zaman serisi? Bir value ne kadar büyük?</td><td>Value bir nesnedir: herhangi bir byte dizisi, 0 byte'tan 50 TB'a kadar, yanında yaklaşık 2 KB kullanıcı metadata'sı ve 10 tag (Ö1, Ö3)</td></tr>
+    <tr><td><b>ŞE</b></td><td>Şema elverişliliği</td><td>Şema yazarken mi okurken mi uygulanır? Alanlar kayıttan kayda değişebilir mi, şema nasıl evrilir?</td><td>Şema yoktur; veri gölünde şema okurken, sorgu motorunun table tanımında uygulanır</td></tr>
+    <tr><td><b>EY</b></td><td>Erişim yolu</td><td>Soru hangi değerle sorulur: key, aralık, ikincil alan, join ve toplam, metin, coğrafya, ilişki, zaman penceresi?</td><td>Key ve prefix; byte aralığı; içerikte ve metadata'da arama yoktur (Ö1, Ö2)</td></tr>
+    <tr><td><b>OY</b></td><td>Okuma/yazma şekli</td><td>Hacim değil, işlemin biçimi: yerinde güncelleme mi, ekleme mi, oku-değiştir-yaz mı, sayaç mı, toplu yazma mı?</td><td>Bütün nesne yazma; yerinde değişiklik, ekleme ve yeniden adlandırma yoktur (S3 Express One Zone ekleme ve yeniden adlandırma verir) (Ö1)</td></tr>
+    <tr><td><b>TA</b></td><td>Tutarlılık ve atomiklik</td><td>Engine hangi garantileri verir: okuma tutarlılığı, koşullu yazma, transaction kapsamı, izolasyon?</td><td>Güçlü tutarlılık (liste dahil); If-None-Match ve If-Match; aynı anda yazmada son yazan kazanır; birkaç nesne üzerinde transaction ve dosya kilidi yoktur (Ö4)</td></tr>
+    <tr><td><b>DA</b></td><td>Depolama algoritması</td><td>Engine'in çalışma algoritması bu erişime uyuyor mu: bellek içi hash, B-tree, LSM, columnar, inverted index?</td><td>Key aralıklarına bölünmüş dağıtık depo; prefix başına istek hızı; S3 Standard'da ilk byte gecikmesi, S3 Express One Zone'da tek haneli milisaniye (Ö2, B5)</td></tr>
+    <tr><td><b>YD</b></td><td>Veri yaşam döngüsü</td><td>Veri nasıl sona erer, değişikliği nasıl dışarı yayılır: TTL, sürüm, değişiklik akışı?</td><td>Sürümler, yaşlanma kuralları, WORM kilidi, olay bildirimleri (Ö5–Ö8)</td></tr>
+    <tr><td><b>AO</b></td><td>Ayar ve optimizasyon araçları</td><td>Engine geliştiriciye hangi sıkılaştırma araçlarını verir: index tipleri, projection, sparse index, sıkıştırma, script?</td><td>Byte aralığı ve paralel parçalar, S3 Metadata tabloları, S3 Tables (Iceberg), S3 Vectors. S3 Select yeni müşterilere kapalıdır; S3 Object Lambda 7 Kasım 2025'ten beri yeni müşterilere kapalıdır (B5)</td></tr>
+  </tbody>
+</table>
+<p>Her kartta her satırın bir <b>ağırlığı</b> vardır ve ağırlıkların toplamı 100'dür. Ağırlık puanlardan önce, iş yükünün önceliğinden belirlenir ve kartta tek cümlelik nedeniyle yazılır. Çoğu kartta R1 en ağır gereksinimdir; R2–R5'in her biri en az 5 alır. Bir aday her satırda 0–10 puan alır ve katkısı puan × ağırlık / 10'dur. Zorunlu satır ve eleme yoktur: bir iş yükünün önceliği olan satırda zayıf kalan aday, toplamda kendiliğinden geride kalır. Puan ile ağırlığın işi ayrıdır: <b>puan</b> satırdaki "ne istiyoruz" cümlesinin ne kadar karşılandığını ölçer, <b>ağırlık</b> o satırın bu iş yükü için ne kadar önemli olduğunu. Bir eksik yalnız bir satırda sayılır: küçük dosyaların yavaşlığı engine'in depolamasından geliyorsa R1 · DA'da, bir arşiv sınıfının geri getirme süresinden geliyorsa R2'de.</p>
+
+<h2 id="signals" data-short="Ö1–Ö9: sinyal ve sınır"><span class="sec">M1</span>Object storage'ın dokuz özelliği: hangi sinyal çağırır, sınırı nedir</h2>
+<p>Bu tablo M2'deki kartların referansıdır. Bir kart "Ö4 ile çözer" dediğinde buraya dönersin. Her satır A10'daki özelliği iş yükündeki sinyaliyle ve sınırıyla, yani yapamadığı şeyle birleştirir.</p>
+<table class="data">
+  <thead><tr><th>Özellik</th><th>Ne sağlar</th><th>İş yükünde onu çağıran sinyal</th><th>Sınırı: ne yapamaz</th><th>Tanım</th></tr></thead>
+  <tbody>
+    <tr><td><b>Ö1</b> Bütün nesne, byte aralığı, parçalı yükleme</td><td>Her türden ve boyuttan dosya tek bir adresle yazılır ve okunur</td><td>Kayıt değil dosya: görsel, video, PDF, yedek, Parquet</td><td>Yerinde değişiklik, ekleme ve yeniden adlandırma yoktur</td><td>A2, A5, A6</td></tr>
+    <tr><td><b>Ö2</b> Prefix ve sıralı liste</td><td>Bir grubun dosyaları tek istekle listelenir; yük key aralıklarına dağılır</td><td>"Bu ziyaretçinin dosyaları", "bu günün log'ları"</td><td>Sonek ve metadata ile liste yoktur; klasör yeniden adlandırma kopyalamadır</td><td>A3, A4</td></tr>
+    <tr><td><b>Ö3</b> Metadata ve tag</td><td>Tür ve kısa bilgiler nesneyle birlikte durur</td><td>Tarayıcı doğru türü almalı; lisans dosyayla gitmeli</td><td>Aranamaz; kullanıcı metadata'sı yerinde değişmez</td><td>A2</td></tr>
+    <tr><td><b>Ö4</b> Güçlü tutarlılık, koşullu yazma</td><td>Yazılan hemen okunur; aynı ada ikinci yazma ya da eski bir hâlin üstüne yazma reddedilir</td><td>"Aynı adla ikinci yükleme ilkinin üstüne yazmasın"</td><td>Kilit ve birkaç nesne üzerinde transaction yoktur; koşul içeriğe bakmaz</td><td>A6</td></tr>
+    <tr><td><b>Ö5</b> Sürümler</td><td>Yanlış yazma ve yanlış silme geri alınır</td><td>"Yanlış görsel 30 gün geri getirilebilmeli"</td><td>Her sürüm saklanır ve ödenir</td><td>A7</td></tr>
+    <tr><td><b>Ö6</b> Yaşlanma ve sınıflar</td><td>Veri yaşlandıkça ucuzlar ve süresi dolunca silinir</td><td>"90 günden eski dosyalar nadiren okunur", "iki yıl sonra silinsin"</td><td>Saniyesinde değildir; arşiv sınıflarında geri getirme ve en kısa saklama süresi vardır</td><td>A8</td></tr>
+    <tr><td><b>Ö7</b> WORM kilidi</td><td>Yönetici dahil hiç kimse süresinden önce silemez</td><td>"Yedi yıl değiştirilemez", "soruşturma bitene kadar sakla"</td><td>Compliance süresi kısaltılamaz; sürüm ister</td><td>A8</td></tr>
+    <tr><td><b>Ö8</b> Olay bildirimleri</td><td>Yükleme bir işi başlatır; yükleyen kod sonraki işi bilmez</td><td>"Dosya gelir gelmez taransın", "küçük boyutlar üretilsin"</td><td>En az bir kez teslim; bazen bir dakikayı aşar</td><td>A9</td></tr>
+    <tr><td><b>Ö9</b> İmzalı URL</td><td>Tarayıcı tek bir nesneye kısa süreli, doğrudan erişir</td><td>"Uygulama sunucusu byte taşımasın", "bucket private kalsın"</td><td>URL'yi taşıyan herkes süre dolana kadar kullanır</td><td>A5</td></tr>
+  </tbody>
+</table>
+<p>Tablo özettir. Aşağıdaki dokuz blok her özelliği dört başlıkla açar: ne sağlar, hangi sinyal çağırır, sınırı nedir ve alternatif ne zaman daha iyidir.</p>
+
+<table class="data feat"><caption>Ö1 · Key ile bütün nesneyi yazma ve okuma</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Uygulama bir key ve bütün byte'ları verir; depo nesneyi saklar ve aynı key ile geri verir. Büyük dosya parça parça, paralel ve kesilen parçayı yeniden göndererek yüklenir; okumada sadece bir byte aralığı istenebilir. Bir dosyanın türü, biçimi ve boyutu deponun işini değiştirmez: 157 byte'lık bir PNG de 1,2 TB'lık bir yedek de aynı iki işlemle çalışır.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Kayıt değil dosya: "satıcının fotoğrafı", "aylık yedek", "partnerin CSV'si", "eğitim görselleri". Dosya bir kez yazılır ve bütün olarak ya da aralıkla okunur.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Dosyanın bir parçası yerinde değişmez; ekleme ve yeniden adlandırma genel amaçlı bucket'ta yoktur. Her okuma bir HTTP isteğidir: saniyede on binlerce küçük okuma istek başına ödenir ve dosya sisteminden yavaştır.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Program dosyayı açıp ortasını değiştiriyorsa ya da kilitliyorsa bir dosya sistemi (EFS, M2 kart 6). Değer küçük ve alanları sık değişiyorsa bir database (DynamoDB, Aurora). Küçük dosyalar tek haneli milisaniyelerde okunmalıysa S3 Express One Zone (kart 9).</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö2 · Düz isim alanı, prefix ve sıralı listeleme</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Key'ler sıralı durur; ortak başlangıçları tek bir istekle, 1.000'erlik sayfalarla listelenir. Delimiter klasör görünümü verir. Yük key aralıklarına dağılır: S3'te her prefix saniyede en az 3.500 yazma ve 5.500 okuma alır ve prefix sayısında sınır yoktur.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"Bu ziyaretçinin yüklemeleri", "14 Mart'ın log'ları", "partner X'in dosyaları". Grubu adın başına koyabiliyorsan sinyal buradadır.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Sonek ve metadata ile liste yoktur. Liste key, boyut ve tarih verir; durum, tag gibi alanlar her nesne için ayrı bir istektir. Klasör yeniden adlandırma her nesneyi kopyalayıp silmektir. Saniyede binlerce liste isteği pahalıdır (kart 10).</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Liste alanlarla birlikte, sıralı ve saniyede binlerce kez açılıyorsa bir key-value database (DynamoDB, kart 10). Liste bir analiz sorusuysa S3 Metadata tablosu ve bir sorgu motoru.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö3 · Nesne metadata'sı ve tag'ler</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Sistem metadata'sı (boyut, tür, ETag, sınıf) depo tarafından tutulur; kullanıcı metadata'sı yazma anında eklenen kısa metinlerdir (S3'te yaklaşık 2 KB); tag'ler (en fazla 10) sonradan değişebilir ve yaşlanma kurallarında ve erişim kurallarında kullanılabilir.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"Tarayıcı doğru türü almalı", "görselin lisansı dosyayla gitmeli", "bu tag'li dosyalar 30 gün sonra silinsin".</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Metadata aranamaz ve kullanıcı metadata'sı yerinde değişmez; değiştirmek nesneyi kendi üstüne kopyalamaktır. Uzun ve değişken alanlar için yer değildir.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Metadata sık değişiyor, aranıyor ya da listede gösteriliyorsa bir database; dosyanın key'i oradaki kaydın bir alanıdır (kart 10).</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö4 · Güçlü tutarlılık ve koşullu yazma</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Başarılı bir yazmadan sonra her okuma ve her liste yeni hâli görür. "Key boşsa yaz" aynı ada ikinci yüklemeyi, "ETag aynıysa yaz" arada değişmiş bir nesnenin üstüne yazmayı 412 ile reddeder. Test ve yazma tek adımdır.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"Aynı adla ikinci yükleme ilkinin üstüne yazmasın", "iki işçi aynı manifest dosyasını güncelliyor", "tarama işi yeni dosyayı hemen görmeli".</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Koşul nesnenin içeriğine bakmaz; dosya kilidi ve birkaç nesneyi birlikte yazan transaction yoktur. Koşul kullanmayan bir yazıcı koşulun korumasını delebilir.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Kural bir alanın değerine bağlıysa ya da birkaç kaydı birlikte kapsıyorsa bir database'in koşullu yazması ya da transaction'ı. Program dosya kilidi bekliyorsa EFS.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö5 · Sürümler</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Üstüne yazma eski hâli saklar, silme bir işaret ekler; eski sürüm id'siyle okunur ve geri getirilir. Lale Market'te yanlış bir yükleme bir gün içinde geri alınabilir.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"Yanlış görsel geri getirilebilmeli", "partner aynı dosyayı yeniden gönderirse eskisi kaybolmasın", "yanlışlıkla silinen fatura".</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Her sürüm saklanır ve ödenir; eski sürümleri silen bir yaşlanma kuralı gerekir. Sürümler bir yedek değildir: aynı bucket'tadır.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Değerin her değişikliğinin sorgulanabilir bir geçmişi isteniyorsa bir database'te tarih table'ı ya da değişiklik akışı.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö6 · Yaşlanma kuralları ve saklama sınıfları</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Aynı nesne yaşına ya da okunma sıklığına göre daha ucuz bir sınıfa geçer ve süresi dolunca silinir; uygulama hiçbir şey yapmaz. eu-central-1'de GB-ay fiyatı Standard'da 0,0245 USD, Glacier Instant Retrieval'da 0,005 USD, Glacier Deep Archive'da 0,0018 USD'dır (Price List API, 2026-10-31).</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"İlk ay çok izlenir, sonra soğur", "yedi yıl saklanır, yılda bir okunur", "iki yıl sonra silinsin".</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Kurallar arka planda ve gecikmeyle çalışır. Arşiv sınıflarının en kısa saklama süresi ve geri getirme ücreti vardır; Deep Archive'da geri getirme varsayılan olarak 12 saat sürer. 128 KB'tan küçük nesneler varsayılan olarak taşınmaz.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Silme saniyesinde kesin olmalıysa bellek içi bir store'un süre sonu. Saklama süresi birkaç hafta ve veri zaten bir log servisindeyse o servisin saklama ayarı (kart 4).</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö7 · WORM kilidi (retention ve legal hold)</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Compliance modunda kilitli bir nesne sürümünü root kullanıcı dahil hiç kimse silemez ve üstüne yazamaz; süre kısaltılamaz. Legal hold süresizdir ve soruşturma bitince kaldırılır. Kural engine'in kendisidir, bir izin ayarı değil.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"Düzenleme yedi yıl değiştirilemez kayıt istiyor", "fidye yazılımı yedekleri silememeli", "soruşturma bitene kadar sakla".</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Sürümleri açık bir bucket ister; compliance modunda yanlış verilmiş uzun bir süre bile kısaltılamaz. Directory bucket'larda yoktur.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Kayıtlar yılın ilk aylarında saniyelik sorgularla okunuyorsa önce bir database'te durur, sonra arşive gelir (Keyspaces ve S3 birlikte, kart 8).</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö8 · Olay bildirimleri</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Oluşturma, silme, geri getirme, yaşlanma ve tag olayları bir kuyruğa, bir konuya ya da bir fonksiyona mesaj olarak gider. Yükleme ile tepki ayrılır: yeni bir tepki eklemek yükleme kodunu değiştirmez.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"Dosya gelir gelmez taransın", "küçük boyutlar üretilsin", "metadata bir index'e yazılsın", "partner dosyası gelince temizleme başlasın".</td></tr>
+    <tr><td><b>Sınırı</b></td><td>En az bir kez teslim edilir; aynı olay iki kez gelebilir. Genellikle saniyeler içinde, bazen bir dakikadan uzun sürer. Okumalar olay üretmez. Directory bucket'larda yoktur.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Her değişikliğin sırasıyla ve tekrarsız işlenmesi gerekiyorsa bir database'in değişiklik akışı ya da bir mesaj kuyruğunun FIFO biçimi.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö9 · İmzalı URL</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Bucket private kalır; uygulama tek bir nesne ve tek bir işlem için süreli bir adres imzalar. Tarayıcı byte'ları doğrudan depodan alır ya da depoya yazar; uygulama sunucusu bant genişliği ve bellek harcamaz. SDK ile süre 7 güne kadar olabilir; geçici kimlik bilgileriyle imzalanan URL onlarla birlikte biter.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"Satıcı 2 GB'lık videoyu tarayıcıdan yüklesin", "fatura linki 5 dakika geçerli olsun", "bucket asla public olmasın".</td></tr>
+    <tr><td><b>Sınırı</b></td><td>URL'nin kendisi izindir: taşıyan herkes süre dolana kadar kullanır. Süre kısa tutulur, URL log'lanmaz.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Aynı dosyayı milyonlarca kişi görüyorsa bir CDN (CloudFront) önbelleği ve bucket'a sadece onun erişmesi (kart 1).</td></tr>
+  </tbody>
+</table>
+
+<h2 id="usecases" data-short="Use case'ler, alternatifleriyle"><span class="sec">M2</span>Use case'ler: hangi servis en uygun, S3 nerede kazanır, nerede kaybeder</h2>
+<p>Her kart bir iş yükünü anlatır ve altı parçadan oluşur. (1) <b>Bu iş yüküne en uygun servis:</b> kartın en üstünde, ağırlıklı toplamı en yüksek olan aday durur. Bu aday S3 olmayabilir; S3 her kartta tabloda kalır ve "bu sayfanın servisi" işaretini taşır. (2) <b>Gerçek projede:</b> iş yükü kim için, hangi ekranda, hangi sayılarla. (3) <b>Gereksinimler ve ağırlıklar:</b> R1'in alt maddeleri (R1.1, R1.2, …) ve R2–R5; her satırda ağırlık ve nedeni, "ne istiyoruz" ve "neden önemli, karşılanmazsa ne olur". (4) <b>Puan tablosu:</b> bu iş yüküne gerçekten uyan üç servis; her hücrede 10 üzerinden puan ve ağırlıklı katkı, R1'in toplamı ve 100 üzerinden toplam. (5) <b>Her adayın gerekçesi:</b> satır satır nasıl karşıladığı (S3 için A10'daki Ö-numarasıyla), kaç puan aldığı ve puanın neden kırıldığı; en uygun servisin dışındaki her aday için uzun bir <b>kafa kafaya</b> paragrafı. (6) <b>Karar:</b> toplamların okunuşu ve "S3 seçersek" artı ve eksilerimiz. Simülasyonu olan beş kart M7'de aynı puanlarla adım adım oynar. Başlığa tıklayarak kartı aç.</p>
+<p>Kartlarda "S3" adı bir <b>genel amaçlı bucket</b>'tır: hikâye isterse bir yaşlanma kuralıyla (Ö6) nesneleri uygun sınıfa taşır ve bu R5 gerekçesinde yazılır. Saklama sınıfları aynı engine'dir ve aynı R1 puanını alır; kart 2 sınıfların kendisini, ilk günden seçilen sınıf olarak yarıştırır ve orada "S3" varsayılan sınıf S3 Standard'dır. S3 Express One Zone ve S3 Tables S3'ün parçasıdır ama farklı bir veri modeli taşır; R1'leri ayrı puanlanır. Kart 10 DynamoDB sayfasının 9. kartıyla aynı iş yüküdür ve aynı satırları, ağırlıkları ve DynamoDB ile DocumentDB puanlarını taşır; bir puan değişirse iki sayfada birlikte değişir.</p>
+<table class="data">
+  <caption>puan ölçeği: her satırda ve her kartta aynı</caption>
+  <thead><tr><th>Puan</th><th>Anlamı</th></tr></thead>
+  <tbody>
+    <tr><td class="y">10</td><td>Satırı doğrudan, ek iş olmadan ve sayıları aşarak karşılar.</td></tr>
+    <tr><td class="y">8–9</td><td>Karşılar; küçük bir ek iş ya da küçük bir maliyet vardır.</td></tr>
+    <tr><td class="p">4–7</td><td>Karşılar, ama uygulama tarafında belirgin ek iş, boyutlandırma ya da bir sınırla.</td></tr>
+    <tr><td class="n">0–3</td><td>Kısmen ya da hiç: satırın bir parçası karşılanmaz ya da ciddi bir bedelle karşılanır.</td></tr>
+  </tbody>
+</table>
+<p>Kartlar S3'ün servis terimlerini ve alternatiflerin terimlerini Bölüm B ve C'den önce kullanır. Kısa anlamları bu tablodadır.</p>
+<table class="data">
+  <caption>kartlarda geçen servis terimleri (ayrıntısı Bölüm B, Bölüm C ve M5'te)</caption>
+  <thead><tr><th>Terim</th><th>Ne demek</th></tr></thead>
+  <tbody>
+    <tr><td>S3 Standard, Standard-IA, Intelligent-Tiering, Glacier Instant Retrieval, Glacier Flexible Retrieval, Glacier Deep Archive</td><td>S3'ün saklama sınıfları (A8). Standard sık okunan veri; Standard-IA seyrek ama hızlı gereken veri; Intelligent-Tiering okunmayan nesneyi kendiliğinden ucuz katmana taşır ve okununca geri getirir; Glacier Instant Retrieval milisaniyelerde okunan arşiv; Glacier Flexible Retrieval önce geri getirilen (dakikalar ile saatler) arşiv; Glacier Deep Archive en ucuz arşiv, nesne önce geri getirilir (varsayılan 12 saat, <code>RestoreObject</code>), en kısa saklama 180 gün (B4).</td></tr>
+    <tr><td>Lifecycle, Object Lock, compliance ve governance modu, legal hold</td><td>S3'te yaşlanma kuralının ve WORM kilidinin adları (A8, B4).</td></tr>
+    <tr><td>PutObject, GetObject, HeadObject, ListObjectsV2, CopyObject, multipart upload, Range, If-None-Match, If-Match, ETag, 412, 503 SlowDown</td><td>S3'ün işlemleri ve başlıkları (A5, A6, B2, B3). 503 SlowDown, S3'ün bir prefix'i bölerken verdiği "yavaşla" cevabıdır.</td></tr>
+    <tr><td>Olay bildirimi, SNS, SQS, Lambda, EventBridge, CORS</td><td>S3'ün mesaj gönderdiği hedefler (B5); tarayıcının başka bir alan adına istek atmasına izin veren bucket kuralı.</td></tr>
+    <tr><td>CloudFront, origin access control</td><td>AWS'in CDN'i ve bucket'ı sadece CloudFront'un okuyabilmesini sağlayan ayar (C2).</td></tr>
+    <tr><td>S3 Express One Zone, directory bucket, Zonal endpoint, CreateSession, write offset, RenameObject</td><td>Tek bir Availability Zone'da, tek haneli milisaniye gecikmeli S3 biçimi; onun hiyerarşik bucket türü; o AZ'nin adresi; oturum tabanlı yetki; nesneye ekleme; tek adımda yeniden adlandırma (B5).</td></tr>
+    <tr><td>S3 Tables, Apache Iceberg, snapshot, compaction</td><td>Iceberg table'larını tutan S3 bucket türü; satır ekleme, silme ve zaman yolculuğu veren açık table biçimi; table'ın bir anlık hâli; küçük dosyaları birleştiren bakım (B5).</td></tr>
+    <tr><td>S3 Metadata, journal table, live inventory table</td><td>Bir bucket'ın nesne bilgilerini sorgulanabilir Iceberg table'larında tutan S3 özelliği: değişiklik günlüğü ve güncel envanter (B5).</td></tr>
+    <tr><td>Athena, Glue Data Catalog, Firehose, Redshift Spectrum</td><td>S3'teki dosyaları SQL ile yerinde sorgulayan servis; table tanımlarının kataloğu; akışı dosyalar hâlinde S3'e yazan servis; Redshift'in S3 dosyalarını okuyan katmanı (<a href="/e2etutorial/redshift?lang=tr">Redshift tutorial'ı</a>).</td></tr>
+    <tr><td>EFS: NFS, mount target, close-to-open, advisory lock, elastic throughput, Infrequent Access</td><td>AWS'in paylaşılan dosya sistemi ve protokolü; bir AZ'deki bağlantı noktası; dosya kapanınca başka istemcilerin son hâli görmesi; kontrol etmeyen programı durdurmayan kilit; yüke göre büyüyen ve okunan GB başına ödenen throughput; ucuz sınıfı (M5).</td></tr>
+    <tr><td>CloudWatch Logs, log group, Logs Insights</td><td>AWS'in log servisi; saklama süresinin ayarlandığı log grubu; log'lar üzerinde sorgu dili (<a href="/e2etutorial/opensearch?lang=tr">OpenSearch tutorial'ı</a> karşılaştırır).</td></tr>
+    <tr><td>OpenSearch: inverted index, rollover, Index State Management, shard</td><td>Kelimelerin geçtiği document'ları tutan yapı; index'leri döndürme; index'leri yaşına göre taşıyan ve silen kural; index'in parçası (<a href="/e2etutorial/opensearch?lang=tr">OpenSearch tutorial'ı</a>).</td></tr>
+    <tr><td>Aurora: bytea, WAL, MVCC, VACUUM, trigger · Keyspaces: partition key, clustering column, TTL · DynamoDB: sort key, GSI, zero-ETL</td><td>Kartta karşılaştırılan database'lerin kavramları (<a href="/e2etutorial/aurora?lang=tr">Aurora</a>, <a href="/e2etutorial/keyspaces?lang=tr">Keyspaces</a>, <a href="/e2etutorial/dynamodb?lang=tr">DynamoDB</a> tutorial'ları).</td></tr>
+    <tr><td>Transaction, idempotency, optimistic locking</td><td>Birkaç değişikliği ya hep ya hiç uygulayan işlem; aynı isteğin iki kez gelmesinin sonucu değiştirmemesi; kilit almadan "okuduğum hâl değişmediyse yaz" kuralı (A6).</td></tr>
+    <tr><td>POSIX, O_CREAT ve O_EXCL, VPC</td><td>Dosya sistemi çağrılarının standardı (aç, yaz, kilitle, yeniden adlandır); "dosya yoksa oluştur" bayrakları; AWS'te sunucuların bulunduğu özel ağ.</td></tr>
+    <tr><td>UltraWarm ve cold storage (OpenSearch), RPU ve SUPER (Redshift), subscription filter ve field index (CloudWatch Logs), LastEvaluatedKey (DynamoDB)</td><td>OpenSearch'ün ucuz okuma katmanları; Redshift Serverless'ın kapasite birimi ve şemasız JSON tipi; log'ları başka bir servise akıtan kural ve Logs Insights'ın alan index'i; DynamoDB'de bir sonraki sayfanın başlangıç key'i.</td></tr>
+    <tr><td>GPU, epoch, checkpoint, shard (eğitim verisi)</td><td>Eğitimi yapan işlemci; verinin bir kez baştan sona okunması; eğitimin ara kaydı; çok sayıda küçük dosyayı birleştiren büyük dosya.</td></tr>
+  </tbody>
+</table>
+<p>Toplam 100 üzerindendir: her hücrenin katkısı puan × ağırlık / 10'dur. İlk iki aday arasındaki fark 5 puan ya da daha azsa kart "yakın yarış" işaretini taşır; bu bir bilgidir, karar yine toplamdır.</p>
+{% for uc in usecases %}{{ k.wusecase(uc) }}
+{% endfor %}
+<table class="data">
+  <caption>on kartın özeti: en uygun servis, ikinciyle farkı ve S3'ün yeri</caption>
+  <thead><tr><th>Kart</th><th>En uygun servis</th><th class="num">Fark</th><th>S3</th></tr></thead>
+  <tbody>{% for uc in usecases %}
+    <tr><td><a href="#uc-{{ uc.id }}">{{ uc.no }}. {{ uc.title }}</a></td><td>{{ uc.best.name }} ({{ uc.best.total }}){% if uc.race %} · yakın yarış{% endif %}</td><td class="num">{{ uc.gap }}</td>
+      <td>{% for c in uc.cands %}{% if c.page %}{{ loop.index }}. sıra, {{ c.total }}{% endif %}{% endfor %}</td></tr>{% endfor %}
+  </tbody>
+</table>
+<p>Özetin okunuşu: S3, bir dosyanın bir kez yazılıp bütün olarak ya da aralıkla okunduğu, yaşlandıkça ucuzlaması ya da silinmemesi gereken ve bir yüklemenin bir işi başlattığı iş yüklerinde öndedir: görseller, veri gölü, log arşivi, yüklemeler, videolar, denetim arşivi (kart 1, 3, 4, 5, 7, 8). Altısının dördünde S3 R1'in tamamını alır. Kart 4'te engine uyumunda OpenSearch (37,6) ve CloudWatch Logs (35,2) S3'ün (33,2) önündedir: biri metni inverted index ile arar, diğeri satırları doğrudan ekler; S3 ise nesnenin içinde aramaz; iki yıllık arşivde kararı R5 verir. Kart 2'de üç saklama sınıfı R1'de eşittir ve Deep Archive R5 ile kazanır; Glacier Flexible Retrieval 2,4 puan geridedir (yakın yarış), varsayılan sınıf S3 Standard üçüncüdür ve milisaniye erişimli Glacier Instant Retrieval 500 USD'lık bütçeyi aştığı için ilk üçe girmez (92,2). Kart 9'da S3'ün tek AZ'li biçimi S3 Express One Zone küçük dosyaların gecikmesinde (R1 · DA) kazanır. S3 iki kartta net kaybeder ve ikisinde de kaybı engine'den gelir: eski program dosyanın ortasını değiştirir ve kilitler (kart 6, EFS) ve metadata saniyede binlerce kez listelenen ve sık değişen bir kayıttır (kart 10, DynamoDB).</p>
+<p>Aynı mekanizma her kartta aynı biçimde kırılır. <b>Nesnenin içinde arama yok</b> (R1 · EY): soru bir tarih ya da prefix ise 0, ara sıra bir alan aranıyorsa 3 (kart 8, 10), metin ve alan araması işin kendisiyse 5 puan (kart 4). <b>Ekleme ve yerinde yazma yok</b> (R1 · OY): akış dosya parçalarına bölünüyorsa 1 (kart 4), canlı bir günlüğe ekleme isteniyorsa 2 (kart 9), yerinde yazma, ekleme ve yeniden adlandırma işin kendisiyse 8 puan (kart 6). <b>S3 Express One Zone'un tek AZ'si</b> (R3): tek kopyayı tutuyorsa 6 (kart 5, 6, 7), tam kopya S3 Standard'da duruyorsa 1 puan (kart 9). CloudFront kaynağı olmak 1 puandır (R4, kart 1 ve 7); S3 Express One Zone'un bucket'ı bir AZ'de kurmak ve Zonal endpoint kullanmak 1 puandır (R4, kart 5, 7). <b>Byte'ların bir uygulama sunucusundan geçmesi</b> (EFS, Aurora) R1 · EY'de sadece okuma geçiyorsa 3 (kart 1, 7), tarayıcının doğrudan yazması isteniyorsa 8 puandır (kart 5); aynı sunucu katmanının ayrı sonuçları ayrı satırlarda sayılır: tepe için önceden eklenen sabit kapasite R2'de 1, sunucuların işletilmesi R4'te 6, sunucu saatleri R5'te (decisions.md kural 3, 6 ve 13). Dört kart sistemde zaten çalışan bir depoyu sayar: Aurora ürün row'larını tutar (kart 1), CloudWatch Logs son 14 günü tutar (kart 4), Keyspaces ilk yılı tutar (kart 8), eğitim verisinin asıl kopyası S3 Standard'dadır (kart 9); diğerleri sıfırdan başlar. Kart 10'da DynamoDB sayfasında üçüncü olan Aurora (77) yerini bu sayfanın servisine bırakır. Redshift sayfasının 10. kartı (Athena 95,4, Redshift 90,2) kart 3'ün okuma tarafıdır: orada S3'teki verinin dayanıklılığı (R3) her adayda 10'dur, burada da öyledir.</p>
+<p>Yedi kartta doğru mimari "ikisi birlikte"dir: dosya S3'te ve key'i Aurora'da (kart 1), ham bölge S3'te ve temiz table'lar S3 Tables'ta (kart 3), son 14 gün CloudWatch'ta ve arşiv S3'te (kart 4), ilk yıl Keyspaces'te ve sonrası S3'te (kart 8), asıl kopya S3 Standard'da ve eğitim kopyası S3 Express One Zone'da (kart 9), dosya S3'te ve metadata DynamoDB'de (kart 10), önünde CloudFront (kart 1, 7).</p>
+
+<h2 id="away" data-short="Uzaklaştıran sinyaller"><span class="sec">M3</span>Object storage'dan uzaklaştıran sinyaller</h2>
+<table class="data">
+  <thead><tr><th>İş yükündeki sinyal</th><th>Object storage neden zayıf bir seçim</th><th>Daha iyi seçim</th></tr></thead>
+  <tbody>
+    <tr><td>Bir kaydın tek bir alanı sık değişiyor (adet, fiyat, durum)</td><td>Her değişiklik bütün nesnenin yeniden yazılmasıdır (Ö1'in sınırı).</td><td><a href="/e2etutorial/dynamodb?lang=tr">Key-value (DynamoDB)</a>, <a href="/e2etutorial/aurora?lang=tr">ilişkisel database (Aurora)</a></td></tr>
+    <tr><td>Saniyede binlerce kez alanlarıyla listelenen küçük kayıtlar</td><td>Liste alan getirmez ve istek başına ödenir (Ö2'nin sınırı, kart 10).</td><td><a href="/e2etutorial/dynamodb?lang=tr">Key-value (DynamoDB)</a></td></tr>
+    <tr><td>Dosyaların içinde kelime, yazım hatası toleransı, relevance</td><td>Depo nesnenin içine bakmaz.</td><td><a href="/e2etutorial/opensearch?lang=tr">Search engine (OpenSearch)</a></td></tr>
+    <tr><td>Birkaç kaydı ya hep ya hiç değiştiren kurallar</td><td>Birkaç nesne üzerinde transaction yoktur (Ö4'ün sınırı).</td><td><a href="/e2etutorial/aurora?lang=tr">İlişkisel database (Aurora)</a></td></tr>
+    <tr><td>Dosyanın ortasını değiştiren, kilitleyen, yeniden adlandıran bir program</td><td>Yerinde yazma ve dosya kilidi yoktur (kart 6).</td><td>Paylaşılan dosya sistemi (Amazon EFS)</td></tr>
+    <tr><td>Bir milisaniyenin altında cevaplar, sayaçlar, oturumlar</td><td>Her istek bir HTTP isteğidir; en hızlı biçimi bile tek haneli milisaniyededir.</td><td><a href="/e2etutorial/elasticache?lang=tr">Bellek içi key-value (ElastiCache)</a></td></tr>
+    <tr><td>Yıllarca verinin üzerinde düzenli JOIN'li raporlar</td><td>Depo SQL çalıştırmaz; her rapor dosyaları yeniden tarar.</td><td><a href="/e2etutorial/redshift?lang=tr">Data warehouse (Redshift)</a>, dosyalar S3'te kalabilir</td></tr>
+  </tbody>
+</table>
+
+<h2 id="questions" data-short="Mimarın soruları"><span class="sec">M4</span>Bir mimarın sorduğu sorular, bu sırayla</h2>
+<ol>
+  <li><b>Bir dosya mı, bir kayıt mı?</b> Dosya bütün olarak yazılıp okunuyorsa object storage (Ö1). Alanları değişen bir kayıtsa database; dosyanın key'i o kaydın bir alanıdır.</li>
+  <li><b>Onu kim, nasıl okuyor?</b> Tarayıcı doğrudan okuyorsa imzalı URL (Ö9) ya da önünde bir CDN. Bucket hiçbir zaman kazara public olmamalı.</li>
+  <li><b>Key'in başında ne olmalı?</b> Listelemek istediğin grup: ziyaretçi, gün, partner (Ö2). Yoğun bir okuma bir prefix'e toplanacaksa key'leri birkaç prefix'e yay.</li>
+  <li><b>İki yazıcı aynı ada yazabilir mi?</b> Evet ise "key boşsa" ya da "ETag aynıysa" koşulu (Ö4); yanlış yazmaya karşı sürümler (Ö5).</li>
+  <li><b>Bir ay sonra, bir yıl sonra ne sıklıkla okunuyor ve ne kadar sürede geri lazım?</b> Bu sınıfı ve yaşlanma kuralını seçer (Ö6, kart 2).</li>
+  <li><b>Süresinden önce silinmemesi gereken bir kural var mı?</b> Varsa WORM kilidi, compliance ya da governance (Ö7).</li>
+  <li><b>Bir yüklemeden sonra bir şey olmalı mı?</b> Olay bildirimi (Ö8); tüketici aynı olayı iki kez işlemeye hazır olmalı.</li>
+  <li><b>Küçük dosyalar milisaniyelerde, aynı AZ'deki bir işlem kümesi tarafından okunuyor mu?</b> Evet ise asıl kopya S3 Standard'da, çalışma kopyası S3 Express One Zone'da (kart 9).</li>
+</ol>
+
+<h2 id="aws" data-short="AWS'te dosya ve nesne"><span class="sec">M5</span>AWS'te dosya ve nesne depoları ve ne zaman S3</h2>
+<p>AWS'te dosya saklayan birkaç servis var. Veri modelinde (nesne, dosya, blok, table), kopyaların sayısında ve ödeme biriminde farklılaşırlar:</p>
+<table class="data">
+  <thead><tr><th>Servis</th><th>Nedir</th><th>Ne zaman seç</th></tr></thead>
+  <tbody>
+    <tr><td><b>Amazon S3 (genel amaçlı bucket)</b></td><td>Bir Region'da object storage; veri en az üç Availability Zone'da; yedi saklama sınıfı. eu-central-1'de S3 Standard GB-ay 0,0245 USD, 1.000 PUT 0,0054 USD, 10.000 GET 0,0043 USD (Price List API, 2026-10-31).</td><td>Çoğu dosya: görseller, videolar, yedekler, log arşivi, veri gölü. Lale Market bir bucket kullanır.</td></tr>
+    <tr><td>S3 Express One Zone</td><td>Tek bir AZ'de directory bucket; "consistent single-digit millisecond first-byte read and write request latencies—up to 10x faster than S3 Standard"; varsayılan olarak bucket başına saniyede 200.000 okuma ve 100.000 yazma (<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-express-performance.html">S3 Express One Zone performance</a>). GB-ay 0,118 USD, 1.000 GET 0,0000323 USD.</td><td>Aynı AZ'deki bir işlem kümesi küçük dosyaları çok sık okuyor; asıl kopya başka yerde (kart 9).</td></tr>
+    <tr><td>S3 Tables</td><td>Apache Iceberg table'larını tutan table bucket; otomatik compaction ve snapshot yönetimi (<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-maintenance.html">S3 Tables maintenance</a>). GB-ay 0,0282 USD.</td><td>Temizlenmiş, satır bazında güncellenen ve sorgulanan analiz table'ları (kart 3).</td></tr>
+    <tr><td>S3 Vectors</td><td>Vektörleri vector index'lerde tutan ve benzerlik sorgusu yapan bucket türü. GB-ay 0,064 USD.</td><td>Embedding'ler büyük ve ucuz saklanmalı, benzerlik sorgusu saniyenin altında yeterli.</td></tr>
+    <tr><td>Amazon EFS</td><td>Paylaşılan NFS dosya sistemi; close-to-open tutarlılık, advisory dosya kilitleri (<a href="https://docs.aws.amazon.com/efs/latest/ug/features.html">EFS features</a>). Standard GB-ay 0,36 USD, Infrequent Access 0,0266 USD.</td><td>Birçok sunucu aynı dosyaları bir yolla açıp yerinde değiştiriyor ve kod değişemiyor (kart 6).</td></tr>
+    <tr><td>Amazon EBS</td><td>Tek bir EC2 instance'ı için blok disk.</td><td>Bir sunucunun ya da kendi işlettiğin bir database'in diski.</td></tr>
+  </tbody>
+</table>
+<p>S3'ün içinde birkaç seçenek bir tasarımı değiştirir:</p>
+<table class="data">
+  <thead><tr><th>Seçenek</th><th>Ne yapar</th><th>Ne zaman seç</th></tr></thead>
+  <tbody>
+    <tr><td>Saklama sınıfı ve lifecycle</td><td>Aynı nesneyi daha ucuz sınıfa taşır ya da siler; geçişler ve silmeler "asynchronous operations"dır (<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/troubleshoot-lifecycle.html">Lifecycle troubleshooting</a>). Deep Archive "minimum storage duration period of 180 days and a default retrieval time of 12 hours".</td><td>Verinin okunma sıklığı yaşla düşüyor; kart 2, 4, 7.</td></tr>
+    <tr><td>Object Lock</td><td>Compliance modunda "can't be overwritten or deleted by any user, including the root user" (<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html">Object Lock</a>).</td><td>Düzenleme WORM istiyor; fidye yazılımına karşı yedekler (kart 2, 8).</td></tr>
+    <tr><td>Koşullu yazma</td><td>PutObject, CompleteMultipartUpload ve CopyObject için If-None-Match ve If-Match; ek ücret yoktur (<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-requests.html">Conditional requests</a>).</td><td>Birden fazla yazıcı aynı key'lere yazıyor (kart 5).</td></tr>
+    <tr><td>S3 Metadata</td><td>Nesne bilgilerini journal ve live inventory table'larında tutar; journal "near real time", live inventory saatlik güncellenir (<a href="https://aws.amazon.com/s3/faqs/">S3 FAQs</a>).</td><td>Milyonlarca nesne üzerinde "hangi dosyalar, hangi sınıfta, hangi tag'le" analizi.</td></tr>
+    <tr><td>S3 Select ve S3 Object Lambda</td><td>S3 Select "no longer available to new customers" (<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/selecting-content-from-objects.html">S3 Select</a>); S3 Object Lambda 7 Kasım 2025'ten beri sadece mevcut müşterilere açık (<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/amazons3-ol-change.html">availability change</a>).</td><td>Yeni bir tasarımda bunların yerine Athena, CloudFront ile Lambda ya da istemcide işleme.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="lalemarket-arch" data-short="Lale Market'teki yeri"><span class="sec">M6</span>Lale Market'te S3'ün yeri</h2>
+<p>Lale Market on engine kullanır ve her engine tek bir iş yapar. S3 dosyaların yeridir: <code>products/</code> her ürün için bir görsel, <code>uploads/</code> satıcı panelinde yüklenen dosyalar. Ürün kaydı Aurora'da ve katalog DocumentDB'de durur. Workshop görselin key'ini ürün id'sinden kurar, bu yüzden ek bir kolon yoktur; production'da bir ürünün birden çok görseli ve boyutu olduğu için ürün row'u key'leri tutar (A2, kart 1). Satıcı paneli bir görseli imzalı URL ile doğrudan S3'ten indirir (Ö9).
+   Workshop iki yerde kısa yol kullanır. Yükleme tarayıcıdan değil, S3 Engine App üzerinden gider (2 MB sınırıyla); production'da tarayıcı imzalı bir PUT URL'siyle doğrudan yazar ve bir olay bildirimi taramayı başlatır (kart 5). Görseller CloudFront olmadan Engine App üzerinden gösterilir; production'da önünde CloudFront durur (kart 1).</p>
+
+<h2 id="decide" data-short="Karar simülasyonları"><span class="sec">M7</span>Karar simülasyonları: M2'nin beş kartı adım adım</h2>
+<p>Her simülasyon M2'deki bir kartın verisini birebir kullanır: aynı iş yükü, aynı satırlar ve ağırlıklar, aynı üç aday, aynı puanlar ve aynı gerekçeler. Fark şudur: simülasyon her adımda bir satır açar. Önce satırın ağırlığını ve nedenini, sonra her adayın puanını ve ağırlıklı katkısını görürsün; puan tablosu ve toplamlar adım adım dolar. Sonunda en uygun servisi, ikinciyi, aradaki farkı ve kartın karar paragrafını görürsün. Oynat'a basmadan önce kartı okuyup sonucu tahmin et.</p>
+<p>Beş simülasyon öğrettikleri şeye göre seçildi. Ürün görsellerinde S3'ün engine özellikleri iş yükünün kendisidir: R1'in 42 puanının tamamını alır. Yedeklerde üç saklama sınıfı R1'de birebir eşittir (36) ve kararı R5 verir; Glacier Flexible Retrieval 2,4 puan geride kalır (yakın yarış) ve bu sayfanın servisi varsayılan sınıfıyla üçüncüdür. Log arşivinde CloudWatch Logs ve OpenSearch engine uyumunda S3'ün az önündedir, S3 toplamı R5 ile kazanır. Eğitim verisinde S3'ün tek AZ'li biçimi küçük dosyaların gecikmesiyle öne geçer. Ortak çalışma klasöründe S3 net kaybeder: program bir dosya sistemi bekler. Simülasyonun puan tablosunda "R1 ara toplam" sütunu R1 alt maddelerinin katkılarının toplamını gösterir.</p>
+{{ k.sim("w_images", "Kart 1: ürün görselleri (S3 en uygun)") }}
+{{ k.sim("w_backups", "Kart 2: yedi yıllık yedekler, hangi sınıf? (R1 eşit, yakın yarış, S3 Standard üçüncü)") }}
+{{ k.sim("w_logs", "Kart 4: log arşivi (iki rakip R1'de önde, S3 toplamı kazanır)") }}
+{{ k.sim("w_training", "Kart 9: eğitim verisi (S3 Express One Zone en uygun)") }}
+{{ k.sim("w_shared", "Kart 6: ortak çalışma klasörü (EFS en uygun, S3 net kaybeder)") }}
+<p>Her kararın son cümlesine bak: "Bir koşul değişseydi". İyi bir mimar bu cümleyi karar kaydına yazar. Koşul daha sonra değişirse ekip kararın yeniden kontrol edilmesi gerektiğini bilir.</p>
+{{ k.quiz("s3-a1", "Bir hastane 30–300 MB'lık röntgenleri on yıl tutmak istiyor. Son ayınkiler sık, eskileri yılda birkaç kez ve aynı gün açılıyor. En iyi ne oturur?",
+   ["Glacier Instant Retrieval'a geçiren bir lifecycle kuralıyla S3", "Görüntü başına bir item ile DynamoDB", "Bütün görüntüler Glacier Deep Archive'da", "bytea kolonlu Aurora"],
+   0, "Büyük dosyalar ve yaşla azalan okuma S3'ün sınıflarına ve lifecycle'ına uyar (kart 2, 7). Aynı gün açılma şartı 12 saatlik geri getirmeyi zorlar; milisaniye erişimli arşiv sınıfı uygun olur.") }}
+{{ k.quiz("s3-a2", "Eski bir PHP programı paylaşılan bir klasördeki dosyaları kilitliyor ve ortasından düzenliyor; kod değişemiyor. Hangi servis ve hangi koşul cevabı değiştirir?",
+   ["EFS. Program 'oku, işle, yeni dosya yaz' biçiminde yeniden yazılsaydı S3 öne geçerdi.", "S3. Dosyalar daha küçük olsaydı EFS kazanırdı.", "S3 Express One Zone. Dosyalar daha büyük olsaydı S3 kazanırdı.", "DynamoDB. Kilit olmasaydı Aurora kazanırdı."],
+   0, "Yerinde yazma ve dosya kilidi bir dosya sisteminin işidir (kart 6, R1 · OY ve TA). Program yeniden yazılırsa S3 daha ucuz ve daha dayanıklıdır.") }}
+{{ k.quiz("s3-a3", "Bir belge uygulaması saniyede 5.000 kez bir kullanıcının dosyalarını durumları ve tag'leriyle listeliyor. Dosyalar S3'te. Metadata nerede durmalı ve neden?",
+   ["DynamoDB'de; liste alanlarla tek okuma, S3'te LIST istek başına pahalı", "S3 metadata'sında; tek yer daha basit", "Glacier'da; ucuz", "CloudWatch Logs'ta; aranabilir"],
+   0, "Kart 10: liste alanlarla birlikte saniyede binlerce kez açılır. S3'te alanlar her nesne için ayrı bir istektir ve LIST istek başına ödenir; ayda on binlerce dolar.") }}
+
+<div class="part"><b>Bölüm B</b><h2 id="partB" data-short="Bölüm B: İleri">İleri: pratikte Amazon S3</h2>
+<p>Bölüm A'daki fikirlerin S3'teki isimleri, canlı bucket'tan gerçek cevaplar, okuma ve yazma işlemleri, sınıflar ve kilitler, S3'ün diğer bucket türleri ve maliyet.</p></div>
+
+<h2 id="names" data-short="İsimler ve canlı nesne"><span class="sec">B1</span>S3'te isimler, canlı bir nesne ve bucket'ın gerçek tanımı</h2>
+<p>A2'deki nesne, bucket, key ve metadata S3'te aynı adları taşır. Bölüm A'nın terimleri değişmeden geçerlidir; yeni adlar işlemlerin adlarıdır. Diğer ürünlerdeki karşılıklar:</p>
+<table class="data">
+  <thead><tr><th>Genel fikir</th><th>MinIO</th><th>Google Cloud Storage</th><th>Amazon S3</th></tr></thead>
+  <tbody>
+    <tr><td>Nesne (A2)</td><td>object</td><td>object</td><td>object</td></tr>
+    <tr><td class="c-pk">Bucket (A2)</td><td>bucket</td><td>bucket</td><td>general purpose bucket; ayrıca directory, table ve vector bucket (B5)</td></tr>
+    <tr><td class="c-sk">Key (A2)</td><td>object name</td><td>object name</td><td>key</td></tr>
+    <tr><td>Sürüm (A7)</td><td>version ID</td><td>generation</td><td>version ID</td></tr>
+    <tr><td>WORM kilidi (A8)</td><td>object locking</td><td>retention policy, object hold</td><td>Object Lock</td></tr>
+    <tr><td>İmzalı URL (A5)</td><td>presigned URL</td><td>signed URL</td><td>presigned URL</td></tr>
+  </tbody>
+</table>
+<p>Bu gerçek bir nesnedir. Workshop canlı bucket'taki ürün görselinin metadata'sını HeadObject ile okudu:</p>
+{% call k.live("dbws-images bucket'ında products/P0001.jpg, S3'ün döndürdüğü hâliyle (HeadObject, 2026-10-31)") %}
+<pre><code>{
+  "AcceptRanges": "bytes",
+  "LastModified": "2026-10-26T18:51:00+00:00",
+  "ContentLength": 49156,
+  "ETag": "\"e288861de35064609859dae80a606a8d\"",
+  "VersionId": "p0VEeMBTLTq1OudEonYbgyhdQjfTrxMg",
+  "ContentType": "image/jpeg",
+  "ServerSideEncryption": "AES256",
+  "Metadata": {
+    "category": "Elektronik",
+    "source": "Wikimedia Commons",
+    "name": "Alpen Kablosuz Kulaklik 1",
+    "author": "R. Henrik Nilsson",
+    "license": "CC BY 4.0"
+  }
+}</code></pre>
+{% endcall %}
+<p>Aynı nesne, S3'ün adları ve bu sayfanın renkleriyle:</p>
+{{ k.anatomy([
+   {"pk": "dbws-images-179330777878-eu-central-1", "sk": "products/P0001.jpg", "attrs": [["ContentLength", "49156"], ["ContentType", "image/jpeg"], ["ETag", "e288861d…"], ["VersionId", "p0VEeMBT…"], ["x-amz-meta-name", "Alpen Kablosuz Kulaklik 1"], ["x-amz-meta-license", "CC BY 4.0"]]}],
+   "Canlı ürün görseli. Bucket ve key adresi verir; geri kalanı S3'ün sistem metadata'sı ve Seed'in yazdığı kullanıcı metadata'sıdır. Byte'lar HeadObject cevabında yoktur: HeadObject sadece metadata'yı okur.",
+   pk_name="Bucket", sk_name="Key",
+   labels={"primary": "Nesnenin adresi", "pk": "Bucket", "sk": "Key", "attrs": "Sistem ve kullanıcı metadata'sı", "note": "x-amz-meta-* kullanıcı metadata'sıdır", "items": "Nesne"}) }}
+<p>Cevabı satır satır oku:</p>
 <ul>
-  <li>Bir {{ k.term("bucket") }}, object'ler için bir kaptır. Adı benzersizdir ve bir AWS Region'ına aittir.</li>
-  <li>Bir {{ k.term("key") }}, bucket'taki bir object'in tam adıdır, örneğin <code>products/P0001.jpg</code>.</li>
-  <li>Bir object veri artı metadata'dır. Sistem metadata'sı boyutu ve <code>Content-Type</code>'ı içerir. Kullanıcı metadata'sı <code>x-amz-meta-</code> ile başlayan kendi header'larındır.</li>
+  <li><code>ContentLength</code> 49.156'dır: nesnenin byte sayısı. Öğretici listedeki ilk satır bu değeri kullanır.</li>
+  <li><code>AcceptRanges: bytes</code>, bu nesnenin byte aralığıyla okunabileceğini söyler (A5).</li>
+  <li><code>ETag</code> içeriğin özetidir. Koşullu yazmada "okuduğum hâl" bu değerle ifade edilir (A6, B3).</li>
+  <li><code>VersionId</code> güncel sürümün id'sidir; bucket'ta sürümler açık (A7).</li>
+  <li><code>ServerSideEncryption: AES256</code>, S3'ün nesneyi kendi yönettiği anahtarla şifreleyerek sakladığını söyler (SSE-S3).</li>
+  <li><code>Metadata</code> içindeki beş alan kullanıcı metadata'sıdır; HTTP'de <code>x-amz-meta-</code> önekiyle taşınır. Seed (workshop'un başlangıç verisini yazan betik) buraya düz ASCII yazar, çünkü HTTP başlıkları düz metin taşır: "Kulaklık" değil "Kulaklik".</li>
 </ul>
-<p>Bunlar Lale Market bucket'ının altı örnek key'idir. Ziyaretçi id'leri örnektir. Gerçek yükleme key'leri yüklemenin zamanını da içerir.</p>
-{{ k.sample("s3_keys", "Lale Market bucket'ındaki key'ler", key=["key"]) }}
-{% call k.sql("A1", "Seed bir ürün görselini koyar") %}
+{% call k.live("aynı bucket'ın ayarları (GetBucketVersioning, GetBucketLifecycleConfiguration, GetBucketEncryption, GetPublicAccessBlock, GetBucketOwnershipControls, 2026-10-31)") %}
+<pre><code>Versioning:        {"Status": "Enabled"}
+Lifecycle:         {"Rules": [{"ID": "expire-old-versions", "Filter": {"Prefix": ""}, "Status": "Enabled",
+                               "NoncurrentVersionExpiration": {"NoncurrentDays": 1}}],
+                    "TransitionDefaultMinimumObjectSize": "all_storage_classes_128K"}
+Encryption:        {"SSEAlgorithm": "AES256", "BucketKeyEnabled": false, "BlockedEncryptionTypes": ["SSE-C"]}
+PublicAccessBlock: {"BlockPublicAcls": true, "IgnorePublicAcls": true, "BlockPublicPolicy": true, "RestrictPublicBuckets": true}
+Ownership:         {"ObjectOwnership": "BucketOwnerEnforced"}</code></pre>
+{% endcall %}
+<p>Bucket'ın gerçek tanımı (<code>cloudformation/workshop.yaml</code> içinden):</p>
+{% call k.sql("T1", "Lale Market'in görsel bucket'ı") %}
+<pre><code>ImageBucket:
+  Type: AWS::S3::Bucket
+  Properties:
+    BucketName: !Sub dbws-images-${AWS::AccountId}-${AWS::Region}
+    VersioningConfiguration:
+      Status: Enabled
+    BucketEncryption:
+      ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+    PublicAccessBlockConfiguration:
+      BlockPublicAcls: true
+      BlockPublicPolicy: true
+      IgnorePublicAcls: true
+      RestrictPublicBuckets: true
+    OwnershipControls:
+      Rules:
+        - ObjectOwnership: BucketOwnerEnforced
+    LifecycleConfiguration:
+      Rules:
+        - Id: expire-old-versions
+          Status: Enabled
+          NoncurrentVersionExpiration:
+            NoncurrentDays: 1</code></pre>
+<table class="clause">
+  <tr><td>BucketName</td><td>Bucket adı bütün AWS'te benzersizdir; hesap numarası ve Region bu benzersizliği sağlar.</td></tr>
+  <tr><td>VersioningConfiguration: Enabled</td><td>Sürümler açık (A7, Ö5): bir yükleme ya da silme eski görseli yok etmez.</td></tr>
+  <tr><td>SSEAlgorithm: AES256</td><td>Her yeni nesne S3'ün yönettiği anahtarla şifrelenir (SSE-S3).</td></tr>
+  <tr><td>PublicAccessBlockConfiguration</td><td>Dört ayar birlikte bucket'ın public olmasını engeller: tarayıcı sadece imzalı URL ile okur (Ö9).</td></tr>
+  <tr><td>ObjectOwnership: BucketOwnerEnforced</td><td>Erişim listeleri (ACL) kapalı; bütün nesnelerin sahibi bucket'ın hesabıdır ve erişim sadece policy'lerle yönetilir.</td></tr>
+  <tr><td>NoncurrentVersionExpiration: 1</td><td>Yaşlanma kuralı (Ö6): bir sürüm güncel olmaktan çıktıktan bir gün sonra silinir. Sürümlerin faturası böylece sınırlı kalır.</td></tr>
+</table>
+{% endcall %}
+{% call k.ask("Bucket adını sonradan değiştirebilir miyim?") %}
+<p>Hayır. Yeni bir bucket oluşturur, nesneleri kopyalar ve eskisini silersin. Bucket adı bütün AWS'te benzersiz olduğu için Lale Market adına hesap numarasını ve Region'ı koyar.</p>
+{% endcall %}
+{% call k.ask("Metadata'da neden Türkçe karakter yok?") %}
+<p>Kullanıcı metadata'sı HTTP başlığı olarak taşınır ve başlıklar düz ASCII bekler. Türkçe karakter gerekiyorsa ya kodlanarak yazılır ya da (daha iyisi) asıl bilgi bir database'te tutulur. Ürün adının asıl yeri Aurora ve DocumentDB'dir; görseldeki ad sadece bir etikettir.</p>
+{% endcall %}
+
+<h2 id="reads" data-short="Okumalar, liste, imzalı URL"><span class="sec">B2</span>Okumalar: GetObject, ListObjectsV2 ve imzalı URL'ler</h2>
+<p>A5'teki okuma yollarının S3'teki adları GetObject, HeadObject ve ListObjectsV2'dir; A5'teki imzalı URL S3'te presigned URL'dir. Satıcı paneli bir ziyaretçinin yüklemelerini şöyle listeler (<code>engines/s3.py</code> içinden):</p>
+{% call k.sql("Q1", "Bir ziyaretçinin yüklemelerini listele") %}
+<pre><code>s3.list_objects_v2(Bucket=bucket, Prefix="uploads/v-7f3a/", MaxKeys=12)</code></pre>
+<table class="clause">
+  <tr><td>Prefix="uploads/v-7f3a/"</td><td>Sadece bu metinle başlayan key'leri döndür (A3, Ö2).</td></tr>
+  <tr><td>MaxKeys=12</td><td>Bu cevapta en fazla 12 key. Daha fazlası varsa cevap <code>IsTruncated: true</code> der ve bir <code>NextContinuationToken</code> verir.</td></tr>
+</table>
+{% endcall %}
+{% call k.live("canlı bucket'ta ListObjectsV2, Prefix='products/', MaxKeys=5 ve Delimiter='/' (2026-10-31)") %}
+<pre><code>Prefix "products/", MaxKeys 5:
+  products/P0001.jpg   49156 B   STANDARD   ETag e288861d…
+  products/P0002.jpg   41333 B   STANDARD   ETag 8a86e546…
+  products/P0003.jpg   48158 B   STANDARD   ETag df93118d…
+  products/P0004.jpg   67973 B   STANDARD   ETag 86dfc392…
+  products/P0005.jpg   36714 B   STANDARD   ETag f7664a36…
+  IsTruncated: true, NextContinuationToken: 1it5jMe7…
+
+Delimiter "/", no prefix:
+  CommonPrefixes: products/, uploads/</code></pre>
+{% endcall %}
+<p>Cevabı oku. Key'ler sıralıdır: P0001'den P0005'e. Her satır key, boyut, sınıf ve ETag verir; kullanıcı metadata'sı yoktur (A3'teki "metadata'ya göre liste: yapamaz" satırı). <code>IsTruncated: true</code> daha fazla görsel olduğunu söyler; devamı token ile ikinci bir istektir. Delimiter ile bucket'ın en üstünde sadece iki grup döner.</p>
+{{ k.sim("prefix", "Prefix ve delimiter: altı key") }}
+<p>Bir okuma bir nesneyi bütün olarak ya da bir aralıkla alır. Video oynatıcı ileri sardığında bir aralık ister:</p>
+{% call k.sql("Q2", "Bir videonun bir byte aralığını oku") %}
+<pre><code>s3.get_object(Bucket=bucket, Key="videos/P0001/720p.mp4", Range="bytes=52428800-53477375")</code></pre>
+<table class="clause">
+  <tr><td>Key=...</td><td>Nesnenin adresi (Ö1).</td></tr>
+  <tr><td>Range="bytes=52428800-53477375"</td><td>Sadece 50 MB'tan başlayan 1 MB'lık parçayı döndür. Cevap <code>206 Partial Content</code>'tir; ödenen veri transferi bu 1 MB'tır.</td></tr>
+</table>
+{% endcall %}
+<p>Satıcı paneli bir görseli bir uygulama sunucusundan geçirmeden indirtir. Gerçek kod budur:</p>
+{% call k.sql("Q3", "Satıcı paneli bir indirme linki imzalar") %}
+<pre><code>s3.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": "products/P0001.jpg"}, ExpiresIn=300)</code></pre>
+<table class="clause">
+  <tr><td>"get_object"</td><td>URL sadece bu nesnenin GET'ine izin verir.</td></tr>
+  <tr><td>Params={"Bucket": ..., "Key": ...}</td><td>URL'nin açtığı tek nesne.</td></tr>
+  <tr><td>ExpiresIn=300</td><td>URL 300 saniye geçerlidir. "IAM user – Valid up to 7 days when you're using AWS Signature Version 4"; bir IAM role'ünün geçici kimlik bilgileriyle imzalanan URL o oturum bitince biter (<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html">presigned URLs</a>). Engine App EC2 role'ünü kullanır.</td></tr>
+</table>
+{% endcall %}
+{{ k.sim("presign", "Zaman içinde bir imzalı URL") }}
+<p>Bir yükleme için de imzalı bir PUT URL'si üretilir; tarayıcı dosyayı doğrudan bucket'a yazar. Koşul da imzanın içine konabilir:</p>
+{% call k.sql("Q3b", "Satıcı paneli bir yükleme linki imzalar: key boşsa yaz") %}
+<pre><code>s3.generate_presigned_url("put_object", Params={"Bucket": bucket, "Key": "incoming/S0815/u-91/fatura.pdf",
+                          "ContentType": "application/pdf", "IfNoneMatch": "*"}, ExpiresIn=300)</code></pre>
+<table class="clause">
+  <tr><td>"put_object"</td><td>URL sadece bu key'e bir PUT'a izin verir.</td></tr>
+  <tr><td>"ContentType", "IfNoneMatch": "*"</td><td>Bu değerler başlık olarak imzaya girer. Tarayıcı aynı başlıkları göndermek zorundadır: "You must include in your request any headers that you use to sign the URL" (<a href="https://repost.aws/knowledge-center/s3-presigned-url-signature-mismatch">Knowledge Center</a>). Başlığı atlayan bir istek imza hatası alır, koşulu atlayamaz.</td></tr>
+</table>
+{% endcall %}
+<p>Tarayıcı başka bir alan adından istek attığı için bucket'a bir CORS kuralı eklenir (M2 kart 5).</p>
+{% call k.ask("ListObjectsV2 her zaman sıralı mı?") %}
+<p>Genel amaçlı bucket'ta evet: key'ler UTF-8 byte sırasıyla döner. S3 Express One Zone'un directory bucket'ında hayır: "ListObjectsV2 does not return objects in lexicographical (alphabetical) order" (<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-express-differences.html">directory bucket differences</a>). Sıraya güvenen bir uygulama bu farkı bilmelidir.</p>
+{% endcall %}
+{{ k.quiz("s3-q6", "ListObjectsV2 bir prefix için IsTruncated: true döndürdü. Ne yapmalısın?",
+   ["Aynı isteği daha büyük MaxKeys ile 1.000'in üstüne çıkarmak", "NextContinuationToken ile bir sonraki sayfayı istemek", "Delimiter'ı kaldırmak", "Her nesne için HeadObject çağırmak"],
+   1, "Liste sayfa sayfa döner; bir sayfa en fazla 1.000 key'dir. Devamı token ile ayrı bir istektir.") }}
+
+<h2 id="writes" data-short="Yazmalar, koşullar, sürümler"><span class="sec">B3</span>Yazmalar: PutObject, multipart, koşullu yazma ve sürümler</h2>
+<p>A6'daki yazma yollarının S3'teki adları PutObject, multipart upload ve CopyObject'tir; A6'daki koşullu yazma If-None-Match ve If-Match başlıklarıdır; A7'deki sürümler S3'te versioning'dir. Seed her ürün görselini şöyle yazar:</p>
+{% call k.sql("Q4", "Seed bir ürün görselini koyar") %}
 <pre><code>s3.put_object(Bucket=bucket, Key="products/P0001.jpg", Body=body, ContentType="image/jpeg",
               Metadata={"name": "Alpen Kablosuz Kulaklik 1", "category": "Elektronik", ...})</code></pre>
 <table class="clause">
-  <tr><td>Bucket=bucket</td><td>Workshop'un bucket'ı. Adı hesabı ve Region'ı içerir.</td></tr>
-  <tr><td>Key="products/P0001.jpg"</td><td>Key. Ürün id'sini içerir, böylece ürün sayfası key'i bir arama yapmadan oluşturabilir.</td></tr>
-  <tr><td>Body=body</td><td>Görselin byte'ları. Tek bir istek tam object'i gönderir.</td></tr>
-  <tr><td>ContentType="image/jpeg"</td><td>S3 bu değeri Content-Type header'ında döndürür, böylece tarayıcı byte'ları bir görsel olarak gösterir.</td></tr>
-  <tr><td>Metadata={...}</td><td>Kullanıcı metadata'sı. S3 her çifti bir <code>x-amz-meta-</code> header'ı olarak saklar. Seed buraya düz ASCII yazar, çünkü HTTP header'ları düz metin taşımalıdır.</td></tr>
+  <tr><td>Key="products/P0001.jpg"</td><td>Key ürün id'sini içerir; ürün sayfası key'i arama yapmadan kurar.</td></tr>
+  <tr><td>Body=body</td><td>Görselin byte'ları. Tek bir istek bütün nesneyi gönderir (Ö1); tek istekle en fazla 5 GB.</td></tr>
+  <tr><td>ContentType="image/jpeg"</td><td>S3 bu değeri okumada Content-Type başlığında döndürür; tarayıcı byte'ları görsel olarak gösterir (Ö3).</td></tr>
+  <tr><td>Metadata={...}</td><td>Kullanıcı metadata'sı; her çift bir <code>x-amz-meta-</code> başlığı olur.</td></tr>
 </table>
 {% endcall %}
-<p>Identifier'lar: ürün id'sinin sahibi katalogdur. S3 key'i onu ödünç alır, böylece görsel ve ürün ek bir kolon olmadan bağlı kalır. Her object version'ının version id'sinin sahibi S3'tür. Yükleme cevabı onu döndürür ve satıcı paneli onu gösterir.</p>
-<p>S3 strongly consistent'tir. Bir object'in başarılı bir yazmasından, üzerine yazılmasından ya da silinmesinden sonra bir sonraki okuma isteği hemen object'in en son version'ını alır
-   (<a href="https://aws.amazon.com/s3/consistency/">Amazon S3 consistency</a>).</p>
-{{ k.fig("s3-consistency.png", "client 1 color = red yazar. Client 2 daha sonra color = ruby yazar. İkinci yazmadan sonraki iki okuma da ruby döndürür.") }}
-
-<h2 id="prefixes" data-short="Klasör değil, prefix"><span class="sec">04</span>Klasörler değil, prefix'ler</h2>
-<p>Bir bucket düzdür. Konsol klasörler gösterir ama onlar sadece key'lerin ortak başlangıcıdır, yani {{ k.term("prefix") }}. ListObjectsV2 bir prefix'e göre filtreleyebilir ve key'leri bir delimiter karakterinde gruplayabilir
-   (<a href="https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html">ListObjectsV2</a>).</p>
-{% call k.sql("A2", "Satıcı paneli bir ziyaretçinin yüklemelerini listeler") %}
-<pre><code>s3.list_objects_v2(Bucket=bucket, Prefix="uploads/v-7f3a/", MaxKeys=12)</code></pre>
+<p>Büyük dosyalar parça parça yüklenir: "You can use a multipart upload for objects from 5 MB to 50 TB in size"; bir yükleme en fazla 10.000 parçadır ve bir parça 5 MiB ile 5 GiB arasıdır (<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/upload-objects.html">Uploading objects</a>, <a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html">multipart limits</a>). Parçalar paralel ve sırasız gönderilir; kesilen parça yeniden gönderilir; <code>CompleteMultipartUpload</code> gelene kadar nesne görünmez.</p>
+<p>Koşullu yazma aynı PutObject'e bir başlık ekler. Canlı bucket'ta <code>scratch/</code> altında kısa ömürlü bir nesneyle denendi ve deneme sonunda bütün sürümleri silindi:</p>
+{% call k.sql("Q5", "Koşullu yazmalar") %}
+<pre><code>s3.put_object(Bucket=bucket, Key=key, Body=b"v1 lale", IfNoneMatch="*")          # key boşsa yaz
+s3.put_object(Bucket=bucket, Key=key, Body=b"v2 lale", IfMatch='"1670fe54…"')   # ETag aynıysa yaz</code></pre>
 <table class="clause">
-  <tr><td>Prefix="uploads/v-7f3a/"</td><td>Sadece bu metinle başlayan key'leri döndür.</td></tr>
-  <tr><td>MaxKeys=12</td><td>Bu cevapta en fazla 12 key. Daha fazlası varsa cevap IsTruncated der ve bir continuation token verir.</td></tr>
+  <tr><td>IfNoneMatch="*"</td><td>Key'de nesne yoksa yaz; varsa <code>412 Precondition Failed</code> (Ö4).</td></tr>
+  <tr><td>IfMatch='"1670fe54…"'</td><td>Nesnenin ETag'i bu değerse yaz; arada değiştiyse 412. Yükleme sırasında çakışan bir işlem olursa S3 <code>409 ConditionalRequestConflict</code> döndürür ve istek yeniden denenir.</td></tr>
 </table>
 {% endcall %}
-{% call k.predict("Altı key'i kullan. A2 hangi key'leri döndürür?") %}
-<p>uploads/v-7f3a/invoice.pdf ve uploads/v-7f3a/photo.jpg. v-3c8d'nin yüklemesinin prefix'i farklıdır.</p>
+{% call k.live("canlı bucket'ta koşullu yazma ve silme denemesi, key scratch/e2e-s3-demo.txt (2026-10-31, deneme sonunda silindi)") %}
+<pre><code>1. PutObject IfNoneMatch="*"             → 200  ETag "1670fe54da713080bb58ac613fb60a64"  VersionId cLrCsaxc…
+2. PutObject IfNoneMatch="*" (again)     → PreconditionFailed: At least one of the pre-conditions you specified did not hold
+3. PutObject IfMatch="1670fe54…"         → 200  ETag "8b8ef4b3bf462803c894cf4a393b82c5"  VersionId aZ5JsnkN…
+4. PutObject IfMatch="1670fe54…" (stale) → PreconditionFailed
+5. DeleteObject (no version id)          → DeleteMarker: true, VersionId vEYwKvlv…
+6. HeadObject                            → 404 Not Found
+7. ListObjectVersions Prefix="scratch/"  → Versions: aZ5JsnkN… (IsLatest false), cLrCsaxc… (IsLatest false)
+                                           DeleteMarkers: vEYwKvlv… (IsLatest true)
+8. DeleteObject VersionId=… × 3          → after: no versions, no markers</code></pre>
 {% endcall %}
-{{ k.sim("prefix", "Prefix ve delimiter") }}
-
-<h2 id="versions" data-short="Versioning"><span class="sec">05</span>Versioning: bir yükleme eski object'i hiçbir zaman yok etmez</h2>
-<p>{{ k.term("versioning") }} açıkken bir key'e yapılan her PUT, kendi version id'si olan yeni bir version ekler. Version id'siz bir DELETE veri silmez. Bir delete marker ekler ve normal bir GET bundan sonra 404 döndürür.
-   Eski version'lar, sen onları version id'leriyle silene ya da bir lifecycle kuralı onları silene kadar kalır.</p>
-{{ k.fig("s3-versioning-put.png", "versioning açık bir bucket'a photo.gif PUT'u yeni bir version ID ekler. Eski version kalır.") }}
-{{ k.sim("versions", "İki yükleme ve bir silme") }}
+<p>Satır satır oku. 1 ve 2: "key boşsa yaz" ilk seferde yazar, ikinci seferde reddedilir. 3 ve 4: "ETag aynıysa yaz" güncel ETag ile kabul edilir ve yeni bir ETag doğar; eski ETag ile gelen ikinci güncelleme reddedilir. 5 ve 6: sürüm id'siz silme bir silme işareti ekler ve normal okuma 404 alır. 7: iki sürüm hâlâ oradadır; en üstte silme işareti. 8: sürüm id'leriyle yapılan üç silme her şeyi kalıcı olarak kaldırır (A7'deki "sürüm id'li silme" satırı).</p>
+{{ k.sim("cond", "Aynı key'e iki sekme: koşulsuz, key boşsa ve ETag aynıysa") }}
+{{ k.sim("versions", "İki yükleme ve bir silme: sürümler") }}
 {% call k.callout("analogy", "Analoji") %}
-<p>Hiçbir fotoğrafı çıkarmadığın bir fotoğraf albümü düşün. Yeni bir fotoğraf eskisinin üstüne gider ve "silindi" notu hepsinin üstüne gider. Üstteki sayfaları kaldır, eski fotoğraflar hâlâ oradadır.</p>
+<p>Koşulsuz yazma, ortak bir panoya kâğıt asmaktır: sonra asan kazanır. "Key boşsa" yazma, boş bir rafa paket bırakmaktır: raf doluysa geri dönersin. "ETag aynıysa" yazma, bir belgeyi değiştirmeden önce sayfa numarasını kontrol etmektir: biri arada yeni sayfa eklediyse önce onu okursun.</p>
 {% endcall %}
-{{ k.quiz("s3-q1", "Versioning açık. Bir kullanıcı report.pdf'i version id olmadan siliyor. Veriye ne olur?",
-   ["S3 bütün version'ları siler", "S3 bir delete marker ekler ve eski version'lar kalır", "S3 silmeyi reddeder", "S3 object'i Glacier'a taşır"],
-   1, "Delete marker en yeni version olur. Eski bir version id ile bir GET hâlâ veriyi döndürür.") }}
+{{ k.quiz("s3-q7", "Sürümler açık bir bucket'ta bir satıcı yanlışlıkla bir faturayı sildi (sürüm id'siz). Faturayı geri getirmenin en kısa yolu hangisi?",
+   ["Faturayı satıcıdan yeniden istemek", "Silme işaretini sürüm id'siyle silmek", "Bucket'ın sürümlerini kapatmak", "Bir yaşlanma kuralı eklemek"],
+   1, "Sürüm id'siz silme sadece bir işaret ekler. İşaret silinince altındaki sürüm yeniden güncel olur.") }}
 
-<h2 id="presign" data-short="Presigned URL'ler"><span class="sec">06</span>Presigned URL'ler: private bir object'e kısa süreli erişim</h2>
-<p>Lale Market bucket'ı bütün public erişimi engeller. Bir tarayıcının AWS kimlik bilgisi yoktur. Bir {{ k.term("presigned URL") }} bunu çözer: uygulama bir object üzerinde tek bir işlem için, bir süre sonu ile bir URL imzalar.
-   "The credentials used by the presigned URL are those of the AWS user who generated the URL", yani URL'yi oluşturan kullanıcının kimlik bilgileri kullanılır (<a href="https://docs.aws.amazon.com/boto3/latest/guide/s3-presigned-urls.html">Boto3: presigned URLs</a>).</p>
-{% call k.sql("A3", "Satıcı paneli bir indirme linki imzalar") %}
-<pre><code>s3.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": "products/P0001.jpg"}, ExpiresIn=300)</code></pre>
+<h2 id="classes" data-short="Sınıflar, lifecycle, Object Lock"><span class="sec">B4</span>Saklama sınıfları, lifecycle ve Object Lock</h2>
+<p>A8'deki saklama sınıfları, yaşlanma kuralı ve WORM kilidi S3'te storage class, lifecycle configuration ve Object Lock adlarını taşır. Bir nesnenin sınıfı yüklemede seçilir (<code>StorageClass="DEEP_ARCHIVE"</code>) ya da bir lifecycle kuralı onu sonra taşır.</p>
+<table class="data">
+  <caption>S3'ün sınıfları: eu-central-1 fiyatları (Price List API, 2026-10-31) ve davranışları</caption>
+  <thead><tr><th>Sınıf</th><th>GB-ay</th><th>Okuma</th><th>En kısa saklama</th><th>Kopyalar</th><th>Ne için</th></tr></thead>
+  <tbody>
+    <tr><td>S3 Standard</td><td class="num">0,0245</td><td>milisaniye</td><td>yok</td><td>en az 3 AZ</td><td>Sık okunan dosyalar</td></tr>
+    <tr><td>S3 Intelligent-Tiering</td><td class="num">0,0245'ten başlar</td><td>milisaniye (arşiv katmanları hariç)</td><td>yok</td><td>en az 3 AZ</td><td>Okunma sıklığı bilinmeyen dosyalar</td></tr>
+    <tr><td>S3 Standard-IA</td><td class="num">0,0135</td><td>milisaniye, okunan GB 0,01 USD</td><td>30 gün</td><td>en az 3 AZ</td><td>Seyrek ama hızlı gereken</td></tr>
+    <tr><td>S3 One Zone-IA</td><td class="num">0,0108</td><td>milisaniye</td><td>30 gün</td><td><b>tek AZ</b></td><td>Yeniden üretilebilen, seyrek okunan kopyalar</td></tr>
+    <tr><td>S3 Glacier Instant Retrieval</td><td class="num">0,005</td><td>milisaniye, okunan GB 0,03 USD</td><td>90 gün</td><td>en az 3 AZ</td><td>Çeyrekte bir okunan arşiv</td></tr>
+    <tr><td>S3 Glacier Flexible Retrieval</td><td class="num">0,00405</td><td>önce geri getirme: dakikalar ile saatler</td><td>90 gün</td><td>en az 3 AZ</td><td>Ara sıra geri getirilen arşiv</td></tr>
+    <tr><td>S3 Glacier Deep Archive</td><td class="num">0,0018</td><td>önce geri getirme: varsayılan 12 saat, standart GB 0,024 USD</td><td>180 gün</td><td>en az 3 AZ</td><td>Yılda bir ya da iki okunan, yıllarca tutulan</td></tr>
+    <tr><td>S3 Express One Zone (ayrı bucket türü, yedi sınıfa dahil değil)</td><td class="num">0,118</td><td>tek haneli milisaniye</td><td>yok</td><td><b>tek AZ</b></td><td>Aynı AZ'deki işlem kümesinin sık okuduğu küçük dosyalar (B5)</td></tr>
+  </tbody>
+</table>
+<p>Kaynaklar: en kısa saklama ve geri getirme süreleri <a href="https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_s3.StorageClass.html">StorageClass</a> ve <a href="https://aws.amazon.com/s3/cost-optimization/">S3 cost optimization</a>; Deep Archive "replicated and stored across at least three geographically-dispersed Availability Zones". Fiyatlar bölgeye ve tarihe göre değişir. Athena varsayılan olarak sadece arşiv dışı sınıflardaki nesneleri okur; Flexible Retrieval ve Deep Archive'daki nesneler önce geri getirilir ve table'da <code>read_restored_glacier_objects</code> açılır (<a href="https://docs.aws.amazon.com/athena/latest/ug/release-notes.html">Athena release notes</a>). Denetim arşivi bu yüzden Glacier Instant Retrieval'dadır (M2 kart 8).</p>
+{% call k.sql("Q6", "Bir log arşivi kuralı: 30 gün sonra arşiv sınıfı, iki yıl sonra silme") %}
+<pre><code>{"Rules": [{
+  "ID": "logs-archive",
+  "Filter": {"Prefix": "logs/"},
+  "Status": "Enabled",
+  "Transitions": [{"Days": 30, "StorageClass": "GLACIER_IR"}],
+  "Expiration": {"Days": 730},
+  "NoncurrentVersionExpiration": {"NoncurrentDays": 7}
+}]}</code></pre>
 <table class="clause">
-  <tr><td>"get_object"</td><td>URL sadece object'in bir GET'ine izin verir.</td></tr>
-  <tr><td>Params={"Bucket": ..., "Key": ...}</td><td>URL'nin açtığı tek object.</td></tr>
-  <tr><td>ExpiresIn=300</td><td>URL 300 saniye geçerlidir. SDK'larla en fazla 7 gündür. Geçici kimlik bilgileriyle imzalanmış bir URL'nin süresi en geç o kimlik bilgileriyle biter.</td></tr>
+  <tr><td>Filter: Prefix "logs/"</td><td>Kural sadece log'lara uygulanır; görseller etkilenmez (Ö2).</td></tr>
+  <tr><td>Transitions: 30 gün, GLACIER_IR</td><td>30 günlük log'lar Glacier Instant Retrieval'a geçer; okuma milisaniyede kalır, GB fiyatı beşte birden azına iner (Ö6).</td></tr>
+  <tr><td>Expiration: 730 gün</td><td>İki yıl sonra silinir. Kural arka planda çalışır; silme o gün içinde değil, bir süre sonra olur.</td></tr>
+  <tr><td>NoncurrentVersionExpiration: 7</td><td>Sürümler açıksa eski sürümler bir hafta sonra silinir.</td></tr>
 </table>
 {% endcall %}
-{{ k.sim("presign", "Zaman içinde bir presigned URL") }}
-{{ k.quiz("s3-q2", "Bir presigned URL neden kısa ömürlü olmalı?",
-   ["URL'nin süresi dolunca S3 object'i siler", "URL'ye sahip olan herkes onu süresi dolana kadar kullanabilir", "Presigned URL'ler sadece bir kez çalışır", "Uzun bir süre indirmeyi yavaşlatır"],
-   1, "URL'nin kendisi izindir. Örneğin bir log'da sızarsa süre zararı sınırlar.") }}
-
-<div class="part"><b>Bölüm 2</b><h2 id="part2" data-short="BÖLÜM 2: Amazon S3">Amazon S3: AWS servisi</h2>
-<p>Dayanıklılık, storage class'lar, lifecycle ve erişim.</p></div>
-
-<h2 id="service" data-short="Dayanıklılık, class'lar"><span class="sec">07</span>Dayanıklılık, storage class'lar ve lifecycle</h2>
-<p>S3 bölgesel bir servistir. AWS, verinin bir Region'daki Availability Zone'lara dağıtılarak saklandığı S3 için 11 dokuzluk (99.999999999%) dayanıklılık belirtir
-   (<a href="https://aws.amazon.com/blogs/storage/aws-reinvent-recap-break-down-data-silos-with-a-data-lake-on-amazon-s3/">AWS Storage Blog</a>).
-   Bir bucket'taki veri miktarında ya da object sayısında sınır yoktur.</p>
-<p>Her object'in bir {{ k.term("storage class") }}'ı vardır. Class'lar GB başına fiyatta, bir okumanın maliyetinde ve veriyi geri getirme süresinde farklılaşır. Bir {{ k.term("lifecycle rule") }}, object'leri belirli bir gün sayısından sonra başka bir class'a taşır ya da siler.</p>
+<p>Object Lock bucket'ta açılır ve sürümler ister; bir nesneye yazma anında bir retention verilir:</p>
+{% call k.sql("Q7", "Denetim dosyasını yedi yıl kilitle") %}
+<pre><code>s3.put_object(Bucket="audit-archive", Key="audit/dt=2026-10-30/part-0.parquet", Body=body,
+              ObjectLockMode="COMPLIANCE", ObjectLockRetainUntilDate="2033-10-30T00:00:00Z")
+s3.put_object_legal_hold(Bucket="audit-archive", Key="audit/dt=2026-10-30/part-0.parquet",
+                         LegalHold={"Status": "ON"})</code></pre>
+<table class="clause">
+  <tr><td>ObjectLockMode="COMPLIANCE"</td><td>"a protected object version can't be overwritten or deleted by any user, including the root user"; mod değişmez, süre kısalmaz (<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html">Object Lock</a>, Ö7).</td></tr>
+  <tr><td>ObjectLockRetainUntilDate</td><td>Kilidin bittiği tarih; sonra bir lifecycle kuralı nesneyi silebilir.</td></tr>
+  <tr><td>LegalHold ON</td><td>Süresiz kilit; soruşturma bitince <code>OFF</code> yapılır. Retention ile birlikte de konabilir.</td></tr>
+</table>
+{% endcall %}
 <table class="data">
-  <thead><tr><th>Storage class</th><th>Şu tür veri için</th><th>Örnek</th></tr></thead>
+  <caption>bütün durumlar: kilitli bir sürüm ve lifecycle kuralı (sürümleri açık bucket)</caption>
+  <thead><tr><th>Durum</th><th>Ne olur</th></tr></thead>
   <tbody>
-    <tr><td>S3 Standard</td><td>Sık okunan.</td><td>Lale Market'in ürün görselleri.</td></tr>
-    <tr><td>S3 Intelligent-Tiering</td><td>Bilinmeyen bir pattern'le okunan. S3 onu tier'lar arasında kendisi taşır.</td><td>Kullanıcı yüklemeleri.</td></tr>
-    <tr><td>S3 Standard-IA</td><td>Nadiren okunan ama biri okuduğunda hızlı gereken.</td><td>Geçen yılın faturaları.</td></tr>
-    <tr><td>S3 Glacier class'ları</td><td>Arşivlenmiş. Geri getirme, class'a göre milisaniyelerden saatlere kadar sürer.</td><td>Yedekler ve yasal kayıtlar.</td></tr>
+    <tr><td>Expiration kuralı, nesne kilitli</td><td>Kural sürüm id'siz bir silme yapar: bir silme işareti koyar; kilitli sürüm durur ve güncel olmayan (noncurrent) sürüm olur.</td></tr>
+    <tr><td>NoncurrentVersionExpiration kuralı, retention bitmemiş</td><td><b>Silemez.</b> Kural kilitli sürümü retention tarihine kadar bekler.</td></tr>
+    <tr><td>NoncurrentVersionExpiration kuralı, retention bitmiş</td><td>Sürüm kalıcı olarak silinir. Yedi yıl sonra verinin gerçekten gitmesi için iki kural birlikte yazılır.</td></tr>
+    <tr><td>Legal hold açık</td><td><b>Silemez</b>, retention bitmiş olsa bile; legal hold kaldırılınca kural siler.</td></tr>
+    <tr><td>Yetkili biri sürüm id'siyle silmeye çalışır</td><td>Compliance'ta <b>yapamaz</b>; governance'ta sadece bypass izniyle yapar.</td></tr>
   </tbody>
 </table>
+<p>Kaynak: "S3 Lifecycle expiration rules can't delete objects that are locked until the retention date has passed" (<a href="https://aws.amazon.com/blogs/storage/maintaining-object-immutability-by-automatically-extending-amazon-s3-object-lock-retention-periods/">AWS Storage Blog</a>), lifecycle'ın kilitli noncurrent sürümleri silmemesi (<a href="https://repost.aws/knowledge-center/s3-object-lock-delete">Knowledge Center</a>).</p>
+{% call k.ask("Governance ile compliance arasındaki fark ne zaman önemli?") %}
+<p>Governance modunda <code>s3:BypassGovernanceRetention</code> izni olan biri kilidi kaldırabilir; bu, kuralı test ederken ya da bir iç politika için uygundur. Bir düzenleme "kimse silemesin" diyorsa compliance gerekir. Compliance'ta yanlış bir süreyi düzeltmenin tek yolu hesabın kendisini silmektir; bu yüzden önce governance ile denenir.</p>
+{% endcall %}
+{% call k.predict("1 KB'lık 3.000 partner dosyası her gün geliyor. Lifecycle 90 gün sonra Standard-IA'ya taşıyacak. Fatura düşer mi?") %}
+<p>Düşmez: 128 KB'tan küçük nesneler varsayılan olarak taşınmaz; taşınsalar bile her taşıma bir istek ücretidir ve kazanç küçüktür. Küçük dosyaları birleştirmek (bir günlük dosya ya da Parquet) hem taşımayı hem sorguyu ucuzlatır (M2 kart 3).</p>
+{% endcall %}
+
+<h2 id="more" data-short="Olaylar ve diğer bucket türleri"><span class="sec">B5</span>Olay bildirimleri, S3 Express One Zone, S3 Tables, S3 Metadata</h2>
+<p>A9'daki olay bildirimleri S3'te S3 Event Notifications adını taşır: hedef bir SNS konusu, bir SQS kuyruğu, bir Lambda fonksiyonu ya da EventBridge olabilir. "Event notifications are designed to be delivered at least once. Typically, event notifications are delivered in seconds but can sometimes take a minute or longer." (<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/EventNotifications.html">Event notifications</a>, Ö8).</p>
+<div class="flow">
+  <div class="box pk">PutObject<small>incoming/S0815/u-91/fatura.pdf</small></div><span class="arrow">→</span>
+  <div class="box">S3 Event Notification<small>s3:ObjectCreated:Put, prefix incoming/</small></div><span class="arrow">→</span>
+  <div class="box">SQS kuyruğu<small>mesaj en az bir kez</small></div><span class="arrow">→</span>
+  <div class="box hit">tarama işi<small>temizse media/ prefix'ine kopyalar</small></div>
+</div>
+<p class="flow-cap">Kart 5'in production düzeni. Kuyruk ani yükü tamponlar; aynı mesaj iki kez gelirse tarama aynı sonucu aynı key'e yazar. Virüslü çıkan dosya media/'ya kopyalanmaz; ayrı bir prefix'e taşınır ve satıcıya bildirilir, incoming/'da kalan her şeyi yedi gün sonra lifecycle siler.</p>
+<p>S3'ün genel amaçlı bucket'ı dışında üç bucket türü daha vardır. Üçü de S3'tür, ama farklı bir veri modeli taşır; M2'de ayrı aday olmalarının nedeni budur:</p>
 <table class="data">
-  <thead><tr><th>Görev</th><th>Kendi dosya sunucuların</th><th>Amazon S3</th></tr></thead>
+  <caption>S3'ün bucket türleri: ne tutar, genel amaçlı bucket'tan farkı</caption>
+  <thead><tr><th>Tür</th><th>Ne tutar</th><th>Farkı (bu sayfanın kartları için önemli olanlar)</th></tr></thead>
   <tbody>
-    <tr><td>Kapasite</td><td>Diskleri ihtiyaç duymadan önce satın alırsın.</td><td>Sınır yok. Sakladığın kadar ödersin.</td></tr>
-    <tr><td>Verinin kopyaları</td><td>RAID, yedekler ve disk değişimini sen yürütürsün.</td><td>Birkaç Availability Zone'da veri. AWS kaybolan kopyaları yerine koyar.</td></tr>
-    <tr><td>Erişim kontrolü</td><td>Sunucu başına dosya izinleri.</td><td>IAM policy'leri, bucket policy'leri, Block Public Access.</td></tr>
-    <tr><td>Eski veri</td><td>Dosyaları taşıyan ya da silen script'ler.</td><td>Lifecycle kuralları.</td></tr>
-    <tr><td>Şifreleme</td><td>Sen ayarlarsın.</td><td>Yeni object'ler için varsayılan server-side encryption.</td></tr>
+    <tr><td>General purpose bucket</td><td>Nesneler, düz isim alanı, yedi sınıf</td><td>Bu sayfanın "S3"ü. Bölüm A'nın bütün özellikleri.</td></tr>
+    <tr><td>Directory bucket (S3 Express One Zone)</td><td>Nesneler, hiyerarşik dizinler, tek AZ</td><td>Tek haneli milisaniye; nesneye ekleme ve RenameObject vardır. "Directory buckets organize data hierarchically into directories as opposed to the flat storage structure of general purpose buckets." Sürümler, Object Lock, Event Notifications, lifecycle geçişleri ve nesne tag'leri yoktur; liste sıralı değildir; 90 gün hiç istek almayan bucket geçici olarak pasif olur (<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-express-differences.html">differences</a>, <a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/directory-buckets-overview.html">directory buckets</a>).</td></tr>
+    <tr><td>Table bucket (S3 Tables)</td><td>Apache Iceberg table'ları</td><td>Satır ekleme, silme ve snapshot'lar; otomatik compaction, varsayılan hedef dosya 512 MB (<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-maintenance.html">maintenance</a>). Ham dosyalar olduğu gibi durmaz.</td></tr>
+    <tr><td>Vector bucket (S3 Vectors)</td><td>Vektörler ve vector index'ler</td><td>Benzerlik sorgusu; bu sayfanın hiçbir kartı benzerlik araması istemez.</td></tr>
+  </tbody>
+</table>
+<p>S3 Metadata, bir genel amaçlı bucket'ın nesne bilgilerini Iceberg table'larında tutar: journal table değişiklikleri "near real time" kaydeder, live inventory table bütün nesneleri saatlik günceller (<a href="https://aws.amazon.com/s3/faqs/">S3 FAQs</a>). A3'teki "metadata'ya göre liste: yapamaz" satırının analiz için cevabı budur; saniyede binlerce kez açılan bir liste için değil (M2 kart 10).</p>
+{% call k.ask("S3 Select ile dosyanın içinden birkaç satır seçemez miyim?") %}
+<p>S3 Select tek bir nesnenin içinde SQL ile süzme yapıyordu, ama "Amazon S3 Select is no longer available to new customers" (<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/selecting-content-from-objects.html">S3 Select</a>). Yeni bir tasarımda Athena birçok dosyayı SQL ile okur, ya da uygulama byte aralığıyla okuyup kendisi süzer. Okurken dönüştürme yapan S3 Object Lambda da 7 Kasım 2025'ten beri yeni müşterilere kapalıdır.</p>
+{% endcall %}
+{% call k.ask("S3 Express One Zone neden her yerde kullanılmıyor, daha hızlı?") %}
+<p>Hız tek AZ'den ve farklı bir bucket türünden gelir. Veri tek AZ'dedir; GB fiyatı eu-central-1'de Standard'ın yaklaşık beş katıdır; sürüm, kilit ve olay bildirimi yoktur. Asıl kopya için değil, aynı AZ'deki bir işlem kümesinin sık okuduğu çalışma kopyası için tasarlanmıştır (M2 kart 9).</p>
+{% endcall %}
+
+<h2 id="cost" data-short="Performans ve maliyet"><span class="sec">B6</span>Performans ve maliyet: istek hızı, istek fiyatı, GB fiyatı</h2>
+<p>A4'teki key aralıklarına bölünmenin S3'teki sayısı: "Your application can achieve at least 3,500 PUT/COPY/POST/DELETE or 5,500 GET/HEAD requests per second per partitioned Amazon S3 prefix", prefix sayısında sınır yoktur ve S3 yeni bir hıza ölçeklenirken geçici olarak <code>503 SlowDown</code> döndürebilir (<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance-design-patterns.html">performance design patterns</a>). SDK'lar bu cevabı bekleyerek yeniden dener.</p>
+<table class="data">
+  <caption>bütün durumlar: iş yükünün biçimi ve faturası (eu-central-1, Price List API, 2026-10-31)</caption>
+  <thead><tr><th>Biçim</th><th>Faturayı ne belirler</th><th>Örnek hesap</th></tr></thead>
+  <tbody>
+    <tr><td>Az sayıda büyük dosya, nadiren okunur</td><td>GB-ay fiyatı ve sınıf</td><td>100 TB yedek: Standard'da ayda yaklaşık 2.458 USD, Deep Archive'da 184 USD (kart 2)</td></tr>
+    <tr><td>Çok okunan görseller, önünde CDN</td><td>Az; storage ve CDN'in kaçırdığı istekler</td><td>120 GB: ayda yaklaşık 2,9 USD storage (kart 1)</td></tr>
+    <tr><td>Milyonlarca küçük dosya, sık okunur</td><td>İstek fiyatı</td><td>800 milyon GET: Standard'da yaklaşık 344 USD, Express One Zone'da 26 USD (kart 9)</td></tr>
+    <tr><td>Saniyede binlerce liste</td><td>LIST istek fiyatı (1.000'de 0,0054 USD)</td><td>Saniyede 5.000 liste ayda 70.000 USD'ın üzerinde (kart 10)</td></tr>
+    <tr><td>Küçük dosyaların arşive taşınması</td><td>Taşıma isteği ücreti; 128 KB altı varsayılan olarak taşınmaz</td><td>1 KB'lık 3.000 dosya/gün: birleştirmek daha ucuz</td></tr>
+    <tr><td>Sürümleri açık, sık üstüne yazılan dosyalar</td><td>Her sürüm ayrıca saklanır</td><td>Lifecycle eski sürümleri bir gün sonra siler (B1)</td></tr>
+    <tr><td>İnternete giden byte'lar</td><td>Veri transferi: S3'ten internete çıkan GB ücretlidir; S3'ten CloudFront'a giden trafik ücretsizdir ve CloudFront izleyiciye giden GB'ı ücretlendirir</td><td>Görseller ve videolar CloudFront üzerinden çıkar (kart 1, 7; <a href="https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Introduction.html">CloudFront pricing</a>)</td></tr>
+  </tbody>
+</table>
+{{ k.quiz("s3-q8", "Bir eğitim işi aynı prefix'teki milyonlarca dosyayı birden okumaya başlıyor ve ilk dakikalarda 503 SlowDown görüyor. Ne oluyor?",
+   ["Bucket doldu", "S3 prefix'i yeni hıza göre bölüyor; istekler yeniden denenmeli ve key'ler birkaç prefix'e yayılabilir", "Dosyalar arşiv sınıfında", "İmzalı URL'lerin süresi doldu"],
+   1, "Her prefix saniyede en az 5.500 GET alır ve S3 daha fazlası için prefix'i kendisi böler. Bölme sürerken geçici 503 gelir.") }}
+
+<div class="part"><b>Bölüm C</b><h2 id="partC" data-short="Bölüm C: AWS servisi">AWS servisi: S3'ün senin için çalıştırdıkları</h2>
+<p>Bir dosya deposunu kendin çalıştırdığında ne yapman gerekir ve bunun yerine AWS ne yapar.</p></div>
+
+<h2 id="selfrun" data-short="Kendin çalıştırırsan"><span class="sec">C1</span>Bir object storage'ı kendin çalıştırdığında ne yapmalısın</h2>
+<p>MinIO gibi açık kaynak bir object storage aynı API'yı kendi makinelerinde verir. Birini kendin çalıştırdığında şu görevleri çözmelisin:</p>
+<ol>
+  <li><b>Diskler ve makineler.</b> Kapasiteyi ihtiyaç duymadan önce satın al; dolmadan önce yeni makineleri ekle.</li>
+  <li><b>Kopyalar.</b> Veriyi birkaç makineye ve birkaç veri merkezine koru (tam kopya ya da erasure coding: dosyayı parçalara ve eşlik parçalarına bölüp birkaç parça kaybolsa da yeniden kurmak), bozulan diski değiştir ve eksik parçaları yeniden üret.</li>
+  <li><b>Ölçek.</b> Key aralıklarını ve yükü makineler arasında dengele; ani yükte kapasite ekle.</li>
+  <li><b>Ucuz katman.</b> Soğuyan veri için ayrı ve ucuz bir katman kur ve veriyi oraya taşı.</li>
+  <li><b>Güvenlik ve yamalar.</b> Kimlik doğrulama, şifreleme anahtarları, sertifikalar ve her makinenin yazılım güncellemeleri.</li>
+</ol>
+
+<h2 id="service" data-short="Servis olarak S3"><span class="sec">C2</span>S3 senin için ne yapar</h2>
+<p>S3 sunucusuzdur: bir bucket oluşturur ve istek gönderirsin. Kapasite planı ve makine yoktur. "The total volume of data and number of objects you can store in Amazon S3 are unlimited" (<a href="https://aws.amazon.com/s3/faqs/">S3 FAQs</a>).</p>
+<table class="data">
+  <thead><tr><th>Görev</th><th>Kendi dosya sunucuların ya da MinIO cluster'ın</th><th>Amazon S3</th></tr></thead>
+  <tbody>
+    <tr><td>Kapasite</td><td>Diskleri ihtiyaçtan önce satın alırsın.</td><td>Sınır yoktur; saklanan GB ve istekler ödenir.</td></tr>
+    <tr><td>Verinin kopyaları</td><td>Kopyaları, disk değişimini ve onarımı sen yürütürsün.</td><td>Veri en az üç Availability Zone'da; 11 dokuzluk dayanıklılık için tasarlanmış. Tek AZ isteyen S3 Express One Zone'u seçer.</td></tr>
+    <tr><td>Yük</td><td>Makine ekler ve dengelersin.</td><td>Prefix'ler yüke göre kendiliğinden bölünür.</td></tr>
+    <tr><td>Ucuz katman</td><td>Ayrı bir depo kurar ve taşıma işleri yazarsın.</td><td>Yedi sınıf ve lifecycle kuralları.</td></tr>
+    <tr><td>Erişim kontrolü</td><td>Sunucu başına izinler.</td><td>IAM policy'leri, bucket policy'leri, Block Public Access, imzalı URL'ler.</td></tr>
+    <tr><td>Şifreleme</td><td>Anahtarları sen yönetirsin.</td><td>Yeni nesneler varsayılan olarak şifrelenir (SSE-S3); istenirse KMS anahtarları.</td></tr>
+    <tr><td>Dağıtım</td><td>Web sunucuları ve önbellek kurarsın.</td><td>CloudFront bucket'tan okur; origin access control bucket'ı sadece ona açar.</td></tr>
   </tbody>
 </table>
 
-<h2 id="lalemarket" data-short="Lale Market'te S3"><span class="sec">08</span>Lale Market'te S3</h2>
+<h2 id="lalemarket" data-short="Lale Market'te S3"><span class="sec">C3</span>Lale Market'te S3</h2>
 <ul>
-  <li>Tek bir bucket: <code>dbws-images-&lt;account&gt;-&lt;region&gt;</code>. Block Public Access açık, SSE-S3 (AES256) şifreleme ve "bucket owner enforced" object ownership.</li>
-  <li>S3 Engine App, S3'e bir gateway VPC endpoint üzerinden ulaşır ve her isteği kendi IAM role'ü ile imzalar (SigV4).</li>
-  <li>Seed <code>products/</code> altındaki object'leri siler ve her ürün için isim, kategori, yazar ve lisansı kullanıcı metadata'sı olarak taşıyan bir görsel koyar.</li>
-  <li>Satıcı paneli 2 MB'a kadar dosyaları ürün id'sini metadata olarak taşıyarak <code>uploads/&lt;visitor&gt;/&lt;time&gt;-&lt;file name&gt;</code>'a yükler ve onları ListObjectsV2 ile listeler.</li>
-  <li>Versioning açık. <code>expire-old-versions</code> lifecycle kuralı bir version'ı güncel olmaktan çıktıktan 1 gün sonra siler. Reset <code>uploads/</code> altındaki object'leri siler.</li>
+  <li>Tek bir bucket: <code>dbws-images-179330777878-eu-central-1</code>. Block Public Access açık, SSE-S3 (AES256) şifreleme, SSE-C kapalı ve "bucket owner enforced" sahiplik (B1).</li>
+  <li>S3 Engine App private bir subnet'teki bir EC2 instance'ında çalışır; S3'e bir gateway VPC endpoint üzerinden ulaşır ve her isteği kendi IAM role'üyle imzalar (SigV4). Bucket policy güvensiz (HTTP) erişimi reddeder.</li>
+  <li>Seed <code>products/</code> altındaki nesneleri siler ve her ürün için ad, kategori, yazar, kaynak ve lisansı kullanıcı metadata'sı olarak taşıyan bir görsel koyar.</li>
+  <li>Satıcı paneli 2 MB'a kadar dosyaları ürün id'sini metadata olarak taşıyarak <code>uploads/&lt;ziyaretçi&gt;/&lt;zaman&gt;-&lt;dosya adı&gt;</code>'a yükler ve onları ListObjectsV2 ile listeler. Ürün görselini 300 saniyelik bir imzalı URL ile indirtir.</li>
+  <li>Versioning açık; <code>expire-old-versions</code> kuralı bir sürümü güncel olmaktan çıktıktan bir gün sonra siler. Reset <code>uploads/</code> altındaki nesneleri siler.</li>
 </ul>
 
-<h2 id="recall" data-short="Hatırlama testi"><span class="sec">09</span>Hatırlama testi</h2>
+<h2 id="recall" data-short="Hatırlama testi" data-group="Sonunda">Hatırlama testi</h2>
+<p>Bölümlere geri bakmadan cevapla.</p>
 {{ k.quiz("s3-r1", "Bir S3 bucket'ında \"klasör\" nedir?",
-   ["Başka object'leri tutan bir kap object'i", "Bazı key'lerin ortak başlangıcı, yani bir prefix", "Bucket'ın içinde ikinci bir bucket", "S3 sunucularında bir dosya sistemi dizini"],
-   1, "Bir bucket düzdür. Konsol key'leri slash'te gruplar ve grupları klasör olarak gösterir.") }}
-{{ k.quiz("s3-r2", "Bir ürünün fiyatı nereye aittir, S3 metadata'sına mı, bir database'e mi?",
-   ["Görselin yanında, S3 metadata'sına", "Bir database'e, çünkü mağaza onu sorgular ve değiştirir", "Görselin key'ine", "Bir presigned URL'ye"],
-   1, "S3 metadata'yı sorgulayamaz ya da kısmen değiştiremez. İş verisi, görselin key'ini saklayan bir database'e aittir.") }}
-{{ k.quiz("s3-r3", "Lale Market'in lifecycle kuralı ne yapar?",
-   ["Güncel görselleri her gün siler", "Bir version'ı güncel olmaktan çıktıktan 1 gün sonra siler", "Görselleri Glacier'a taşır", "Bucket'ı public yapar"],
-   1, "expire-old-versions kuralı sadece güncel version'ları uzun süre tutar. Eski version'lar bir gün kalır.") }}
+   ["Başka nesneleri tutan bir kap nesnesi", "Bazı key'lerin ortak başlangıcı, yani bir prefix", "Bucket'ın içinde ikinci bir bucket", "S3 sunucularında bir dosya sistemi dizini"],
+   1, "Genel amaçlı bucket düzdür. Konsol key'leri slash'te gruplar ve grupları klasör olarak gösterir.") }}
+{{ k.quiz("s3-r2", "Bir ürünün fiyatı nereye aittir?",
+   ["Görselin kullanıcı metadata'sına", "Bir database'e; mağaza onu sorgular ve değiştirir", "Görselin key'ine", "Bir imzalı URL'ye"],
+   1, "Metadata aranamaz ve yerinde değişmez. İş verisi, görselin key'ini de tutan bir database'e aittir.") }}
+{{ k.quiz("s3-r3", "İki istemci aynı key'e koşulsuz yazdı ve ikisi de 200 OK aldı. Sessiz kaybı ne önlerdi?",
+   ["Daha uzun bir imzalı URL", "If-None-Match ya da If-Match ile koşullu yazma", "Bir yaşlanma kuralı", "Daha ucuz bir sınıf"],
+   1, "Koşullu yazma testi ve yazmayı tek adımda yapar ve ikinci isteği 412 ile reddeder.") }}
+{{ k.quiz("s3-r4", "Yılda bir okunan ve yedi yıl tutulan 100 TB yedek için hangi sınıf ve hangi koşul cevabı değiştirir?",
+   ["Glacier Deep Archive. Talepler çoğunlukla aynı gün cevap isteseydi Glacier Flexible Retrieval kazanırdı.", "S3 Standard. Dosyalar büyük olsaydı Deep Archive kazanırdı.", "S3 Express One Zone. Bütçe büyük olsaydı Standard kazanırdı.", "Intelligent-Tiering. Dosyalar küçük olsaydı Standard kazanırdı."],
+   0, "Kart 2: üç sınıf aynı engine'dir; kararı GB-ay fiyatı verir. Deep Archive'ın varsayılan 12 saatlik geri getirmesi, aynı gün şartı sıklaşınca dakikalar ile saatler içinde geri getiren Flexible Retrieval'ı öne çıkarır.") }}
 
 <section class="lesson-foot">
   <h2>Daha derine in</h2>
   <p><b>Ana kaynak:</b> <a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html">What is Amazon S3?</a>, sonra
-     <a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html">Retaining multiple versions of objects with S3 Versioning</a>.</p>
-  <p><b>Mağazada kullan:</b> Guided görevde <a href="/guided-e-commerce-app/?adim=36">36. adımda</a> satıcı paneli bir görseli presigned URL ile doğrudan S3'ten indirir, <a href="/guided-e-commerce-app/?adim=37">37. adımda</a> bir dosya yükler ve version id'sini gösterir.</p>
-  <p><b>Soru sor.</b> Bir kısım net değilse eğitmenine ya da AI asistanına sor. Projenin dosyalarını getir ve onların key'lerini ve lifecycle kurallarını birlikte tasarlayın.</p>
+     <a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance-design-patterns.html">Performance design patterns</a> ve
+     <a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-requests.html">Conditional requests</a>.</p>
+  <p><b>Mağazada kullan:</b> Guided görevde <a href="/guided-e-commerce-app/?adim=36">36. adımda</a> satıcı paneli bir görseli imzalı URL ile doğrudan S3'ten indirir, <a href="/guided-e-commerce-app/?adim=37">37. adımda</a> bir dosya yükler ve sürüm id'sini gösterir.</p>
+  <p><b>Soru sor.</b> Bir kısım net değilse eğitmenine ya da AI asistanına sor. Projenin dosyalarını getir ve onların key'lerini, sınıflarını ve yaşlanma kurallarını birlikte tasarlayın.</p>
 </section>
 {% endblock %}
