@@ -1,261 +1,1046 @@
 {% extends "e2e/_base.html" %}
 {% import "e2e/_macros.html" as k with context %}
-{# Turkish version of redshift.html. Terms stay in English; the explanations are Turkish. Keep both files in step. #}
+{# Redshift, Turkish, model 2 (weighted cards from e2e_usecases_w.REDSHIFT_W). The English redshift.html is the older model 1 page and stays untouched. #}
 {% block body %}
 
-<h2 id="goal" data-short="Ne öğreneceksin"><span class="sec">00</span>Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
-<p>Bölüm 01 mimarın kararını verir: Amazon Redshift nereye oturur, nereye oturmaz. Sonra tutorial iki bölümden oluşur.
-   Bölüm 1, columnar bir data warehouse'un nasıl çalıştığını öğretir: fact'ler ve dimension'lar, kolon bazlı saklama, zone map'ler ve sort key'ler, paralel slice'lar. Bölüm 2, AWS servisini ve Lale Market'in onu nasıl kullandığını gösterir.</p>
-<p>Örnekler Lale Market'in satış raporlarından gelir. Bazen başka bir örnek bir fikri daha kolay gösterir. O zaman tutorial onu kullanır: bir hesap tablosu, bir kütüphane rafı, oy sayan bir ekip.</p>
+<h2 id="goal" data-short="Ne öğreneceksin" data-group="Başlarken">Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
+<p>Bu sayfa genel fikirden AWS servisine dört adımda gider:</p>
+<ol>
+  <li><b>Bölüm A, Temel.</b> Raporlar için kurulan ayrı bir database nedir; satışların ve onları anlatan table'ların düzeni, verinin kolon kolon saklanması, sıkıştırma, okunmayacak blokları atlamak, işi birçok makineye bölmek, veriyi yüklemek ve değiştirmek, analitik SQL ve ön hesaplama, compute ile storage'ın ayrılması. Her kavram bütün durumlarıyla bir tabloda verilir ve bölüm sekiz özelliğin (Ö1–Ö8) listesi ve PostgreSQL / Athena / Redshift matrisiyle biter. Fikirler her columnar warehouse'ta aynıdır.</li>
+  <li><b>Mimar gözüyle.</b> Böyle bir database ne zaman doğru seçimdir, ne zaman değildir: on use case, her birinde bu iş yüküne en uygun servis, iki alternatifin aynı gereksinimlere cevabı ve yine de Redshift seçersek artı ve eksilerimiz. Sonra AWS'teki analitik seçenekleri ve Redshift Serverless ile provisioned cluster arasındaki seçim. Kartlardan kurulmuş beş karar simülasyonu.</li>
+  <li><b>Bölüm B, İleri.</b> Pratikte Redshift: canlı Lale Market table'ı, rapor sorgusu ve planı, dağıtım ve join, yükleme, güncelleme ve VACUUM, maliyet.</li>
+  <li><b>Bölüm C, AWS servisi.</b> Bir warehouse'u kendin çalıştırdığında ne yapman gerekir, Redshift senin için neyi yapar ve Lale Market'te nasıl kurulu.</li>
+</ol>
+<p>Örnekler Lale Market'in satış raporlarından gelir: siparişler Aurora'dadır, bir kopyası Redshift'te raporlanır. Başka bir örnek bir fikri daha kolay gösteriyorsa tutorial onu kullanır: bir seçim gecesi oy sayımı, bir kütüphane rafı, bir sözlük.</p>
 <p>Bu tutorial'ın sonunda şunları yapabilirsin:</p>
 <ol>
-  <li>Bir data warehouse'un hangi iş yükleri için doğru seçim olduğunu ve neden checkout'un database'i olmadığını söylemek.</li>
-  <li>Bir column store'un bir rapor için neden row store'dan daha az veri okuduğunu açıklamak.</li>
-  <li>Bir sort key'in ve zone map'lerin Redshift'in blokları atlamasını nasıl sağladığını açıklamak.</li>
-  <li>Bir distribution style seçmek ve onun bir join'e ne yaptığını açıklamak.</li>
-  <li>Bir fact table üzerindeki bir rapor query'sini okuyup hangi kolonları okuduğunu söylemek.</li>
-  <li>Redshift Serverless'ı ve Aurora'dan gelen zero-ETL entegrasyonunu açıklamak.</li>
+  <li>Bir rapor sorgusunun neden checkout database'inde değil bir warehouse'ta çalışması gerektiğini sayılarla açıklamak.</li>
+  <li>Bir sorgunun hangi kolonları ve hangi blokları okuyacağını tahmin etmek.</li>
+  <li>Bir table için sıralama kolonunu ve dağıtım kolonunu seçmek ve seçimin bir join'e ne yaptığını söylemek.</li>
+  <li>Bir iş yükü için Redshift, Athena, Aurora ve OpenSearch arasında seçim yapmak ve seçimi satır satır savunmak.</li>
+  <li>Redshift Serverless ile provisioned cluster arasında trafik şekline ve fiyata göre karar vermek.</li>
+  <li>Bir warehouse'un yapamadığı işleri (tek kayıt okuma, metin arama, kural koruma) tanıyıp doğru servise göndermek.</li>
 </ol>
 <p>Dört tür kutu sana yardım eder. <b>Simülasyon</b>: Oynat'a ya da Sonraki adım'a bas. <b>Önce tahmin et</b>: cevabı açmadan önce kendi cevabını yaz.
    <b>Checkpoint</b>: tek doğru cevabı olan bir soru. <b>Analoji</b>: günlük hayattan bir resim.</p>
 
-<h2 id="architect" data-short="Mimar gözüyle: ne zaman"><span class="sec">01</span>Mimar gözüyle: Redshift nereye oturur</h2>
-<p><b>Önce bu bölümü oku.</b> Kararı bu bölüm verir. Sonraki bölümler bir warehouse'un nasıl çalıştığını öğretir.</p>
-<p><b>Kısaca:</b> Amazon Redshift bir data warehouse'dur. Çok sayıda row üzerinde SQL sorularını cevaplar: "iki yıl boyunca kategori başına aylık gelir", "şehre göre en iyi 100 müşteri".
-   Her kolonu ayrı saklar, eşleşemeyecek blokları atlar ve işi paralel çalışan birçok slice'a böler. Raporların ve analitiğin yeridir, mağazanın tıklamalarının değil.</p>
-<p>Anahtar fikir {{ k.term("OLAP") }}'tır (online analytical processing): az sayıda query, her biri milyonlarca row okur ama sadece birkaç kolon. Checkout ise {{ k.term("OLTP") }} yapar: çok sayıda query, her biri birkaç tam row okur ya da yazar.</p>
+<div class="part"><b>Bölüm A</b><h2 id="partA" data-short="Bölüm A: Temel">Temel: analiz için ayrı bir database, bütün durumlarıyla</h2>
+<p>Milyarlarca row üzerinde birkaç kolonu toplayan sorguların nasıl saniyelerde döndüğü ve bunun karşılığında nelerden vazgeçildiği. Bu bölüm her kavramı önce tanımlar, sonra o kavramın <b>bütün durumlarını</b> bir tabloda gösterir. Böylece "ya şöyle olursa?" sorusunun cevabı tabloda vardır. Fikirler her columnar analiz database'inde aynıdır; isimler standarttır ve sayfanın sonuna kadar değişmez.</p></div>
 
-<h3>Bir iş yükünde Redshift'i işaret eden sinyaller</h3>
+<h2 id="why" data-short="Neden warehouse?"><span class="sec">A1</span>Neden ayrı bir analiz database'i? Seçim gecesi</h2>
+<p>Seçim gecesi bir ilçede 400 sandık var. Her sandığın tutanağı bir kâğıttır: sandık numarası, okul, saat, görevliler, imzalar ve on partinin oy sayısı.
+   Gece yarısı tek bir soru sorulur: "A partisi ilçede kaç oy aldı?" Bunun için her tutanaktan sadece bir sayı gerekir.
+   Tutanakları tek tek açıp okuyan bir görevli 400 kâğıdın her satırını görür. Bir ekip ise işi böler: on kişi kırkar tutanak alır, herkes sadece A partisinin satırına bakar ve sonunda on ara toplam toplanır.</p>
+{% call k.callout("analogy", "Analoji") %}
+<p>Tutanağın tamamı bir kayıttır. "A partisinin satırı" bir kolondur. Bir data warehouse ikinci ekip gibi çalışır: sadece sorulan kolonu okur, işi birçok kişiye böler ve ara toplamları birleştirir. Bir sandığa itiraz edildiğinde o tek tutanağı bulmak ise ilk görevlinin işidir; ekip bunun için kurulmamıştır.</p>
+{% endcall %}
+<p>Bir mağazanın iki tür database işi vardır. Checkout her saniye birkaç row okur ve yazar: bu siparişi kaydet, bu ürünün stoğunu azalt. Buna {{ k.term("OLTP") }} (online transaction processing) denir; birçok küçük ve kısa işlem. Finans ekibinin sorusu farklıdır: "son üç yılda şehre ve kategoriye göre aylık gelir". Bu sorgu iki milyar row'a dokunur ama her row'un sadece üç dört kolonunu okur. Buna {{ k.term("OLAP") }} (online analytical processing) denir; az sayıda ama çok büyük okuma.</p>
+{{ k.concept("Data warehouse",
+   "Analiz için kurulmuş ayrı bir database. Birçok kaynaktan gelen geçmişi tek yerde tutar ve çok sayıda row'u tarayıp gruplayan sorguları hızlı cevaplar. Veriyi kolon kolon saklar ve işi birçok makineye böler (A3, A6). Genellikle verinin kaynağı değil, bir kopyasıdır.",
+   "Lale Market'in siparişleri Aurora'dadır. Satış raporları Redshift'teki <code>sales</code> table'ında ve Aurora'nın <code>aurora_live</code> adlı kopyasında çalışır; checkout database'i rapor sorgusu görmez.",
+   "Bir şirketin arşiv ve istatistik birimi. Satış ekibi müşteriyle konuşur ve faturayı keser; istatistik birimi faturaların kopyalarından yıllık raporu hazırlar ve satış ekibini rahatsız etmez.") }}
 <table class="data">
-  <thead><tr><th>Sinyal</th><th>Gerçek bir projede nasıl görünür</th><th>Onu cevaplayan özellik</th></tr></thead>
+  <caption>takas: data warehouse neyi verir, neyi alır</caption>
+  <thead><tr><th>Warehouse'un verdiği</th><th>Karşılığında aldığı</th><th>Bu sayfada nerede</th></tr></thead>
   <tbody>
-    <tr><td>Bütün geçmiş üzerinde sorular</td><td>"Son iki yılın aylık geliri."</td><td>Kolon bazlı saklama ve paralel taramalar (bölüm 03 ve 05)</td></tr>
-    <tr><td>Geniş table'ların az kolonu</td><td>60 kolonlu bir sales table'ı, 4'üne ihtiyaç duyan bir rapor.</td><td>Kolon bazlı saklama (bölüm 03)</td></tr>
-    <tr><td>Tarihler üzerinde filtreler</td><td>"Geçen çeyrek", "bu yılın Mart'ı".</td><td>Sort key ve zone map'ler (bölüm 04)</td></tr>
-    <tr><td>Fact'lerin dimension'larla join'i</td><td>Müşteriler, ürünler ve tarihlerle join'lenen satışlar.</td><td>Star schema ve dağıtım (bölüm 02 ve 05)</td></tr>
-    <tr><td>Birçok kaynaktan veri tek yerde</td><td>Siparişler, web event'leri, pazarlama maliyetleri.</td><td>Zero-ETL, S3'ten COPY, data lake üzerinde query'ler (bölüm 07)</td></tr>
-    <tr><td>Raporlar mağazayı yavaşlatmamalı</td><td>Analistler gün içinde ağır query'ler çalıştırır.</td><td>Zero-ETL ile beslenen ayrı bir warehouse (bölüm 08)</td></tr>
+    <tr><td>Milyarlarca row'un birkaç kolonunu saniyelerde tarar</td><td>Tek bir row'u key ile bulmak bir OLTP database'inden yavaştır</td><td>A3, M3</td></tr>
+    <tr><td>Veri sıkışır; aynı disk daha fazla geçmiş tutar</td><td>Tek bir row'u değiştirmek bir işaret ve bir eklemedir; arkadan temizlik gerekir</td><td>A4, A7</td></tr>
+    <tr><td>İş birçok makineye bölünür; büyük sorgu paralel çalışır</td><td>Verinin nasıl dağıtılacağı bir tasarım kararıdır</td><td>A6</td></tr>
+    <tr><td>Checkout'tan ayrı çalışır; raporlar müşteriyi yavaşlatmaz</td><td>Veri bir kopyadır ve kaynaktan biraz geridedir</td><td>A7, M6</td></tr>
+  </tbody>
+</table>
+<table class="data">
+  <caption>bütün durumlar: bir sorgunun biçimi ve doğru yeri</caption>
+  <thead><tr><th>Sorgunun biçimi</th><th>Örnek</th><th>Doğru yer</th></tr></thead>
+  <tbody>
+    <tr><td>Bir kaydı key ile oku ya da yaz</td><td>"O000061 siparişini getir", "stoğu 1 azalt"</td><td>OLTP database'i (Aurora, DynamoDB)</td></tr>
+    <tr><td>Birkaç table'da birlikte yaz, kuralı koru</td><td>Sipariş + stok + ödeme tek transaction'da</td><td>OLTP database'i (Aurora)</td></tr>
+    <tr><td>Milyonlarca row'un birkaç kolonunu tara ve grupla</td><td>"Kategoriye göre üç yıllık gelir"</td><td>Data warehouse</td></tr>
+    <tr><td>Birçok kaynağı birleştir</td><td>Siparişler + reklam tıklamaları + kampanya maliyetleri</td><td>Data warehouse</td></tr>
+    <tr><td>Son birkaç günü birkaç kez sor</td><td>"Bugün kaç sipariş geldi"</td><td>İkisi de olur; OLTP database'inin bir reader'ı çoğu zaman yeter</td></tr>
+    <tr><td>Saniyede binlerce tek row'luk yazma</td><td>Her tıklamanın ayrı bir INSERT'i</td><td><b>Warehouse'ta yapma.</b> Toplu yüklenir ya da bir akış katmanından mikro-batch'lerle gelir (A7)</td></tr>
+    <tr><td>Metin içinde kelime arama</td><td>"timeout geçen log satırları"</td><td><b>Warehouse'un işi değil:</b> inverted index yoktur, search engine'e gider (M3)</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Aurora zaten SQL konuşuyor. Raporları neden onun reader'ında çalıştırmıyoruz?") %}
+<p>Çalıştırabilirsin ve son 90 gün için çoğu zaman yeter. Sorun ölçekte başlar: PostgreSQL bir row'u bütün kolonlarıyla birlikte saklar, bu yüzden üç kolon isteyen bir sorgu iki milyar row'un tamamını okur. Reader'lar da checkout ile aynı storage'ı paylaşır. A3 bu farkı gösterir; M2'nin ilk kartı aynı soruyu puanlar.</p>
+{% endcall %}
+{% call k.ask("Warehouse verinin kaynağı olabilir mi?") %}
+<p>Olabilir ama nadiren olur. Warehouse büyük okumalar için kurulmuştur; çok sayıda küçük yazmada ve tek row'luk kurallarda zayıftır (A7). Bu yüzden veri çoğunlukla bir OLTP database'inden, dosyalardan ya da bir akıştan gelir ve warehouse onun kopyasını tutar.</p>
+{% endcall %}
+{{ k.quiz("rs-q0", "Hangi soru bir data warehouse'un işidir?",
+   ["Ziyaretçinin sepetini key ile okumak", "Üç yılın siparişlerini şehre göre gruplamak", "Bir ödemeyi stokla birlikte yazmak", "Bir log satırında kelime aramak"],
+   1, "Çok sayıda row'u tarayıp birkaç kolonu gruplayan soru OLAP'tır. Sepet ve ödeme OLTP işidir; kelime araması bir search engine'in işidir.") }}
+
+<h2 id="star" data-short="Fact ve dimension"><span class="sec">A2</span>Fact table ve dimension table: olaylar ve onları anlatanlar</h2>
+<p>Bir warehouse'taki veri iki tür table'a ayrılır. Birincisi olayları tutar: her satış, her tıklama, her ödeme bir row'dur. İkincisi bu olayları anlatan şeyleri tutar: müşteri, ürün, tarih, mağaza.</p>
+{{ k.concept("Fact table",
+   "Olayların table'ı. Her row bir olaydır ve iki tür kolon taşır: <b>ölçüler</b> (adet, tutar) ve olayı anlatan table'lara giden <b>key'ler</b> (müşteri id'si, ürün id'si, tarih). Warehouse'un en büyük table'ıdır; milyarlarca row olabilir ve çoğunlukla sadece büyür.",
+   "<code>sales</code>: her sipariş satırı için bir row. <code>qty</code> ve <code>amount</code> ölçüdür; <code>customer_id</code> ve <code>product_id</code> key'dir.",
+   "Bir kasanın fiş rulosu. Her fiş bir olaydır: ne kadar, hangi ürün, hangi müşteri kartı, hangi saat.") }}
+{{ k.concept("Dimension table",
+   "Fact table'daki key'leri anlatan table. Müşterinin adı ve şehri, ürünün kategorisi, tarihin ayı ve tatil olup olmadığı burada durur. Fact table'a göre küçüktür ve yavaş değişir.",
+   "<code>rs_customers</code>: dört müşteri, şehirleri ve segmentleri. <code>sales</code> table'ı müşteriyi sadece <code>customer_id</code> ile ödünç alır.",
+   "Fiş rulosunun yanındaki müşteri kartı dolabı: fişte sadece kart numarası yazar, kimin olduğu kartta yazar.") }}
+<p>Ortada fact table, etrafında dimension'lar: çizim bir yıldıza benzer ve bu yüzden düzene {{ k.term("star schema") }} denir.</p>
+{{ k.fig("redshift-star-schema.png", "bir star schema. Ortadaki turuncu kutu fact table'dır: Lale Market'te sales. Dört mavi kutu dimension'lardır: müşteri, ürün, tarih ve mağaza olabilir. Oklar fact table'ın key'lerinin dimension'lara gittiğini gösterir.") }}
+<p>Bu sayfanın simülasyonları aşağıdaki iki küçük table'ı kullanır. Sipariş, müşteri ve ürün id'leri gerçek Lale Market verisindendir. <code>sales</code> table'ında şehir ve kategori de vardır: Lale Market raporların çoğunu join'siz çalıştırmak için onları fact table'a kopyalar.</p>
+{{ k.sample("rs_sales", "sales: fact table'ın öğretici kopyası (8 row, 8 kolon)", key=["order_id", "product_id"], ref=["customer_id"]) }}
+{{ k.sample("rs_customers", "rs_customers: bir dimension table (4 müşteri)", key=["customer_id"]) }}
+<table class="data">
+  <caption>bütün durumlar: fact ve dimension'ları düzenlemenin biçimleri</caption>
+  <thead><tr><th>Biçim</th><th>Nasıl</th><th>Neyi kolaylaştırır</th><th>Bedeli</th></tr></thead>
+  <tbody>
+    <tr><td>Star schema</td><td>Bir fact table, her dimension tek bir table</td><td>Raporlar az JOIN'le yazılır; dimension'lar küçük kalır</td><td>Her rapor bir iki JOIN ister</td></tr>
+    <tr><td>Snowflake schema</td><td>Dimension'lar da bölünür: ürün → kategori → ana kategori</td><td>Tekrar eden bilgi tek yerde durur</td><td>Daha çok JOIN</td></tr>
+    <tr><td>Düz, geniş table (denormalize)</td><td>Dimension bilgisi fact table'a kopyalanır: şehir ve kategori sales'te</td><td>Çoğu rapor JOIN'siz çalışır; kolon bazlı saklamada fazla kolonun bedeli düşüktür (A3)</td><td>Bir müşteri şehir değiştirirse eski row'lar eski şehri taşır</td></tr>
+    <tr><td>Kaynağın kopyası olduğu gibi</td><td>Checkout table'ları aynen gelir: orders, order_items, products, customers</td><td>Kopyalama kodu yoktur; aynı JOIN'ler çalışır</td><td>Raporlar dört table'ı JOIN'ler</td></tr>
+    <tr><td>Fact table'da kural (unique, foreign key) koruması</td><td>Database olmayan bir müşteri id'sini reddeder</td><td><b>Columnar warehouse'larda çoğunlukla yok:</b> key'ler sadece bilgi olarak tutulur, kontrol yükleme sürecindedir (A7)</td><td>Yanlış yükleme çift row ya da sahipsiz row bırakır</td></tr>
+  </tbody>
+</table>
+<p>Lale Market ikisini birlikte kullanır: geçmiş için düz bir <code>sales</code> table'ı, canlı veri için Aurora table'larının olduğu gibi kopyası (B4).</p>
+<table class="data">
+  <thead><tr><th>Identifier</th><th>Sahibi kim</th><th>Kim ödünç alır</th></tr></thead>
+  <tbody>
+    <tr><td>Sipariş id'si (<code>O000061</code>)</td><td>Aurora'daki <code>orders</code> table'ı</td><td><code>sales</code> bir sipariş satırını <code>order_id</code> + <code>product_id</code> çiftiyle tanır. Warehouse bu çiftin tekrar etmediğini kontrol etmez.</td></tr>
+    <tr><td>Müşteri id'si (<code>C00002</code>)</td><td>Aurora'daki <code>customers</code> table'ı</td><td><code>sales</code> ve <code>rs_customers</code> onu ödünç alır; <code>rs_customers</code> onun dimension'ıdır.</td></tr>
+    <tr><td>Ürün id'si (<code>P0034</code>)</td><td>Katalog (Aurora ve DocumentDB)</td><td><code>sales</code> onu ödünç alır; kategori yanına kopyalanmıştır.</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Fact table'da şehir ve kategori varken dimension table'a neden ihtiyaç var?") %}
+<p>Sık sorulan alanları fact table'a kopyalamak JOIN'i kaldırır. Ama müşterinin adı, segmenti ya da kayıt tarihi gibi seyrek sorulan alanları her satış row'una kopyalamak gereksizdir; onlar dimension'da bir kez durur. Hangi alanın kopyalanacağı raporlara göre verilen bir tasarım kararıdır.</p>
+{% endcall %}
+{% call k.ask("Bir müşteri İstanbul'dan Ankara'ya taşınırsa eski satışlar hangi şehri gösterir?") %}
+<p>Düz table'da eski satışlar yazıldıkları andaki şehri taşır, yani İstanbul'u. Bu çoğu zaman istenen şeydir: geçen yılın satışı geçen yılın şehrinde sayılır. Bugünün şehrine göre rapor isteniyorsa şehir dimension'dan JOIN ile alınır. Warehouse dünyasında bunun adı "slowly changing dimension"dır.</p>
+{% endcall %}
+{% call k.predict("sales table'ında 8 row var. \"Kitap kategorisinin geliri\" sorusu için hangi kolonlar okunmalı? Bir JOIN gerekir mi?") %}
+<p>Sadece <code>category</code> ve <code>amount</code>. JOIN gerekmez, çünkü kategori fact table'a kopyalanmıştır. Sonuç O000054 ve O000061'in tutarlarının toplamıdır: 9.188,34 + 4.009,92 = 13.198,26.</p>
+{% endcall %}
+
+<h2 id="columns" data-short="Kolon bazlı saklama"><span class="sec">A3</span>Kolon bazlı saklama: sadece sorgunun kolonlarını oku</h2>
+<p>Disk ve bellek veriyi sabit büyüklükte <b>blok</b>larda okur ve yazar; bir blok tek seferde okunan en küçük parçadır. Soru şudur: bir bloğa ne konur?</p>
+{{ k.concept("Row store",
+   "Bir row'un bütün kolonlarını yan yana, aynı blokta saklayan düzen. Bir row tek bir yerde okunur ve yazılır. Bir kolonu toplamak için ise o kolonu taşıyan bütün row'ların bütün blokları okunur. PostgreSQL, MySQL ve Aurora row store'dur.",
+   "Row store'da <code>sales</code>'in ilk bloğu O000003 ve O000054'ün sekiz kolonunu birlikte tutar.",
+   "Seçim tutanakları: her kâğıtta bir sandığın bütün bilgisi. Bir sandığı bulmak kolay, bir partinin toplamı için her kâğıt açılır.") }}
+{{ k.concept("Column store (kolon bazlı saklama)",
+   "Bir kolonun birçok row'a ait değerlerini yan yana, aynı blokta saklayan düzen. Bir sorgu sadece istediği kolonların bloklarını okur; diğer kolonlar diskte kalır. Bir row'u bütünüyle okumak ya da yazmak ise her kolonun ayrı bloğuna dokunmaktır. Redshift, ClickHouse ve Parquet dosyaları kolon bazlıdır.",
+   "Column store'da <code>amount</code> kolonunun bloğu sekiz siparişin tutarını yan yana tutar: 2635.86, 9188.34, 2678.72, …",
+   "Partilerin sayılarını tek bir listede tutan özet kâğıdı: A partisinin satırı tek başına okunur.") }}
+{{ k.fig("redshift-row-storage.png", "row storage, resmî AWS çizimi. Üstteki tabloda turuncu çerçeve CHIN'in row'udur; alttaki şeritte aynı row bütün kolonlarıyla (SSN, Name, Age, Addr, City, St) Block 2'de yan yana durur. Her blok tam row'lar tutar: sadece SSN gereken bir sorgu da üç bloğu ve bütün kolonları okur.") }}
+{{ k.fig("redshift-column-storage.png", "column storage, aynı veri. Turuncu çerçeve yine bir disk bloğudur; ama içinde sadece SSN kolonunun değerleri vardır, birçok row için. SSN isteyen sorgu sadece bu bloğu okur; Name ve Addr blokları diskte kalır.") }}
+<p>Fark sorgunun kaç kolon istediğine bağlıdır. Öğretici table'da sekiz kolon var; "kategoriye göre gelir" ikisini ister:</p>
+<table class="data">
+  <caption>bütün durumlar: sorgunun biçimi ve column store'un okuduğu</caption>
+  <thead><tr><th>Sorgu</th><th>Row store okur</th><th>Column store okur</th><th>Kim kazanır</th></tr></thead>
+  <tbody>
+    <tr><td>Bütün row'larda 8 kolonun 2'si (<code>SELECT category, sum(amount)</code>)</td><td>8 row × 8 kolon = 64 değer</td><td>8 row × 2 kolon = 16 değer</td><td>Column store, açık farkla</td></tr>
+    <tr><td>Bütün row'larda bütün kolonlar (<code>SELECT *</code>)</td><td>64 değer</td><td>64 değer, sekiz ayrı bloktan</td><td>Fark yok; column store geniş table'da <code>SELECT *</code> ile avantajını kaybeder</td></tr>
+    <tr><td>Tek bir row, key ile (<code>WHERE order_id = 'O000061'</code>)</td><td>Bir index ile tek blok</td><td>Her kolonun bloğundan bir değer; index yoktur, bloklar sıralama ile atlanır (A5)</td><td>Row store</td></tr>
+    <tr><td>Tek bir row ekle</td><td>Bir bloğa bir row</td><td>Sekiz kolonun sekiz bloğuna birer değer</td><td>Row store; column store toplu eklemeyi sever (A7)</td></tr>
+    <tr><td>Bir değeri yerinde değiştir</td><td>Row'un bloğunda</td><td><b>Yerinde değiştirmez:</b> eski row silinmiş işaretlenir, yenisi eklenir (A7)</td><td>Row store</td></tr>
+    <tr><td>100 kolonlu table'da 3 kolon</td><td>Bütün row'ların 100 kolonu</td><td>3 kolonun blokları</td><td>Column store, kabaca 33 kat az veri</td></tr>
+  </tbody>
+</table>
+<p>B2'deki simülasyon aynı sekiz row'u iki düzende saklar ve "kategoriye göre gelir" sorgusunun her iki düzende kaç değer okuduğunu adım adım sayar.</p>
+{% call k.ask("Column store row'u nasıl yeniden birleştirir? Değerler farklı bloklarda.") %}
+<p>Sıra ile. Bir table'ın her kolonu aynı sırada saklanır: <code>order_id</code> bloğunun 4. değeri ile <code>amount</code> bloğunun 4. değeri aynı row'a aittir. Engine bir row'u gösterirken her kolonun aynı sıradaki değerini alır. Bu yüzden bütün kolonları isteyen sorgu daha çok blok açar.</p>
+{% endcall %}
+{% call k.ask("O zaman neden her database kolon bazlı değil?") %}
+<p>Çünkü checkout'un işi tam tersidir: tek bir siparişi bütün kolonlarıyla yazmak ve okumak. Column store'da bu, her kolonun ayrı bloğuna dokunmak demektir. Her düzen bir soru türü için iyidir; mimar soruyu önce sorar.</p>
+{% endcall %}
+{{ k.quiz("rs-q1", "Bir table'ın 50 kolonu var. Bir sorgu bütün row'lar üzerinde bunların 2'sini okuyor. Bir column store verinin yaklaşık ne kadarını okur?",
+   ["Hepsini", "Yaklaşık yarısını", "50 kolonun yaklaşık 2'sini", "Sadece ilk row'u"],
+   2, "Column store sadece iki kolonun bloklarını okur. Diğer 48 kolonun blokları diskte kalır.") }}
+
+<h2 id="compression" data-short="Sıkıştırma"><span class="sec">A4</span>Sıkıştırma: aynı türden değerler küçülür</h2>
+<p>Bir kolonun bloğunda hep aynı türden değerler vardır: hep tarih, hep kategori adı, hep tutar. Benzer değerler yan yana durunca çok iyi sıkışır. Daha küçük veri daha az blok, daha az blok daha kısa okuma demektir.</p>
+{{ k.concept("Compression encoding (sıkıştırma kodlaması)",
+   "Bir kolonun değerlerini diskte daha az yer kaplayacak biçimde yazma kuralı. Her kolon kendi kodlamasını seçer: tekrar eden kısa metinler için sözlük, sayılar ve tarihler için sayısal kodlamalar, uzun metinler için genel amaçlı sıkıştırma. Sorgu okurken değerleri açar.",
+   "Canlı <code>sales</code> table'ında <code>category</code> kolonu <code>bytedict</code> (sözlük), <code>qty</code> ve <code>amount</code> <code>az64</code>, metin kolonları <code>lzo</code> ile saklanır; A5'te göreceğin sıralama kolonu <code>order_date</code> sıkıştırılmaz (B1).",
+   "Bir sözlüğün kısaltmaları: \"İstanbul\" her satırda yazılmaz, \"1\" yazılır ve sayfanın başında \"1 = İstanbul\" durur.") }}
+<p>Sözlük kodlaması en kolay görülendir. <code>category</code> kolonunda sekiz değer var ama sadece beş farklı kategori. Engine önce bir sözlük yazar, sonra her row için sadece kodu saklar:</p>
+<div class="flow">
+  <div class="box">category kolonu<small>Spor, Kitap, Elektronik, Kitap, Elektronik, Moda, Elektronik, Ev &amp; Yaşam</small></div><span class="arrow">→</span>
+  <div class="box">sözlük<small>0 Elektronik · 1 Ev &amp; Yaşam · 2 Kitap · 3 Moda · 4 Spor</small></div><span class="arrow">→</span>
+  <div class="box hit">saklanan<small>4, 2, 0, 2, 0, 3, 0, 1</small></div>
+</div>
+<p class="flow-cap">Sözlük kodlaması öğretici veride. Sekiz metin yerine beş metinlik bir sözlük ve sekiz küçük sayı saklanır. Kolonda tekrar ne kadar çoksa kazanç o kadar büyüktür; milyonlarca row ve beş kategoriyle metinlerin neredeyse hepsi kaybolur.</p>
+{{ k.sample("rs_dict", "sözlük: category kolonunun beş farklı değeri") }}
+{{ k.sample("rs_encoded", "sales'in category kolonu ve diskte saklanan kod") }}
+<table class="data">
+  <caption>bütün durumlar: kolonun verisi ve uyan kodlama</caption>
+  <thead><tr><th>Kolonun verisi</th><th>Uyan kodlama</th><th>Neden</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Az sayıda farklı kısa metin</td><td>Sözlük (Redshift'te BYTEDICT)</td><td>Her değer bir küçük koda iner</td><td><code>category</code>, <code>city</code></td></tr>
+    <tr><td>Sayılar ve tarihler</td><td>Sayısal kodlama (Redshift'te AZ64; delta kodlaması)</td><td>Ardışık değerlerin farkı küçüktür ve az bitle yazılır</td><td><code>qty</code>, <code>amount</code></td></tr>
+    <tr><td>Uzun ve farklı metinler</td><td>Genel amaçlı sıkıştırma (LZO, ZSTD)</td><td>Tekrar eden harf dizilerini kısaltır</td><td>Ürün açıklaması, URL</td></tr>
+    <tr><td>Hep aynı ya da hep artan değer</td><td>Run-length ya da delta</td><td>"bu değer 4.000 kez" tek bir kayıttır</td><td>Bir partition'ın tarihi</td></tr>
+    <tr><td>Sıralama kolonunun ilki (A5)</td><td>Sıkıştırmasız (RAW) önerilir</td><td>Blokları atlamak için değerler hızlı okunmalı (A5)</td><td><code>order_date</code></td></tr>
+    <tr><td>Rastgele değerler (hash, şifreli veri)</td><td><b>Neredeyse sıkışmaz</b></td><td>Tekrar ve düzen yoktur; kodlama yer kazandırmaz</td><td>Bir oturumun rastgele token'ı</td></tr>
+    <tr><td>Row store'da aynı veri</td><td><b>Kolon başına kodlama yoktur</b></td><td>Bir blokta farklı türden değerler karışıktır; sadece büyük değerler için genel sıkıştırma uygulanır (PostgreSQL'de bunun adı TOAST'tır)</td><td>PostgreSQL'de <code>sales</code></td></tr>
+  </tbody>
+</table>
+{% call k.ask("Kodlamayı ben mi seçerim?") %}
+<p>Seçebilirsin ama gerekmez. Redshift CREATE TABLE'da kodlama yazılmazsa her kolon için kodlamayı kendisi seçer (<code>ENCODE AUTO</code>); AWS dokümantasyonu sıralama kolonlarına (A5) RAW, sayı ve zaman kolonlarına AZ64, metin kolonlarına LZO atandığını söyler. Canlı table'ın kodlamaları B1'de görünür.</p>
+{% endcall %}
+{% call k.ask("Sıkıştırma sorguyu yavaşlatmaz mı? Her değer açılmalı.") %}
+<p>Açmak işlemcide birkaç işlemdir; diskten bir blok daha okumak bundan çok daha pahalıdır. Bu yüzden analitik sorgularda sıkıştırma çoğu zaman sorguyu hızlandırır: aynı bilgi daha az blokta durur.</p>
+{% endcall %}
+{{ k.quiz("rs-q2", "Hangi kolon sözlük kodlamasından en çok kazanır?",
+   ["Her row'da farklı olan sipariş id'si", "Beş farklı değeri olan kategori", "Rastgele bir oturum token'ı", "Her row'da farklı bir tutar"],
+   1, "Sözlük kodlaması az sayıda farklı değeri olan kolonda en çok kazandırır: beş kategori beş küçük koda iner. Farklı değerler ve rastgele token neredeyse hiç kazandırmaz.") }}
+
+<h2 id="zonemaps" data-short="Sort key ve zone map"><span class="sec">A5</span>Sort key ve zone map: eşleşemeyecek blokları atla</h2>
+<p>Column store sadece gereken kolonları okur. İkinci kazanç, o kolonların bloklarından da sadece gerekenleri okumaktır. Bunun için engine her blok hakkında küçük bir not tutar.</p>
+{{ k.concept("Zone map",
+   "Her blok için o bloktaki en küçük ve en büyük değerin notu. Engine bir bloğu okumadan önce sorgunun filtresini bu iki değerle karşılaştırır; aralık eşleşemiyorsa bloğu hiç okumaz. Notlar küçüktür ve bellekte durur. Index değildir: tek bir değerin yerini bilmez, sadece \"bu blokta olamaz\" der.",
+   "<code>order_date</code> kolonunun B3 bloğu 2026-03-01 ile 2026-03-31 arasını tutar. \"Mart\" sorgusu sadece B3'ü okur; B1, B2, B4, B5 ve B6 atlanır.",
+   "Kütüphane raflarındaki etiket: \"1990–1995\". 1993'ten bir kitap arayan sadece o rafa gider.") }}
+{{ k.concept("Sort key",
+   "Row'ların diskte hangi kolonun sırasıyla saklanacağını belirleyen kolon ya da kolonlar. Row'lar bu kolona göre sıralı yazıldığında her blok dar ve ayrı bir aralık tutar ve zone map'ler blokları gerçekten eler. Bir kolondan oluşabilir ya da birkaç kolonun sırası olabilir (compound sort key: önce ilki, sonra ikincisi).",
+   "Canlı <code>sales</code> table'ının sort key'i <code>order_date</code>'tir. Bu sayfada sort key kolonu <span class=\"c-pk\">sarı</span> renkte gösterilir.",
+   "Kitapları yıla göre dizmek. Raflar yıla göre dizilmezse her rafta her yıldan kitap olur ve etiketler bir işe yaramaz.") }}
+<p>Renk dili bu sayfanın sonuna kadar aynıdır: sort key kolonu <span class="c-pk">sarı</span>, A6'da tanımlanan dağıtım kolonu <span class="c-sk">mavi</span>, diğer kolonlar gri.</p>
+<div class="parts">
+  <div><h4>B1</h4><span class="chip">min 2026-01-01</span><span class="chip">max 2026-01-31</span></div>
+  <div><h4>B2</h4><span class="chip">min 2026-02-01</span><span class="chip">max 2026-02-28</span></div>
+  <div class="on"><h4>B3 · okunur</h4><span class="chip">min 2026-03-01</span><span class="chip">max 2026-03-31</span></div>
+  <div><h4>B4</h4><span class="chip">min 2026-04-01</span><span class="chip">max 2026-04-30</span></div>
+  <div><h4>B5</h4><span class="chip">min 2026-05-01</span><span class="chip">max 2026-05-31</span></div>
+  <div><h4>B6</h4><span class="chip">min 2026-06-01</span><span class="chip">max 2026-06-30</span></div>
+</div>
+<p class="flow-cap">order_date'e göre sıralı bir table'ın altı bloğu ve zone map'leri. "WHERE order_date BETWEEN '2026-03-01' AND '2026-03-31'" sadece B3 ile çakışır; beş blok okunmadan atlanır. Sırasız bir table'da her blok ocaktan hazirana kadar tarih tutar ve altısı da okunur. B2'deki simülasyon iki table'ı aynı filtreyle adım adım karşılaştırır.</p>
+<table class="data">
+  <caption>bütün durumlar: filtre ve zone map</caption>
+  <thead><tr><th>Filtre</th><th>Zone map ne yapar</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Sort key üzerinde aralık</td><td>Aralık dışındaki blokları atlar; en büyük kazanç</td><td><code>order_date BETWEEN '2026-03-01' AND '2026-03-31'</code></td></tr>
+    <tr><td>Sort key üzerinde eşitlik</td><td>O değeri içerebilecek bir iki bloğu okur</td><td><code>order_date = '2026-03-17'</code></td></tr>
+    <tr><td>Compound sort key'in ikinci kolonu, ilki olmadan</td><td>Çok az atlar: ikinci kolon her ilk değerin içinde yeniden başlar</td><td>Sort key (order_date, city) iken sadece <code>city = 'Ankara'</code></td></tr>
+    <tr><td>Sıralı olmayan bir kolon</td><td>Neredeyse hiç atlamaz: her bloğun aralığı geniştir</td><td><code>amount &gt; 5000</code></td></tr>
+    <tr><td>Kolonun üzerinde bir fonksiyon</td><td>Engine çoğu zaman aralığa çeviremez; blokları atlayamayabilir</td><td><code>WHERE to_char(order_date, 'MM') = '03'</code> yerine bir tarih aralığı yaz</td></tr>
+    <tr><td>Son eklenen, henüz sıralanmamış row'lar</td><td>Table'ın sonundaki sıralanmamış bölge geniş aralıklı bloklar tutar; arka plandaki sıralama işi bunu düzeltir (A7)</td><td>Bugünün siparişleri</td></tr>
+    <tr><td>Bir değerin tam yerini bulmak</td><td><b>Yapamaz:</b> zone map index değildir; sadece blok eler, tek row'a gitmez</td><td>"O000061'i getir" yine blokları tarar</td></tr>
+    <tr><td>Metin içinde bir kelime</td><td><b>Yapamaz:</b> en küçük ve en büyük değer, metnin ortasındaki kelimeyi söylemez</td><td><code>message LIKE '%timeout%'</code></td></tr>
+  </tbody>
+</table>
+{% call k.ask("Sort key'i nasıl seçerim?") %}
+<p>Sorguların en sık aralıkla filtrelediği kolona göre. AWS'in önerisi şudur: en çok yeni veri sorgulanıyorsa zaman kolonunu sort key'in ilk kolonu yap; sık aralık ya da eşitlik filtresi olan bir kolon varsa onu seç; sık join'lenen bir kolon hem sort key hem de A6'daki dağıtım kolonu olabilir. <code>SORTKEY AUTO</code> ile seçimi Redshift kendisi yapar.</p>
+{% endcall %}
+{% call k.ask("Bir table'ın birkaç sırası olabilir mi?") %}
+<p>Hayır: row'lar diskte tek bir sırayla durur. Compound sort key birkaç kolon kullanır ama yine tek bir sıradır: önce ilk kolon, eşitlikte ikincisi. Farklı bir sıraya göre sık sorgulanan veri için ikinci bir table ya da önceden hesaplanmış bir kopya (A8) gerekir.</p>
+{% endcall %}
+{{ k.quiz("rs-q3", "sales table'ının sort key'i order_date. Hangi filtre zone map'ten en az yararlanır?",
+   ["order_date BETWEEN '2026-03-01' AND '2026-03-31'", "order_date = '2026-03-17'", "amount > 5000", "order_date >= '2026-06-01'"],
+   2, "amount sıralı değildir; her bloğun en küçük ve en büyük tutarı geniş bir aralıktır ve neredeyse hiçbir blok elenmez. Diğer üçü sort key üzerinde aralık ya da eşitliktir.") }}
+
+<h2 id="slices" data-short="MPP ve dağıtım"><span class="sec">A6</span>MPP ve dağıtım: işi birçok makineye bölmek</h2>
+<p>Seçim gecesinin ekibi gibi: veri birçok parçaya bölünür, her parça aynı anda taranır ve ara sonuçlar birleştirilir.</p>
+{{ k.concept("MPP (massively parallel processing)",
+   "Bir sorguyu birçok makineye ve her makinenin birkaç işçisine bölen mimari. Bir yönetici bileşen sorguyu planlar, işi dağıtır ve ara sonuçları birleştirir; diğerleri kendi veri paylarını aynı anda tarar. Redshift'te yöneticinin adı leader node, işçi makinelerin adı compute node'dur.",
+   "\"Kategoriye göre gelir\" sorgusunda her işçi kendi row'larını toplar: bir işçi Elektronik için 14.649,69 bulur, diğeri 5.510,75; leader node ikisini toplar.",
+   "Oy sayan ekip: başkan tutanakları dağıtır, on görevli aynı anda sayar, başkan ara toplamları toplar.") }}
+{{ k.concept("Slice",
+   "Bir compute node'un, belleğinin ve diskinin bir payını alan paralel çalışan parçası. Bir table'ın row'ları slice'lara dağıtılır ve her slice sadece kendi row'larını tarar. Bir node'da kaç slice olduğu node tipine bağlıdır.",
+   "Öğretici dağıtımda iki slice var: slice 0 ve slice 1. B3'teki simülasyon sales'in sekiz row'unu bu iki slice'a yerleştirir.",
+   "Ekipteki tek bir görevlinin önündeki tutanak yığını.") }}
+{{ k.concept("Distribution key",
+   "Bir row'un hangi slice'a gideceğini belirleyen kolon. Aynı değer her zaman aynı slice'a gider. İki table aynı kolonla dağıtılırsa eşleşen row'ları aynı slice'ta durur ve join ağ üzerinden row taşımadan çalışır. Bir table'ın en fazla bir distribution key'i vardır. Diğer dağıtım biçimleri: sırayla (EVEN), her node'a tam kopya (ALL), engine'in seçimi (AUTO).",
+   "Canlı <code>sales</code> table'ının distribution key'i <code>customer_id</code>'dir: C00002'nin bütün satışları aynı slice'tadır. Bu sayfada distribution key kolonu <span class=\"c-sk\">mavi</span> renkte gösterilir.",
+   "Görevlilere tutanakları mahalleye göre dağıtmak: her mahallenin listesi ve tutanakları aynı masadadır, kimse masalar arasında kâğıt taşımaz.") }}
+{{ k.anatomy([
+   {"pk": "2026-02-21", "sk": "C00002", "attrs": [["order_id", "O000061"], ["city", "Ankara"], ["category", "Kitap"], ["qty", "2"], ["amount", "4009.92"]]},
+   {"pk": "2026-04-04", "sk": "C00004", "attrs": [["order_id", "O000004"], ["city", "Frankfurt"], ["category", "Elektronik"], ["qty", "3"], ["amount", "14649.69"]]},
+   {"pk": "2026-04-22", "sk": "C00002", "attrs": [["order_id", "O000082"], ["city", "Ankara"], ["category", "Ev & Yaşam"], ["qty", "1"], ["amount", "836.15"]]}],
+   "sales'in üç row'u ve fiziksel düzeni belirleyen iki kolonu. order_date (sarı) row'ların diskteki sırasını, customer_id (mavi) row'un hangi slice'a gideceğini belirler. Diğer kolonlar (gri) bu kararlara katılmaz. 1. ve 3. row'un customer_id'si aynıdır: ikisi aynı slice'tadır.",
+   pk_name="order_date", sk_name="customer_id",
+   labels={"primary": "Fiziksel düzeni belirleyen kolonlar", "pk": "Sort key", "sk": "Distribution key", "attrs": "Diğer kolonlar", "note": "sorgu sadece istediği kolonları okur", "items": "Row'lar"}) }}
+<p>Şemayı satır satır oku: 1. row C00002'nin 21 şubat siparişidir; sarı tarih onun bloklar arasındaki yerini, mavi müşteri id'si slice'ını belirler. 3. row aynı müşterinin 22 nisan siparişidir: tarihi farklı olduğu için başka bir blokta durabilir, ama aynı slice'tadır. 2. row başka bir müşterinindir ve başka bir slice'a gidebilir.</p>
+<div class="parts">
+  <div class="on"><h4>slice 0 (C00002, C00004)</h4><span class="chip">O000054 · C00004</span><span class="chip">O000061 · C00002</span><span class="chip">O000004 · C00004</span><span class="chip">O000082 · C00002</span></div>
+  <div><h4>slice 1 (C00001, C00003)</h4><span class="chip">O000003 · C00001</span><span class="chip">O000025 · C00001</span><span class="chip">O000027 · C00001</span><span class="chip">O000070 · C00003</span></div>
+</div>
+<p class="flow-cap">DISTKEY customer_id ile sekiz satışın yerleşimi. Öğretici hash müşteri numarasının 2'ye bölümünden kalandır (Redshift kendi hash'ini kullanır). customers table'ı da customer_id ile dağıtıldığı için her satış müşterisini aynı slice'ta bulur. EVEN dağıtımda aynı join için sekiz row'un altısı diğer slice'a taşınmalıdır; B3'teki simülasyon ikisini adım adım karşılaştırır.</p>
+<table class="data">
+  <caption>bütün durumlar: dağıtım biçimi ve sonucu</caption>
+  <thead><tr><th>Biçim</th><th>Row'lar nereye gider</th><th>Ne için iyi</th><th>Bedeli</th></tr></thead>
+  <tbody>
+    <tr><td>KEY</td><td>Distribution key'in değerine göre; eşit değerler aynı slice'ta</td><td>Aynı kolon üzerinden join'lenen büyük table'lar</td><td>Az değerli ya da çarpık bir kolon slice'ları dengesiz doldurur (skew)</td></tr>
+    <tr><td>EVEN</td><td>Değere bakmadan sırayla</td><td>Join'lenmeyen table; açık bir seçim yoksa</td><td>Join'de eşleşen row'lar ağ üzerinden taşınır</td></tr>
+    <tr><td>ALL</td><td>Her node'da tam bir kopya</td><td>Küçük bir dimension (rs_customers gibi)</td><td>Storage node sayısı kadar çarpılır; yükleme yavaşlar</td></tr>
+    <tr><td>AUTO</td><td>Engine seçer: küçükken ALL, büyüyünce KEY ya da EVEN</td><td>Çoğu table</td><td>Seçim engine'indir; değişiklik arka planda olur</td></tr>
+    <tr><td>İki büyük table farklı kolonlarla join'lenir</td><td>Bir table'ın tek distribution key'i vardır</td><td>Biri yerel çalışır</td><td><b>İkisi birden yerel olamaz:</b> fact table'ın sadece bir distribution key'i olabilir; diğer join row taşır</td></tr>
+    <tr><td>Bir müşteri bütün satışların yarısı</td><td>Hepsi aynı slice'a</td><td>—</td><td>O slice herkesi bekletir; KEY yerine EVEN ya da başka kolon</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Kaç slice olduğunu ben mi seçerim?") %}
+<p>Provisioned cluster'da node tipini ve sayısını seçersin; slice sayısı bunlardan gelir. Serverless'ta node ve slice görmezsin; kapasite RPU (Redshift Processing Unit, 16 GB bellekli kapasite birimi) olarak verilir (B5). Distribution key seçimi iki durumda da aynı işi yapar: eşleşen row'ları aynı yere koymak.</p>
+{% endcall %}
+{% call k.ask("Distribution key ile DynamoDB'nin partition key'i aynı şey mi?") %}
+<p>Fikir benzer, amaç farklıdır. İkisi de bir değerin hash'iyle veriyi parçalara dağıtır. DynamoDB'de partition key tek bir item'ı bulmanın yoludur ve her istek onu vermek zorundadır. Warehouse'ta distribution key sorguda verilmez; sadece join'lerin ve taramaların işi dengeli bölmesi için row'ların nereye yerleşeceğini belirler.</p>
+{% endcall %}
+{{ k.quiz("rs-q4", "sales çoğu raporda customers ile customer_id üzerinden join'leniyor. Hangi ayar row'ların taşınmasını önler?",
+   ["İki table'da da DISTSTYLE EVEN", "İki table'da da DISTKEY customer_id", "Sadece sales'te SORTKEY customer_id", "Hiçbir ayar bunu önleyemez"],
+   1, "Aynı distribution key ile eşleşen row'lar aynı slice'tadır ve join yerel çalışır. Sort key sadece sırayı belirler, slice'ı değil.") }}
+
+<h2 id="loading" data-short="Yükleme ve değişiklik"><span class="sec">A7</span>Yükleme ve değişiklik: warehouse toplu yazmayı sever</h2>
+<p>Column store'da bir row'un her kolonu ayrı, sıkıştırılmış ve sıralı bir bloktadır. Bu yapı büyük okumalar için kurulmuştur; yazma ise bu blokları bozmamalıdır. Bu yüzden yazma yolunun her biçimi farklı bir bedel öder.</p>
+{{ k.concept("Toplu yükleme (bulk load)",
+   "Binlerce ya da milyonlarca row'u tek bir komutla, dosyalardan ve paralel olarak yükleme. Engine row'ları kolonlara ayırır, sıkıştırır ve bloklara yazar; her slice kendi payını aynı anda yükler. Redshift'te komutun adı COPY'dir.",
+   "Pazarlamanın tıklama dosyaları her gece S3'e gelir ve tek bir COPY ile yüklenir (M2 kart 2).",
+   "Bir kamyon dolusu kitabı rafa dizmek: kitaplar önce sıralanır, sonra raflar birer kez doldurulur. Kitapları tek tek getirmek rafları her seferinde yeniden düzenlemektir.") }}
+{{ k.concept("Değişiklik aktarımı (change data capture, CDC)",
+   "Bir OLTP database'indeki her ekleme, güncelleme ve silmenin sırayla okunup başka bir sisteme uygulanması. Warehouse kaynağın kopyasını kod yazmadan ve kısa bir gecikmeyle güncel tutar. Redshift'te Aurora'dan gelen yönetilen biçiminin adı <dfn>zero-ETL</dfn> entegrasyonudur.",
+   "Aurora'daki <code>orders</code>, <code>order_items</code>, <code>products</code> ve <code>customers</code> table'ları Redshift'teki <code>aurora_live</code> database'ine akar; bu workshop'ta yeni bir sipariş yaklaşık 30 saniyede görünür (B4).",
+   "Bir gazetenin baskı makinesine giden düzeltme listesi: her düzeltme sırayla uygulanır, gazete baştan yazılmaz.") }}
+<table class="data">
+  <caption>bütün durumlar: yazma yolları</caption>
+  <thead><tr><th>Yazma</th><th>Engine ne yapar</th><th>Bedeli</th><th>Redshift'teki adı (B4)</th></tr></thead>
+  <tbody>
+    <tr><td>Dosyalardan toplu yükleme</td><td>Row'ları kolonlara ayırır, sıkıştırır, bütün slice'larda paralel yazar</td><td>En düşük; önerilen yol</td><td>COPY</td></tr>
+    <tr><td>Başka bir table'dan toplu yazma</td><td>Sorgunun sonucunu paralel yazar</td><td>Düşük</td><td>INSERT INTO … SELECT, CREATE TABLE AS</td></tr>
+    <tr><td>Kaynak database'ten değişiklik akışı</td><td>Değişiklikleri sırayla uygular</td><td>Kod yok; kopya kaynaktan biraz geride</td><td>Zero-ETL entegrasyonu</td></tr>
+    <tr><td>Bir akıştan sürekli olaylar</td><td>Olayları kısa aralıklarla, mikro-batch'ler hâlinde ekler</td><td>Bir akış katmanı gerekir</td><td>Streaming ingestion (Kinesis, MSK)</td></tr>
+    <tr><td>Tek row'luk INSERT, saniyede binlerce</td><td>Her biri sekiz kolonun bloklarına dokunur</td><td><b>Yapma:</b> AWS tek tek INSERT için "prohibitively slow" der; toplu yükle</td><td>INSERT … VALUES</td></tr>
+    <tr><td>Bir row'u güncelle</td><td>Eski row'u silinmiş işaretler, yenisini sona ekler</td><td>Arkadan temizlik ve yeniden sıralama</td><td>UPDATE</td></tr>
+    <tr><td>Row sil</td><td>Row'u silinmiş işaretler; yer hemen geri gelmez</td><td>Arkadan temizlik</td><td>DELETE</td></tr>
+    <tr><td>Süre sonu (row kendi kendine silinsin)</td><td><b>Yoktur:</b> warehouse'ta TTL yok; silme zamanlanmış bir DELETE'tir</td><td>Bir iş ve temizlik</td><td>—</td></tr>
+    <tr><td>Kural koruma (unique, foreign key, CHECK)</td><td><b>Uygulanmaz:</b> unique, primary key ve foreign key sadece planner için bilgidir; NOT NULL uygulanır</td><td>Kontrol yükleme sürecindedir</td><td>—</td></tr>
+  </tbody>
+</table>
+<p>Güncellemenin iki sonucu:</p>
+<div class="flow">
+  <div class="box pk">UPDATE<small>O000061'in qty'si: 2 → 3</small></div><span class="arrow">→</span>
+  <div class="box miss">eski row<small>silinmiş işaretlenir, diskte kalır</small></div><span class="arrow">→</span>
+  <div class="box hit">yeni row<small>table'ın sıralanmamış sonuna eklenir</small></div><span class="arrow">→</span>
+  <div class="box">VACUUM<small>işaretliyi kaldırır, yeniden sıralar</small></div>
+</div>
+<p class="flow-cap">Column store'da bir güncelleme bir silme ve bir eklemedir. Temizlik işinin adı VACUUM'dur; Redshift silme kısmını yük düşükken arka planda kendisi çalıştırır. B4'teki simülasyon aynı güncellemeyi öğretici table'da adım adım oynatır.</p>
+{% call k.ask("Kurallar uygulanmıyorsa primary key'i neden yazayım?") %}
+<p>Planner onu kullanır: key ilişkilerinden JOIN'lerin sırasını ve gereksiz JOIN'leri çıkarır. Ama AWS uyarır: key'ler gerçekte geçerli değilse bazı sorgular yanlış sonuç döndürebilir, örneğin <code>SELECT DISTINCT</code> çift row verebilir. Bu yüzden key'i sadece yükleme süreci onu gerçekten koruyorsa yaz.</p>
+{% endcall %}
+{% call k.ask("İki kişi aynı anda yazarsa ne olur?") %}
+<p>Transaction'lar vardır ve birbirinden yalıtılır: Redshift'te varsayılan seviye SNAPSHOT, istenirse SERIALIZABLE'dır. SERIALIZABLE'da aynı veriye çakışan iki yazmadan biri hata alır ve yeniden dener. Ama warehouse'ta row lock ile korunan saniyede binlerce küçük transaction yoktur; o iş OLTP database'inindir.</p>
+{% endcall %}
+{{ k.quiz("rs-q5", "Bir geliştirici her yeni siparişi sipariş başına bir INSERT ile doğrudan warehouse'a yazmak istiyor, saniyede 500. Ana sorun nedir?",
+   ["Warehouse tarih saklayamaz", "Tek tek küçük yazmalar her kolonun bloğuna dokunur ve çok yavaştır", "Warehouse row'ları bir gün sonra siler", "Warehouse'ta SQL yoktur"],
+   1, "Column store toplu yazmayı sever. Sipariş Aurora'ya yazılır ve değişiklik aktarımı (zero-ETL) onu warehouse'a taşır.") }}
+
+<h2 id="analytics" data-short="Analitik SQL ve ön hesaplama"><span class="sec">A8</span>Analitik SQL ve ön hesaplama</h2>
+<p>Bir warehouse'un sorusu bir değeri bulmak değil, birçok değeri gruplamak, sıralamak ve karşılaştırmaktır. SQL'in bunun için iki aracı vardır: GROUP BY ve window function. Aynı soru sık tekrar ediyorsa cevabı önceden hesaplamak da bir araçtır.</p>
+{{ k.concept("Window function",
+   "Her row için, ona komşu row'ların bir penceresi üzerinde hesap yapan SQL fonksiyonu. GROUP BY row'ları tek bir sonuca indirir; window function ise her row'u korur ve yanına penceresinin sonucunu yazar: sıra numarası, önceki değer, hareketli ortalama, kümülatif toplam. <code>OVER (PARTITION BY … ORDER BY …)</code> ile yazılır.",
+   "<code>ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY order_date DESC)</code>: her müşterinin en son siparişine 1 verir. C00001'in 2026-03-04 siparişi 1, 2026-02-02 siparişi 2 olur.",
+   "Bir sınıfın not listesinde her öğrencinin yanına \"sınıftaki sıran\" yazmak: liste kısalmaz, her satıra bir bilgi eklenir.") }}
+{{ k.concept("Materialized view",
+   "Bir sorgunun sonucunu bir table gibi saklayan nesne. Sorgu tekrar geldiğinde sonuç hesaplanmaz, okunur. Kaynak değişince sonuç yenilenir; birçok sorgu için engine sadece değişen row'ları işler (incremental refresh).",
+   "\"Ay ve kategoriye göre gelir\" bir materialized view olursa yönetim panosunun kutusu iki milyar row yerine birkaç yüz row okur (M2 kart 9).",
+   "Bir dükkânın gün sonu kasa raporu: her müşteri sorduğunda fişler yeniden toplanmaz; rapor bir kez yazılır, yeni fiş gelince eklenir.") }}
+{{ k.concept("Result cache (sonuç önbelleği)",
+   "Bir sorgunun sonucunu bellekte tutan ve aynı sorgu tekrar gelince, veri değişmediyse, sorguyu hiç çalıştırmadan döndüren önbellek. Sorgunun okuduğu table'a bir yazma gelince o sonuç geçersiz olur.",
+   "Canlı Redshift'te aynı rapor sorgusu ilk çalıştırmada 125 ms, ikincide 3 ms sürdü ve <code>result_cache_hit</code> true döndü (B2).",
+   "Sık sorulan bir sorunun cevabını ezbere bilen danışma görevlisi: cevap değişmediyse dosyaya bakmaz.") }}
+<table class="data">
+  <caption>bütün durumlar: analitik bir soru ve onu cevaplayan araç</caption>
+  <thead><tr><th>Soru</th><th>Araç</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Gruba göre toplam</td><td>GROUP BY</td><td>Kategoriye göre gelir</td></tr>
+    <tr><td>Fact ve dimension'ı birleştir</td><td>JOIN</td><td>sales + rs_customers: segmente göre gelir</td></tr>
+    <tr><td>Her grubun ilk N'i</td><td>Window function: ROW_NUMBER</td><td>Her müşterinin son siparişi</td></tr>
+    <tr><td>Önceki değerle fark</td><td>Window function: LAG</td><td>Siparişler arası gün sayısı</td></tr>
+    <tr><td>Hareketli ortalama, kümülatif toplam</td><td>Window function: AVG / SUM OVER</td><td>90 günlük hareketli satış ortalaması</td></tr>
+    <tr><td>Aynı ağır soru dakikada bir</td><td>Materialized view, result cache</td><td>Yönetim panosunun 12 kutusu</td></tr>
+    <tr><td>Yeni bir soru, ilk kez</td><td>Sadece SQL; key tasarımı gerekmez</td><td>"Şehre ve cihaza göre iade oranı"</td></tr>
+    <tr><td>İki saniyenin altında tek bir kaydı bin kez</td><td><b>Warehouse'un işi değil:</b> her sorgu planlanır ve birçok slice'a gider</td><td>Ürün sayfasında stok</td></tr>
+  </tbody>
+</table>
+<table class="data">
+  <caption>öğretici veride ROW_NUMBER: C00001'in siparişleri, en yeni önce</caption>
+  <thead><tr><th>order_id</th><th class="c-pk">order_date</th><th class="c-sk">customer_id</th><th>amount</th><th>ROW_NUMBER()</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">O000027</td><td class="c-pk mono">2026-03-04</td><td class="c-sk mono">C00001</td><td>2832.03</td><td><b>1</b></td></tr>
+    <tr><td class="mono">O000025</td><td class="c-pk mono">2026-02-02</td><td class="c-sk mono">C00001</td><td>2678.72</td><td>2</td></tr>
+    <tr><td class="mono">O000003</td><td class="c-pk mono">2026-01-05</td><td class="c-sk mono">C00001</td><td>2635.86</td><td>3</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Materialized view ile result cache arasındaki fark ne?") %}
+<p>Materialized view bir sorgunun sonucunu kalıcı bir nesne olarak saklar ve kaynak değişince yenilenir; başka sorgular onu bir table gibi okuyabilir. Result cache sadece aynı sorgunun aynı sonucunu bellekte tutar ve table değişince silinir. Panonun geçmiş kutuları cache'ten, bugünün kutuları materialized view'dan gelir.</p>
+{% endcall %}
+{% call k.ask("Warehouse aynı sorguyu her seferinde yeniden mi planlar?") %}
+<p>Evet, cache'ten dönmüyorsa. Planlama, derleme ve slice'lara dağıtma birkaç milisaniyeden fazla sürer. Bu, milyar row'luk bir taramada önemsizdir ama tek bir kaydı okuyan sorguda toplam sürenin çoğudur. Bu yüzden warehouse tek kayıt aramalarında bir OLTP database'inden yavaştır (M3).</p>
+{% endcall %}
+{{ k.quiz("rs-q6", "Her müşterinin en son siparişini bulmak için hangi araç en doğal olanı?",
+   ["GROUP BY customer_id ile max(amount)", "ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY order_date DESC)", "Bir materialized view olmadan yazılamaz", "order_date üzerinde bir zone map"],
+   1, "Window function her müşterinin row'larını tarihe göre sıralar ve en yenisine 1 verir; row'un diğer kolonları da korunur. max(amount) en büyük tutarı verir, en son siparişi değil.") }}
+
+<h2 id="separation" data-short="Compute ve storage ayrımı"><span class="sec">A9</span>Compute ile storage'ın ayrılması: dışarıdaki veri, paylaşım, yüke göre kapasite</h2>
+<p>Klasik bir warehouse'ta her makine hem veriyi saklar hem sorguyu çalıştırır; daha çok veri daha çok makine demektir. Yeni nesil warehouse'larda veri ayrı, kalıcı bir storage katmanında durur ve compute bu katmanı okur.</p>
+{{ k.concept("Compute ile storage ayrımı",
+   "Verinin saklandığı katman ile sorguyu çalıştıran işlemci ve belleğin ayrı ayrı büyüyebilmesi ve ayrı ödenmesi. Compute boştayken durabilir, yük gelince büyüyebilir; birden fazla compute aynı veriyi okuyabilir. Üç sonucu vardır: dışarıdaki dosyaları sorgulamak, veriyi kopyalamadan paylaşmak ve kapasiteyi yüke göre vermek.",
+   "Lale Market'in Redshift'i Serverless'tır: veri managed storage'dadır, compute sorgu gelince çalışır ve sorgu yokken ödenmez (B5).",
+   "Bir kütüphanenin arşivi ile okuma salonu: arşiv büyür ve salon ayrı genişler; boş bir salonun ışıkları kapanır; iki salon aynı arşivden okur.") }}
+{{ k.concept("External table",
+   "Verisi warehouse'ta değil, dışarıdaki dosyalarda (örneğin S3'te Parquet) duran ama warehouse'ta bir table gibi sorgulanan tanım. Sorgu dosyaları yerinde okur; veri yüklenmez. Redshift'te bu katmanın adı Redshift <dfn>Spectrum</dfn>'dur.",
+   "Reklam ağlarının tıklama dosyaları S3'te durur; <code>spectrum.ad_clicks</code> external table'ı onları warehouse'taki <code>orders</code> ile tek sorguda JOIN'ler (M2 kart 2 ve 10).",
+   "Kütüphanenin başka bir şehirdeki deposundan kitap istemek: kitap rafa konmaz, okuma salonuna gelir ve geri gider.") }}
+{{ k.concept("Data sharing (veri paylaşımı)",
+   "Bir warehouse'taki table'ları kopyalamadan başka bir compute'a, başka bir hesaba ya da bölgeye okuma ya da yazma hakkıyla açmak. Paylaşan tarafın adı producer, kullanan tarafın adı consumer'dır. Consumer kendi compute'uyla sorgular; veri tek yerde durur.",
+   "Finans, pazarlama ve tedarikçi portalı aynı <code>sales</code> table'ını üç ayrı compute ile okur; gece CSV aktarımı kalkar (M2 kart 5).",
+   "Ortak bir kütüphane kartı: üç şube aynı kitaplara bakar, kitaplar fotokopiyle çoğaltılmaz.") }}
+<table class="data">
+  <caption>bütün durumlar: verinin ve compute'un yeri</caption>
+  <thead><tr><th>Durum</th><th>Nasıl çalışır</th><th>Bedeli</th></tr></thead>
+  <tbody>
+    <tr><td>Veri warehouse'ta, compute warehouse'ta</td><td>Kolon blokları, sort key, distribution: en hızlı yol</td><td>Veri yüklenir ve storage ödenir</td></tr>
+    <tr><td>Veri S3'te dosya, sorgu warehouse'tan</td><td>External table; dosyalar yerinde okunur</td><td>Zone map ve distribution yoktur; dosya düzeni (Parquet, partition) hızı belirler</td></tr>
+    <tr><td>Veri S3'te, sorgu bir query engine'den</td><td>Warehouse olmadan, dosyalar üzerinde SQL (Athena)</td><td>Her sorgu dosyaları yeniden okur; sorgu başına ödenir</td></tr>
+    <tr><td>Aynı veri, iki compute</td><td>Data sharing; her consumer kendi kapasitesiyle</td><td>Yetki tasarımı</td></tr>
+    <tr><td>Yük gelir ve gider</td><td>Compute yükle büyür ve boşta durur</td><td>Kapasitenin üst sınırı ve en küçük birimi ayarlanır</td></tr>
+    <tr><td>Bir sorgu bütün veriyi tek makinenin belleğine almak ister</td><td><b>Gerekmez ve olmaz:</b> MPP işi böler; tek makine sınırı yoktur, compute eklenir</td><td>—</td></tr>
+    <tr><td>Compute ile storage tek makinede (klasik cluster)</td><td>Daha çok veri için daha çok makine</td><td>Veri büyüyünce compute da ödenir; Redshift'in eski DC2 node'ları böyleydi, RA3 ve Serverless ayrıdır</td></tr>
+  </tbody>
+</table>
+{{ k.fig("redshift-architecture.png", "resmî Redshift mimarisi. Ortadaki büyük kutu compute'tur: solda Serverless bulutu, sağda bir leader node ve dört compute node'lu (CN1–CN4) cluster. En altta iki storage katmanı vardır: Redshift Managed Storage ve S3'teki Parquet, ORC, JSON dosyaları. Soldaki turuncu kutu data sharing ile aynı veriyi okuyan başka compute'lardır.") }}
+{% call k.ask("External table varken veriyi warehouse'a neden yüklüyoruz?") %}
+<p>Çünkü yüklenen veri kolon bloklarına, sort key'e ve distribution'a göre düzenlenir ve tekrar eden sorgularda çok daha hızlıdır. External table ara sıra sorulan sorular ve henüz düzenlenmemiş ham veri için iyidir. M2'nin 10. kartı bu iki yolu ve Athena'yı karşılaştırır.</p>
+{% endcall %}
+{% call k.ask("Compute boştayken veri kaybolur mu?") %}
+<p>Hayır. Veri storage katmanındadır ve compute'tan bağımsız saklanır. Compute durunca sadece sorgu çalıştıran kapasite durur; ilk sorgu geldiğinde yeniden başlar.</p>
+{% endcall %}
+
+<h2 id="summary" data-short="Ö1–Ö8 özeti ve matris"><span class="sec">A10</span>Özet: data warehouse'un sekiz özelliği ve hangi üründe olduğu</h2>
+<p>Bölüm A'nın her kavramı bir özelliğe karşılık gelir. Bu sekiz özellik sayfanın geri kalanının ortak dilidir: Mimar gözüyle bölümü her use case'i bu numaralarla anlatır ve M1 bu listeyi sinyaller ve sınırlarıyla genişletir.</p>
+<table class="data">
+  <caption>Ö1–Ö8: columnar data warehouse'un özellikleri</caption>
+  <thead><tr><th>No</th><th>Özellik</th><th>Tek cümleyle</th><th>Tanım</th></tr></thead>
+  <tbody>
+    <tr><td><b>Ö1</b></td><td>Kolon bazlı saklama</td><td>Sorgu sadece istediği kolonların bloklarını okur; diğer kolonlar diskte kalır.</td><td>A3</td></tr>
+    <tr><td><b>Ö2</b></td><td>Kolon başına sıkıştırma</td><td>Her kolon kendi verisine uyan kodlamayla saklanır; aynı bilgi daha az blokta durur.</td><td>A4</td></tr>
+    <tr><td><b>Ö3</b></td><td>Sort key ve zone map</td><td>Row'lar bir kolonun sırasıyla saklanır ve aralık dışındaki bloklar okunmadan atlanır.</td><td>A5</td></tr>
+    <tr><td><b>Ö4</b></td><td>MPP ve distribution key</td><td>İş slice'lara bölünür; aynı değerli row'lar aynı slice'ta durur ve join yerel çalışır.</td><td>A6</td></tr>
+    <tr><td><b>Ö5</b></td><td>Analitik SQL</td><td>JOIN, GROUP BY ve window function ile her yeni soru bir SQL cümlesidir.</td><td>A8</td></tr>
+    <tr><td><b>Ö6</b></td><td>Ön hesaplama: materialized view ve result cache</td><td>Tekrar eden soruların sonucu saklanır ve artımlı yenilenir.</td><td>A8</td></tr>
+    <tr><td><b>Ö7</b></td><td>Toplu yükleme ve değişiklik aktarımı</td><td>Veri dosyalardan toplu, kaynak database'ten sürekli ve kod yazmadan gelir.</td><td>A7</td></tr>
+    <tr><td><b>Ö8</b></td><td>Compute ile storage ayrımı</td><td>Dışarıdaki dosyalar yerinde sorgulanır, veri kopyasız paylaşılır, kapasite yüke göre gelir.</td><td>A9</td></tr>
+  </tbody>
+</table>
+<p>Bu sekiz özellik her analitik üründe aynı biçimde yoktur. Matris üç ürünü karşılaştırır: PostgreSQL (row store; aynı SQL ama farklı depolama), Athena (S3'teki dosyalar üzerinde SQL çalıştıran sunucusuz bir query engine; engine'i açık kaynak <dfn>Trino</dfn>'dur) ve Redshift. Mimar bu matrisi "hangi analitik ürün" sorusunda kullanır (M5).</p>
+<table class="data fmatrix">
+  <caption>özellik × ürün matrisi: ✓ var · ½ kısmen ya da farklı biçimde · ✗ yok</caption>
+  <thead><tr><th>Özellik</th><th>PostgreSQL (Aurora)</th><th>Athena (Trino, S3 üzerinde)</th><th>Redshift</th></tr></thead>
+  <tbody>
+    <tr><td><b>Ö1</b> Kolon bazlı saklama</td><td class="n">✗ Row store; bir row bütün kolonlarıyla 8 kB'lık page'lerde</td><td class="p">½ Veri Parquet ya da ORC dosyasıysa kolon bazlı okur; CSV ve JSON row bazlıdır</td><td class="y">✓ 1 MB'lık kolon blokları</td></tr>
+    <tr><td><b>Ö2</b> Kolon başına sıkıştırma</td><td class="n">✗ Kolon başına kodlama yok; büyük değerler için genel sıkıştırma</td><td class="p">½ Dosya biçiminin sıkıştırması (Parquet, Snappy, ZSTD); dosyayı yazan seçer</td><td class="y">✓ Kolon başına kodlama, AUTO ile engine seçer</td></tr>
+    <tr><td><b>Ö3</b> Sort key ve zone map</td><td class="p">½ B-tree ve BRIN index'leri; BRIN zone map'e benzer bir blok özeti tutar</td><td class="p">½ Partition budama ve Parquet'in row group istatistikleri; dosyaların içi sıralıysa iyi çalışır</td><td class="y">✓ Sort key, blok başına zone map</td></tr>
+    <tr><td><b>Ö4</b> MPP ve distribution key</td><td class="p">½ Paralel sorgu tek makinenin çekirdekleriyle; dağıtım yok (Limitless ayrı bir üründür)</td><td class="p">½ Dağıtık çalışır ama verinin yerleşimini sen belirlemezsin; join'de row'lar her sorguda dağıtılır</td><td class="y">✓ Slice'lar, KEY / EVEN / ALL / AUTO</td></tr>
+    <tr><td><b>Ö5</b> Analitik SQL</td><td class="y">✓ JOIN, GROUP BY, window function, CTE</td><td class="y">✓ Trino SQL'i, window function dahil</td><td class="y">✓ PostgreSQL'e yakın SQL, window function, SUPER için PartiQL</td></tr>
+    <tr><td><b>Ö6</b> Materialized view ve result cache</td><td class="p">½ Materialized view var ama elle yenilenir (REFRESH); sonuç önbelleği yok</td><td class="p">½ Sorgu sonucunu yeniden kullanma seçeneği var; materialized view yok</td><td class="y">✓ Artımlı yenilenen materialized view, otomatik result cache</td></tr>
+    <tr><td><b>Ö7</b> Toplu yükleme ve değişiklik aktarımı</td><td class="p">½ COPY ve S3'ten yükleme var; bir OLTP sistemidir, kendisi kaynaktır</td><td class="p">½ Yükleme yok; veri S3'e başka bir servisle gelir (Firehose, dışa aktarım)</td><td class="y">✓ COPY, Aurora ve DynamoDB'den zero-ETL, Kinesis ve MSK'dan streaming ingestion</td></tr>
+    <tr><td><b>Ö8</b> Compute ile storage ayrımı</td><td class="p">½ Aurora'da storage ayrıdır ve reader'lar onu paylaşır; ama compute instance'ları saat başına çalışır</td><td class="y">✓ Storage S3'tür, compute sorgu başınadır; ayrı bir sistem yok</td><td class="y">✓ Managed storage, Serverless compute, Spectrum, data sharing</td></tr>
+  </tbody>
+</table>
+<p>Matristeki birkaç ad: <b>BRIN</b>, PostgreSQL'in blok aralığı başına en küçük ve en büyük değeri tutan index'i; <b>Parquet</b> ve <b>ORC</b>, kolon bazlı dosya biçimleri; <b>row group</b>, bir Parquet dosyasının içindeki row bloğu; <b>CTE</b>, SQL'in adlandırılmış ara sonucu; <b>SUPER</b> ve <b>PartiQL</b>, Redshift'in şemasız JSON tipi ve onu sorgulayan SQL uzantısı; <b>Limitless</b>, Aurora PostgreSQL'in yazmaları birkaç instance'a dağıtan ayrı biçimi (<a href="/e2etutorial/aurora?lang=tr">Aurora tutorial'ı</a>, M5).</p>
+<p>Matris bir ürünün "iyi" ya da "kötü" olduğunu söylemez. PostgreSQL'in Ö1–Ö4'te zayıf olması onu checkout için iyi yapan şeyin kendisidir. Athena'nın Ö6–Ö7'de eksik olması, ayrı bir sistem işletmemenin bedelidir. Soru her zaman şudur: iş yükü hangi özelliği istiyor?</p>
+{{ k.quiz("rs-q7", "Bir ekip S3'teki ham dosyalar üzerinde haftada birkaç farklı soru soruyor ve hiçbir şey yüklemek istemiyor. Matrise göre hangi özellik ve hangi ürün bu iş yükünü en doğrudan karşılar?",
+   ["Ö6; PostgreSQL", "Ö8; Athena", "Ö2; PostgreSQL", "Ö4; Athena"],
+   1, "Dosyaları yerinde sorgulamak ve sorgu başına ödemek Ö8'dir; Athena bunu ayrı bir sistem olmadan yapar. Redshift de Spectrum ile yapar ama bir warehouse işletilir (kart 10).") }}
+
+<div class="part"><b>Mimar gözüyle</b><h2 id="architect" data-short="Mimar gözüyle">Mimar gözüyle: ne zaman data warehouse, ne zaman Redshift</h2>
+<p>Önce kategori: bir data warehouse ne zaman doğru seçimdir, alternatifleri neyi daha iyi yapar ve yine de warehouse seçersek ne kazanıp ne kaybederiz. Sonra AWS'teki seçenekler ve Redshift Serverless ile provisioned cluster arasındaki seçim.</p></div>
+
+<p><b>Kısaca:</b> bir data warehouse çok sayıda row'u tarayan, birkaç kolonu okuyan ve gruplayan sorguları saniyelerde cevaplar; bunu kolonları ayrı saklayarak, okunmayacak blokları atlayarak ve işi birçok slice'a bölerek yapar. Tek bir kaydı bulmak, metin içinde aramak ve saniyede binlerce küçük yazma onun işi değildir.</p>
+<p>Önemli kelime yine {{ k.term("access pattern") }}'dir: uygulamanın sorduğu bir soru, o anda bildiği değerlerle birlikte. Bir warehouse'ta access pattern'ler önceden listelenmez; analist yarın yeni bir soruyu SQL ile sorar (Ö5). Ama sorunun <b>biçimi</b> bellidir: çok row, az kolon, gruplama. "Bu müşterinin son siparişini 10 ms'de getir" bu biçime uymaz.</p>
+<p>Bu bölümdeki her karar aynı beş gereksinimle anlatılır. M2'deki kartlar ve M7'deki simülasyonlar aynı beş başlığı kullanır. Son sütun her gereksinimin cevabının nereden geldiğini söyler:</p>
+<table class="data">
+  <caption>R1–R5: her iş yükünün beş gereksinimi</caption>
+  <thead><tr><th>No</th><th>Gereksinim</th><th>Sorusu</th><th>Kaynağı</th></tr></thead>
+  <tbody>
+    <tr><td><b>R1</b></td><td>Engine uyumu: veri, erişim ve garanti modeli</td><td>İş yükünün verisi, soruları ve kuralları engine'in çalışma prensibine, algoritmasına ve sunduğu araçlara ne kadar uyuyor? Access pattern bu gereksinimin bir parçasıdır (R1 · EY).</td><td>engine'in doğası</td></tr>
+    <tr><td><b>R2</b></td><td>Ölçek ve trafik şekli</td><td>Ne kadar veri, kaç eşzamanlı sorgu, yük düz mü dalgalı mı, tepe anında ne kadar gecikme kabul edilir?</td><td>ikisi birlikte: engine'in ölçeklenme modeli ve servisin kapasite yönetimi</td></tr>
+    <tr><td><b>R3</b></td><td>Dayanıklılık</td><td>Bir arızada bu verinin kaybı ne demek: kaynaktan yeniden yüklenen bir kopya mı, yeniden üretilemeyen bir kapanış mı?</td><td>üreticinin servis tasarımı</td></tr>
+    <tr><td><b>R4</b></td><td>Operasyon ve ekip</td><td>Kim işletecek, veri nasıl gelecek, kapasite planlanmak isteniyor mu, sistemde zaten çalışan bir warehouse var mı?</td><td>üreticinin servis tasarımı</td></tr>
+    <tr><td><b>R5</b></td><td>Maliyet modeli</td><td>Sorgu başına mı, kapasite-saat başına mı, taranan TB başına mı ödenir ve bu yükün şekline uyar mı?</td><td>üreticinin servis tasarımı</td></tr>
+  </tbody>
+</table>
+{% call k.callout("why", "Neden R1 en ağır, R3–R5 neden daha hafif ama silinmez?") %}
+<p>R1'in cevabı platformdan bağımsızdır. R1 satırları yalnız engine'in kendisini puanlar; bir kırılım servisin paketlemesinden geliyorsa (Serverless kapasite, zero-ETL bağlantısı, 60 saniyelik minimum ücret, düğüm planı) R2–R5'e yazılır ve R1'de sayılmaz. Redshift'in kolonları ayrı bloklarda saklaması, bir UPDATE'i silme ve ekleme olarak yapması ve primary key'i uygulamaması, engine hangi bulutta ya da hangi makinede çalışırsa çalışsın aynıdır. Bu yüzden bir iş yüküne hangi engine'in uyduğu en çok R1'de görünür.</p>
+<p>R3–R5'in cevabı ise büyük ölçüde üreticinin tasarım kararıdır. AWS Redshift'i yalnız düğümlü cluster olarak sunabilirdi; aynı engine bugün iki biçimde gelir: provisioned cluster (düğüm tipi ve sayısı seçilir, saat başına ödenir) ve Serverless (kapasite yükle gelir, kullanıldığı saniye ödenir). Athena ise S3'teki dosyaları warehouse olmadan sorgular. Bu yüzden R3–R5'in ağırlığı R1 kadar yüksek olamaz. Ama silinmez: aynı engine'i sunan servisler arasındaki seçim tam olarak bu satırlarda yapılır. Bu sayfanın dört kartında (3, 5, 8, 10) Redshift Serverless ile provisioned cluster aynı R1 puanını alır ve kararı bu satırlar verir.</p>
+{% endcall %}
+<p>R1 tek bir puan değildir. Bir iş yükünde engine'e sorulan birkaç soru vardır ve her kart bu soruları aşağıdaki sabit katalogdan seçer: katalog üç ile beş arası alt maddeye izin verir; bu sayfanın kartlarında dört alt madde vardır. Kartta alt maddeler sırayla numaralanır ve katalog kodunu taşır, örneğin "R1.2 · DA Depolama algoritması". Katalog bütün database sayfalarında aynıdır; böylece bu sayfanın kartlarını Aurora ya da DynamoDB sayfasının kartlarıyla aynı dille karşılaştırabilirsin.</p>
+<table class="data">
+  <caption>R1 kataloğu: Engine uyumunun sekiz alt maddesi (database'ler için)</caption>
+  <thead><tr><th>Kod</th><th>Alt madde</th><th>Ne sorar</th><th>Redshift'te örnek</th></tr></thead>
+  <tbody>
+    <tr><td><b>VM</b></td><td>Veri modeli ve value tipi</td><td>Value'nun yapısı ne: structured, semi-structured, iç içe, blob, graph, zaman serisi? Bir value ne kadar büyük?</td><td>Type'lı kolonlu table'lar; şemasız JSON için SUPER tipi; büyük dosya yok (A2, A9)</td></tr>
+    <tr><td><b>ŞE</b></td><td>Şema elverişliliği</td><td>Şema yazarken mi okurken mi uygulanır? Alanlar kayıttan kayda değişebilir mi, şema nasıl evrilir?</td><td>Şema yazarken uygulanır ama sadece type ve NOT NULL; unique, primary key ve foreign key uygulanmaz (A7); external table'larda şema okurken (A9)</td></tr>
+    <tr><td><b>EY</b></td><td>Erişim yolu</td><td>Soru hangi değerle sorulur: key, aralık, ikincil alan, join ve toplam, metin, coğrafya, ilişki, zaman penceresi?</td><td>Join ve toplam, zaman penceresi, window function (Ö5); tek kayıt araması ve metin araması zayıf (A5, A8)</td></tr>
+    <tr><td><b>OY</b></td><td>Okuma/yazma şekli</td><td>Hacim değil, işlemin biçimi: yerinde güncelleme mi, ekleme mi, oku-değiştir-yaz mı, sayaç mı, toplu yazma mı?</td><td>Toplu yükleme ve CREATE TABLE AS çok iyi (Ö7); UPDATE bir silme ve bir eklemedir, tek row'luk INSERT yavaştır (A7)</td></tr>
+    <tr><td><b>TA</b></td><td>Tutarlılık ve atomiklik</td><td>Engine hangi garantileri verir: okuma tutarlılığı, koşullu yazma, transaction kapsamı, izolasyon?</td><td>Transaction'lar SNAPSHOT ya da SERIALIZABLE; row lock'la korunan yoğun küçük transaction'lar için değil (A7)</td></tr>
+    <tr><td><b>DA</b></td><td>Depolama algoritması</td><td>Engine'in çalışma algoritması bu erişime uyuyor mu: bellek içi hash, B-tree, LSM, columnar, inverted index?</td><td>Columnar, 1 MB'lık bloklar, zone map, MPP (Ö1, Ö3, Ö4)</td></tr>
+    <tr><td><b>YD</b></td><td>Veri yaşam döngüsü</td><td>Veri nasıl sona erer, değişikliği nasıl dışarı yayılır: TTL, sürüm, değişiklik akışı?</td><td>TTL yok: silme bir DELETE'tir ve VACUUM ister; içeri değişiklik akışı var (zero-ETL), dışarı akış yok (A7)</td></tr>
+    <tr><td><b>AO</b></td><td>Ayar ve optimizasyon araçları</td><td>Engine geliştiriciye hangi sıkılaştırma araçlarını verir: index tipleri, projection, sparse index, sıkıştırma, script?</td><td>Sort key, distribution, kolon kodlaması, materialized view, result cache, row-level security (Ö2, Ö3, Ö4, Ö6)</td></tr>
+  </tbody>
+</table>
+<p>Her kartta her satırın bir <b>ağırlığı</b> vardır ve ağırlıkların toplamı 100'dür. Ağırlık puanlardan önce, iş yükünün önceliğinden belirlenir ve kartta tek cümlelik nedeniyle yazılır. Çoğu kartta R1 en ağır gereksinimdir; R2–R5'in her biri en az 5 alır. Bir aday her satırda 0–10 puan alır ve katkısı puan × ağırlık / 10'dur. Zorunlu satır ve eleme yoktur: bir iş yükünün önceliği olan satırda zayıf kalan aday, toplamda kendiliğinden geride kalır. Puan ile ağırlığın işi ayrıdır: <b>puan</b> satırdaki "ne istiyoruz" cümlesinin ne kadar karşılandığını ölçer, <b>ağırlık</b> o satırın bu iş yükü için ne kadar önemli olduğunu. Bir eksik yalnız bir satırda sayılır: bir taramanın yavaşlığı row'ların saklanma biçiminden geliyorsa R1 · DA'da, reader'ların storage'ı checkout ile paylaşmasından ya da bir akış katmanının ölçeklenmesinden geliyorsa R2'de.</p>
+
+<h2 id="signals" data-short="Ö1–Ö8: sinyal ve sınır"><span class="sec">M1</span>Data warehouse'un sekiz özelliği: hangi sinyal çağırır, sınırı nedir</h2>
+<p>Bu tablo M2'deki kartların referansıdır. Bir kart "Ö3 ile çözer" dediğinde buraya dönersin. Her satır A10'daki özelliği iş yükündeki sinyaliyle ve sınırıyla, yani yapamadığı şeyle birleştirir. Sınırlar, alternatiflerin neden bazen daha iyi olduğunu da açıklar.</p>
+<table class="data">
+  <thead><tr><th>Özellik</th><th>Ne sağlar</th><th>İş yükünde onu çağıran sinyal</th><th>Sınırı: ne yapamaz</th><th>Tanım</th></tr></thead>
+  <tbody>
+    <tr><td><b>Ö1</b> Kolon bazlı saklama</td><td>Sorgu sadece istediği kolonların bloklarını okur</td><td>Geniş table'lar, her sorguda birkaç kolon, milyonlarca row</td><td>Tek bir row'u okumak ya da yazmak her kolonun bloğuna dokunur; SELECT * avantajı siler</td><td>A3</td></tr>
+    <tr><td><b>Ö2</b> Kolon başına sıkıştırma</td><td>Aynı bilgi daha az blokta, daha az okuma</td><td>Tekrar eden değerler: şehir, kategori, durum, tarih</td><td>Rastgele değerler sıkışmaz; sort key kolonu sıkıştırılmadan bırakılır</td><td>A4</td></tr>
+    <tr><td><b>Ö3</b> Sort key ve zone map</td><td>Aralık dışındaki bloklar okunmadan atlanır</td><td>"Geçen çeyrek", "bu yılın mart'ı": zamana göre aralık filtreleri</td><td>Tek bir sıra; sırasız kolonda ve metin içinde kelimede işe yaramaz; index değildir</td><td>A5</td></tr>
+    <tr><td><b>Ö4</b> MPP ve distribution key</td><td>Sorgu slice'lara bölünür, eşleşen row'lar yerel join'lenir</td><td>Milyarlarca row, iki büyük table'ın aynı kolonla join'i</td><td>Bir table'ın tek distribution key'i; çarpık bir kolon tek slice'ı boğar; her sorgu planlanır ve dağıtılır</td><td>A6</td></tr>
+    <tr><td><b>Ö5</b> Analitik SQL</td><td>JOIN, GROUP BY, window function; yeni soru yeni bir cümle</td><td>Her hafta yeni bir soru, analistler SQL biliyor</td><td>Metin araması için inverted index yok; tek kayıt sorgusu milisaniyelerce planlanır</td><td>A8</td></tr>
+    <tr><td><b>Ö6</b> Materialized view ve result cache</td><td>Tekrar eden sorgunun sonucu saklanır ve artımlı yenilenir</td><td>Dakikada bir yenilenen panolar, aynı ara sonuç birçok raporda</td><td>Kaynağa her yazma cache'i geçersiz kılar; yenileme bedavaya değil</td><td>A8</td></tr>
+    <tr><td><b>Ö7</b> Toplu yükleme ve değişiklik aktarımı</td><td>Dosyalardan paralel yükleme; kaynak database'ten kodsuz kopya</td><td>Gecelik dosyalar, Aurora'daki siparişlerin raporlanması</td><td>Tek tek küçük yazma yavaş; UPDATE ve DELETE arkadan temizlik ister; TTL yok; kurallar uygulanmaz</td><td>A7</td></tr>
+    <tr><td><b>Ö8</b> Compute ile storage ayrımı</td><td>Dışarıdaki dosyalar yerinde, veri kopyasız paylaşılır, kapasite yüke göre</td><td>S3'te veri gölü, birkaç ekip ve hesap, dalgalı yük</td><td>External table'da zone map ve distribution yok; kapasite sınırları ve minimum ücret ayarlanır</td><td>A9</td></tr>
+  </tbody>
+</table>
+<p>Tablo özettir. Aşağıdaki sekiz blok her özelliği dört başlıkla açar: ne sağlar, hangi sinyal çağırır, sınırı nedir ve alternatif ne zaman daha iyidir.</p>
+
+<table class="data feat"><caption>Ö1 · Kolon bazlı saklama</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Bir kolonun değerleri kendi bloklarında durur. "Kategoriye göre gelir" sorusu sekiz kolonlu table'da iki kolonun bloklarını okur; 100 kolonlu bir table'da üç kolon isteyen sorgu verinin kabaca otuzda birini okur. İki milyar row'luk bir tarama bu yüzden yüzlerce GB değil birkaç GB okur.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"Üç yılın siparişleri, ay ve şehre göre", "her müşterinin 140 feature'ı, gece", "60 kolonlu sales table'ında 4 kolonluk rapor". Çok row ve az kolon birlikteyse sinyal buradadır.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Bir row'u bütünüyle okumak ve yazmak her kolonun ayrı bloğuna dokunur. "O000061'i getir" ya da "bu siparişi kaydet" row store'da daha ucuzdur. <code>SELECT *</code> geniş bir table'da bütün blokları açar ve avantaj kaybolur.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>İş tek kayıtlar üzerinde okuma ve yazmaysa ilişkisel database (Aurora) ya da key-value (DynamoDB). Veri zaten S3'te Parquet ise ve sorular seyrekse Athena aynı kolon okumasını warehouse olmadan yapar.</td></tr>
   </tbody>
 </table>
 
-<h3>Use case'ler, nedeni ve özelliğiyle</h3>
-<table class="data">
-  <thead><tr><th>Use case</th><th>Veri</th><th>Neden bir warehouse</th><th>İşi yapan özellik</th></tr></thead>
+<table class="data feat"><caption>Ö2 · Kolon başına sıkıştırma</caption>
   <tbody>
-    <tr><td>Satış raporları (Lale Market)</td><td>Tarih, şehir, kategori, miktar ve tutarlı sipariş satırları.</td><td>Bütün siparişler üzerinde ay, kategori ya da şehre göre GROUP BY.</td><td>Kolon bazlı saklama, SORTKEY order_date</td></tr>
-    <tr><td>Neredeyse gerçek zamanlı operasyon dashboard'u (Lale Market)</td><td>Canlı Aurora table'ları.</td><td>Bir ETL pipeline'ı olmadan bugünün siparişleri bir raporda.</td><td>Aurora'dan zero-ETL entegrasyonu</td></tr>
-    <tr><td>Finans ve muhasebe raporları</td><td>Faturalar, ödemeler, defterler.</td><td>Milyonlarca kayıt üzerinde aylık kapanış.</td><td>SQL, join'ler, window function'lar</td></tr>
-    <tr><td>Pazarlama attribution'ı</td><td>Reklam tıklamaları, oturumlar, siparişler.</td><td>Birçok kaynaktan event'leri müşteriye göre join'le.</td><td>Join key'ine göre dağıtım</td></tr>
-    <tr><td>Business intelligence araçları</td><td>Herhangi bir warehouse table'ı.</td><td>Birçok kullanıcı için dashboard'lar.</td><td>JDBC ve ODBC driver'ları, concurrency scaling</td></tr>
-    <tr><td>Data lake query'leri</td><td>S3'teki Parquet dosyaları.</td><td>Warehouse table'larını S3'te kalan dosyalarla join'le.</td><td>External table'lar (Redshift Spectrum)</td></tr>
-    <tr><td>Machine learning feature'ları</td><td>Müşteri geçmişi.</td><td>Eğitim verisi için aggregate'ler hesapla.</td><td>SQL aggregate'leri, Redshift ML</td></tr>
-    <tr><td>Telekom ve IoT geçmişi</td><td>Milyarlarca arama ya da cihaz kaydı.</td><td>Uzun dönemler üzerinde sıkıştırılmış taramalar.</td><td>Kolon başına sıkıştırma, zone map'ler</td></tr>
+    <tr><td><b>Ne sağlar</b></td><td>Her kolon kendi verisine uyan kodlamayla saklanır: kategori sözlükle küçük kodlara, tutar ve tarih sayısal kodlamayla birkaç bite iner. Daha küçük veri daha az blok, daha az okuma ve daha ucuz storage demektir. Kodlamayı engine kendisi seçebilir (AUTO).</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Çok tekrar eden değerler ve büyük geçmiş: "beş kategori, iki milyar row", "on şehir", "her row'da bir durum kodu". Storage faturası ve tarama süresi birlikte önemliyse sinyal buradadır.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Rastgele değerler (token, hash) sıkışmaz. Sort key'in ilk kolonu hızlı eleme için sıkıştırılmadan bırakılır. Sıkıştırma tek row'luk yazmayı daha da pahalı yapar: bir değer eklemek bir bloğu yeniden kodlamaktır.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Veri küçükse (birkaç GB) sıkıştırmanın kazancı fark edilmez ve var olan bir ilişkisel database yeter. Veri S3'te kalacaksa Parquet dosyalarının kendi sıkıştırması Athena ile aynı kazancı verir.</td></tr>
   </tbody>
 </table>
 
-<h3>Redshift'ten uzaklaştıran sinyaller</h3>
-<table class="data">
-  <thead><tr><th>İş yükündeki sinyal</th><th>Redshift neden zayıf bir seçim</th><th>Daha iyi seçim</th></tr></thead>
+<table class="data feat"><caption>Ö3 · Sort key ve zone map</caption>
   <tbody>
-    <tr><td>Tıklama başına küçük bir yazma, saniyede binlerce</td><td>Redshift büyük yüklemeleri ve taramaları iyi yapar, çok sayıda küçük yazmayı değil.</td><td><a href="/e2etutorial/aurora">Aurora</a>, <a href="/e2etutorial/dynamodb">DynamoDB</a></td></tr>
-    <tr><td>Milisaniyelerde key ile tek bir kaydı okuma</td><td>Bir warehouse query'sinin başlangıç maliyeti bir key okumasından fazladır.</td><td><a href="/e2etutorial/dynamodb">DynamoDB</a>, <a href="/e2etutorial/elasticache">ElastiCache</a></td></tr>
-    <tr><td>Yazım hatalı serbest metin arama</td><td>Analyzer ya da relevance score yok.</td><td><a href="/e2etutorial/opensearch">OpenSearch</a></td></tr>
-    <tr><td>Birçok hop üzerinden ilişkiler</td><td>Her hop bir self-join daha demektir.</td><td><a href="/e2etutorial/neptune">Neptune</a></td></tr>
-    <tr><td>Birkaç saniyede bir gelen ve otomatik silinen metrikler</td><td>Ölçüm başına retention yok.</td><td><a href="/e2etutorial/influxdb">Timestream for InfluxDB</a></td></tr>
+    <tr><td><b>Ne sağlar</b></td><td>Row'lar bir kolonun sırasıyla saklanır ve her blok dar bir aralık tutar. Engine her bloğun en küçük ve en büyük değerini bilir ve filtreyle çakışmayan blokları hiç okumaz. "Mart" sorusu altı bloğun birini okur; üç yıllık bir table'da "geçen ay" sorusu blokların otuz altıda birini okur.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>Zamana göre aralık filtreleri: "geçen çeyrek", "son 90 gün", "2025 kampanya haftası". Ya da tek bir kolonda sık eşitlik filtresi: "bu depo", "bu kategori".</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Table'ın tek bir sırası vardır. Sırasız bir kolonda (tutar) zone map neredeyse hiçbir şey elemez. Zone map index değildir: tek bir row'a gitmez, metin içindeki bir kelimeyi bilmez. Yeni eklenen row'lar sıralanana kadar geniş aralıklı bloklarda durur.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Soru tek bir kaydı key ile istiyorsa B-tree index'li bir ilişkisel database ya da key-value. Metin içinde kelime aranıyorsa inverted index'li bir search engine (OpenSearch).</td></tr>
   </tbody>
 </table>
 
-<h3>Bir mimarın sorduğu sorular, bu sırayla</h3>
+<table class="data feat"><caption>Ö4 · MPP ve distribution key</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Sorgu birçok slice'a bölünür ve her slice kendi payını aynı anda tarar; daha büyük bir iş için compute eklenir. Fact table ve en büyük dimension aynı kolonla dağıtılırsa eşleşen row'lar aynı slice'tadır ve join ağ üzerinden row taşımadan çalışır.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"900 milyon tıklama ile 7 milyon siparişin müşteriye göre join'i", "30 dashboard aynı anda iki milyar row tarıyor", "gece iki saatte 2 milyon müşterinin feature'ı".</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Bir table'ın tek distribution key'i vardır; farklı kolonla yapılan ikinci join row taşır. Çarpık bir kolon (bir müşteri satışların yarısı) tek slice'ı boğar. Her sorgu planlanır, derlenir ve dağıtılır: bu birkaç milisaniye tek kayıtlık bir soruda toplam sürenin çoğudur.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Veri tek bir makineye sığıyorsa ve sorular son birkaç günle sınırlıysa ilişkisel database'in bir reader'ı. Join'ler seyrekse ve veri S3'teyse Athena aynı dağıtık taramayı sorgu başına ödemeyle yapar.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö5 · Analitik SQL</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>JOIN, GROUP BY ve window function'lar ile her yeni soru bir SQL cümlesidir: "şehre ve cihaza göre iade oranı", "her müşterinin son tıklaması", "90 günlük hareketli ortalama". Analistler bildikleri SQL'i yazar; key tasarımı ya da index planı gerekmez.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"Analistler her hafta yeni bir soru soruyor", "attribution modelini değiştirmek istiyoruz", "mizan, masraf merkezine göre dağılım". Sorular önceden listelenemiyorsa ve hepsi gruplama ise sinyal buradadır.</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Metin içinde kelime aramak için inverted index yoktur: LIKE bütün blokları okur. İlişkiler üzerinden birçok adımlık gezinti (arkadaşın arkadaşı) her adımda bir self-join'dir. Tek bir kayıt sorusu planlama süresini öder.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Metin araması ve relevance için search engine (OpenSearch). Derin ilişki gezintisi için graph database (Neptune). Aynı SQL'i yükleme olmadan, ara sıra, S3'teki dosyalar üzerinde sormak için Athena.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö6 · Ön hesaplama: materialized view ve result cache</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Tekrar eden bir sorgunun sonucu bir materialized view'da saklanır ve kaynak değişince çoğu durumda sadece değişen row'larla yenilenir. Aynı sorgu tekrar geldiğinde ve veri değişmediyse result cache sonucu hiç çalıştırmadan döndürür: canlı Redshift'te 125 ms'lik rapor ikinci kez 3 ms'de döndü.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"Dakikada bir yenilenen 12 KPI kutusu", "her beş dakikada aynı 90 günlük ortalama", "bütün raporlarda aynı aylık toplam".</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Kaynak table'a her yazma o table'ın cache girişlerini geçersiz kılar; zero-ETL ile sürekli güncellenen table'larda cache sık boşalır. Materialized view yenilemesi de compute harcar ve bazı sorgu biçimleri artımlı yenilenemez.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Kutu her saniye ve milisaniyede doğru olmalıysa bellek içi bir sayaç (ElastiCache). Pano olay verisi üzerindeyse OpenSearch'ün hazır panoları.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö7 · Toplu yükleme ve değişiklik aktarımı</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>COPY dosyaları bütün slice'larda paralel yükler. Zero-ETL Aurora'daki table'ları kod yazmadan ve kısa bir gecikmeyle kopyalar: AWS "within seconds of being written" der, bu workshop'ta yeni bir sipariş yaklaşık 30 saniyede görünür. Streaming ingestion Kinesis ya da MSK'dan gelen olayları mikro-batch'lerle bir materialized view'a alır.</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"Her gece S3'e gelen tıklama dosyaları", "Aurora'daki siparişlerin raporları checkout'u yavaşlatmasın", "bir akıştaki olaylar bir dakika içinde raporda".</td></tr>
+    <tr><td><b>Sınırı</b></td><td>Tek tek küçük INSERT'ler çok yavaştır. UPDATE eski row'u silinmiş işaretler ve yenisini ekler; DELETE yer açmaz; ikisi de arkadan VACUUM ister. TTL yoktur. Unique, primary key ve foreign key uygulanmaz. Kaynak table'larda primary key olmazsa zero-ETL o table'ı kopyalamaz.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Veri kaynakta kalmalı ve kurallar korunmalıysa ilişkisel database. Tek tek olaylar milisaniyede yazılmalı ve key ile okunmalıysa key-value ya da wide-column (DynamoDB, Keyspaces); warehouse onların kopyasını raporlar.</td></tr>
+  </tbody>
+</table>
+
+<table class="data feat"><caption>Ö8 · Compute ile storage ayrımı</caption>
+  <tbody>
+    <tr><td><b>Ne sağlar</b></td><td>Veri managed storage'da ya da S3'te durur, compute ayrı büyür ve ayrı ödenir. Serverless'ta sorgu yokken compute ödenmez. Spectrum S3'teki dosyaları yerinde sorgular. Data sharing aynı veriyi başka bir workgroup'a, hesaba ya da bölgeye kopyasız açar; veri "live and available to all warehouses as soon as a write transaction is committed".</td></tr>
+    <tr><td><b>Hangi sinyal çağırır</b></td><td>"Ayın üç günü yoğun, 27 günü sakin", "üç ekip aynı veriyi kendi compute'uyla okumalı", "40 TB S3'te kalmalı".</td></tr>
+    <tr><td><b>Sınırı</b></td><td>External table'larda zone map ve distribution yoktur; hız dosya düzenine bağlıdır. Serverless'ta her sorgu en az 60 saniye ödenir ve kapasite sınırları ayarlanır. 7/24 düz bir yükte saniye başına ödeme bir avantaj getirmez.</td></tr>
+    <tr><td><b>Alternatif ne zaman daha iyi</b></td><td>Yük 7/24 düzse provisioned cluster ve uzun dönemli rezervasyon (kart 8). Sorular seyrek ve veri S3'teyse Athena (kart 10).</td></tr>
+  </tbody>
+</table>
+
+<h2 id="usecases" data-short="Use case'ler, alternatifleriyle"><span class="sec">M2</span>Use case'ler: hangi servis en uygun, Redshift nerede kazanır, nerede kaybeder</h2>
+<p>Her kart bir iş yükünü anlatır ve altı parçadan oluşur. (1) <b>Bu iş yüküne en uygun servis:</b> kartın en üstünde, ağırlıklı toplamı en yüksek olan aday durur. Bu aday Redshift olmayabilir; Redshift her kartta tabloda kalır ve "bu sayfanın servisi" işaretini taşır. (2) <b>Gerçek projede:</b> iş yükü kim için, hangi ekranda, hangi sayılarla. (3) <b>Gereksinimler ve ağırlıklar:</b> R1'in alt maddeleri (R1.1, R1.2, …) ve R2–R5; her satırda ağırlık ve nedeni, "ne istiyoruz" ve "neden önemli, karşılanmazsa ne olur". (4) <b>Puan tablosu:</b> bu iş yüküne gerçekten uyan üç servis; her hücrede 10 üzerinden puan ve ağırlıklı katkı, R1'in toplamı ve 100 üzerinden toplam. (5) <b>Her adayın gerekçesi:</b> satır satır nasıl karşıladığı (Redshift için A10'daki Ö-numarasıyla), kaç puan aldığı ve puanın neden kırıldığı; en uygun servisin dışındaki her aday için uzun bir <b>kafa kafaya</b> paragrafı: nerede ayrışır, bu iş yükünde neden geride kalır, hangi koşul değişseydi o seçilirdi. (6) <b>Karar:</b> toplamların okunuşu ve "Redshift seçersek" artı ve eksilerimiz. Simülasyonu olan beş kart M7'de aynı puanlarla adım adım oynar. Başlığa tıklayarak kartı aç.</p>
+<p>Kartlarda "Redshift" adı <b>Redshift Serverless</b>'ı, yani bu sayfanın servisini anlatır. "Redshift provisioned" aynı engine'in düğümlü cluster biçimidir; ikisi aynı R1 puanını alır. Kart 1 Aurora sayfasının 6. kartıyla, kart 4 Keyspaces sayfasının 7. kartıyla aynı iş yüküdür ve aynı satırları, ağırlıkları ve puanları taşır; bir puan değişirse iki sayfada birlikte değişir.</p>
+<table class="data">
+  <caption>puan ölçeği: her satırda ve her kartta aynı</caption>
+  <thead><tr><th>Puan</th><th>Anlamı</th></tr></thead>
+  <tbody>
+    <tr><td class="y">10</td><td>Satırı doğrudan, ek iş olmadan ve sayıları aşarak karşılar.</td></tr>
+    <tr><td class="y">8–9</td><td>Karşılar; küçük bir ek iş ya da küçük bir maliyet vardır.</td></tr>
+    <tr><td class="p">4–7</td><td>Karşılar, ama uygulama tarafında belirgin ek iş, boyutlandırma ya da bir sınırla.</td></tr>
+    <tr><td class="n">0–3</td><td>Kısmen ya da hiç: satırın bir parçası karşılanmaz ya da ciddi bir bedelle karşılanır.</td></tr>
+  </tbody>
+</table>
+<p>Kartlar Redshift'in servis terimlerini ve alternatiflerin terimlerini Bölüm B ve C'den önce kullanır. Kısa anlamları bu tablodadır; alternatiflerin ayrıntısı kendi tutorial'larındadır.</p>
+<table class="data">
+  <caption>kartlarda geçen servis terimleri (ayrıntısı Bölüm B, Bölüm C ve M5'te)</caption>
+  <thead><tr><th>Terim</th><th>Ne demek</th></tr></thead>
+  <tbody>
+    <tr><td>Redshift Serverless, <dfn>RPU</dfn>, base RPU, workgroup</td><td>Düğüm seçmeden kullanılan Redshift. Kapasite birimi RPU'dur (Redshift Processing Unit); bir RPU 16 GB bellek sağlar. Base RPU sorguların başladığı kapasitedir (varsayılan 128, en az 4); en fazla RPU sınırı da ayarlanır. Ödeme RPU-saat olarak, saniye başına ve sorgu başına en az 60 saniyedir; sorgu yokken compute ödenmez. Workgroup bu compute ayarlarını taşıyan birimdir (B5, C2).</td></tr>
+    <tr><td>Redshift provisioned, RA3 düğümü, rezervasyon, pause/resume, elastic resize</td><td>Düğüm tipi ve sayısı seçilen Redshift cluster'ı; düğüm saat başına ödenir. RA3 düğümleri veriyi managed storage'da tutar. Rezervasyon bir ya da üç yıllık taahhütle indirimli saat fiyatıdır. Pause/resume cluster'ı durdurur ve yeniden başlatır; elastic resize düğüm sayısını dakikalar içinde değiştirir (C2). Fiyatlar düğüm başınadır.</td></tr>
+    <tr><td>Concurrency scaling</td><td>Provisioned cluster'da kuyruktaki sorgular için kısa süreli ek cluster'lar; her cluster için günde bir saatlik ücretsiz kredi, sonrası saniye başına ödenir. Serverless'ta dahildir.</td></tr>
+    <tr><td>Managed storage, recovery point, snapshot</td><td>Redshift'in compute'tan ayrı storage katmanı (GB-ay başına ödenir). Serverless 30 dakikada bir recovery point alır ve 24 saat tutar; snapshot elle alınan ve istenen süre tutulan yedektir.</td></tr>
+    <tr><td><dfn>Zero-ETL</dfn>, aurora_live</td><td>Aurora'nın table'larını Redshift'e kod yazmadan kopyalayan yönetilen değişiklik aktarımı (Ö7). Lale Market'te kopyanın adı <code>aurora_live</code>'dır; yeni bir sipariş yaklaşık 30 saniyede görünür (B4).</td></tr>
+    <tr><td>COPY, UNLOAD, CREATE TABLE AS</td><td>Dosyalardan paralel toplu yükleme; bir sorgunun sonucunu S3'e dosya olarak yazma; bir sorgunun sonucundan yeni table (B4).</td></tr>
+    <tr><td>VACUUM</td><td>Silinmiş işaretli row'ları kaldıran ve row'ları yeniden sıralayan bakım işi; Redshift silme kısmını arka planda kendisi çalıştırır (A7, B4).</td></tr>
+    <tr><td><dfn>Spectrum</dfn>, external table, Glue Data Catalog</td><td>Redshift'in S3'teki dosyaları yerinde sorgulayan katmanı; dosyaları table gibi gösteren tanım; table tanımlarının tutulduğu ortak katalog (A9).</td></tr>
+    <tr><td>Data sharing, datashare, producer, consumer</td><td>Table'ları kopyalamadan başka bir workgroup'a ya da hesaba açmak; açılan nesnelerin listesi; paylaşan ve kullanan taraf (A9).</td></tr>
+    <tr><td>Streaming ingestion, Kinesis, MSK, mikro-batch</td><td>Bir akıştaki olayları kısa aralıklarla bir materialized view'a almak; AWS'in iki akış servisi; kısa aralıklarla toplu ekleme (A7).</td></tr>
+    <tr><td>SUPER, PartiQL</td><td>Redshift'in şemasız JSON tipi ve onun içinde gezinen SQL uzantısı.</td></tr>
+    <tr><td>Redshift ML, SageMaker AI, Autopilot, Data API, QuickSight</td><td>SQL'den <code>CREATE MODEL</code> ile model eğitmek (eğitim SageMaker AI'da çalışır); AWS'in machine learning servisi; SageMaker AI'ın modeli ve ayarlarını otomatik deneyip seçen özelliği; bağlantı kurmadan HTTP ile SQL çalıştırma; AWS'in pano servisi.</td></tr>
+    <tr><td>Row-level security, view, role</td><td>Bir kullanıcının table'ın hangi row'larını göreceğini sınırlayan kural; kayıtlı bir sorgu; yetki grubu.</td></tr>
+    <tr><td>Athena: <dfn>Trino</dfn>, Parquet, partition, partition projection, bucketing, SerDe, Iceberg, Lake Formation, Firehose</td><td>Athena'nın açık kaynak SQL engine'i; kolon bazlı dosya biçimi; dosyaların tarih gibi bir değere göre klasörlere ayrılması; partition'ları katalogda tek tek kaydetmeden bir kuraldan hesaplamak; dosyaların bir kolona göre sabit sayıda parçaya bölünmesi; bir dosya satırını kolonlara çeviren okuyucu (JSON SerDe gibi); S3'teki dosyalara transaction ve snapshot getiren table biçimi; S3 verisine hesaplar arası ve row bazında yetki veren servis; akışı dosyalar hâlinde S3'e yazan servis. Athena taranan TB başına ödenir (yaklaşık 5 USD/TB, sorgu başına en az 10 MB).</td></tr>
+    <tr><td>Aurora: writer, reader, ACU, I/O, CHECK, foreign key, constraint trigger</td><td>Bütün yazmaları alan instance ve okuma kopyaları (aynı storage'ı okurlar); Serverless v2'nin kapasite birimi; Standard yapılandırmada ayrıca ödenen disk istekleri; Aurora'nın yazma anında uyguladığı kurallar (<a href="/e2etutorial/aurora?lang=tr">Aurora tutorial'ı</a>).</td></tr>
+    <tr><td>OpenSearch: inverted index, doc values, dynamic mapping, Index State Management, shard, Dashboards, OpenSearch Ingestion, rollup, PPL</td><td>Her kelimenin hangi document'larda geçtiğini tutan yapı; aggregation'ların kullandığı kolon bazlı yapı; yeni alanın type'ını engine'in seçmesi; index'leri yaşına göre silen ya da taşıyan kural; index'in parçası; hazır pano ve arama ekranı; veri toplayan boru hattı servisi; özet index üreten iş; OpenSearch'ün boru işaretli sorgu dili (<a href="/e2etutorial/opensearch?lang=tr">OpenSearch tutorial'ı</a>).</td></tr>
+    <tr><td>Keyspaces ve DynamoDB: partition key, clustering column, sort key (DynamoDB), CDC stream, TTL, KCL, Spark Cassandra Connector, sessionization</td><td>Kartta key ile okuma yapan servislerin kavramları: verinin yerini belirleyen key; partition içindeki sıra; değişiklik akışı; süre sonu; akışı okuyan kütüphane; Spark'ın Cassandra bağlantısı; tıklamalardan okuma oturumlarını çıkarma (<a href="/e2etutorial/keyspaces?lang=tr">Keyspaces</a> ve <a href="/e2etutorial/dynamodb?lang=tr">DynamoDB</a> tutorial'ları).</td></tr>
+  </tbody>
+</table>
+<p>Toplam 100 üzerindendir: her hücrenin katkısı puan × ağırlık / 10'dur. İlk iki aday arasındaki fark 5 puan ya da daha azsa kart "yakın yarış" işaretini taşır; bu bir bilgidir, karar yine toplamdır.</p>
+{% for uc in usecases %}{{ k.wusecase(uc) }}
+{% endfor %}
+<table class="data">
+  <caption>on kartın özeti: en uygun servis, ikinciyle farkı ve Redshift'in yeri</caption>
+  <thead><tr><th>Kart</th><th>En uygun servis</th><th class="num">Fark</th><th>Redshift</th></tr></thead>
+  <tbody>{% for uc in usecases %}
+    <tr><td><a href="#uc-{{ uc.id }}">{{ uc.no }}. {{ uc.title }}</a></td><td>{{ uc.best.name }} ({{ uc.best.total }}){% if uc.race %} · yakın yarış{% endif %}</td><td class="num">{{ uc.gap }}</td>
+      <td>{% for c in uc.cands %}{% if c.page %}{{ loop.index }}. sıra, {{ c.total }}{% endif %}{% endfor %}</td></tr>{% endfor %}
+  </tbody>
+</table>
+<p>Özetin okunuşu: Redshift, çok sayıda row'u tarayıp birkaç kolonu gruplayan, her hafta yeni bir soru soran ve yükü dalgalı olan iş yüklerinde öndedir: raporlar, attribution, kapanış, paylaşım, feature hazırlığı, panolar (kart 1, 2, 3, 5, 6, 9). Aynı engine'in provisioned biçimi 7/24 düz bir yükte üç yıllık rezervasyonla daha ucuzdur ve kazanır (kart 8, yakın yarış). S3'teki veri gölünde ara sıra sorulan sorularda R1 eşittir ve Athena servis tasarımıyla kazanır (kart 10). Redshift iki kartta net kaybeder ve ikisinde de kaybı R1'in erişim yolundan gelir: ana sayfa şeridinin tek okuyucu sorusu bir point lookup'tır (kart 4, Keyspaces) ve log'larda metin araması bir inverted index ister (kart 7, OpenSearch). Kart 3'te Aurora engine uyumunu 1 puanla kazanır, çünkü düzeltme kaydının kurallarını database'in kendisi korur; toplamı Redshift servis tasarımıyla alır. Altı kartta doğru mimari "ikisi birlikte"dir: Aurora kayıt sistemi ve Redshift rapor tarafı (1, 3), Keyspaces şerit ve Redshift rapor (4), Redshift feature ve SageMaker model (6), OpenSearch sıcak log ve S3 arşiv (7), Athena veri gölü ve Redshift düzenli raporlar (10).</p>
+
+<h2 id="away" data-short="Uzaklaştıran sinyaller"><span class="sec">M3</span>Data warehouse'tan uzaklaştıran sinyaller</h2>
+<table class="data">
+  <thead><tr><th>İş yükündeki sinyal</th><th>Warehouse neden zayıf bir seçim</th><th>Daha iyi seçim</th></tr></thead>
+  <tbody>
+    <tr><td>Tek bir kaydı key ile milisaniyelerde okuma ya da yazma, saniyede binlerce</td><td>Her sorgu planlanır ve slice'lara dağıtılır; index yoktur, sadece zone map vardır (Ö3 ve Ö4'ün sınırı).</td><td><a href="/e2etutorial/dynamodb?lang=tr">Key-value (DynamoDB)</a>, <a href="/e2etutorial/keyspaces?lang=tr">wide-column (Keyspaces)</a></td></tr>
+    <tr><td>Birkaç table'da birlikte yazma ve kurallar (sipariş, stok, ödeme)</td><td>Unique, primary key ve foreign key uygulanmaz; yoğun küçük transaction'lar için kurulmamıştır (Ö7'nin sınırı).</td><td><a href="/e2etutorial/aurora?lang=tr">İlişkisel database (Aurora)</a></td></tr>
+    <tr><td>Metin içinde kelime, yazım hatası toleransı, relevance</td><td>Inverted index yoktur; LIKE bütün blokları okur (Ö5'in sınırı).</td><td><a href="/e2etutorial/opensearch?lang=tr">Search engine (OpenSearch)</a></td></tr>
+    <tr><td>Bir milisaniyenin altında sayaçlar, oturumlar, canlı skor</td><td>Disk tabanlı, sorgu başına planlanan bir engine'dir.</td><td><a href="/e2etutorial/elasticache?lang=tr">Bellek içi key-value (ElastiCache)</a></td></tr>
+    <tr><td>İlişkiler üzerinden birçok adım ("arkadaşın aldığını alanlar")</td><td>Her adım bir self-join'dir ve derinlik arttıkça büyür.</td><td><a href="/e2etutorial/neptune?lang=tr">Graph database (Neptune)</a></td></tr>
+    <tr><td>Birkaç saniyede bir gelen ve kendi kendine silinmesi gereken metrikler</td><td>TTL yoktur; tek tek küçük yazmalar yavaştır (Ö7'nin sınırı).</td><td><a href="/e2etutorial/influxdb?lang=tr">Time series (Timestream for InfluxDB)</a></td></tr>
+    <tr><td>Veri S3'te kalmalı, sorular haftada birkaç tane</td><td>Bir warehouse işletmek ve minimum ücret ödemek seyrek sorular için gereksizdir (kart 10).</td><td>S3 üzerinde sorgu motoru (Athena), dosyalar <a href="/e2etutorial/s3?lang=tr">S3</a>'te</td></tr>
+    <tr><td>Görseller, videolar, PDF dosyaları</td><td>Büyük binary değerler için yer değildir.</td><td>Dosya için <a href="/e2etutorial/s3?lang=tr">object storage (S3)</a></td></tr>
+  </tbody>
+</table>
+
+<h2 id="questions" data-short="Mimarın soruları"><span class="sec">M4</span>Bir mimarın sorduğu sorular, bu sırayla</h2>
 <ol>
-  <li><b>Bir rapor mu, bir transaction mı?</b> Raporlar warehouse'a gider. Transaction'lar operasyonel database'de kalır.</li>
-  <li><b>Rapor ne kadar taze olmalı?</b> Saniyeler zero-ETL'i işaret eder. Saatler ya da bir gün, COPY ile bir batch yüklemeye izin verir.</li>
-  <li><b>Raporlar hangi kolonları ve hangi filtreleri kullanıyor?</b> Sort key'e bunlar karar verir.</li>
-  <li><b>Hangi table'lar, hangi kolon üzerinden join'leniyor?</b> Distribution key'e bunlar karar verir. AUTO ile Redshift karar verir.</li>
-  <li><b>Yük sabit mi, patlamalı mı?</b> Patlamalar ve boş geceler Redshift Serverless'ı işaret eder. Sabit ve yüksek bir yük provisioned bir cluster kullanabilir.</li>
-  <li><b>Veri S3'te kalmak zorunda mı?</b> O zaman onu external table'larla ya da Amazon Athena ile sorgula.</li>
+  <li><b>Soru bir rapor mu, bir işlem mi?</b> Çok row ve az kolon bir rapordur ve warehouse'a gider (Ö1). Tek kayıt ve kural bir işlemdir ve kaynak database'te kalır.</li>
+  <li><b>Veri nerede doğuyor ve nasıl gelecek?</b> Aurora ya da DynamoDB'deyse zero-ETL, dosyalardaysa COPY, bir akıştaysa streaming ingestion (Ö7). Veri S3'te kalmalıysa external table ya da Athena (Ö8).</li>
+  <li><b>Rapor ne kadar taze olmalı?</b> Bir dakika içi zero-ETL ile olur; bu workshop'ta yaklaşık 30 saniye. Saniyesinde doğru olmalıysa o kutu kaynaktan okunur.</li>
+  <li><b>Sorgular hangi kolonla aralık filtreliyor?</b> O kolon sort key'in ilk kolonudur, çoğunlukla bir tarih (Ö3).</li>
+  <li><b>Hangi büyük table'lar hangi kolonla join'leniyor?</b> Fact table ve en büyük dimension o kolonla dağıtılır; küçük dimension'lar ALL ya da AUTO (Ö4).</li>
+  <li><b>Hangi sorular tekrar ediyor?</b> Panolar ve ortak ara sonuçlar materialized view olur; result cache aynı sorguyu bedava yapar (Ö6).</li>
+  <li><b>Yük düz mü, dalgalı mı?</b> Dalgalı ya da boşluklu yük Serverless'ı, 7/24 düz yük provisioned cluster ve rezervasyonu işaret eder (Ö8, kart 3 ve 8).</li>
+  <li><b>Kimler okuyacak?</b> Birkaç ekip ya da hesap aynı veriyi kendi compute'uyla okuyacaksa data sharing (Ö8, kart 5).</li>
+  <li><b>Hangi kural korunmalı?</b> Unique ve foreign key korunmalıysa kontrol yükleme sürecinde ya da kaynak database'te kalır (A7).</li>
+  <li><b>Onu kim işletecek?</b> Kapasite planlamak istemeyen küçük bir ekip için Serverless; cluster işletmiş DBA'lar ve düz yük için provisioned.</li>
 </ol>
 
-<h3>AWS'te Redshift ve akrabaları</h3>
+<h2 id="aws" data-short="AWS'te analitik"><span class="sec">M5</span>AWS'te analitik seçenekler ve ne zaman Redshift</h2>
+<p>AWS'te çok sayıda row'u SQL ile tarayan birkaç seçenek var. Verinin nerede durduğunda, kapasitenin nasıl verildiğinde ve ödeme biriminde farklılaşırlar:</p>
 <table class="data">
   <thead><tr><th>Seçenek</th><th>Nedir</th><th>Ne zaman seç</th></tr></thead>
   <tbody>
-    <tr><td>Redshift Serverless</td><td>Kapasitesi Redshift Processing Unit (RPU) cinsinden olan ve yükle ölçeklenen bir workgroup.</td><td>Değişken yük ve boyutlandırılacak cluster yok. Lale Market bunu kullanır.</td></tr>
-    <tr><td>Redshift provisioned cluster</td><td>Senin seçip boyutlandırdığın bir leader node ve compute node'lar.</td><td>Sabit, tahmin edilebilir bir yük.</td></tr>
-    <tr><td>Amazon Athena</td><td>Doğrudan S3'teki dosyalar üzerinde serverless SQL. Query başına ödersin.</td><td>Bir data lake üzerinde ara sıra query'ler.</td></tr>
-    <tr><td>Aurora read replica</td><td>Okumalar için operasyonel database'in bir kopyası.</td><td>Güncel veri üzerinde küçük raporlar, warehouse yok.</td></tr>
+    <tr><td><b>Amazon Redshift Serverless</b></td><td>Düğüm seçmeden kullanılan columnar MPP warehouse. Kapasite RPU olarak yükle gelir; "you pay for the workloads you run in RPU-hours on a per-second basis (with a 60-second minimum charge)"; Spectrum ve concurrency scaling dahildir (<a href="https://aws.amazon.com/redshift/pricing/">Redshift pricing</a>). eu-central-1'de 0,451 USD/RPU-saat (Price List API, 2026-10-31).</td><td>Dalgalı ya da boşluklu yük, kapasite planlamak istemeyen ekip, birkaç ekibin ayrı compute'u. Lale Market bunu kullanır.</td></tr>
+    <tr><td>Amazon Redshift provisioned (RA3)</td><td>Aynı engine; düğüm tipi ve sayısı seçilir, saat başına ödenir; bir ya da üç yıllık rezervasyon vardır. ra3.4xlarge (12 vCPU, 96 GiB) eu-central-1'de düğüm başına on demand 3,894 USD/saat, bir yıllık peşinatsız rezervasyonla 2,7258 USD/saat, üç yıllık peşinatsız rezervasyonla 1,6939 USD/saat. Price List API'da Serverless rezervasyonu yalnız bir yıllıktır (0,352 USD/RPU-saat).</td><td>7/24 düz ve öngörülebilir yük, üç yıllık taahhüt, cluster işletmeyi bilen ekip (kart 8). Bir yıllık vadede düz yükte de Serverless daha ucuzdur.</td></tr>
+    <tr><td>Amazon Athena</td><td>S3'teki dosyalar üzerinde sunucusuz SQL; "$5 per TB of data scanned", sorgu başına en az 10 MB (<a href="https://docs.aws.amazon.com/whitepapers/latest/big-data-analytics-options/amazon-athena.html">Athena cost model</a>).</td><td>Veri S3'te bir veri gölünde, sorular seyrek ve farklı, warehouse işletmek istenmiyor (kart 10).</td></tr>
+    <tr><td><a href="/e2etutorial/aurora?lang=tr">Aurora PostgreSQL</a> reader</td><td>Checkout database'inin okuma kopyası; aynı SQL, row store.</td><td>Raporlar son birkaç günle ya da haftayla sınırlı, veri küçük, ayrı bir sistem istenmiyor.</td></tr>
+    <tr><td><a href="/e2etutorial/opensearch?lang=tr">Amazon OpenSearch Service</a></td><td>Inverted index'li search engine, hazır panolarla.</td><td>Log ve olay verisinde metin araması ve canlı panolar (kart 7).</td></tr>
   </tbody>
 </table>
-{{ k.fig("redshift-architecture.png", "Redshift mimarisi. Client'lar JDBC, ODBC ya da Data API ile bağlanır. Compute, Redshift managed storage üzerinde serverless olarak ya da bir leader node ve compute node'lu bir cluster olarak çalışır.") }}
+<p>Redshift'in içinde birkaç seçenek bir tasarımı değiştirir:</p>
+<table class="data">
+  <thead><tr><th>Seçenek</th><th>Ne yapar</th><th>Ne zaman seç</th></tr></thead>
+  <tbody>
+    <tr><td>Base ve en fazla RPU</td><td>Base sorguların başladığı kapasitedir: "The default base capacity for Amazon Redshift Serverless is 128 RPUs", en az 4 RPU; her RPU 16 GB bellek (<a href="https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-capacity.html">Compute capacity</a>). En fazla RPU ve RPU-saat sınırları faturayı korur.</td><td>Küçük veride düşük base (Lale Market 8 RPU), büyük join'lerde yüksek base.</td></tr>
+    <tr><td>Zero-ETL entegrasyonu</td><td>Aurora (ve DynamoDB) table'larını kod yazmadan kopyalar; kaynak table'larda primary key şarttır (<a href="https://docs.aws.amazon.com/redshift/latest/mgmt/zero-etl.reqs-lims.html">zero-ETL considerations</a>). Aurora'dan "within seconds of being written" (<a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/zero-etl.html">Aurora zero-ETL</a>); bu workshop'ta yaklaşık 30 saniye. DynamoDB'den "every 15-30 minutes".</td><td>Raporlar OLTP verisinden gelir ve checkout bunu hissetmemelidir.</td></tr>
+    <tr><td>Data sharing</td><td>Canlı veriyi workgroup'lar, hesaplar ve bölgeler arasında kopyasız paylaşır (<a href="https://docs.aws.amazon.com/redshift/latest/dg/datashare-overview.html">Data sharing</a>).</td><td>Birkaç ekip ya da hesap aynı veriyi kendi compute'uyla okur (kart 5).</td></tr>
+    <tr><td>Spectrum (external table)</td><td>S3'teki dosyaları yerinde sorgular ve warehouse table'larıyla JOIN'ler.</td><td>Veri gölündeki ham veri ile warehouse'taki düzenli veri birlikte sorulur (kart 2, 10).</td></tr>
+    <tr><td>Streaming ingestion</td><td>Kinesis ya da MSK'dan bir materialized view'a; "each materialized-view refresh can ingest hundreds of megabytes of data per second" (<a href="https://docs.aws.amazon.com/redshift/latest/dg/materialized-view-streaming-ingestion.html">Streaming ingestion</a>).</td><td>Olaylar bir dakika içinde raporda olmalı ve bir akış zaten var.</td></tr>
+    <tr><td>Redshift ML</td><td>SQL'den <code>CREATE MODEL</code> ile SageMaker AI Autopilot'ta model eğitir ve tahmini SQL içinde yapar (<a href="https://docs.aws.amazon.com/redshift/latest/gsg/machine-learning.html">Redshift ML</a>).</td><td>SQL bilen ekip basit tahmin modelleri istiyor (kart 6).</td></tr>
+  </tbody>
+</table>
 
-<h3>Lale Market'te Redshift'in yeri</h3>
-<p>Siparişler Aurora PostgreSQL'de yaşar. Bir zero-ETL entegrasyonu Aurora table'larını Redshift'teki <code>aurora_live</code> database'ine kopyalar ve kopyayı kısa bir gecikmeyle güncel tutar: bu workshop'ta yeni bir siparişin kopyaya ulaşması yaklaşık 30 saniye sürüyor (2026-10-31'de iki ölçüm).
-   Geçmiş için Seed ayrıca düz bir <code>sales</code> table'ı yükler; iptal edilmemiş her sipariş satırı için bir row.
-   Admin sayfası "Sales reports" sadece Redshift'ten okur. Checkout database'ine hiçbir zaman rapor query'si göndermez.</p>
+<h2 id="lalemarket-arch" data-short="Lale Market'teki yeri"><span class="sec">M6</span>Lale Market'te Redshift'in yeri</h2>
+<p>Lale Market on engine kullanır ve her engine tek bir iş yapar. Redshift raporların yeridir: Admin sayfası "Sales reports" sadece Redshift'ten okur ve checkout database'ine hiçbir zaman rapor sorgusu göndermez. Siparişler Aurora'da yazılır (checkout transaction'ı); zero-ETL entegrasyonu Aurora'nın <code>shop</code> database'indeki dört table'ı Redshift'teki <code>aurora_live</code> database'ine kopyalar ve yeni bir sipariş orada yaklaşık 30 saniye sonra görünür (2026-10-31'de iki ölçüm). Geçmiş için Seed ayrıca düz bir <code>sales</code> table'ı yükler: iptal edilmemiş her sipariş satırı için bir row, 11.878 row. Redshift kendine ait ziyaretçi verisi tutmaz; Aurora ziyaretçi siparişlerini sildiğinde zero-ETL kopyadan da siler. Production'da aynı düzen ölçeklenir: tıklamalar S3'e ve oradan COPY ya da Spectrum ile gelir, panolar materialized view'lardan okur, ekipler data sharing ile kendi compute'larını kullanır.</p>
 
-<h3>Simülasyon: gereksinimler seçsin</h3>
-{{ k.sim("decide_report", "İş yükü 1: satış raporları") }}
-{{ k.sim("decide_checkout", "İş yükü 2: checkout") }}
+<h2 id="decide" data-short="Karar simülasyonları"><span class="sec">M7</span>Karar simülasyonları: M2'nin beş kartı adım adım</h2>
+<p>Her simülasyon M2'deki bir kartın verisini birebir kullanır: aynı iş yükü, aynı satırlar ve ağırlıklar, aynı üç aday, aynı puanlar ve aynı gerekçeler. Fark şudur: simülasyon her adımda bir satır açar. Önce satırın ağırlığını ve nedenini, sonra her adayın puanını ve ağırlıklı katkısını görürsün; puan tablosu ve toplamlar adım adım dolar. Sonunda en uygun servisi, ikinciyi, aradaki farkı ve kartın karar paragrafını görürsün. Oynat'a basmadan önce kartı okuyup sonucu tahmin et.</p>
+<p>Beş simülasyon öğrettikleri şeye göre seçildi. Raporlamada Redshift'in engine özellikleri iş yükünün kendisidir: R1'in 48 puanının 46,2'sini alır. Attribution'da iki servis aynı SQL'i yazar ve Athena 4,6 puan geride kalır: kararı R1'in depolama satırları verir (yakın yarış). Stok tahmininde Redshift Serverless ile provisioned cluster R1'de birebir eşittir (44,2) ve 7/24 düz yükte rezervasyonlu düğümler R5 ile kazanır: bu sayfanın servisi ikizine kaybeder (yakın yarış). Tıklama akışında Redshift üçüncüdür, çünkü şeridin sorusu bir point lookup'tır. Log'larda OpenSearch metin aramasıyla R1'i açık farkla kazanır ve Redshift yine üçüncüdür. Simülasyonun puan tablosunda "R1 ara toplam" sütunu R1.1–R1.4 katkılarının toplamını gösterir.</p>
+{{ k.sim("w_reporting", "Kart 1: üç yıllık satış raporları (Redshift en uygun)") }}
+{{ k.sim("w_attribution", "Kart 2: pazarlama attribution'ı, Redshift mi Athena mı? (yakın yarış)") }}
+{{ k.sim("w_forecast", "Kart 8: 7/24 düz yük, Serverless mi provisioned mı? (R1 eşit, provisioned en uygun, yakın yarış)") }}
+{{ k.sim("w_clicks", "Kart 4: tıklama akışı (Keyspaces en uygun, Redshift üçüncü)") }}
+{{ k.sim("w_logs", "Kart 7: log arama (OpenSearch en uygun, Redshift net kaybeder)") }}
+<p>Her kararın son cümlesine bak: "Bir koşul değişseydi". İyi bir mimar bu cümleyi karar kaydına yazar. Koşul daha sonra değişirse ekip kararın yeniden kontrol edilmesi gerektiğini bilir.</p>
 
-{{ k.quiz("rs-a1", "Bir ekip 5.000 mağazanın her birinin üç yıl boyunca günlük gelirini, mağaza ve ürün table'larıyla join'lenmiş olarak istiyor. En iyi ne oturur?",
-   ["Sipariş database'inden beslenen Redshift", "Mağaza id'si key olan DynamoDB", "Gün başına bir key ile ElastiCache", "Mağazaların vertex olduğu Neptune"],
-   0, "Query uzun bir geçmişi tarar, birkaç kolon okur ve fact'leri dimension'larla join'ler. Bu columnar bir warehouse'un işidir.") }}
-{{ k.quiz("rs-a2", "Bir geliştirici her yeni siparişi sipariş başına bir INSERT ile doğrudan Redshift'e yazmak istiyor. Ana sorun nedir?",
-   ["Redshift tarih saklayamaz", "Redshift büyük yüklemeleri ve taramaları iyi yapar, çok sayıda küçük yazmayı değil", "Redshift row'ları bir gün sonra siler", "Redshift'te SQL yok"],
-   1, "Çok sayıda küçük yazma OLTP işidir. Sipariş Aurora'ya gider ve zero-ETL onu Redshift'e kopyalar.") }}
+{{ k.quiz("rs-a1", "Bir ekip 5.000 mağazanın her birinin üç yıl boyunca günlük gelirini, mağaza ve ürün table'larıyla join'lenmiş olarak istiyor. Veri Aurora'da. En iyi ne oturur?",
+   ["Aurora'dan zero-ETL ile beslenen Redshift", "Mağaza id'si key olan DynamoDB", "Gün başına bir key ile ElastiCache", "Mağazaların vertex olduğu Neptune"],
+   0, "Sorgu uzun bir geçmişi tarar, birkaç kolon okur ve fact'leri dimension'larla join'ler: columnar ve MPP bir warehouse'un işi (kart 1). Zero-ETL kopyayı kod yazmadan getirir; Aurora kayıt sistemi olarak kalır.") }}
+{{ k.quiz("rs-a2", "Bir SRE ekibi olay anında son yedi günün log'larında \"timeout\" kelimesini saniyeler içinde bulmak istiyor. Hangi servis ve hangi koşul cevabı değiştirir?",
+   ["OpenSearch. Metin araması istenmeseydi ve iş yalnız toplamlar olsaydı Redshift öne geçerdi.", "Redshift. Log'lar JSON olsaydı OpenSearch kazanırdı.", "Aurora. Log'lar daha küçük olsaydı DynamoDB kazanırdı.", "Athena. Log'lar S3'te olsaydı Redshift kazanırdı."],
+   0, "Metin içinde kelime aramak inverted index ister (kart 7, R1.1). Warehouse her bloğu okur; toplamlar ve raporlar ise onun işidir.") }}
+{{ k.quiz("rs-a3", "Bir şirketin warehouse yükü yıllardır 7/24 düz ve finans üç yıllık bir bütçe istiyor. Redshift Serverless mi provisioned mı, ve hangi koşul cevabı değiştirir?",
+   ["Provisioned ve üç yıllık rezervasyon. Yük gece ve hafta sonu düşseydi Serverless kazanırdı.", "Serverless. Veri iki katına çıksaydı provisioned kazanırdı.", "Athena. Sorgular SQL olsaydı Redshift kazanırdı.", "Aurora. Raporlar uzun olsaydı Redshift kazanırdı."],
+   0, "Engine aynıdır ve R1 eşittir; kararı R5 verir (kart 8). Düz yükte saniye başına ödeme avantaj getirmez ve rezervasyonlu düğümler yaklaşık yüzde 20 ucuzdur. Boşluklu yükte Serverless boş saatleri ödemez (kart 3).") }}
 
-<div class="part"><b>Bölüm 1</b><h2 id="part1" data-short="BÖLÜM 1: Warehouse nasıl çalışır">Columnar bir data warehouse nasıl çalışır</h2>
-<p>Fact'ler ve dimension'lar, kolon bazlı saklama, zone map'ler ve paralel slice'lar.</p></div>
+<div class="part"><b>Bölüm B</b><h2 id="partB" data-short="Bölüm B: İleri">İleri: pratikte Redshift</h2>
+<p>Bölüm A'daki fikirlerin Redshift'teki isimleri, canlı Lale Market table'ı, sorgular ve planları, dağıtım, yükleme, güncelleme ve maliyet.</p></div>
 
-<h2 id="star" data-short="Fact'ler ve dimension'lar"><span class="sec">02</span>Fact'ler ve dimension'lar: star schema</h2>
-<p>Bir warehouse event'leri genellikle büyük bir {{ k.term("fact table") }}'da saklar: her satış için bir row, sayılarla (miktar, tutar) ve key'lerle.
-   Etrafında {{ k.term("dimension table") }}'lar vardır: müşteriler, ürünler, tarihler, mağazalar. Bir dimension, fact table'ın key'lerini tanımlar. Çizim bir yıldıza benzer.</p>
-{{ k.fig("redshift-star-schema.png", "bir star schema. Ortada bir fact table, etrafında dört dimension table vardır.") }}
-<p>Lale Market geçmişi tek bir düz <code>sales</code> table'ında tutar. Müşterinin şehrini ve ürünün kategorisini zaten içerir, bu yüzden çoğu rapor join gerektirmez. Bunlar sekiz örnek row'dur:</p>
-{{ k.sample("rs_sales", "sales: sekiz örnek row", key=["order_id", "product_id"], ref=["customer_id"]) }}
-<p>Identifier'lar: sipariş id'sinin, müşteri id'sinin ve ürün id'sinin sahibi Aurora'dır. sales table'ı üçünü de ödünç alır. <code>order_id</code> ve <code>product_id</code> çifti bir sipariş satırını tanımlar.
-   Redshift primary key'leri ya da foreign key'leri zorlamaz. Onları planner için bilgi olarak kabul eder, bu yüzden yükleme süreci id'leri doğru tutmalıdır.</p>
-{% call k.sql("Q1", "Lale Market admin sayfasının raporu") %}
-<pre><code>SELECT category AS category, count(DISTINCT order_id) AS orders, sum(qty) AS units, sum(amount) AS revenue
+<h2 id="names" data-short="Canlı table ve isimler"><span class="sec">B1</span>Redshift'te isimler, canlı bir table ve gerçek tanımı</h2>
+<p>Bölüm A'nın terimleri Redshift'te aynen geçerlidir. Yeni isimler azdır ve çoğu servisin parçalarını anlatır. Diğer ürünlerdeki karşılıklar:</p>
+<table class="data">
+  <thead><tr><th>Genel fikir</th><th>PostgreSQL (Aurora)</th><th>Athena</th><th>Amazon Redshift</th></tr></thead>
+  <tbody>
+    <tr><td>Blok (A3)</td><td>8 kB'lık page, bütün row</td><td>Parquet row group'unun kolon parçası</td><td>1 MB'lık kolon bloğu</td></tr>
+    <tr><td>Sıkıştırma kodlaması (A4)</td><td>—</td><td>Dosya biçiminin kodlaması</td><td><code>ENCODE</code>: AZ64, BYTEDICT, LZO, ZSTD, RAW</td></tr>
+    <tr><td class="c-pk">Sort key (A5)</td><td>CLUSTER komutu bir kez sıralar, sonra korunmaz</td><td>Dosya içindeki sıra, partition</td><td><code>SORTKEY</code> (compound ya da AUTO)</td></tr>
+    <tr><td class="c-sk">Distribution key (A6)</td><td>—</td><td>—</td><td><code>DISTSTYLE KEY</code> + <code>DISTKEY</code></td></tr>
+    <tr><td>Yönetici ve işçiler (A6)</td><td>Tek instance</td><td>Servisin kendi işçileri</td><td>Leader node ve compute node'lar; Serverless'ta RPU</td></tr>
+    <tr><td>Toplu yükleme (A7)</td><td>COPY, aws_s3 extension</td><td>Dosyayı S3'e koymak</td><td>COPY</td></tr>
+    <tr><td>Değişiklik aktarımı (A7)</td><td>Kaynak kendisidir</td><td>—</td><td>Zero-ETL entegrasyonu</td></tr>
+    <tr><td>External table (A9)</td><td>Foreign data wrapper</td><td>Her table zaten dışarıdadır</td><td>Redshift Spectrum</td></tr>
+  </tbody>
+</table>
+<p>Lale Market'in geçmiş table'ı canlı workgroup'ta durur. Workshop table'ın sistem bilgisini Redshift Data API ile okudu:</p>
+{% call k.live("sales table'ının sistem bilgisi (SELECT \"table\", diststyle, sortkey1, encoded, tbl_rows, size, unsorted FROM svv_table_info WHERE \"table\" = 'sales', 2026-10-31)") %}
+<pre><code> table | diststyle        | sortkey1   | encoded         | tbl_rows | size | unsorted
+-------+------------------+------------+-----------------+----------+------+---------
+ sales | KEY(customer_id) | order_date | Y, AUTO(ENCODE) |    11878 | 2629 |    91.58</code></pre>
+{% endcall %}
+<p>Cevabı kolon kolon oku. <code>diststyle</code> KEY(customer_id): row'lar müşteriye göre slice'lara dağılır (A6). <code>sortkey1</code> order_date: sort key'in ilk kolonu (A5). <code>encoded</code> Y, AUTO(ENCODE): kolonlar sıkıştırılmış ve kodlamayı Redshift seçmiş (A4). <code>tbl_rows</code> 11.878: iptal edilmemiş her sipariş satırı bir row.
+   <code>size</code> 2.629, 1 MB'lık blok sayısıdır ve 11.878 row için çok büyüktür: AWS'in formülüne göre bir table en az 1 MB × (kolon sayısı + 3 sistem kolonu) × dolu slice sayısı × segment sayısı (sıralı ve sıralanmamış bölge birer segmenttir) yer tutar, yani her kolon her slice'ta en az bir blok kullanır (<a href="https://repost.aws/knowledge-center/redshift-cluster-storage-space">AWS re:Post, minimum table size</a>). Küçük bir table'da blokların çoğu neredeyse boştur; iki milyar row'da bu fark kaybolur.
+   <code>unsorted</code> 91,58: row'ların yüzde 91,58'i henüz sıralanmamış bölgededir, çünkü Seed table'ı binlik INSERT'lerle doldurdu ve arka plandaki sıralama henüz çalışmadı (A7, B4).</p>
+{% call k.live("kolonlar ve kodlamaları (SELECT \"column\", type, encoding, distkey, sortkey FROM pg_table_def WHERE tablename = 'sales')") %}
+<pre><code> column      | type                  | encoding | distkey | sortkey
+-------------+-----------------------+----------+---------+--------
+ order_id    | character varying(16) | lzo      | false   | 0
+ order_date  | date                  | none     | false   | 1
+ customer_id | character varying(8)  | lzo      | true    | 0
+ city        | character varying(32) | lzo      | false   | 0
+ category    | character varying(32) | bytedict | false   | 0
+ product_id  | character varying(8)  | lzo      | false   | 0
+ qty         | smallint              | az64     | false   | 0
+ amount      | numeric(12,2)         | az64     | false   | 0</code></pre>
+{% endcall %}
+<p>Burada A4'ün tablosu canlı görünür: <code>category</code> sözlük kodlamasıyla (bytedict), <code>qty</code> ve <code>amount</code> sayısal kodlamayla (az64), metinler genel sıkıştırmayla (lzo). Sort key olan <code>order_date</code> sıkıştırılmamıştır (none): blokları hızlı elemek için. <code>sortkey</code> kolonundaki 1, order_date'in sort key'in ilk kolonu olduğunu söyler.</p>
+{% call k.live("sales'in ilk beş row'u, tarih sırasıyla (SELECT * FROM sales ORDER BY order_date, order_id, product_id LIMIT 5)") %}
+<pre><code> order_id | order_date | customer_id | city    | category   | product_id | qty | amount
+----------+------------+-------------+---------+------------+------------+-----+--------
+ O001620  | 2025-10-25 | C00289      | Hamburg | Kitap      | P0034      |   3 | 6014.88
+ O001620  | 2025-10-25 | C00289      | Hamburg | Ev & Yaşam | P0057      |   1 |  521.99
+ O001723  | 2025-10-25 | C00467      | Hamburg | Moda       | P0130      |   3 |  875.13
+ O001723  | 2025-10-25 | C00467      | Hamburg | Spor       | P0173      |   1 | 2391.14
+ O001723  | 2025-10-25 | C00467      | Hamburg | Spor       | P0178      |   3 | 2635.86</code></pre>
+{% endcall %}
+{{ k.anatomy([
+   {"pk": "2025-10-25", "sk": "C00289", "attrs": [["order_id", "O001620"], ["city", "Hamburg"], ["category", "Kitap"], ["product_id", "P0034"], ["qty", "3"], ["amount", "6014.88"]]},
+   {"pk": "2025-10-25", "sk": "C00289", "attrs": [["order_id", "O001620"], ["city", "Hamburg"], ["category", "Ev & Yaşam"], ["product_id", "P0057"], ["qty", "1"], ["amount", "521.99"]]},
+   {"pk": "2025-10-25", "sk": "C00467", "attrs": [["order_id", "O001723"], ["city", "Hamburg"], ["category", "Moda"], ["product_id", "P0130"], ["qty", "3"], ["amount", "875.13"]]}],
+   "Canlı sales'in üç row'u, Redshift isimleriyle. SORTKEY order_date (sarı) row'ların diskteki sırasıdır; DISTKEY customer_id (mavi) row'un slice'ıdır. İlk iki row aynı siparişin iki satırıdır: aynı müşteri, aynı slice.",
+   pk_name="order_date", sk_name="customer_id",
+   labels={"primary": "Fiziksel düzen", "pk": "SORTKEY", "sk": "DISTKEY", "attrs": "Diğer kolonlar (her biri kendi bloklarında)", "note": "her kolonun kendi kodlaması var", "items": "Row'lar"}) }}
+<ul>
+  <li><b>order_date</b> sort key'dir: 2025-10-25 table'ın en eski günüdür, bu yüzden bu row'lar sıralı bölgenin ilk bloklarına düşer.</li>
+  <li><b>customer_id</b> distribution key'dir: C00289'un iki satırı aynı slice'tadır; C00467 başka bir slice'ta olabilir.</li>
+  <li><b>order_id + product_id</b> bir sipariş satırını tanır, ama Redshift bu çiftin tekrar etmediğini kontrol etmez (A7).</li>
+  <li><b>Diğer kolonlar</b> kendi bloklarındadır; "kategoriye göre gelir" sadece category ve amount bloklarını açar.</li>
+</ul>
+<p>Table'ın gerçek tanımı Engine App'in kodundadır (<code>engines/redshift.py</code>):</p>
+{% call k.sql("T1", "Geçmiş table'ı") %}
+<pre><code>CREATE TABLE IF NOT EXISTS sales (
+  order_id    varchar(16),
+  order_date  date SORTKEY,
+  customer_id varchar(8) DISTKEY,
+  city        varchar(32),
+  category    varchar(32),
+  product_id  varchar(8),
+  qty         smallint,
+  amount      decimal(12,2))</code></pre>
+<table class="clause">
+  <tr><td>order_date date SORTKEY</td><td>Row'lar diskte bu kolonun sırasıyla saklanır; zone map'ler tarih aralıklarını eler (A5).</td></tr>
+  <tr><td>customer_id varchar(8) DISTKEY</td><td>Table DISTSTYLE KEY olur; aynı müşterinin row'ları aynı slice'a gider (A6).</td></tr>
+  <tr><td>ENCODE yazılmamış</td><td>Redshift her kolonun kodlamasını kendisi seçer (ENCODE AUTO); sonuç yukarıdaki pg_table_def çıktısıdır (A4).</td></tr>
+  <tr><td>PRIMARY KEY yok</td><td>Yazılsaydı da uygulanmazdı; sadece planner için bilgi olurdu (A7).</td></tr>
+  <tr><td>decimal(12,2)</td><td>Tutar kesirli sayı olarak tam saklanır; float'ın yuvarlama hataları olmaz.</td></tr>
+</table>
+{% endcall %}
+{% call k.ask("SORTKEY ve DISTKEY'i yazmasaydık ne olurdu?") %}
+<p>Redshift automatic table optimization ile ikisini de yönetirdi: küçük table için <code>AUTO(ALL)</code>, büyüdükçe KEY ya da EVEN; sort key'i de sorgu geçmişine bakarak seçerdi. Lale Market ikisini açıkça yazar, çünkü tutorial onları göstermek ister.</p>
+{% endcall %}
+{% call k.ask("Table'ın sütunlarını sonradan değiştirebilir miyim?") %}
+<p>Kolon eklemek bir ALTER TABLE'dır. Sort key ve distribution key de ALTER TABLE ile değiştirilebilir ama Redshift bunun için row'ları yeniden yazar; büyük bir table'da bu bir bakım işidir.</p>
+{% endcall %}
+
+<h2 id="reads" data-short="Rapor, plan, cache"><span class="sec">B2</span>Okumalar: rapor sorgusu, planı ve sonuç önbelleği</h2>
+<p>A3'teki kolon okuması, A5'teki blok atlama ve A8'deki result cache Redshift'te tek bir rapor sorgusunda birlikte görünür. Lale Market'in admin sayfası bu sorguyu çalıştırır:</p>
+{% call k.sql("Q1", "Kategoriye göre gelir (admin sayfası \"Sales reports\")") %}
+<pre><code>SELECT category, count(DISTINCT order_id) AS orders, sum(qty) AS units, sum(amount) AS revenue
 FROM sales GROUP BY 1 ORDER BY revenue DESC LIMIT 24</code></pre>
 <table class="clause">
-  <tr><td>SELECT category AS category</td><td>Grup etiketi. Sayfa ay ya da şehre göre de gruplayabilir.</td></tr>
-  <tr><td>count(DISTINCT order_id) AS orders</td><td>Gruptaki farklı siparişlerin sayısı. Bir siparişin birkaç satırı olabilir.</td></tr>
-  <tr><td>sum(qty), sum(amount)</td><td>Grubun adedi ve geliri.</td></tr>
-  <tr><td>GROUP BY 1</td><td>SELECT listesinin ilk kolonuna göre grupla.</td></tr>
+  <tr><td>SELECT category, …</td><td>Dört kolon okunur: category, order_id, qty, amount. order_date, customer_id, city ve product_id diskte kalır.</td></tr>
+  <tr><td>count(DISTINCT order_id)</td><td>Farklı siparişlerin sayısı; bir siparişin birkaç satırı olabilir.</td></tr>
+  <tr><td>GROUP BY 1</td><td>SELECT listesinin ilk kolonuna, yani kategoriye göre grupla. Her slice kendi ara toplamını hesaplar, leader node birleştirir.</td></tr>
   <tr><td>ORDER BY revenue DESC LIMIT 24</td><td>En yüksek gelirli gruplar önce, en fazla 24.</td></tr>
 </table>
 {% endcall %}
-{% call k.predict("Q1, sales'in hangi kolonlarını okur? Sekiz kolonun kaçına ihtiyaç duymaz?") %}
-<p>category, order_id, qty ve amount'u okur. order_date, customer_id, city ve product_id'ye, yani sekiz kolonun dördüne ihtiyaç duymaz.</p>
+{% call k.live("Q1'in canlı cevabı (Redshift Data API, workgroup dbws, 2026-10-31)") %}
+<pre><code> category   | orders | units | revenue
+------------+--------+-------+------------
+ Ev & Yaşam |   1935 |  4667 | 13467050.32
+ Kitap      |   2010 |  5069 | 13463521.43
+ Moda       |   1901 |  4616 | 12353010.09
+ Spor       |   1986 |  4885 | 12038316.36
+ Elektronik |   1917 |  4655 | 10905343.42</code></pre>
 {% endcall %}
-
-<h2 id="columns" data-short="Kolon bazlı saklama"><span class="sec">03</span>Kolon bazlı saklama: sadece query'nin ihtiyacını oku</h2>
-<p>PostgreSQL gibi bir row store, her tam row'u bir disk bloğuna koyar. Bu checkout için iyidir: bir sipariş bir row'dur ve database onu tek bir yerde okur ya da yazar.
-   Bir {{ k.term("column store") }} ise bir kolonun değerlerini bir blokta bir araya koyar. İki kolona ihtiyaç duyan bir rapor iki tür blok okur ve diğerlerini diskte bırakır.</p>
-{% call k.callout("analogy", "Analoji") %}
-<p>Kâğıda basılmış büyük bir hesap tablosu düşün. Bir row store her sayfaya bütün alanlarıyla bir müşteri basar. Bir kolonu toplamak için her sayfayı çevirmen gerekir.
-   Bir column store her sayfaya bir kolon basar. Tutarları toplamak için tutar sayfasını alırsın, başka hiçbir şeyi değil.</p>
+{% call k.predict("Öğretici table'da (8 row, 8 kolon) aynı sorgu row store'da kaç değer, column store'da kaç değer okur?") %}
+<p>Row store her bloğu tam okur: 8 row × 8 kolon = 64 değer. Column store sadece category ve amount bloklarını okur: 8 × 2 = 16 değer. Aşağıdaki simülasyon kısa sorguyu (iki kolon) oynatır; Q1 dört kolon okur ve oran yine yarıdan azdır.</p>
 {% endcall %}
-{{ k.fig("redshift-row-storage.png", "row storage. Her disk bloğu bütün kolonlarıyla tam row'lar tutar.") }}
-{{ k.fig("redshift-column-storage.png", "column storage. Bir disk bloğu birçok row için bir kolonun değerlerini tutar.") }}
 {{ k.sim("rowcol", "SELECT category, sum(amount): row store ve column store") }}
-<p>İkinci kazanç sıkıştırmadır. Bir kolon tek tipte ve çoğunlukla tekrar eden değerler tutar, örneğin aynı şehir birçok kez. Redshift her kolon için bir compression encoding seçer, böylece aynı veri daha az blok kullanır.</p>
-{{ k.quiz("rs-q1", "Bir table'ın 50 kolonu var. Bir query bütün row'lar üzerinde bunların 2'sini okuyor. Bir column store verinin yaklaşık ne kadarını okur?",
-   ["Hepsini", "Yaklaşık yarısını", "50 kolonun yaklaşık 2'sini", "Sadece ilk row'u"],
-   2, "Bir column store 2 kolonun bloklarını okur. Diğer 48 kolonun blokları diskte kalır.") }}
-
-<h2 id="zonemaps" data-short="Sort key ve zone map"><span class="sec">04</span>Sort key'ler ve zone map'ler: eşleşemeyecek blokları atla</h2>
-<p>Redshift her kolonu 1 MB'lık bloklarda saklar. Her blok için en küçük ve en büyük değeri bellekte tutar. Bu {{ k.term("zone map") }}'tir.
-   Bir bloğu okumadan önce Redshift query'nin filtresini zone map ile karşılaştırır. Bloğun aralığı eşleşemiyorsa Redshift onu atlar
-   (<a href="https://docs.aws.amazon.com/redshift/latest/dg/c_best-practices-sort-key.html">Choose the best sort key</a>).</p>
-<p>Zone map sadece her bloktaki değerler birbirine yakınsa yardım eder. Bunu {{ k.term("sort key") }} yapar: row'ları diskte bir ya da daha fazla kolonun sırasıyla saklar.</p>
-{% call k.sql("Q2", "Bir ay için bir rapor") %}
+<p>Bir tarih filtresi eklenince sort key ve zone map devreye girer:</p>
+{% call k.sql("Q2", "Mart ayı, kategoriye göre") %}
 <pre><code>SELECT category, sum(amount) AS revenue
 FROM   sales
 WHERE  order_date BETWEEN '2026-03-01' AND '2026-03-31'
 GROUP  BY category;</code></pre>
 <table class="clause">
-  <tr><td>WHERE order_date BETWEEN ... AND ...</td><td>Sort key kolonu üzerinde bir aralık filtresi. Redshift onu her bloğun minimum ve maksimumuyla karşılaştırır.</td></tr>
-  <tr><td>GROUP BY category</td><td>Kalan row'ların tutarlarını kategori başına topla.</td></tr>
+  <tr><td>WHERE order_date BETWEEN …</td><td>Sort key üzerinde bir aralık. Redshift her bloğun zone map'ini filtreyle karşılaştırır ve çakışmayan blokları okumaz.</td></tr>
+  <tr><td>GROUP BY category</td><td>Kalan row'ların tutarlarını kategoriye göre topla.</td></tr>
 </table>
 {% endcall %}
+{% call k.live("Q2'nin planı (EXPLAIN, canlı workgroup)") %}
+<pre><code>XN HashAggregate  (cost=20.39..20.39 rows=1 width=24)
+  ->  XN Seq Scan on sales  (cost=0.00..15.29 rows=1020 width=24)
+        Filter: ((order_date <= '2026-03-31'::date) AND (order_date >= '2026-03-01'::date))</code></pre>
+{% endcall %}
+<p>Planı aşağıdan yukarı oku. <code>XN Seq Scan on sales</code>: table taranır; Redshift'te index olmadığı için her tarama bir "seq scan"dir. <code>Filter</code> satırı sort key üzerindeki aralığı gösterir; zone map'ler bu filtreyle blokları eler, bu yüzden "seq scan" bütün diskin okunduğu anlamına gelmez. <code>rows=1020</code> planner'ın Mart için tahmini row sayısıdır. <code>XN HashAggregate</code> gruplamadır. "XN" adımın compute node'larda çalıştığını söyler.</p>
 {{ k.sim("zonemap", "Mart: sıralı bloklar ve sırasız bloklar") }}
-{% call k.callout("analogy", "Analoji") %}
-<p>Kitapları yıla göre sıralı bir kütüphanede her rafın bir etiketi vardır: "1990'dan 1995'e". 1993'ten kitaplar bulmak için tek bir rafa gidersin. Kitaplar rastgele sıradaysa her rafta her yıldan kitap vardır ve etiketler yardım etmez.</p>
+<p>Aynı Q1'i iki kez çalıştırdık ve sorgu geçmişini okuduk:</p>
+{% call k.live("result cache (SELECT query_id, start_time, elapsed_time, execution_time, returned_rows, result_cache_hit FROM sys_query_history WHERE query_text LIKE 'SELECT category, count(DISTINCT order_id)%')") %}
+<pre><code> query_id | start_time          | elapsed_time | execution_time | returned_rows | result_cache_hit
+----------+---------------------+--------------+----------------+---------------+-----------------
+  1260737 | 2026-10-31 02:40:50 |         3248 |              0 |             5 | true
+  1260681 | 2026-10-31 02:39:47 |       125145 |          13328 |             5 | false</code></pre>
 {% endcall %}
+<p>Süreler mikrosaniyedir. İlk çalıştırma (alttaki satır) 125 ms sürdü; bunun 13 ms'si yürütme, gerisi planlama, derleme ve dağıtmadır. İkinci çalıştırma 3,2 ms sürdü, yürütme süresi 0'dır ve <code>result_cache_hit</code> true: sonuç leader node'un belleğinden geldi, sorgu hiç çalışmadı (A8). <code>sales</code>'e bir INSERT, UPDATE, DELETE ya da COPY gelseydi bu giriş geçersiz olurdu.</p>
+{% call k.ask("125 ms'nin çoğu planlamaysa, tek bir siparişi bulmak da en az o kadar sürmez mi?") %}
+<p>Evet; bu yüzden warehouse tek kayıt aramalarında bir OLTP database'inden yavaştır (M3, kart 4). Aurora bir siparişi index ile milisaniyenin altında bulur. Warehouse'ta sabit bir planlama bedeli vardır; milyar row'luk bir taramada önemsiz, tek kayıtta belirleyicidir.</p>
+{% endcall %}
+{{ k.quiz("rs-q8", "Bir planda \"XN Seq Scan on sales\" ve sort key üzerinde bir Filter görüyorsun. Doğru okuma hangisi?",
+   ["Bütün table diskten okunur, filtre okumadan sonra uygulanır", "Table taranır ama zone map'ler filtreyle çakışmayan blokları eler", "Redshift bir index kullanır", "Sorgu result cache'ten döner"],
+   1, "Redshift'te index yoktur ve her tarama bir seq scan'dir; sort key üzerindeki filtre zone map'lerle blokları okumadan eler.") }}
 
-<h2 id="slices" data-short="Slice'lar ve dağıtım"><span class="sec">05</span>Slice'lar ve dağıtım: paralel çalışan birçok işçi</h2>
-<p>Redshift bir {{ k.term("MPP") }} (massively parallel processing) sistemidir. Her table'ı {{ k.term("slice") }}'lara böler. Her slice kendi parçasını tarar ve Redshift sonuçları birleştirir.
-   Bir query iki table'ı join'lediğinde eşleşen row'lar aynı slice'ta olmalıdır. Değillerse Redshift önce row'ları ağ üzerinden taşır. Bir table'ın {{ k.term("distribution style") }}'ı row'larının nereye gideceğine karar verir.</p>
-<table class="data">
-  <thead><tr><th>Style</th><th>Row'lar nereye gider</th><th>Ne için iyi</th></tr></thead>
-  <tbody>
-    <tr><td>KEY</td><td>Bir kolonun, yani DISTKEY'in değerine göre. Eşit değerler aynı slice'tadır.</td><td>O kolon üzerinden join'lenen büyük bir table.</td></tr>
-    <tr><td>EVEN</td><td>Değerlere bakılmadan sırayla.</td><td>Join'lenmeyen bir table.</td></tr>
-    <tr><td>ALL</td><td>Her node'da tam bir kopya.</td><td>Küçük bir dimension table.</td></tr>
-    <tr><td>AUTO</td><td>Table büyüdükçe stili Redshift seçer ve değiştirir. Varsayılandır.</td><td>Çoğu table.</td></tr>
-  </tbody>
+<h2 id="dist" data-short="Dağıtım ve join"><span class="sec">B3</span>Dağıtım ve join pratikte</h2>
+<p>A6'daki distribution key'in Redshift'teki adı DISTKEY'dir ve DISTSTYLE KEY ile birlikte gelir. Bir rapor fact table'ı bir dimension ile join'lediğinde dağıtım join'in maliyetini belirler:</p>
+{% call k.sql("Q3", "Müşteri segmentine göre gelir") %}
+<pre><code>SELECT c.segment, sum(s.amount) AS revenue
+FROM   sales s
+JOIN   customers c ON c.customer_id = s.customer_id
+GROUP  BY c.segment;</code></pre>
+<table class="clause">
+  <tr><td>JOIN customers c ON c.customer_id = s.customer_id</td><td>İki table da DISTKEY customer_id ise her sales row'u müşterisini aynı slice'ta bulur; row taşınmaz.</td></tr>
+  <tr><td>DISTSTYLE EVEN olsaydı</td><td>Eşleşen row'lar farklı slice'larda olur ve Redshift join'den önce row'ları ağ üzerinden yeniden dağıtır (redistribution); planda bu bir DS_DIST adımı olarak görünür.</td></tr>
+  <tr><td>customers küçükse</td><td>DISTSTYLE ALL ile her node'da bir kopyası durur; join her zaman yereldir.</td></tr>
 </table>
-<p>Kaynak: <a href="https://docs.aws.amazon.com/redshift/latest/dg/c_choosing_dist_sort.html">Distribution styles</a>.</p>
-{% call k.callout("analogy", "Analoji") %}
-<p>Oy sayan bir ekip düşün. Herkes aynı anda bir yığını sayar ve sonunda ekip yığınları toplar. Bir kişi başka birinde olan bir listede isim araması gerekirse masanın üzerinden kâğıt uzatmaları gerekir. Bu yavaştır. Her kişiye aynı isimlerin kâğıtlarını ve listesini ver.</p>
 {% endcall %}
 {{ k.sim("dist", "JOIN customers: KEY ve EVEN dağıtım") }}
-{{ k.quiz("rs-q2", "sales table'ı çoğu raporda customers ile customer_id üzerinden join'leniyor. Hangi ayar row'ların taşınmasını önler?",
-   ["İki table'da da DISTSTYLE EVEN", "İki table'da da DISTKEY customer_id", "Sadece sales'te SORTKEY customer_id", "Hiçbir ayar bunu önleyemez"],
-   1, "Aynı DISTKEY ile eşleşen row'lar aynı slice'tadır, bu yüzden join yerel çalışır.") }}
+{% call k.ask("sales hem müşteriye hem ürüne göre join'leniyor. İkisini birden yerel yapabilir miyim?") %}
+<p>Hayır: AWS'in deyişiyle "your fact table can have only one distribution key". Daha sık ve daha büyük join'i seç (çoğunlukla müşteri); ürün table'ı küçükse ALL ile her node'a kopyala. Böylece iki join de row taşımadan çalışır.</p>
+{% endcall %}
+{{ k.quiz("rs-q9", "rs_customers dört row'luk küçük bir dimension. sales ile join'i her durumda yerel yapmanın en basit yolu hangisi?",
+   ["rs_customers için DISTSTYLE ALL", "sales için DISTSTYLE EVEN", "rs_customers için SORTKEY customer_id", "İki table'ı ayrı workgroup'lara koymak"],
+   0, "ALL küçük bir table'ın tam kopyasını her node'a koyar; hangi slice hangi sales row'unu tutarsa tutsun müşterisini yanında bulur. Bedeli storage'ın node sayısıyla çarpılmasıdır, küçük bir table'da önemsizdir.") }}
 
-<div class="part"><b>Bölüm 2</b><h2 id="part2" data-short="BÖLÜM 2: Amazon Redshift">Amazon Redshift: AWS servisi</h2>
-<p>Serverless kapasite, managed storage ve Aurora'dan zero-ETL.</p></div>
-
-<h2 id="service" data-short="Serverless ve storage"><span class="sec">06</span>Redshift Serverless ve managed storage</h2>
-<p>Redshift Serverless kapasiteyi Redshift Processing Unit (RPU) cinsinden ölçer. Bir RPU 16 GB bellek sağlar ve varsayılan base capacity 128 RPU'dur
-   (<a href="https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-capacity.html">Compute capacity for Redshift Serverless</a>).
-   Kapasite yükle birlikte artar ve azalır. İş yüklerinin kullandığı RPU-saatleri için ödersin, bu yüzden boş bir gece compute maliyeti doğurmaz.</p>
-<p>Veri, compute'tan ayrı olarak Redshift managed storage'da yaşar. Provisioned bir cluster'da, bölüm 01'deki mimari görselinin gösterdiği gibi, query'leri planlayan bir leader node ve onları çalıştıran compute node'lar vardır.</p>
-<table class="data">
-  <thead><tr><th>Görev</th><th>Kendi warehouse'un</th><th>Amazon Redshift</th></tr></thead>
-  <tbody>
-    <tr><td>Sunucular ve kapasite</td><td>Sen satın alır, kurar ve boyutlandırırsın.</td><td>Serverless RPU'lar ya da senin seçtiğin node'lar.</td></tr>
-    <tr><td>Storage</td><td>Yıllarca büyüme için diskleri planlarsın.</td><td>Compute'tan ayrı managed storage.</td></tr>
-    <tr><td>Table tasarımı</td><td>Sort ve distribution key'lerini ayarlarsın.</td><td>AUTO ile automatic table optimization.</td></tr>
-    <tr><td>Aurora'dan veri</td><td>Bir ETL pipeline'ı yazar ve çalıştırırsın.</td><td>Zero-ETL entegrasyonu.</td></tr>
-    <tr><td>Yedekler</td><td>Sen zamanlarsın.</td><td>Otomatik recovery point'ler ve snapshot'lar.</td></tr>
-  </tbody>
+<h2 id="load" data-short="Yükleme, zero-ETL, VACUUM"><span class="sec">B4</span>Yükleme ve değişiklik: COPY, zero-ETL, UPDATE ve VACUUM</h2>
+<p>A7'deki yazma yollarının Redshift'teki adları COPY, zero-ETL entegrasyonu, streaming ingestion, UPDATE ve DELETE'tir. Dosyalardan toplu yükleme şöyle görünür (örnek; Lale Market dosya yüklemez):</p>
+{% call k.sql("Q4", "Gecelik tıklama dosyalarını yükle (M2 kart 2)") %}
+<pre><code>COPY ad_clicks
+FROM 's3://lale-ads/clicks/dt=2026-10-30/'
+IAM_ROLE 'arn:aws:iam::123456789012:role/redshift-copy'
+FORMAT AS PARQUET;</code></pre>
+<table class="clause">
+  <tr><td>COPY ad_clicks FROM 's3://…/dt=2026-10-30/'</td><td>Bu klasördeki bütün dosyaları ad_clicks table'ına yükle. Dosyalar slice'lar arasında paylaşılır ve paralel okunur.</td></tr>
+  <tr><td>IAM_ROLE</td><td>Redshift'in S3'ü okumak için kullandığı role; şifre yoktur.</td></tr>
+  <tr><td>FORMAT AS PARQUET</td><td>Kolon bazlı dosya; Redshift kolonları doğrudan kendi bloklarına alır.</td></tr>
 </table>
-
-<h2 id="zeroetl" data-short="Aurora'dan zero-ETL"><span class="sec">07</span>Aurora'dan zero-ETL</h2>
-<p>AWS dokümantasyonu zero-ETL entegrasyonunu yönetilen bir çözüm olarak tanımlar. Transactional veriyi Redshift'te "within seconds of being written", yani yazıldıktan saniyeler sonra kullanılabilir yapar
-   (<a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/zero-etl.html">Aurora zero-ETL integrations</a>). Entegrasyonu bir kez oluşturursun. Redshift'te tek bir statement ondan bir database oluşturur:</p>
-{{ k.fig("redshift-zero-etl.png", "zero-ETL entegrasyonları. Aurora kaynak cluster'ları analitik ve machine learning için Redshift data warehouse'larına replike olur.") }}
-{% call k.sql("Q3", "Redshift'i entegrasyona bağla (Lale Market admin işlemi)") %}
+{% endcall %}
+<p>Lale Market'in canlı verisi zero-ETL ile gelir. Entegrasyon bir kez oluşturulur (CloudFormation, C3); Redshift tarafında tek bir cümle onu bir database'e bağlar:</p>
+{% call k.sql("Q5", "Redshift'i entegrasyona bağla (Lale Market admin işlemi)") %}
 <pre><code>CREATE DATABASE aurora_live FROM INTEGRATION '&lt;integration id&gt;' DATABASE shop</code></pre>
 <table class="clause">
-  <tr><td>CREATE DATABASE aurora_live</td><td>Redshift'te yeni bir database. Table'ları Aurora table'larının kopyalarıdır.</td></tr>
-  <tr><td>FROM INTEGRATION '&lt;integration id&gt;'</td><td>AWS'in Aurora cluster'ı ile Redshift namespace'i arasında çalıştırdığı zero-ETL entegrasyonu.</td></tr>
-  <tr><td>DATABASE shop</td><td>Entegrasyonun kopyaladığı Aurora'daki database.</td></tr>
+  <tr><td>CREATE DATABASE aurora_live</td><td>Redshift'te yeni bir database; table'ları Aurora table'larının kopyalarıdır.</td></tr>
+  <tr><td>FROM INTEGRATION '&lt;integration id&gt;'</td><td>AWS'in Aurora cluster'ı ile Redshift namespace'i (database'leri, kullanıcıları ve veriyi taşıyan birim; C2) arasında çalıştırdığı zero-ETL entegrasyonu.</td></tr>
+  <tr><td>DATABASE shop</td><td>Kopyalanan Aurora database'i. Kaynak table'larda primary key şarttır; yoksa o table kopyalanmaz.</td></tr>
 </table>
 {% endcall %}
-{% call k.sql("Q4", "Zero-ETL kopyası üzerinde canlı rapor") %}
-<pre><code>SELECT p.category AS category, count(DISTINCT o.order_id) AS orders, sum(oi.qty) AS units, sum(oi.qty * oi.unit_price) AS revenue
-FROM aurora_live.public.orders o
-JOIN aurora_live.public.order_items oi ON oi.order_id = o.order_id
-JOIN aurora_live.public.products p ON p.product_id = oi.product_id
-JOIN aurora_live.public.customers c ON c.customer_id = o.customer_id
-WHERE o.status &lt;&gt; 'cancelled'
-GROUP BY 1 ORDER BY revenue DESC LIMIT 24</code></pre>
-<table class="clause">
-  <tr><td>aurora_live.public.orders</td><td>Aurora'daki orders table'ının kopyası. İsmin üç parçası vardır: database, schema, table.</td></tr>
-  <tr><td>JOIN ... order_items, products, customers</td><td>Aurora'daki join'lerin aynısı. Burada checkout database'inde değil, warehouse'ta çalışırlar.</td></tr>
-  <tr><td>WHERE o.status &lt;&gt; 'cancelled'</td><td>İptal edilmiş siparişleri sayma.</td></tr>
-  <tr><td>sum(oi.qty * oi.unit_price)</td><td>Sipariş satırlarından hesaplanan gelir.</td></tr>
-</table>
-{% endcall %}
+{{ k.fig("redshift-zero-etl.png", "resmî AWS çizimi: soldaki Aurora cluster'ları yeşil oklarla (zero-ETL entegrasyonları) ortadaki Redshift warehouse'larına akar; sağda analistler ve ML modelleri warehouse'u okur. Lale Market'te bir Aurora cluster'ı ve bir Redshift namespace'i vardır.") }}
+{% call k.live("entegrasyonun durumu ve kopyadaki en yeni sipariş (svv_integration ve aurora_live.public.orders, 2026-10-31)") %}
+<pre><code>SELECT integration_id, target_database, state, total_tables_replicated, total_tables_failed FROM svv_integration;
+ integration_id                       | target_database | state           | total_tables_replicated | total_tables_failed
+--------------------------------------+-----------------+-----------------+-------------------------+--------------------
+ 708ba5af-b891-472e-9ca7-0faa4bf7aeaf | aurora_live     | CdcRefreshState |                       4 |                   0
 
-<h2 id="lalemarket" data-short="Lale Market'te Redshift"><span class="sec">08</span>Lale Market'te Redshift</h2>
+SELECT order_id, customer_id, order_date, status FROM aurora_live.public.orders ORDER BY order_date DESC LIMIT 1;
+ order_id        | customer_id | order_date                    | status
+-----------------+-------------+-------------------------------+-----------
+ W179340244054a3 | C00001      | 2026-10-30 23:20:40.966266+00 | processing</code></pre>
+{% endcall %}
+<p>Cevabı oku. <code>state</code> CdcRefreshState: ilk yükleme bitti, entegrasyon şimdi değişiklikleri sürekli uyguluyor (A7'deki değişiklik aktarımı). <code>total_tables_replicated</code> 4: orders, order_items, products, customers. <code>total_tables_failed</code> 0: hiçbir table primary key eksikliği ya da tip uyuşmazlığı yüzünden durmamış. Alttaki sorgu checkout'tan gelen en yeni siparişi kopyada okur; Guided görevin 31. adımı benzer bir sorguyla yeni bir siparişin kopyaya ne zaman ulaştığını ölçer: bu workshop'ta yaklaşık 30 saniye. AWS'in genel ifadesi "within seconds of being written"dır; gerçek gecikme yüke ve yapılandırmaya bağlıdır.</p>
+<p>Güncelleme ve silme ise A7'de gördüğün iki adımı izler: eski row silinmiş işaretlenir, yeni row sona eklenir; VACUUM sonra temizler ve sıralar. AWS bunu şöyle anlatır: "When you perform a delete, the rows are marked for deletion, but not removed"; Redshift "automatically runs a VACUUM DELETE operation in the background" (<a href="https://docs.aws.amazon.com/redshift/latest/dg/t_Reclaiming_storage_space202.html">Vacuuming tables</a>).</p>
+{{ k.sim("update", "UPDATE: işaretle, ekle, VACUUM ile temizle ve sırala") }}
+{% call k.ask("Canlı sales table'ında unsorted yüzde 91,58 idi. Bu sorguları yavaşlatır mı?") %}
+<p>Biraz: sıralanmamış bölgedeki bloklar geniş tarih aralıkları tutar ve zone map'ler onları daha az eler. 11.878 row'da fark ölçülemez; milyarlarca row'da belirgindir. Redshift sıralamayı da arka planda yapar; büyük bir yüklemeden sonra <code>VACUUM SORT ONLY sales</code> ile elle de başlatılabilir. AWS'e göre VACUUM, row'ların yüzde 95'inden fazlası zaten sıralıysa sıralama aşamasını atlar.</p>
+{% endcall %}
+{% call k.ask("Zero-ETL kopyasına yazabilir miyim?") %}
+<p>Hayır: <code>aurora_live</code> entegrasyonun hedefidir ve kaynak Aurora'dır. Kopyanın üzerine view ve materialized view kurabilir, sonuçları başka bir database'e yazabilirsin. Sipariş değişikliği her zaman Aurora'da yapılır.</p>
+{% endcall %}
+{{ k.quiz("rs-q10", "Yeni bir checkout siparişi Lale Market'in canlı raporuna nasıl ulaşır?",
+   ["S3'ten gecelik bir COPY ile", "Zero-ETL entegrasyonu onu yaklaşık yarım dakika içinde Aurora'dan kopyalar", "Checkout onu doğrudan Redshift'e yazar", "Rapor doğrudan Aurora'yı okur"],
+   1, "Checkout sadece Aurora'ya yazar. Entegrasyon değişikliği aurora_live'a kopyalar; bu workshop'ta yaklaşık 30 saniye sürer.") }}
+
+<h2 id="cost" data-short="Maliyet: RPU ve storage"><span class="sec">B5</span>Performans ve maliyet: RPU, 60 saniye, storage</h2>
+<p>A9'daki compute ile storage ayrımı Redshift Serverless'ın faturasında iki ayrı satırdır: compute RPU-saat olarak, storage GB-ay olarak ödenir. Kurallar (<a href="https://aws.amazon.com/redshift/pricing/">Redshift pricing</a>, <a href="https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-billing-on-demand.html">Billing for Serverless</a>):</p>
 <ul>
-  <li>Data subnet'lerinde bir Redshift Serverless workgroup'u. Redshift Engine App, Secrets Manager'dan alınan bir şifreyle TLS port 5439 üzerinden bağlanır.</li>
-  <li>Geçmiş table'ı <code>sales</code>'te DISTKEY customer_id ve SORTKEY order_date vardır. Seed onu iptal edilmemiş her sipariş satırı için bir row ile yükler.</li>
-  <li><code>aurora_live</code> database'i, Aurora'daki <code>shop</code> database'inin zero-ETL kopyasıdır. Checkout'tan gelen bir sipariş, pipeline kodu olmadan yaklaşık 30 saniye içinde orada görünür.</li>
+  <li>"One RPU provides 16 GB of memory." Base RPU varsayılan 128'dir; en az 4 RPU seçilebilir. Lale Market 8 RPU kullanır.</li>
+  <li>"You pay for the workloads you run in RPU-hours on a per-second basis (with a 60-second minimum charge)." "When no queries are running, you aren't billed for compute capacity."</li>
+  <li>eu-central-1'de on demand 0,451 USD/RPU-saat, bir yıllık rezervasyonla 0,352 USD/RPU-saat; managed storage 0,0256 USD/GB-ay (Price List API, 2026-10-31).</li>
+  <li>Spectrum ve concurrency scaling Serverless'ta ayrıca ödenmez.</li>
+</ul>
+{% call k.live("Lale Market'in son üç günlük compute kullanımı (SELECT trunc(start_time), sum(charged_seconds), max(compute_capacity) FROM sys_serverless_usage …)") %}
+<pre><code> day        | charged_seconds | max_capacity
+------------+-----------------+-------------
+ 2026-10-29 |            1440 |           8
+ 2026-10-30 |           12960 |           8
+ 2026-10-31 |             960 |           8</code></pre>
+{% endcall %}
+<p><code>charged_seconds</code> faturalanan RPU-saniyedir. 30 ekim workshop'un en yoğun günüydü: 12.960 RPU-saniye = 3,6 RPU-saat, yani 3,6 × 0,451 ≈ 1,62 USD. Kapasite hiç 8 RPU'yu geçmedi. Aynı gün 7/24 çalışan en küçük provisioned düğüm (ra3.large, 0,649 USD/saat) 15,58 USD tutardı. Bu küçük ve boşluklu yük Serverless'ın en iyi olduğu yüktür; kart 8'deki 7/24 düz yük ise tersidir.</p>
+<table class="data">
+  <caption>bütün durumlar: yükün şekli ve faturası</caption>
+  <thead><tr><th>Yük</th><th>Serverless'ta ne olur</th><th>Provisioned'da ne olur</th></tr></thead>
+  <tbody>
+    <tr><td>Günde birkaç sorgu</td><td>Her sorgu en az 60 saniye ödenir; boş saatler sıfırdır</td><td>Düğümler bütün gün ödenir</td></tr>
+    <tr><td>Ayın üç günü yoğun</td><td>Kapasite üç gün büyür, sonra sıfıra iner (kart 3)</td><td>Üç güne göre boyutlanan düğümler 27 gün boş</td></tr>
+    <tr><td>Mesai saatinde dakikada bir pano</td><td>Mesai boyunca kapasite açık kalır (kart 9)</td><td>Düğümler 7/24 ödenir; pause/resume planlanır</td></tr>
+    <tr><td>7/24 düz yük</td><td>Saniye başına ödeme avantaj getirmez</td><td>Üç yıllık rezervasyonla en ucuz (kart 8)</td></tr>
+    <tr><td>Kısa sorgular, saniyenin altında</td><td>Her biri 60 saniyelik minimuma takılır; sorguları birlikte çalıştırmak ödenen dakikayı doldurur</td><td>Fark yok; düğüm zaten ödenir</td></tr>
+    <tr><td>Kontrolsüz büyük sorgu</td><td>Kapasite büyür ve fatura büyür; <b>sınır yoksa durmaz:</b> en fazla RPU ve RPU-saat sınırı ayarlanır. En fazla RPU'ya ulaşınca compute daha fazla büyümez ve sorgular o kapasiteyle daha uzun sürer; RPU-saat sınırına ulaşınca seçilen eylem uygulanır (log, uyarı ya da kullanıcı sorgularını kapatmak)</td><td>Kapasite sabittir; sorgu yavaşlar, fatura değişmez</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Saatlerce boş duran bir workgroup'a ilk sorgu gelince ne olur?") %}
+<p>Compute yeniden başlar ve ilk sorgu bunu bekler; AWS fiyat sayfasına göre "There is no charge for data warehouse start up time", yani başlama süresi ödenmez. Pazartesi 09:00 gibi herkesin aynı anda geldiği bir anda ilk kutular bu yüzden biraz geç açılabilir (kart 9, R2). Aynı sorgu daha önce çalıştıysa ve veri değişmediyse sonuç cache'ten döner.</p>
+{% endcall %}
+{% call k.ask("Base RPU'yu düşük tutmak her zaman ucuz mu?") %}
+<p>Hayır. Düşük base ile ağır bir sorgu daha uzun sürer ve ödenen RPU-saniye aynı kalabilir ya da artabilir; AWS'e göre 128 TB'tan büyük veri için base en az 32 RPU olmalıdır. Doğru base, tipik sorgunun hızına ve kaç sorgunun aynı anda geldiğine göre seçilir ve sonra kullanım view'larından izlenir.</p>
+{% endcall %}
+{{ k.quiz("rs-q11", "Bir Serverless workgroup'ta saniyenin altında süren 1.000 ayrı sorgu bir saate dağılmış. Faturayı en çok ne belirler?",
+   ["Sorguların taradığı TB", "Her sorgunun en az 60 saniye ödenmesi", "Managed storage'ın GB-ay fiyatı", "Recovery point'ler"],
+   1, "Serverless RPU-saniye başına öder ama sorgu başına 60 saniyelik bir minimum vardır. Çok kısa ve dağınık sorgular bu minimumla ödenir.") }}
+
+<div class="part"><b>Bölüm C</b><h2 id="partC" data-short="Bölüm C: AWS servisi">AWS servisi: Redshift'in senin için çalıştırdıkları</h2>
+<p>Bir columnar warehouse'u kendin çalıştırdığında ne yapman gerekir ve bunun yerine AWS ne yapar.</p></div>
+
+<h2 id="selfrun" data-short="Kendin çalıştırırsan"><span class="sec">C1</span>Bir warehouse'u kendin çalıştırdığında ne yapmalısın</h2>
+<p>Açık kaynak columnar warehouse'lar (örneğin ClickHouse) ve MPP sistemleri aynı fikirleri kullanır. Birini kendin çalıştırdığında şu görevleri çözmelisin:</p>
+<ol>
+  <li><b>Makineler ve dağıtım.</b> Node'ları seç, kur, verinin node'lara nasıl bölüneceğini ayarla ve node eklerken veriyi yeniden dağıt.</li>
+  <li><b>Storage büyümesi.</b> Yıllarca büyüyen geçmiş için disk planla; storage büyüdükçe compute da büyümek zorunda kalır.</li>
+  <li><b>Yükleme boru hatları.</b> OLTP database'inden değişiklikleri okuyan ve warehouse'a uygulayan işi yaz ve işlet; bir şema değişikliğinde onu düzelt.</li>
+  <li><b>Bakım.</b> Silinen row'ların temizliği, yeniden sıralama ve istatistik toplama işlerini zamanla.</li>
+  <li><b>Yedekler ve kopyalar.</b> Node'ların yedeğini al, bir geri yüklemeyi test et, bir AZ arızasına karşı kopya tut.</li>
+  <li><b>Kapasite.</b> Ay sonu ya da kampanya tepesi için plan yap; tepeyi bekleyen makineler bütün yıl para tutar.</li>
+</ol>
+
+<h2 id="service" data-short="Servis olarak Redshift"><span class="sec">C2</span>Redshift senin için ne yapar: Serverless ve provisioned</h2>
+<p>Redshift aynı engine'i iki biçimde sunar. Provisioned cluster'da bir leader node ve compute node'lar seçersin; RA3 düğümleri veriyi managed storage'da tutar, bu yüzden storage düğümden ayrı büyür. Serverless'ta düğüm görmezsin: bir namespace (database'ler, kullanıcılar, veri) ve bir workgroup (compute ayarları) oluşturursun ve kapasite RPU olarak yükle gelir. Mimari resim A9'dadır: solda Serverless bulutu, sağda leader node ve CN1–CN4.</p>
+<table class="data">
+  <thead><tr><th>Görev</th><th>Kendi warehouse'un</th><th>Redshift provisioned</th><th>Redshift Serverless</th></tr></thead>
+  <tbody>
+    <tr><td>Makineler</td><td>Sen seçer ve işletirsin</td><td>Düğüm tipi ve sayısını seçersin; AWS işletir</td><td>Görülecek makine yok; base ve en fazla RPU</td></tr>
+    <tr><td>Storage</td><td>Disk planlarsın</td><td>Managed storage, düğümden ayrı (RA3)</td><td>Managed storage</td></tr>
+    <tr><td>Tepe yük</td><td>Tepe için makine alırsın</td><td>Elastic resize, concurrency scaling</td><td>Kapasite yükle gelir</td></tr>
+    <tr><td>Table tasarımı</td><td>Sen ayarlarsın</td><td>AUTO ile automatic table optimization</td><td>AUTO ile automatic table optimization</td></tr>
+    <tr><td>Bakım</td><td>Sen zamanlarsın</td><td>Otomatik VACUUM DELETE, sıralama ve ANALYZE (planner için istatistik toplama); bakım penceresi</td><td>Otomatik VACUUM DELETE, sıralama ve ANALYZE</td></tr>
+    <tr><td>Yedekler</td><td>Sen planlarsın</td><td>Otomatik ve elle snapshot'lar</td><td>30 dakikada bir recovery point (24 saat), elle snapshot</td></tr>
+    <tr><td>Aurora'dan veri</td><td>Boru hattı yazarsın</td><td>Zero-ETL</td><td>Zero-ETL</td></tr>
+    <tr><td>Ödeme</td><td>Donanım ve işletme</td><td>Düğüm-saat, rezervasyon</td><td>RPU-saniye (60 saniye minimum), storage GB-ay</td></tr>
+  </tbody>
+</table>
+<p>İki biçim arasında geçiş bir snapshot geri yüklemesidir: AWS bir Serverless snapshot'ını provisioned cluster'a ve tersine geri yüklemeye izin verir (<a href="https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-snapshots-recovery-points.html">Snapshots and recovery points</a>). Bu yüzden kart 3 ve kart 8'deki kararlar geri alınabilir.</p>
+
+<h2 id="lalemarket" data-short="Lale Market'te Redshift"><span class="sec">C3</span>Lale Market'te Redshift</h2>
+<p>Gerçek yapılandırma <code>cloudformation/workshop.yaml</code> içindedir:</p>
+{% call k.sql("T2", "Namespace, workgroup ve zero-ETL entegrasyonu") %}
+<pre><code>RedshiftWorkgroup:
+  Type: AWS::RedshiftServerless::Workgroup
+  Properties:
+    WorkgroupName: dbws
+    NamespaceName: !Ref RedshiftNamespace
+    BaseCapacity: 8
+    PubliclyAccessible: false
+    EnhancedVpcRouting: true
+    SubnetIds: [!Ref DataSubnetA, !Ref DataSubnetB, !Ref DataSubnetC]
+    ConfigParameters:
+      - ParameterKey: enable_case_sensitive_identifier
+        ParameterValue: 'true'
+ZeroEtlIntegration:
+  Type: AWS::RDS::Integration
+  Properties:
+    IntegrationName: dbws-aurora-to-redshift
+    SourceArn: !GetAtt AuroraCluster.DBClusterArn
+    TargetArn: !GetAtt RedshiftNamespace.Namespace.NamespaceArn
+    DataFilter: 'include: shop.*.*'</code></pre>
+<table class="clause">
+  <tr><td>BaseCapacity: 8</td><td>Sorgular 8 RPU (128 GB bellek) ile başlar; varsayılan 128'in çok altında, çünkü workshop'un verisi küçüktür.</td></tr>
+  <tr><td>PubliclyAccessible: false, SubnetIds</td><td>Workgroup sadece üç AZ'deki data subnet'lerinden erişilir; internete açık değildir.</td></tr>
+  <tr><td>EnhancedVpcRouting: true</td><td>COPY ve UNLOAD trafiği VPC üzerinden gider.</td></tr>
+  <tr><td>enable_case_sensitive_identifier</td><td>Zero-ETL hedefi için büyük-küçük harf duyarlı adlar gerekir.</td></tr>
+  <tr><td>AWS::RDS::Integration, DataFilter: 'include: shop.*.*'</td><td>Aurora cluster'ının <code>shop</code> database'indeki bütün table'ları Redshift namespace'ine kopyalayan entegrasyon.</td></tr>
+</table>
+{% endcall %}
+<ul>
+  <li>Redshift Engine App private bir subnet'teki EC2 instance'ında çalışır ve workgroup'a TLS ile 5439 portundan bağlanır; şifre Secrets Manager'dan (<code>dbws/redshift</code>) gelir. Workgroup'un security group'u sadece bu Engine App'ten gelen bağlantıya izin verir.</li>
+  <li>Geçmiş table'ı <code>sales</code>: DISTKEY customer_id, SORTKEY order_date, 11.878 row (B1).</li>
+  <li>Canlı kopya <code>aurora_live</code>: dört table, durum CdcRefreshState; yeni bir sipariş yaklaşık 30 saniyede görünür (B4).</li>
   <li>Admin sayfası "Sales reports" geçmişten ya da canlı kopyadan ay, kategori ya da şehre göre gruplar.</li>
-  <li>Redshift kendine ait ziyaretçi verisi tutmaz. Aurora ziyaretçi siparişlerini sildiğinde zero-ETL kopyaları siler.</li>
+  <li>Redshift ziyaretçiye ait veri tutmaz; Aurora ziyaretçi siparişlerini sildiğinde zero-ETL kopyadan da siler.</li>
 </ul>
 
-<h2 id="recall" data-short="Hatırlama testi"><span class="sec">09</span>Hatırlama testi</h2>
+<h2 id="recall" data-short="Hatırlama testi" data-group="Sonunda">Hatırlama testi</h2>
+<p>Bölümlere geri bakmadan cevapla.</p>
 {{ k.quiz("rs-r1", "Zone map neden sırasız bir kolonda yardım etmez?",
-   ["Zone map'ler sadece text kolonlar için vardır", "Her blok geniş bir değer aralığı tutar, bu yüzden çoğu blok eşleşebilir", "Redshift sırasız kolonların zone map'lerini siler", "Sırasız kolonlar sıkıştırılmaz"],
-   1, "Değerler hiçbir sırada değilse her bloğun minimum ve maksimumu neredeyse her filtreyi kapsar. Redshift bloğu okumak zorundadır.") }}
-{{ k.quiz("rs-r2", "DISTSTYLE ALL ne yapar?",
-   ["Table'ın tam bir kopyasını her node'a koyar", "Table'ı bütün kolonlara göre sıralar", "Bütün kolonları sıkıştırır", "Distribution key'i kaldırır"],
-   0, "ALL bir table'ı, genellikle küçük bir dimension'ı, her node'a kopyalar. Onunla yapılan her join böylece yereldir.") }}
-{{ k.quiz("rs-r3", "Yeni bir checkout siparişi Lale Market'in canlı raporuna nasıl ulaşır?",
-   ["S3'ten gecelik bir COPY ile", "Zero-ETL entegrasyonu onu yaklaşık yarım dakika içinde Aurora'dan kopyalar", "Checkout onu doğrudan Redshift'e yazar", "Rapor doğrudan Aurora'yı okur"],
-   1, "Checkout sadece Aurora'ya yazar. Entegrasyon değişikliği aurora_live'a kopyalar.") }}
+   ["Zone map'ler sadece metin kolonları için vardır", "Her blok geniş bir değer aralığı tutar, bu yüzden çoğu blok filtreyle çakışır", "Redshift sırasız kolonların zone map'lerini siler", "Sırasız kolonlar sıkıştırılmaz"],
+   1, "Değerler hiçbir sırada değilse her bloğun en küçük ve en büyük değeri neredeyse her filtreyi kapsar ve blok okunmak zorundadır.") }}
+{{ k.quiz("rs-r2", "Column store'da bir UPDATE ne yapar?",
+   ["Değeri bloğun içinde yerinde değiştirir", "Eski row'u silinmiş işaretler ve yeni row'u sona ekler", "Bütün table'ı yeniden yazar", "Hata verir, çünkü warehouse'ta UPDATE yoktur"],
+   1, "Her kolon ayrı ve sıkıştırılmış bir bloktadır. Engine eski row'u işaretler, yenisini ekler; VACUUM sonra temizler ve sıralar.") }}
+{{ k.quiz("rs-r3", "Redshift bir sales table'ında aynı order_id + product_id çiftinin iki kez yüklenmesini önler mi?",
+   ["Evet, primary key tanımlıysa", "Hayır, unique ve primary key sadece bilgi olarak tutulur", "Evet, ama sadece Serverless'ta", "Evet, DISTKEY bunu önler"],
+   1, "Redshift unique, primary key ve foreign key kurallarını uygulamaz; planner onları bilgi olarak kullanır. Çift row'u yükleme süreci önlemelidir.") }}
+{{ k.quiz("rs-r4", "Bir iş yükünde soruların yarısı \"bu müşterinin son siparişini 10 ms'de getir\". Warehouse için doğru okuma hangisi?",
+   ["Warehouse'un işi; sort key yeter", "O yarı OLTP database'ine ya da bir key-value store'a aittir; warehouse raporları yapar", "Result cache her zaman 10 ms'nin altında döner", "Distribution key bunu index'e çevirir"],
+   1, "Tek kayıt araması bir point lookup'tır; warehouse her sorguyu planlar ve dağıtır (kart 4). Doğru mimari ikisi birliktedir.") }}
 
 <section class="lesson-foot">
   <h2>Daha derine in</h2>
   <p><b>Ana kaynak:</b> <a href="https://docs.aws.amazon.com/redshift/latest/dg/c_columnar_storage_disk_mem_mgmnt.html">Columnar storage</a>, sonra
-     <a href="https://docs.aws.amazon.com/redshift/latest/dg/c_designing-tables-best-practices.html">Amazon Redshift best practices for designing tables</a>.</p>
+     <a href="https://docs.aws.amazon.com/redshift/latest/dg/c_designing-tables-best-practices.html">Amazon Redshift best practices for designing tables</a> ve
+     <a href="https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-capacity.html">Compute capacity for Redshift Serverless</a>.</p>
   <p><b>Mağazada kullan:</b> Guided görevde <a href="/guided-e-commerce-app/?adim=29">29. adımda</a> Sales reports satışları şehre göre toplar, <a href="/guided-e-commerce-app/?adim=30">30. adımda</a> canlı kopyayı okur, <a href="/guided-e-commerce-app/?adim=31">31. adımda</a> kopyanın ne kadar güncel olduğunu gösterir.</p>
   <p><b>Soru sor.</b> Bir kısım net değilse eğitmenine ya da AI asistanına sor. Projenden bir rapor getir ve onun sort key'ini ve distribution key'ini birlikte seçin.</p>
 </section>
