@@ -3749,3 +3749,800 @@ ELASTICACHE_W.append(wusecase("geo", 10, sim="w_geo",
 
 USECASES_W["elasticache"] = ELASTICACHE_W
 PAGE_SVC["elasticache"] = "ec"
+
+
+# ====================================================================== Amazon Neptune (page id "neptune"), model 2, Turkish only
+# The ten M2 cards of templates/e2e/neptune.tr.html and the five M7 simulations (weighted_scorecard). en = None.
+# Candidates: "np" = Neptune Database (SVC "Neptune", the page's service), "npa" = Neptune Analytics. They share the property
+# graph model and openCypher but are different engines (disk-based cluster volume with three quad indexes and OLTP isolation,
+# versus one memory-optimized instance with built-in algorithms and a vector index): NOT twins, R1 is scored separately.
+# Neptune Serverless and provisioned instances are two deployments of the same Neptune Database (R2, R4, R5 only).
+# Sources (hedges as in the source; full list in docs/neptune.scope.md):
+#   one primary and up to 15 replicas, replicas on the same cluster volume, failover "generally less than 30 seconds":
+#       https://docs.aws.amazon.com/prescriptive-guidance/latest/neptune-well-architected-framework/reliability-pillar.html
+#   copies in three AZs, replication independent of the instances: https://docs.aws.amazon.com/neptune/latest/userguide/storage.html
+#   six copies of each 10 GB chunk in three AZs, backups up to 35 days: https://aws.amazon.com/documentation-overview/neptune/
+#   read-only queries SNAPSHOT, mutations READ COMMITTED with range locks, lock wait up to 60 s, replica lag:
+#       https://docs.aws.amazon.com/neptune/latest/userguide/transactions-neptune.html
+#   three default indexes SPOG, POGS, GPSO; OSGP only on an empty cluster: https://docs.aws.amazon.com/neptune/latest/userguide/feature-overview-storage-indexing.html
+#   openCypher in Neptune: shortestPath() and CALL not supported, VLP: https://docs.aws.amazon.com/neptune/latest/userguide/feature-opencypher-compliance.html
+#   no TTL in the engine (TTL is built with Lambda + DynamoDB): https://aws.amazon.com/blogs/database/implement-time-to-live-in-amazon-neptune-part-1-property-graph/
+#   full-text search through OpenSearch replication: https://docs.aws.amazon.com/neptune/latest/userguide/full-text-search.html
+#   Streams 1-90 days, default 7: https://docs.aws.amazon.com/neptune/latest/userguide/streams-using-enabling.html
+#   Neptune Analytics: one memory-optimized instance, replicas are passive failover targets, priced per m-NCU:
+#       https://docs.aws.amazon.com/prescriptive-guidance/latest/neptune-analytics-well-architected-framework/reliability-pillar.html
+#   Neptune Analytics: 25+ algorithms as openCypher procedures, vector search (HNSW):
+#       https://docs.aws.amazon.com/neptune-analytics/latest/userguide/algorithms.html ; one vector index: https://aws.amazon.com/neptune/faqs/
+#   Neptune Analytics mutation reads under snapshot isolation: https://docs.aws.amazon.com/neptune-analytics/latest/userguide/query-isolation-level.html
+#   Neptune Database vs Analytics: https://docs.aws.amazon.com/neptune-analytics/latest/userguide/neptune-analytics-vs-neptune-database.html
+#   Prices, Price List API, eu-central-1, 2026-10-31: Serverless 0.1941 USD per NCU-hour; storage 0.119 USD per GB-month;
+#       0.22 USD per million I/O; Analytics 32 m-NCU 1.162 USD per hour, 128 m-NCU 4.647 USD per hour, a stopped graph 10 %.
+#   Redshift recursive CTE: https://docs.aws.amazon.com/redshift/latest/dg/r_WITH_clause.html
+CATEGORY.setdefault("np", ("graph", "graph"))
+LINK.setdefault("np", "neptune")
+CATEGORY.setdefault("npa", ("in-memory graph analytics", "bellek içi graph analitiği"))
+LINK.setdefault("npa", "neptune")          # Neptune Analytics has no page of its own; this page (A9, M5, C2) compares them
+
+NEPTUNE_W = []
+
+# ------------------------------------------------------------------ 1. social graph: people you may know (Neptune wins on its engine)
+NEPTUNE_W.append(wusecase("social", 1, sim="w_social",
+    title="Sosyal graph: tanıyor olabileceğin kişiler",
+    key="Vertex: User. Edge: FRIEND. Soru: bu kullanıcıdan iki hop uzaktaki, henüz arkadaşı olmayan kişiler, ortak arkadaş sayısına göre.",
+    story="Bir kitap kulübü uygulamasının 2 milyon kullanıcısı ve 60 milyon arkadaşlık bağlantısı var. Ana sayfadaki \"Tanıyor olabileceğin kişiler\" kutusu kullanıcının arkadaşlarının arkadaşlarını ortak arkadaş sayısına göre sıralar ve zaten arkadaş olanları çıkarır. "
+          "Kutu her ana sayfa açılışında hesaplanır: akşam saatlerinde saniyede 3.000 istek, her biri 100 ms bütçeyle; gece trafik onda birine düşer. Bir kullanıcının ortalama 30 arkadaşı var, ama 40 yazar hesabının her birinin 50.000'den fazla takipçisi var. "
+          "Yeni bir arkadaşlık bir sonraki açılışta öneriyi değiştirmeli. Ekip dört geliştiriciden oluşuyor ve SQL biliyor, graph dili bilmiyor. Kullanıcı profilleri bugün Aurora PostgreSQL'de duruyor; arkadaşlıklar yeni bir özellik olarak yazılacak.",
+    wnote="R1 toplam 50: sorunun kendisi iki hop'luk bir yol (20) ve bu yolun her istekte, yazar hesaplarına rağmen bütçede kalması (15) bu kartın riskidir. "
+          "R2 20 ile ikinci: akşam saniyede 3.000 öneri. R4 12'dir, çünkü ekip graph dili bilmiyor ve küçük; R5 8'dir, çünkü trafik akşam ve gece çok farklıdır.",
+    rows=[
+        row("EY", 20, "Kutu her ana sayfa açılışında bu soruyu sorar; sorunun şekli iş yükünün kendisidir.",
+            "\"Bu kullanıcının arkadaşlarının arkadaşları, ortak arkadaş sayısına göre, zaten arkadaş olanlar ve kendisi hariç, ilk 20.\" Sorunun elinde bir kullanıcı id'si var; cevap iki hop uzaktadır.",
+            "Soru tek bir istekte cevaplanamazsa uygulama arkadaş listesini çekip her arkadaş için ayrı istek gönderir; 30 arkadaşta 31 istek olur ve 100 ms bütçesi aşılır."),
+        row("DA", 15, "40 yazar hesabı 50.000'den fazla takipçiyle her akşam binlerce isteğin yolunda durur.",
+            "Bir isteğin maliyeti 2 milyon kullanıcıya değil, yalnız bu kullanıcının komşularına bağlı olmalı. Yazar hesapları (supernode) bir isteği bütçenin dışına taşımamalı.",
+            "Maliyet graph'ın boyutuyla büyürse her yeni kullanıcı her isteği yavaşlatır; bir yazar hesabından geçen tek istek saniyeler sürerse akşam kuyruğu büyür."),
+        row("OY", 10, "Her yeni arkadaşlık bir yazmadır, ama biçimi basittir: iki kullanıcı arasına bir bağlantı.",
+            "Bir arkadaşlık tek bir yazmayla eklenir ya da silinir ve bir sonraki öneri onu hemen sayar; iki yöne ayrı ayrı yazmak gerekmemeli.",
+            "Bağlantı iki kayıt olarak yazılırsa bir arızada yalnız biri kalabilir ve öneri tek taraflı bir arkadaşlığı sayar."),
+        row("VM", 5, "Veri doğası gereği bir ağdır, ama şekli basittir: tek tür vertex, tek tür edge.",
+            "Veri: kullanıcılar ve aralarındaki arkadaşlıklar; bağlantının kendisi veridir (ne zaman kuruldu).",
+            "Bağlantılar başka bir şeklin içine gömülürse (bir dizi alan) her ilişki iki yerde tutulur ve senkron kalmaz."),
+        row("R2", 20, "Akşam saniyede 3.000 istek; trafik bu iş yükünün en riskli anıdır.",
+            "Akşam saniyede 3.000 öneri isteği, her biri 100 ms içinde; gece trafik onda birine düşer. Saniyede 50 yeni arkadaşlık yazılır.",
+            "Akşam kutu yavaşlarsa ana sayfa beklemez ve kutuyu boş gösterir; büyüme kanalı tepe saatinde durur."),
+        row("R3", 10, "Arkadaşlık kullanıcının kendi kurduğu bir kayıttır; öneri kutusu ise yeniden hesaplanabilir.",
+            "Onaylanan bir arkadaşlık bir arızada kaybolmamalı.",
+            "Kaybolan bir arkadaşlığı kullanıcı tekrar kurmak zorunda kalır ve güven kaybolur."),
+        row("R4", 12, "Dört kişilik ekip graph dili bilmiyor; yeni bir sistem ürün geliştirmeden zaman çalar.",
+            "Dört geliştirici SQL biliyor; yeni bir sorgu dili öğrenmek kabul edilir, sunucu boyutlandırmak istenmiyor. Profiller Aurora'da kalır.",
+            "Küçük bir ekipte ikinci bir database ikinci bir yedekleme, izleme ve veri akışı işidir."),
+        row("R5", 8, "Akşam ile gece arasında on kat fark var; ödeme modeli bu farkı takip etmeli.",
+            "Trafik akşam yoğun, gece çok düşük. Veri birkaç on GB'tır.",
+            "Akşam tepesine göre boyutlanmış kapasite gecenin büyük kısmında boş durur ve ödenir."),
+    ],
+    cands=["np", "aur", "ddb"],
+    scores={
+        "np": [sc(10, "User vertex'leri ve FRIEND edge'leri (Ö1); öneri openCypher'da tek bir pattern'dir (Ö4): (me)-[:FRIEND]-()-[:FRIEND]-(fof) WHERE NOT (me)-[:FRIEND]-(fof) AND fof <> me, sonra count() ile sıralama. Puan kırılmadı."),
+               sc(9, "Başlangıç vertex'i ~id ile bulunur (Ö2) ve traversal yalnız bu kullanıcının komşularını okur (Ö3); iş 2 milyon kullanıcıya değil, yaklaşık 900 edge'e bağlıdır. 1 puan kırıldı: yazar hesapları supernode'dur; önceden bilindikleri için sorgu onları bir label ile (:Author) dışarıda bırakmalıdır (A4)."),
+               sc(10, "Tek bir CREATE (a)-[:FRIEND]->(b) arkadaşlığı yazar; yönsüz sorgu (-[:FRIEND]-) edge'i iki yönde de okur, ikinci kayıt gerekmez (Ö1, Ö6). Puan kırılmadı."),
+               sc(10, "Veri doğrudan vertex ve edge'tir; since gibi bir property edge'in üzerinde durur (Ö1). Puan kırılmadı."),
+               sc(9, "Okumalar 15'e kadar read replica'ya dağılır ve Serverless instance'ları akşam yükle büyür; saniyede 50 yazma writer için küçüktür. 1 puan kırıldı: bütün yazmalar tek writer'dan geçer ve replica'lar writer'ın birkaç milisaniye gerisindedir; yeni arkadaşlık replica'dan okunan bir öneride o kadar geç görünür."),
+               sc(10, "Cluster volume her 10 GB'ı üç AZ'de altı kopya olarak tutar; onaylanan yazma kaybolmaz. Puan kırılmadı."),
+               sc(7, "Yönetilen cluster; yedek, yama ve failover servistir. 3 puan kırıldı: ekip openCypher öğrenir (2) ve replica sayısı ile NCU aralığını akşam tepesine göre ayarlar (1)."),
+               sc(7, "Serverless NCU-saat başına ödenir. 3 puan kırıldı: kapasite sıfıra inmez; gece de writer ve reader'ın en az 1'er NCU'su ödenir (eu-central-1'de NCU-saat 0,1941 USD, instance başına ayda yaklaşık 142 USD).")],
+        "aur": [sc(8, "Arkadaşlık bir edge table'ıdır; öneri iki self-join, NOT EXISTS ve GROUP BY ile tek bir SQL sorgusudur. 2 puan kırıldı: her hop FROM'da table'ın bir kopyası daha demektir ve sorgu bir pattern değil bir join planıdır."),
+                sc(7, "(user_id, friend_id) B-tree index'i ile her hop index aramasıdır; yazar hesapları Neptune'deki gibi bir koşulla (is_author = false) dışarıda bırakılır. 3 puan kırıldı: her hop bir birleştirmedir ve ara sonuç çoğalır (30 × 30 = 900 row her istekte birleştirilip gruplanır); akşam saniyede 3.000 istekte bu, komşuluğu bir index aralığı olarak okuyan graph'tan pahalıdır."),
+                sc(9, "INSERT tek row yazar. 1 puan kırıldı: yönsüz arkadaşlık ya iki row (iki yön) olarak yazılır ya da her sorgu iki kolonu OR ile arar."),
+                sc(9, "Edge table'ı bir ağı taşır. 1 puan kırıldı: ilişki row'lardaki iki id'dir; graph'ın kendisi değil, onun bir tablosudur."),
+                sc(7, "Okumalar reader'lara gider ve Serverless v2 ACU'yu artırır. 3 puan kırıldı: akşam saniyede 3.000 birleştirme ve gruplama sorgusu reader'ları yorar; tepe için birkaç reader gerekir."),
+                sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                sc(9, "Profiller zaten Aurora'da; ekip SQL biliyor ve yeni sistem yok. 1 puan kırıldı: akşam tepesi için reader sayısı ve ACU aralığı ayarlanır."),
+                sc(7, "Var olan cluster'a bir table eklenir. 3 puan kırıldı: akşam için eklenen reader'lar ve yüksek ACU saat başına ödenir ve kapasite gece de sıfıra inmez.")],
+        "ddb": [sc(3, "Adjacency list deseni: partition key kullanıcı, sort key arkadaş; bir Query arkadaşları verir. 7 puan kırıldı: ikinci hop için uygulama 30 Query daha gönderir, sonuçları birleştirir, sayar, sıralar ve zaten arkadaş olanları kendisi çıkarır; 31 istek bir pattern değildir."),
+                sc(6, "Her Query bir partition'a gider ve tek haneli milisaniyedir. 4 puan kırıldı: bir yazar hesabının 50.000 takipçisi tek bir büyük item collection'dır; onu okuyan istekler hem büyük hem aynı partition'a yığılır (hot partition)."),
+                sc(9, "PutItem bağlantıyı yazar. 1 puan kırıldı: iki yönde okunabilmesi için iki item yazılır (ya da GSI ile ters yön); ikisi birlikte transaction ile yazılmalıdır."),
+                sc(6, "Bağlantı bir item'dır. 4 puan kırıldı: graph partition key ve sort key çiftlerine düzleştirilir; bağlantının iki ucu ayrı item'larda tekrarlanır."),
+                sc(10, "Okumalar partition'lara dağılır; on-demand mod akşam tepesini ayarsız karşılar. Puan kırılmadı."),
+                sc(10, "Her yazma birkaç AZ'de saklanır. Puan kırılmadı."),
+                sc(8, "Serverless, sunucu yok. 2 puan kırıldı: ekip DynamoDB API'ını ve key tasarımını öğrenir; birleştirme kodu R1.1'de sayıldı."),
+                sc(9, "On-demand modda istek başına ödenir; gece maliyet düşer. 1 puan kırıldı: tepe saatin birim tüketimi önceden hesaplanmalıdır.")],
+    },
+    h2h={
+        "aur": "İlişkisel (Aurora) ile kafa kafaya. Aurora bu soruyu yazabilir: iki self-join, NOT EXISTS ve GROUP BY tek bir SQL sorgusudur ve profiller zaten oradadır, bu yüzden R4'te öndedir. "
+               "Fark R1'in depolama satırındadır: bir graph engine'i bir vertex'ten başlar ve yalnız onun edge'lerini okur; ilişkisel engine her hop'ta index'te arar ve ara sonucu çoğaltır. "
+               "Yazar hesabından geçen bir istekte bu 50.000 row'luk bir birleştirme ve gruplamadır ve akşam saniyede 3.000 istek reader'ları yorar (R2). "
+               "Hangi koşul değişseydi Aurora seçilirdi: trafik saniyede birkaç yüz isteğe inseydi, supernode olmasaydı ve öneri her gece toplu hesaplanıp bir table'a yazılsaydı; o zaman ikinci bir database'in bedeli kazancından büyük olurdu.",
+        "ddb": "Key-value (DynamoDB) ile kafa kafaya. DynamoDB ölçekte ve işletimde rakipsizdir: on-demand mod akşam tepesini ayarsız karşılar ve gece neredeyse hiç ödenmez (R2, R5). "
+               "Ama engine iki hop'u bilmez: adjacency list deseninde bir Query arkadaşları verir, arkadaşların arkadaşları için uygulama 30 Query daha gönderir ve sonuçları kendisi birleştirir, sayar ve eler (R1.1). "
+               "Yazar hesapları büyük item collection'lardır ve aynı partition'a yığılır (R1.2). Kaybın tamamı R1'dedir: 27'ye 48,5. "
+               "Hangi koşul değişseydi DynamoDB seçilirdi: soru tek hop olsaydı (\"bu kullanıcının arkadaşları\", \"beni takip edenler\") ya da öneriler gece başka bir yerde hesaplanıp kullanıcı başına bir liste olarak saklansaydı.",
+    },
+    verdict="Karar: Neptune {np}, Aurora {aur}, DynamoDB {ddb}. Bu iş yüküne en uygun servis Neptune'dür ve farkın neredeyse tamamı R1'dedir: iki hop'luk öneri bir pattern'dir ve maliyeti graph'ın boyutuna değil komşulara bağlıdır. "
+            "Neptune seçtiğimizde artımız: öneri tek bir sorgudur, yeni arkadaşlık hemen sayılır, üçüncü bir hop eklemek pattern'e bir parça eklemektir ve okumalar replica'larla büyür. "
+            "Eksimiz: ekip openCypher öğrenir, yazar hesaplarını sorgudan bir label ile dışarıda bırakır ve gece de iki instance'ın en düşük NCU'su ödenir; profiller Aurora'da kalır ve uygulama kullanıcı silinince vertex'i de siler. Bir koşul değişseydi: öneriler gecelik bir toplu işle hesaplansaydı Aurora yeterdi."))
+
+# ------------------------------------------------------------------ 2. fraud ring check at payment time (R1 equal with Neptune Analytics, service design decides)
+NEPTUNE_W.append(wusecase("fraud", 2, sim="w_fraud",
+    title="Ödeme anında dolandırıcılık halkası kontrolü",
+    key="Vertex: Card, Device, Address, Phone, Account. Edge: USED, LIVES_AT, OWNS. Soru: bu ödemenin kartı ya da cihazı, en fazla üç hop'ta işaretli bir hesaba bağlı mı?",
+    story="Lale Market'in ödeme ortağı her kartlı ödemede bir dolandırıcılık kontrolü yapar. Graph'ta 30 milyon vertex (kart, cihaz, adres, telefon, hesap) ve 120 milyon edge var; 2.000 hesap dolandırıcılık nedeniyle işaretli. "
+          "Her ödemede soru şudur: bu kart, bu cihaz ya da bu teslimat adresi en fazla üç hop'ta işaretli bir hesaba bağlı mı? Cevap 50 ms içinde gelmeli, yoksa ödeme kontrolsüz geçer. "
+          "Gündüz saniyede 800, kampanya akşamı saniyede 2.400 ödeme olur; her ödeme iki ya da üç yeni edge yazar (kart bu cihazı kullandı) ve bir sonraki ödeme bu edge'i görmelidir. "
+          "Bazı adresler (bir alışveriş merkezi, bir kargo deposu) on binlerce karta bağlıdır. Altı kişilik veri ekibi bir pilot projede openCypher kullandı. Edge'ler denetim kanıtıdır ve kaybolmamalıdır.",
+    wnote="R1 toplam 50: üç hop'luk soru (15), her ödemede 50 ms (15), ödeme başına yeni edge'ler (10) ve yeni edge'in bir sonraki kontrolde görünmesi (10). "
+          "R2 20 ile ikinci: kampanya akşamı saniyede 2.400 kontrol ve 7.000'den fazla edge yazması. R3, R4 ve R5 10'ar: kanıt kaybolmamalı, ekip küçük, trafik gün boyu süreklidir.",
+    rows=[
+        row("EY", 15, "Her ödeme bu soruyu sorar; cevap gelmezse ödeme kontrolsüz geçer.",
+            "\"Bu kartın, cihazın ya da adresin en fazla üç hop'ta işaretli bir hesaba yolu var mı?\" Hop sayısı 1 ile 3 arasındadır ve edge türü dörttür. Cevap evet ise yol da dönmeli (inceleme için).",
+            "Soru birkaç ayrı isteğe bölünürse 50 ms bütçesi aşılır; yol dönmezse analist neden reddedildiğini göremez."),
+        row("DA", 15, "50 ms her ödemede geçerlidir; ortak adresler on binlerce karta bağlıdır.",
+            "Kontrolün maliyeti 30 milyon vertex'e değil, ödemenin komşularına bağlı olmalı. Bilinen ortak adresler (supernode) kontrolü bütçenin dışına taşımamalı.",
+            "Bir alışveriş merkezi adresinden geçen kontrol saniyeler sürerse o ödeme ya bekler ya da kontrolsüz geçer."),
+        row("OY", 10, "Her ödeme iki ya da üç edge yazar; biçimi basit ama süreklidir.",
+            "Ödeme anında \"bu kart bu cihazı kullandı\" edge'i eklenir; cihaz ilk kez görülüyorsa vertex'i de oluşturulur (yoksa oluştur).",
+            "Cihaz vertex'i iki kez oluşturulursa halka iki parçaya bölünür ve bağlantı görünmez."),
+        row("TA", 10, "Dolandırıcı aynı cihazla art arda ödeme dener; ikinci ödeme ilkinin edge'ini görmelidir.",
+            "Onaylanan bir edge bir sonraki kontrolde görünmeli; kontrol yarım yazılmış bir ödemeyi görmemeli.",
+            "Yeni edge görünmezse aynı cihazla yapılan ikinci ve üçüncü ödeme de temiz görünür."),
+        row("R2", 20, "Kampanya akşamı saniyede 2.400 kontrol ve yazma aynı anda gelir.",
+            "Gündüz saniyede 800, kampanya akşamı saniyede 2.400 kontrol; her biri 50 ms içinde. Saniyede 7.200'e kadar edge yazması.",
+            "Tepe anında kontrol yavaşlarsa ödemeler ya bekler ya da kontrolsüz geçer; ikisi de para kaybıdır."),
+        row("R3", 10, "Edge'ler denetim kanıtıdır; bir itirazda geri istenir.",
+            "Onaylanan hiçbir edge bir arızada kaybolmamalı; geçmişe dönük geri yükleme mümkün olmalı.",
+            "Kanıt kaybolursa bir itiraz kaybedilir ve halkanın geçmişi kurulamaz."),
+        row("R4", 10, "Altı kişilik ekip openCypher'ı pilot projeden biliyor; sunucu işletmek istemiyor.",
+            "Altı veri mühendisi openCypher'ı bir pilotta kullandı. Sunucu, yama ve failover işi istenmiyor.",
+            "Kapasite ve failover işi ekibin kural geliştirme zamanını yer."),
+        row("R5", 10, "Trafik gün boyu süreklidir; fiyat birimi bunu takip etmeli.",
+            "Trafik gün boyu süreklidir, akşam üç katına çıkar. Graph 120 milyon edge'tir.",
+            "Graph'ın tamamı için gece gündüz büyük bir kapasite ödenirse kontrol başına maliyet büyür."),
+    ],
+    cands=["np", "npa", "aur"],
+    scores={
+        "np": [sc(10, "Değişken uzunlukta bir pattern (Ö5): MATCH p = (c:Card {`~id`: $card})-[:USED|LIVES_AT|OWNS*1..3]-(a:Account {flagged: true}) RETURN p LIMIT 1. Yol da döner. Puan kırılmadı."),
+               sc(9, "Kontrol kartın vertex'inden başlar ve yalnız komşuları okur (Ö2, Ö3). 1 puan kırıldı: bilinen ortak adresler supernode'dur; önceden işaretlenir ve sorgu onlardan geçmez (A4)."),
+               sc(10, "MERGE cihaz vertex'ini yoksa oluşturur, CREATE edge'i yazar; ikisi bir transaction'dır (Ö6). Puan kırılmadı."),
+               sc(10, "Okuma sorguları snapshot isolation ile çalışır: yarım yazılmış bir ödemeyi görmez, commit edilmiş edge'i görür (Ö6). Puan kırılmadı."),
+               sc(8, "Kontroller 15'e kadar replica'ya dağılır. 2 puan kırıldı: kampanya akşamı saniyede 7.200 edge yazması tek writer'dan geçer; AWS tek bir writer için bir yazma sayısı vermez, bu hız bir yük testiyle doğrulanmalıdır. Replica'lar writer'ın birkaç milisaniye gerisindedir; aynı cihazla milisaniyeler içinde gelen ikinci ödeme ilkinin edge'ini görmeyebilir ve bu küçük pencere kabul edilir."),
+               sc(10, "Altı kopyalı cluster volume; 35 güne kadar point-in-time restore. Puan kırılmadı."),
+               sc(9, "Yönetilen cluster; ekip openCypher biliyor. 1 puan kırıldı: replica sayısı ve NCU aralığı kampanya akşamına göre ayarlanır."),
+               sc(8, "NCU-saat ya da instance-saat başına ödenir; sürekli trafiğe uyar. 2 puan kırıldı: akşamın üç katı için replica'lar ve NCU'lar saat başına ödenir.")],
+        "npa": [sc(10, "Aynı property graph ve aynı openCypher pattern'i (Ö5); yol döner. Puan kırılmadı."),
+                sc(9, "Graph bellekte durur ve kontrol yalnız komşuları okur. 1 puan kırıldı: ortak adresler supernode'dur; burada da önceden işaretlenir ve sorgu onlardan geçmez."),
+                sc(10, "openCypher MERGE ve CREATE yazar; MERGE eşzamanlı yazmalarda tek vertex oluşturur. Puan kırılmadı."),
+                sc(10, "Okuma sorguları snapshot isolation ile çalışır; commit edilmiş edge'i görür. Puan kırılmadı: mutation okumalarının daha gevşek izolasyonu bu iş yükünde bir koşula bağlı yazma olmadığı için fark yaratmaz."),
+                sc(5, "Graph tek bir bellek odaklı instance'tır. 5 puan kırıldı: AWS'e göre replica'lar pasif failover hedefidir ve okuma ölçeklemez; saniyede 2.400 kontrol ve 7.200 yazma tek instance'ın işidir ve kapasite yalnız bir yönetim işlemiyle dikey büyür."),
+                sc(8, "Graph verisi durdurup başlatmada korunur; AWS'e göre hot standby başka bir AZ'de bekler ve failover saniyeler sürer, standby yoksa kapasite dakikalar içinde yeniden kurulur. 2 puan kırıldı: geri dönüş kullanıcının aldığı snapshot'lardan yeni bir graph kurmaktır; Neptune Database'in 35 güne kadar herhangi bir ana dönen point-in-time restore'u Neptune Analytics için aynı biçimde belgelenmiş değildir, bu yüzden kanıt için bir saniyeye dönüş garanti edilmez."),
+                sc(9, "Sunucusuz bir graph; algoritmalar ve notebook'lar hazır. 1 puan kırıldı: m-NCU boyutu graph'ın büyüklüğüne göre seçilir; büyütmenin bir yönetim işlemi olması R2'de sayıldı."),
+                sc(5, "m-NCU-saat başına ödenir. 5 puan kırıldı: graph'ın tamamı için bellek gece gündüz ödenir (128 m-NCU eu-central-1'de saatte 4,647 USD, ayda yaklaşık 3.400 USD) ve bir standby aynı fiyatı ikinci kez öder.")],
+        "aur": [sc(5, "Dört edge türü bir edges table'ında; WITH RECURSIVE en fazla üç seviye iner ve yolu bir dizide taşır. 5 puan kırıldı: değişken derinlik recursive bir sorgu, döngü kontrolü ve yol dizisi ister; bu bir pattern değil, elle yazılmış bir aramadır."),
+                sc(4, "Her seviye bir index araması ve birleştirmedir. 6 puan kırıldı: bir alışveriş merkezi adresinde ara sonuç on binlerce row'a çıkar; 50 ms bütçesi her ödemede tutmaz."),
+                sc(9, "INSERT edge row'ları ve INSERT … ON CONFLICT DO NOTHING ile cihaz. 1 puan kırıldı: her edge yönü için index güncellemesi ve MVCC row sürümleri yazmayı büyütür."),
+                sc(10, "Transaction'lar ve snapshot okumalar; commit edilmiş edge görünür. Puan kırılmadı."),
+                sc(7, "Okumalar reader'lara gider. 3 puan kırıldı: saniyede 2.400 recursive sorgu reader'ları yorar ve yazmalar checkout'u yapan tek writer'dan geçer."),
+                sc(10, "Üç AZ'de altı kopya ve sürekli yedek. Puan kırılmadı."),
+                sc(9, "Ekip SQL biliyor ve Aurora zaten çalışıyor. 1 puan kırıldı: kampanya akşamı için reader sayısı ve ACU aralığı ayarlanır; sorgunun yazılışı R1.1'de sayıldı."),
+                sc(8, "Var olan cluster'a eklenir. 2 puan kırıldı: akşam için reader'lar ve ACU saat başına ödenir.")],
+    },
+    h2h={
+        "npa": "Bellek içi graph analitiği (Neptune Analytics) ile kafa kafaya. İki servis aynı property graph modelini ve aynı openCypher pattern'ini kullanır; bu iş yükünde R1'leri eşittir (48,5'e 48,5). "
+               "Neptune Analytics graph'ı bellekte tutar ve bütün graph algoritmalarında Neptune Database'ten çok güçlüdür, ama bu kartın sorusu bir algoritma değil, her ödemede bir vertex'ten başlayan kısa bir yoldur. "
+               "Kararı servis tasarımı verir: Neptune Analytics tek bir instance'tır ve replica'ları okuma ölçeklemez (R2), graph'ın tamamının belleği gece gündüz ödenir (R5) ve kalıcılığı tek instance'a dayanır (R3). "
+               "Hangi koşul değişseydi Neptune Analytics seçilirdi: soru her ödemede değil gece bir kez sorulsaydı, yani bütün graph üzerinde halkaları (community detection) bulup işaretlemek isteseydik; doğru mimari çoğunlukla ikisi birliktedir.",
+        "aur": "İlişkisel (Aurora) ile kafa kafaya. Aurora'da edge'ler bir table'dır ve WITH RECURSIVE üç seviyeye kadar arayabilir; transaction ve dayanıklılık güçlüdür ve ekip SQL bilir. "
+               "Ama engine bu soruyu bir arama olarak çalıştırır: her seviye bir index araması ve birleştirmedir ve bir alışveriş merkezi adresinde ara sonuç on binlerce row'a çıkar (R1.2). "
+               "Recursive sorgu, döngü kontrolü ve yol dizisi elle yazılır (R1.1) ve saniyede 2.400 kontrol reader'ları yorar (R2). "
+               "Hangi koşul değişseydi Aurora seçilirdi: kontrol yalnız tek hop olsaydı (\"bu kart işaretli bir hesapla aynı cihazı kullandı mı?\") ya da saniyede birkaç kontrol yapılsaydı ve bütçe 50 ms değil birkaç saniye olsaydı.",
+    },
+    verdict="Karar: Neptune {np}, Neptune Analytics {npa}, Aurora {aur}. Bu iş yüküne en uygun servis Neptune'dür. Engine uyumunda Neptune ile Neptune Analytics eşittir; kararı servis tasarımı verir: okuma ölçekleyen replica'lar, altı kopyalı volume ve sürekli trafiğe uyan fiyat. "
+            "Neptune seçtiğimizde artımız: üç hop'luk kontrol tek bir sorgudur, yol inceleme için döner, yeni edge bir sonraki kontrolde görünür ve okumalar replica'larla büyür. "
+            "Eksimiz: ortak adresler önceden işaretlenip sorgudan çıkarılır, replica gecikmesi kadar küçük bir pencere kabul edilir, tek writer'ın kampanya akşamındaki yazma hızı bir yük testiyle doğrulanır ve replica ile NCU ayarlanır. "
+            "Doğru mimari ikisi birliktedir: ödeme anı Neptune'de, gece halka taraması Neptune Analytics'te (A9). Bir koşul değişseydi: kontrol gerçek zamanlı olmasaydı Neptune Analytics yeterdi."))
+
+# ------------------------------------------------------------------ 3. recommendations by graph (Lale Market; close race with Aurora)
+NEPTUNE_W.append(wusecase("reco", 3, sim="w_reco",
+    title="Graph ile öneri: bunu alanlar şunları da aldı (Lale Market)",
+    key="Vertex: Customer, Product. Edge: BOUGHT (müşteriden ürüne). Soru: bu ürünü alanların aldığı diğer ürünler; kişisel öneride bir hop daha.",
+    story="Lale Market'in ürün sayfası \"Bunu alanlar şunları da aldı\" kutusunu, ana sayfa ise persona'ya göre kişisel öneriyi gösterir. Bugün bu iş Neptune'dedir ve küçük bir graph'tır; bu kart mağaza büyüdüğündeki hâlini puanlar: "
+          "400.000 müşteri, 20.000 ürün ve 6 milyon BOUGHT edge'i. Ürün sayfası tepe anında saniyede 1.500, ana sayfa saniyede 300 kez açılır; kutu 80 ms içinde gelmelidir. "
+          "En çok satan ürünlerin her biri 30.000'den fazla alıcıya sahiptir ve öneri tam da onlardan başlar. Yeni bir sipariş öneriyi hemen değiştirmelidir. "
+          "Siparişlerin resmi kaydı Aurora'dadır; graph onların bir kopyasıdır. Ekip dört geliştiriciden oluşur ve SQL bilir; Aurora zaten çalışmaktadır.",
+    wnote="R1 toplam 45: iki ve üç hop'luk soru (15) ve en çok satan ürünlerden geçen her istek (15) bu kartın riskidir. "
+          "R2 20 ve R4 20 ile ikinci sıradadır: tepe anında saniyede 1.800 öneri ve Aurora'nın zaten çalışıyor olması. R3 5'tir: graph siparişlerin bir kopyasıdır.",
+    rows=[
+        row("EY", 15, "Her ürün sayfası ve her ana sayfa bu soruyu sorar.",
+            "Ürün sayfası: \"bu ürünü alanların aldığı diğer ürünler, ortak alıcı sayısına göre, ilk 6\" (iki hop). Ana sayfa: \"benim aldıklarımı alanların aldıkları, benim almadıklarım\" (üç hop).",
+            "Soru tek istekte cevaplanamazsa öneri her sayfa açılışında birkaç istek olur ve 80 ms bütçesi aşılır."),
+        row("DA", 15, "Öneri en çok satan ürünlerden başlar; onların 30.000 alıcısı her istekte yoldadır.",
+            "Bir isteğin maliyeti 6 milyon edge'e değil, başlangıç ürününün komşularına bağlı olmalı; en çok satan ürünler (supernode) bütçeyi aşmamalı.",
+            "En çok satan ürünün sayfası en çok açılan sayfadır; orada yavaşlayan öneri en çok satışı kaçırır."),
+        row("OY", 10, "Her sipariş satırı bir yazmadır ve öneriyi hemen değiştirmelidir.",
+            "Her sipariş satırı müşteriden ürüne bir BOUGHT edge'i olarak eklenir; aynı ürün tekrar alınırsa ikinci bir edge yazılır.",
+            "Yazma toplu ve gecikmeli olursa yeni siparişler öneriye ertesi gün girer."),
+        row("VM", 5, "Veri iki tür vertex ve tek tür edge'tir; şekli basittir.",
+            "Müşteriler, ürünler ve aralarındaki satın almalar; edge üzerinde sipariş id'si ve adet.",
+            "İlişki bir dizi alana gömülürse her satın alma iki yerde tutulur."),
+        row("R2", 20, "Tepe anında saniyede 1.800 öneri checkout tepesiyle aynı akşamdır.",
+            "Tepe anında saniyede 1.500 ürün sayfası ve 300 ana sayfa önerisi, her biri 80 ms içinde.",
+            "Öneri yavaşlarsa sayfa beklemez ve kutuyu boş gösterir; kampanya akşamı en değerli kutu boş kalır."),
+        row("R3", 5, "Graph siparişlerin bir kopyasıdır; kaybı yeniden yüklemedir.",
+            "Düşük: graph Aurora'daki siparişlerden yeniden kurulabilir.",
+            "Kopya kaybolursa birkaç saat genel bir liste gösterilir."),
+        row("R4", 20, "Ekip dört kişidir ve Aurora zaten çalışır; ikinci bir database bu ekip için büyük bir iştir.",
+            "Dört geliştirici SQL biliyor; Aurora siparişleri zaten tutuyor. İkinci bir database ve bir kopyalama hattı ancak gerekiyorsa kurulmalı.",
+            "Kopyalama hattı bozulursa öneri sessizce eskir ve kimse fark etmez."),
+        row("R5", 10, "Öneri bir satış aracıdır; maliyeti satıştan küçük olmalı.",
+            "Tepe akşamdadır; gündüz ve gece trafik üçte birdir.",
+            "İkinci bir database'in saat başı faturası öneri kutusunun getirisini aşabilir."),
+    ],
+    cands=["np", "aur", "ddb"],
+    scores={
+        "np": [sc(10, "Ürün sayfası iki hop'luk, ana sayfa üç hop'luk tek bir openCypher pattern'idir (Ö4); Lale Market'in canlı sorguları budur (B2). Puan kırılmadı."),
+               sc(8, "Traversal başlangıç ürününden başlar ve yalnız komşuları okur (Ö3). 2 puan kırıldı: en çok satan ürünler supernode'dur ve öneri tam onlardan başladığı için dışarıda bırakılamaz; sorgu alıcıları örneklemeli ya da hop başına bir LIMIT koymalıdır (A4). Workshop'un canlı ölçümü (B2: en düşük kapasitede, ağ ve imza dahil 205 ms) 80 ms'yi kanıtlamaz; bütçe sınırlı sorguyla bir yük testinde doğrulanır."),
+               sc(10, "Her sipariş satırı bir CREATE ile BOUGHT edge'idir ve bir sonraki öneri onu hemen sayar (Ö6); canlı mağaza bunu yapar. Puan kırılmadı."),
+               sc(10, "Customer ve Product vertex'leri, BOUGHT edge'i üzerinde order_id ve qty (Ö1). Puan kırılmadı."),
+               sc(9, "Okumalar replica'lara dağılır ve Serverless instance'ları yükle büyür; yazma hacmi küçüktür. 1 puan kırıldı: bütün yazmalar tek writer'dan geçer ve replica'lar writer'ın birkaç milisaniye gerisindedir; yeni sipariş replica'dan okunan bir öneride o kadar geç görünür."),
+               sc(10, "Altı kopyalı cluster volume. Puan kırılmadı."),
+               sc(5, "Yönetilen cluster. 5 puan kırıldı: ekip openCypher öğrenir (2), siparişleri Aurora'dan Neptune'e taşıyan kopyalama hattını kurar ve izler (2) ve replica ile NCU aralığını akşam tepesine göre ayarlar (1)."),
+               sc(6, "NCU-saat başına ödenir. 4 puan kırıldı: Aurora'nın yanında ikinci bir database'in en az iki instance'ı gece gündüz ödenir (en düşük kapasitede ayda yaklaşık 283 USD), trafik ise akşamdadır.")],
+        "aur": [sc(7, "Ürün sayfası iki self-join ve GROUP BY ile tek SQL sorgusudur; siparişler zaten oradadır. 3 puan kırıldı: üç hop'luk kişisel öneri üç self-join ve NOT EXISTS ister; her hop table'ın bir kopyası daha demektir."),
+                sc(6, "(product_id) ve (customer_id) index'leri ile her hop bir index aramasıdır. 4 puan kırıldı: en çok satan bir ürünün 30.000 alıcısı ve onların satırları her istekte birleştirilip gruplanır; ara sonuç 80 ms bütçesini zorlar."),
+                sc(10, "Siparişler checkout tarafından zaten yazılıyor; öneri için ayrıca yazma yoktur ve yeni sipariş hemen görünür. Puan kırılmadı."),
+                sc(9, "order_items table'ı satın almaları taşır. 1 puan kırıldı: ilişki row'lardaki iki id'dir; graph'ın kendisi değil, onun bir tablosudur."),
+                sc(7, "Öneri sorguları reader'lara gider. 3 puan kırıldı: tepe anında saniyede 1.800 birleştirme ve gruplama sorgusu reader'ları yorar; checkout ile aynı akşamdır."),
+                sc(10, "Kaynak zaten burada. Puan kırılmadı."),
+                sc(9, "Yeni sistem ve kopyalama hattı yok; ekip SQL biliyor. 1 puan kırıldı: akşam tepesi için reader sayısı ve ACU aralığı ayarlanır."),
+                sc(8, "Var olan cluster'a reader eklenir. 2 puan kırıldı: akşam için reader'lar ve ACU saat başına ödenir.")],
+        "ddb": [sc(2, "Adjacency list: ürünün alıcıları bir Query, her alıcının ürünleri birer Query. 8 puan kırıldı: en çok satan ürün için 30.000 Query gerekir; sayma, sıralama ve eleme uygulamadadır ve üç hop'luk öneri pratikte yapılamaz."),
+                sc(6, "Her Query bir partition'a gider. 4 puan kırıldı: en çok satan ürünün alıcıları tek büyük bir item collection'dır ve onu okuyan istekler aynı partition'a yığılır (hot partition)."),
+                sc(9, "Her sipariş satırı bir item'dır. 1 puan kırıldı: iki yönde okumak için iki item (ya da ters yön için bir GSI) yazılır."),
+                sc(6, "Satın alma bir item'dır. 4 puan kırıldı: graph partition key ve sort key çiftlerine düzleştirilir; ilişki iki yönde tekrarlanır."),
+                sc(10, "On-demand mod tepeyi ayarsız karşılar. Puan kırılmadı."),
+                sc(10, "Her yazma birkaç AZ'de saklanır. Puan kırılmadı."),
+                sc(6, "Serverless. 4 puan kırıldı: ekip DynamoDB API'ını öğrenir (2) ve siparişleri Aurora'dan kopyalayan hattı kurar (2)."),
+                sc(9, "İstek başına ödenir. 1 puan kırıldı: tepe saatin birim tüketimi önceden hesaplanmalıdır.")],
+    },
+    h2h={
+        "aur": "İlişkisel (Aurora) ile kafa kafaya. Bu kartın en yakın yarışıdır. Aurora'nın güçlü yanı R4'tedir: siparişler zaten oradadır, kopyalama hattı yoktur, yeni sipariş öneride hemen görünür ve ekip SQL bilir. "
+               "Neptune'ü öne geçiren R1'dir: iki ve üç hop'luk öneri bir pattern'dir ve maliyeti başlangıç ürününün komşularına bağlıdır; Aurora'da her hop bir self-join'dir ve en çok satan ürünlerde ara sonuç 30.000 alıcı ve onların satırlarına büyür (R1.1, R1.2). R1'de Neptune 8 puan önde, R4'te Aurora 8 puan öndedir; R2 Neptune'e 4 puan kazandırır, R5 Aurora'ya 2 puan geri verir ve net fark 2 puandır. "
+               "Hangi koşul değişseydi Aurora seçilirdi: kişisel üç hop'luk öneri istenmeseydi ve ürün sayfası önerisi her gece toplu hesaplanıp bir table'a yazılsaydı; bugünkü küçük Lale Market'te (11.887 edge) de Aurora yeterli olurdu.",
+        "ddb": "Key-value (DynamoDB) ile kafa kafaya. DynamoDB ölçekte ve işletimde güçlüdür ve tepe trafiği ayarsız karşılar (R2). Ama bu iş yükü bir key ile okuma değil, bir yolun hesaplanmasıdır: en çok satan bir ürünün önerisi 30.000 alıcının ürünlerini okumayı ister ve DynamoDB'de bu 30.000 ayrı Query'dir (R1.1). "
+               "Aynı alıcılar tek bir büyük item collection'da durur ve hot partition olur (R1.2); siparişler de Aurora'dan kopyalanmalıdır (R4). "
+               "Hangi koşul değişseydi DynamoDB seçilirdi: öneri listeleri gece başka bir sistemde hesaplanıp ürün başına bir value olarak saklansaydı; o zaman soru bir GetItem olurdu (DynamoDB sayfasındaki öneri kartı ve ElastiCache sayfasının kart 9'u bu iş yüküdür).",
+    },
+    verdict="Karar: Neptune {np}, Aurora {aur}, DynamoDB {ddb}. Bu iş yüküne en uygun servis Neptune'dür, ama fark yakın bir yarıştır. Engine uyumunu Neptune açıkça kazanır; Aurora işletimde öndedir, çünkü siparişler zaten oradadır. "
+            "Neptune seçtiğimizde artımız: iki ve üç hop'luk öneri tek bir sorgudur, yeni sipariş öneride hemen görünür ve okumalar replica'larla büyür. "
+            "Eksimiz: siparişleri Aurora'dan Neptune'e taşıyan bir kopyalama hattı (seed ve sipariş başına yazma) kurulur ve izlenir, en çok satan ürünler için sorgu alıcıları sınırlar ve ikinci bir database ödenir. "
+            "Doğru mimari ikisi birliktedir: kayıt Aurora'da, öneri Neptune'de; çok sık açılan sayfalarda hesaplanmış liste bir cache'te. Bir koşul değişseydi: kişisel üç hop'luk öneri istenmeseydi Aurora kazanırdı."))
+
+# ------------------------------------------------------------------ 4. product knowledge graph for an assistant (GraphRAG): Neptune Analytics wins, Neptune third
+NEPTUNE_W.append(wusecase("knowledge", 4,
+    title="Ürün bilgi graph'ı ve alışveriş asistanı (GraphRAG)",
+    key="Vertex: Product, Brand, Category, Feature, Chunk. Edge: COMPATIBLE_WITH, PART_OF, HAS_FEATURE, DESCRIBES. Soru: bu soruya anlamca en yakın metin parçaları ve onlardan bir-iki hop uzaktaki ürünler.",
+    story="Lale Market bir alışveriş asistanı kuruyor: müşteri \"bu kulaklığa uyan bir şarj aleti\" diye yazar. Asistan sorunun embedding'ine anlamca en yakın 10 metin parçasını bulur, sonra onlardan iki hop uzaktaki ürünlere (uyumlu aksesuar, aynı marka, aynı kategori) gider ve bu bağlamı bir dil modeline verir. "
+          "Graph'ta 20.000 ürün, 2 milyon ilişki ve embedding'li 500.000 metin parçası var. Saniyede 30 soru gelir ve getirme adımı 300 ms içinde bitmelidir. "
+          "Graph her hafta katalogdan (S3'teki dışa aktarım) yeniden kurulur, gün içinde küçük güncellemeler olur. Ekip üç veri bilimcidir, Python ve notebook kullanır ve tek bir sistem ister. Graph kaybolursa S3'ten yeniden yüklenir.",
+    wnote="R1 toplam 50: vector benzerliği ile hop'un aynı sorguda olması (15), bunun bellek hızında çalışması (15), graph ile embedding'in tek modelde durması (10) ve engine'in araçları (10). "
+          "R4 20 ile ikinci: üç kişilik ekip tek bir sistem istiyor. R5 15'tir, çünkü asistan yeni bir denemedir; R3 5'tir, çünkü graph S3'ten yeniden kurulur.",
+    rows=[
+        row("EY", 15, "Her soru bu iki adımı birlikte ister: anlamca yakın parçalar ve onlardan ürünlere yol.",
+            "Önce embedding'e en yakın 10 metin parçası (vector benzerliği), sonra her parçadan iki hop'a kadar ürünler; ikisi tek bir sorguda.",
+            "İki adım iki sistemde olursa her soru iki ağ isteği ve uygulamada bir birleştirme olur; 300 ms bütçesi zorlanır."),
+        row("DA", 15, "Getirme adımı 300 ms içinde bitmeli; dil modeli ondan sonra çalışır.",
+            "Vector araması ve hop'lar bellek hızında çalışmalı; 500.000 embedding bir yaklaşık en yakın komşu index'inde durmalı.",
+            "Getirme yavaşlarsa asistan geç cevap verir ve müşteri sayfayı kapatır."),
+        row("VM", 10, "Veri hem ilişki hem embedding'dir; ikisi ayrı yerlerde tutulursa senkron kalmaz.",
+            "Ürünler, markalar, özellikler ve metin parçaları vertex; ilişkiler edge; her parçanın bir embedding'i (1.024 sayı) var.",
+            "Embedding'ler başka bir sistemde dururken ürün silinirse asistan var olmayan bir ürünü önerir."),
+        row("AO", 10, "Ekip en yakın komşu araması, benzerlik ve bağlam için hazır araçlar istiyor.",
+            "Hazır vector index'i, benzerlik ve topluluk algoritmaları; notebook'tan çağrılabilen araçlar.",
+            "Her aracı ekip kendisi yazarsa üç kişilik ekip asistanı değil altyapıyı geliştirir."),
+        row("R2", 10, "Saniyede 30 soru küçük ve düzenli bir yüktür.",
+            "Saniyede 30 soru; kampanya günü iki katı.",
+            "Yük küçük olduğu için ölçek bu kartı belirlemez, ama getirme her soruda bütçede kalmalıdır."),
+        row("R3", 5, "Graph S3'teki dışa aktarımdan yeniden kurulur; kaybı birkaç saatlik yeniden yüklemedir.",
+            "Düşük: graph haftalık dışa aktarımdan yeniden kurulabilir.",
+            "Kayıp asistanı birkaç saat kapatır, veri kaybı değildir."),
+        row("R4", 20, "Üç veri bilimci tek bir sistem istiyor; ikinci bir sistem bu ekip için en büyük risktir.",
+            "Üç veri bilimci Python ve notebook kullanır; graph ve vector için tek bir yönetilen sistem istenir, sunucu boyutlandırılmaz.",
+            "İki sistemi senkron tutmak (graph ve ayrı bir vector store) küçük ekibin bütün zamanını alır."),
+        row("R5", 15, "Asistan yeni bir denemedir; sabit bir fatura denemeyi durdurabilir.",
+            "Deneme döneminde maliyet düşük olmalı; kullanılmadığında kapatılabilmeli.",
+            "Büyük bir sabit fatura denemeyi bitmeden durdurur."),
+    ],
+    cands=["npa", "os", "np"],
+    scores={
+        "npa": [sc(10, "openCypher'da vector araması (topK) ve iki hop'luk pattern aynı sorgudadır (Ö4, Ö8). Puan kırılmadı."),
+                sc(10, "Graph ve HNSW vector index'i bellekte durur; arama ve hop'lar bellek hızındadır. Puan kırılmadı."),
+                sc(10, "Embedding vertex'in kendisine bağlıdır; graph ve vector tek modeldedir. Puan kırılmadı."),
+                sc(9, "Vector index'i, benzerlik ve topluluk algoritmaları openCypher prosedürleridir (Ö8). 1 puan kırıldı: AWS'e göre graph başına tek bir vector index vardır; ikinci bir embedding türü ayrı bir graph ister."),
+                sc(9, "Saniyede 30 soru bir graph instance'ı için küçüktür. 1 puan kırıldı: kapasite yalnız bir yönetim işlemiyle büyür; kampanya günü önceden büyütülür."),
+                sc(10, "Graph S3'ten yeniden yüklenir ve durdurup başlatmada korunur; istenen bu kadardır. Puan kırılmadı."),
+                sc(7, "Tek sistem, notebook desteği ve S3'ten yükleme. 3 puan kırıldı: ekip openCypher öğrenir (2) ve m-NCU boyutu graph'ın büyüklüğüne göre seçilir (1)."),
+                sc(7, "m-NCU-saat başına ödenir. 3 puan kırıldı: graph açıkken saat başına ödenir (32 m-NCU eu-central-1'de saatte 1,162 USD, ayda yaklaşık 850 USD); durdurulan graph fiyatın onda birini öder.")],
+        "os": [sc(6, "k-NN araması en yakın parçaları verir. 4 puan kırıldı: ilişkiler document'larda id dizileridir; iki hop için ikinci ve üçüncü bir sorgu gönderilir ve uygulama birleştirir."),
+               sc(10, "HNSW index'i ve filtreler hızlıdır. Puan kırılmadı: hop'ların ayrı sorgular olması R1.1'de sayıldı."),
+               sc(6, "Ürünler ve parçalar document'tır, embedding bir alandır. 4 puan kırıldı: ilişki bir graph değil, document'lara gömülmüş id listeleridir ve iki yönde tekrarlanır."),
+               sc(10, "k-NN, metin ve vector'ü birlikte kullanan hibrit arama, filtreler. Puan kırılmadı: arama araçlarında en güçlü aday budur."),
+               sc(10, "Saniyede 30 soru küçük bir yüktür. Puan kırılmadı."),
+               sc(10, "Index S3'ten yeniden kurulur. Puan kırılmadı."),
+               sc(6, "Yönetilen domain ya da serverless collection. 4 puan kırıldı: mapping, shard ve kapasite ekip için yeni işlerdir ve ilişkileri document'lara yazan bir hat gerekir."),
+               sc(7, "Saat başına ödenir. 3 puan kırıldı: en düşük kapasite deneme döneminde de ödenir.")],
+        "np": [sc(5, "İki hop'luk ürün yolu bir pattern'dir (Ö4). 5 puan kırıldı: Neptune Database'de vector araması yoktur; ilk adım başka bir sistemde (OpenSearch) yapılır ve id'ler Neptune'e ikinci istekle gönderilir."),
+               sc(10, "Hop'lar komşuları okur (Ö3) ve küçük graph buffer cache'e sığar. Puan kırılmadı: vector adımının başka bir sistemde olması R1.1'de sayıldı."),
+               sc(10, "Ürünler ve ilişkiler doğrudan vertex ve edge'tir (Ö1). Puan kırılmadı: embedding'in Neptune Database'te saklanıp aranamaması R1.1'de sayıldı."),
+               sc(7, "Index'ler (SPOG, POGS, GPSO) ve Streams var (Ö2, Ö7). 3 puan kırıldı: benzerlik ve topluluk algoritmaları Neptune Database'te yoktur ve metin araması OpenSearch entegrasyonuyla yapılır; vector eksikliği R1.1'de sayıldı."),
+               sc(10, "Saniyede 30 soru küçüktür. Puan kırılmadı."),
+               sc(10, "Altı kopyalı cluster volume. Puan kırılmadı."),
+               sc(5, "Yönetilen cluster. 5 puan kırıldı: graph için Neptune, vector için OpenSearch; iki sistem ve aralarında bir hat (2), ekip openCypher öğrenir (2) ve NCU aralığını ayarlar (1)."),
+               sc(6, "NCU-saat başına ödenir. 4 puan kırıldı: kapasite sıfıra inmez; deneme döneminde de en az iki instance'ın en düşük NCU'su ödenir (ayda yaklaşık 283 USD); Neptune Analytics ise fiyatın onda birine durdurulabilir. İkinci sistemin işletimi R4'te sayıldı.")],
+    },
+    h2h={
+        "os": "Search engine (OpenSearch) ile kafa kafaya. OpenSearch'ün vector araması güçlüdür ve metinle vector'ü birlikte kullanan hibrit arama onun işidir (R1.4'te tam puan). "
+              "Ama bu iş yükünün ikinci adımı bir yoldur: bir parçadan uyumlu aksesuara, oradan markaya. OpenSearch'te ilişkiler document'lara gömülmüş id listeleridir; her hop ikinci bir sorgu ve uygulamada bir birleştirmedir (R1.1, R1.3). "
+              "Üç kişilik ekip için yeni bir sistem ve ilişkileri document'lara yazan bir hat R4'te de puan kaybettirir. "
+              "Hangi koşul değişseydi OpenSearch seçilirdi: asistan yalnız benzer metin parçalarını getirseydi ve ürünler arası ilişkiler cevaba girmeseydi, ya da metin araması (yazım hatası, relevance) vector kadar önemli olsaydı.",
+        "np": "Graph (Neptune) ile kafa kafaya. Bu sayfanın servisi bu kartta üçüncüdür ve nedeni açıktır: Neptune Database'te vector araması yoktur. İki hop'luk ürün yolu Neptune'de de bir pattern'dir, ama sorunun ilk adımı (anlamca en yakın parçalar) başka bir sistemde yapılır (R1.1, R1.4). "
+              "Neptune Analytics aynı property graph'ı ve openCypher'ı kullanır, ama graph'ı bellekte tutar, vector index'i ve algoritmaları engine'inde taşır; bu kart tam olarak onun için tasarlanmıştır. "
+              "Neptune Database'in güçlü yanları (replica'larla okuma ölçeği, altı kopyalı volume) bu kartta ağırlığı düşük satırlardadır. "
+              "Hangi koşul değişseydi Neptune seçilirdi: asistan yalnız ilişkileri sorsaydı (\"bu kulaklığa uyan aksesuarlar\") ve saniyede binlerce soruyla okuma ölçeği gerekseydi.",
+    },
+    verdict="Karar: Neptune Analytics {npa}, OpenSearch {os}, Neptune {np}. Bu iş yüküne en uygun servis Neptune Analytics'tir: vector araması ve hop'lar aynı engine'de, aynı sorguda ve bellekte çalışır. Kararı R1 verir. "
+            "Yine de Neptune seçersek artımız: okuma replica'larla büyür, veri altı kopyalı volume'dadır ve ürün ilişkileri için güçlü bir kayıt sistemi olur. "
+            "Eksimiz: vector araması için ayrı bir sistem (OpenSearch) ve aralarında bir hat gerekir; uygulama iki isteği birleştirir. "
+            "Doğru mimari çoğunlukla ikisi birliktedir: ürün ilişkilerinin kaydı katalogda (ya da Neptune Database'te), asistanın getirme graph'ı Neptune Analytics'te. Bir koşul değişseydi: vector adımı istenmeseydi Neptune Database öne geçerdi."))
+
+# ------------------------------------------------------------------ 5. identity graph (Neptune Analytics wins R1, Neptune wins the total)
+NEPTUNE_W.append(wusecase("identity", 5,
+    title="Identity graph: bir kişinin bütün identifier'ları",
+    key="Vertex: Cookie, Device, Email, Phone, LoyaltyCard. Edge: SEEN_WITH (aynı oturumda görüldü). Soru: bu cookie'ye bağlı bütün identifier'lar (en fazla 6 hop).",
+    story="Lale Market'in pazarlama ekibi aynı kişinin cookie'lerini, cihazlarını, e-postalarını, telefon özetlerini ve sadakat kartını tek bir kişi olarak görmek istiyor. "
+          "Graph'ta 50 milyon identifier ve 200 milyon bağlantı var. Her login ya da checkout iki identifier'ı aynı oturumda görür ve bir bağlantı yazar: saniyede 2.000 olay. "
+          "Kişiselleştirme servisi her sayfa açılışında \"bu cookie'ye bağlı bütün identifier'lar\" sorusunu sorar: saniyede 1.000 istek, 50 ms bütçe, en fazla 6 hop. "
+          "Bazı identifier'lar milyonlarca kişiyle paylaşılır (bir mağaza tableti, test@ adresi) ve önceden bilinmez. Aynı identifier iki olayda aynı anda ilk kez görülebilir. Ekip beş kişidir; bir kişinin silinme talebi (KVKK) bütün identifier'larını silmelidir.",
+    wnote="R1 toplam 50: değişken derinlikli soru (15), saniyede 2.000 olayın \"yoksa oluştur\" yazması (15), paylaşılan identifier'larla çalışma (10) ve aynı anda gelen iki olay (10). "
+          "R2 20 ile ikinci: saniyede 1.000 okuma ve 2.000 yazma birlikte. R3, R4 ve R5 10'ar.",
+    rows=[
+        row("EY", 15, "Her sayfa açılışı bu soruyu sorar; derinlik önceden bilinmez.",
+            "\"Bu cookie'ye en fazla 6 hop'ta bağlı bütün identifier'lar.\" Derinlik kişiden kişiye değişir; cevap bir küme ve kişinin kimliğidir.",
+            "Soru her hop için ayrı istek olursa 6 hop 50 ms'ye sığmaz ve kişiselleştirme varsayılan sayfaya düşer."),
+        row("OY", 15, "Saniyede 2.000 olayın her biri \"yoksa oluştur, sonra bağla\" yazmasıdır.",
+            "Her olay iki identifier'ı yoksa oluşturur ve aralarına bir bağlantı yazar; aynı bağlantı iki kez yazılmamalı. Silme talebi bir kişinin bütün identifier'larını ve bağlantılarını siler.",
+            "Aynı identifier iki kez oluşturulursa kişi iki parçaya bölünür; silme eksik kalırsa yasal bir yükümlülük ihlal edilir."),
+        row("DA", 10, "Paylaşılan identifier'lar önceden bilinmez; bir istek onlara rastlarsa milyonlarca vertex'e yayılır.",
+            "Paylaşılan identifier'lar (supernode) aramayı bütün graph'a yaymamalı; arama bir derecenin üstündeki vertex'te durmalı.",
+            "Bir istek mağaza tabletinden geçerse milyonlarca identifier'ı okur, bütçeyi aşar ve yanlış kişileri birleştirir."),
+        row("TA", 10, "Aynı identifier iki olayda aynı anda ilk kez görülebilir; kural yarışta da korunmalı.",
+            "İki olay aynı identifier'ı aynı anda oluşturmak isterse tek bir vertex oluşmalı.",
+            "İki vertex oluşursa kişi iki parçaya bölünür ve kişiselleştirme yarım kalır."),
+        row("R2", 20, "Saniyede 1.000 okuma ve 2.000 yazma aynı graph'a gelir.",
+            "Saniyede 1.000 okuma, 50 ms içinde; saniyede 2.000 olay ve her biri iki-üç yazma.",
+            "Okuma yavaşlarsa sayfa varsayılan içeriğe düşer; yazma birikirse yeni bağlantılar saatler sonra görünür."),
+        row("R3", 10, "Bağlantılar aylar içinde birikir; kaybı yeniden kurulamaz.",
+            "Onaylanan bağlantılar kaybolmamalı.",
+            "Kaybolan bağlantılar olayların kendisi tekrar gelmedikçe geri gelmez."),
+        row("R4", 10, "Beş kişilik ekip sunucu işletmek istemiyor.",
+            "Beş geliştirici; sunucu ve failover işi istenmiyor. Ekip AWS SDK'yı biliyor, graph dili bilmiyor.",
+            "İşletme işi ekibin kişiselleştirme kurallarına ayıracağı zamanı yer."),
+        row("R5", 10, "Trafik gün boyu süreklidir.",
+            "Gün boyu sürekli trafik; graph 200 milyon edge'tir.",
+            "Graph'ın tamamı için bellek gece gündüz ödenirse fatura büyür."),
+    ],
+    cands=["np", "ddb", "npa"],
+    scores={
+        "np": [sc(10, "MATCH (c:Cookie {`~id`: $id})-[:SEEN_WITH*1..6]-(x) RETURN DISTINCT x; değişken uzunlukta path (Ö5). Puan kırılmadı."),
+               sc(10, "MERGE identifier'ı yoksa oluşturur, ikinci bir MERGE bağlantıyı yoksa yazar; silme talebi DETACH DELETE ile kişinin bütün vertex ve edge'lerini siler (Ö6). Puan kırılmadı."),
+               sc(7, "Traversal komşuları okur (Ö3). 3 puan kırıldı: paylaşılan identifier'lar önceden bilinmez; sorgu edge sayısı bir sınırı aşan vertex'te durmalı ve bu sayı ayrı bir property olarak tutulmalı (2, her önceden bilinmeyen supernode'da olduğu gibi); 6 hop'ta buffer cache'te olmayan sayfalar diskten okunur ve 50 ms bütçesini zorlar (1)."),
+               sc(9, "Mutation'lar range lock alır; aynı ~id için iki MERGE tek vertex oluşturur (Ö6). 1 puan kırıldı: yarışan iki yazmadan biri çakışma hatası alabilir ve uygulama yeniden dener."),
+               sc(8, "Okumalar replica'lara dağılır. 2 puan kırıldı: saniyede 2.000 olayın 4.000-6.000 yazması (range lock alan MERGE'ler) tek writer'dan geçer; AWS tek bir writer için bir yazma sayısı vermez, bu hız bir yük testiyle doğrulanmalıdır. Replica'lar writer'ın birkaç milisaniye gerisindedir."),
+               sc(10, "Altı kopyalı cluster volume. Puan kırılmadı."),
+               sc(7, "Yönetilen cluster. 3 puan kırıldı: ekip openCypher öğrenir (2) ve NCU ile replica aralığını ayarlar (1)."),
+               sc(8, "NCU-saat başına ödenir; sürekli trafiğe uyar. 2 puan kırıldı: replica'lar ve tepe NCU'su saat başına ödenir.")],
+        "ddb": [sc(3, "Adjacency list ile her identifier'ın komşuları bir Query'dir. 7 puan kırıldı: 6 hop'luk arama uygulamanın yazdığı bir breadth-first search'tür; her seviye onlarca Query ve 50 ms bütçesi tutmaz."),
+                sc(9, "Koşullu PutItem (attribute_not_exists) identifier'ı yoksa yazar; silme için kişinin item'ları okunup tek tek silinir. 1 puan kırıldı: her bağlantı iki yönde iki item'dır."),
+                sc(6, "Her Query bir partition'a gider. 4 puan kırıldı: paylaşılan identifier'ın milyonlarca bağlantısı tek bir item collection'dır ve hot partition olur."),
+                sc(10, "Koşullu yazma (attribute_not_exists) yarışta tek item bırakır. Puan kırılmadı: iki yönlü bağlantının iki item olması R1.2'de sayıldı."),
+                sc(10, "On-demand mod okuma ve yazmayı ayarsız karşılar. Puan kırılmadı."),
+                sc(10, "Her yazma birkaç AZ'de saklanır. Puan kırılmadı."),
+                sc(10, "Serverless ve ekip SDK'yı biliyor. Puan kırılmadı: arama kodu R1.1'de sayıldı."),
+                sc(9, "İstek başına ödenir. 1 puan kırıldı: tepe saatin birim tüketimi hesaplanmalıdır.")],
+        "npa": [sc(10, "Aynı değişken uzunlukta pattern; ayrıca bağlı bileşenler (WCC) bir algoritma olarak hazırdır (Ö5, Ö8). Puan kırılmadı."),
+                sc(10, "openCypher MERGE ve DETACH DELETE çalışır; AWS'e göre MERGE eşzamanlı yazmalarda tek vertex bırakır. Puan kırılmadı."),
+                sc(8, "Graph bellekte durur ve 6 hop'luk arama disk okumaz. 2 puan kırıldı: paylaşılan identifier'lar önceden bilinmez; arama burada da bir derece sınırında durmalıdır."),
+                sc(9, "Okumalar snapshot isolation ile çalışır. 1 puan kırıldı: mutation okumaları da snapshot üzerindedir; yarışan iki yazmadan biri çakışma hatası alabilir ve yeniden dener."),
+                sc(5, "Tek bir bellek odaklı instance. 5 puan kırıldı: AWS'e göre replica'lar pasif failover hedefidir ve okuma ölçeklemez; saniyede 1.000 okuma ve 2.000 olay tek instance'ın işidir."),
+                sc(8, "Graph verisi korunur ve hot standby başka bir AZ'dedir. 2 puan kırıldı: kalıcılık tek instance'a ve snapshot'lara dayanır."),
+                sc(7, "Sunucusuz graph. 3 puan kırıldı: ekip openCypher öğrenir (2) ve m-NCU boyutu seçilir (1); büyütmenin bir yönetim işlemi olması R2'de sayıldı."),
+                sc(5, "m-NCU-saat başına ödenir. 5 puan kırıldı: 200 milyon edge'in belleği gece gündüz ödenir ve standby aynı fiyatı ikinci kez öder.")],
+    },
+    h2h={
+        "ddb": "Key-value (DynamoDB) ile kafa kafaya. DynamoDB işletimde ve ölçekte en güçlü adaydır: saniyede 2.000 olay ve 1.000 okuma on-demand modda ayarsız çalışır, ekip SDK'yı bilir ve koşullu yazma \"yoksa oluştur\" kuralını tek istekte korur (R2, R4). "
+               "Ama soru bir yoldur: 6 hop'luk arama DynamoDB'de uygulamanın yazdığı bir breadth-first search'tür ve her seviye onlarca Query'dir (R1.1); paylaşılan identifier'lar hot partition olur (R1.3). "
+               "Hangi koşul değişseydi DynamoDB seçilirdi: kişiler gece bir algoritmayla (bağlı bileşenler) hesaplansaydı ve gündüz soru yalnız \"bu cookie hangi kişiye ait?\" olsaydı; o zaman soru bir GetItem'dır ve doğru mimari Neptune ya da Neptune Analytics ile DynamoDB birliktedir.",
+        "npa": "Bellek içi graph analitiği (Neptune Analytics) ile kafa kafaya. Bu kartta engine uyumunu Neptune Analytics kazanır ve bunu söylemek gerekir: graph bellekte durur, 6 hop'luk arama disk okumaz ve bağlı bileşenler hazır bir algoritmadır (R1'de 47'ye 46). "
+               "Ama toplamı servis tasarımı çevirir: Neptune Analytics tek bir instance'tır, replica'ları okuma ölçeklemez ve saniyede 1.000 okuma ile 2.000 olay o tek instance'a biner (R2); 200 milyon edge'in belleği gece gündüz ödenir (R5). "
+               "Hangi koşul değişseydi Neptune Analytics seçilirdi: kişiler gerçek zamanlı değil gece toplu hesaplansaydı; o zaman WCC algoritması bütün graph'ı bir kerede böler ve sonuç DynamoDB'ye yazılır.",
+    },
+    verdict="Karar: Neptune {np}, DynamoDB {ddb}, Neptune Analytics {npa}. Bu iş yüküne en uygun servis Neptune'dür. Engine uyumunda Neptune Analytics bir puan öndedir; Neptune'ü öne geçiren R2 ve R5'tir: okumalar replica'larla büyür ve 200 milyon edge'in belleği gece gündüz ödenmez; R3'te altı kopyalı volume da yardım eder. "
+            "Neptune seçtiğimizde artımız: değişken derinlikli arama tek bir sorgudur, MERGE yarışta tek identifier bırakır ve silme talebi tek bir DETACH DELETE'tir. "
+            "Eksimiz: paylaşılan identifier'lar için bir derece sınırı tutulur ve sorgu orada durur, çakışan yazmalar yeniden denenir, ekip openCypher öğrenir. "
+            "Bir koşul değişseydi: kişiler gece toplu hesaplansaydı doğru mimari Neptune Analytics (hesap) ile DynamoDB (gündüz okuma) birlikte olurdu."))
+
+# ------------------------------------------------------------------ 6. network topology and impact analysis (Neptune wins R1, Aurora wins the total)
+NEPTUNE_W.append(wusecase("network", 6, sim="w_network",
+    title="Ağ topolojisi: bu switch düşerse ne düşer?",
+    key="Vertex: Switch, Server, Service, Endpoint. Edge: CONNECTED_TO, RUNS_ON, DEPENDS_ON. Soru: bir parçadan, herhangi bir derinlikte, ona bağlı bütün müşteri servisleri.",
+    story="Lale Market'in platform ekibi 3.000 sunucu, 400 servis ve 120 switch'ten oluşan bir altyapı işletir; aralarında 15.000 bağımlılık var. Nöbetçi mühendis bir arızada şunu sorar: \"bu switch düşerse hangi müşteri servisleri düşer?\" "
+          "Cevap 1 ile 8 hop arasındadır ve yol da gösterilmelidir. Soru günde yaklaşık 200 kez sorulur, bir arıza sırasında dakikada birkaç kez; birkaç saniyelik bir cevap yeterlidir. "
+          "Envanter (CMDB) bugün Aurora PostgreSQL'de üç table'dır ve her gece Terraform hattı tarafından güncellenir. Veri 50 MB'tır. Ekip iki SRE'den oluşur ve SQL bilir; bütçe sıkıdır ve yeni bir sistem istemezler.",
+    wnote="R1 toplam 45: değişken derinlikli bağımlılık sorusu (20) bu kartın kendisidir. R4 20 ve R5 20 ile ikinci sıradadır: iki SRE'lik ekip yeni bir sistem istemiyor ve trafik o kadar küçüktür ki her sabit fatura belirleyicidir. "
+          "R2 5'te, en düşük sınırdadır: günde 200 soru. R1 grup olarak yine en ağırdır.",
+    rows=[
+        row("EY", 20, "Arıza anında sorulan tek soru budur ve derinliği önceden bilinmez.",
+            "\"Bu switch'e herhangi bir derinlikte (1-8 hop) bağımlı bütün müşteri servisleri, yollarıyla.\" Bağımlılıklarda döngü olabilir.",
+            "Soru yanlış ya da eksik cevaplanırsa nöbetçi etkilenen bir servisi atlar ve müşteriye duyuru geç yapılır."),
+        row("DA", 10, "Cevap birkaç saniyede yeterlidir ve graph küçüktür.",
+            "Sorgu birkaç saniye içinde dönmeli; graph 50 MB'tır ve tamamı belleğe sığar.",
+            "Arıza anında dakikalar süren bir sorgu kararı geciktirir."),
+        row("VM", 10, "Birçok tür parça ve birçok tür bağlantı aynı soruda geçer.",
+            "Dört tür parça ve üç tür bağlantı; yeni türler (yük dengeleyici, kuyruk) ekleneceği bilinir.",
+            "Her yeni tür bir şema değişikliği olursa envanter gerçeğin gerisinde kalır."),
+        row("OY", 5, "Envanter her gece toplu güncellenir; gün içinde az değişiklik olur.",
+            "Her gece Terraform hattı envanterin farkını yazar; gün içinde birkaç elle değişiklik.",
+            "Gece güncellemesi yarım kalırsa sabah yanlış bir topoloji sorgulanır."),
+        row("R2", 5, "Günde 200 soru; ölçek bu kartı belirlemez.",
+            "Günde yaklaşık 200 soru, arızada dakikada birkaç.",
+            "Bu yük her aday için küçüktür; bir arızada da artmaz."),
+        row("R3", 10, "Envanter bir arıza anında en çok gereken veridir.",
+            "Envanter kaybolmamalı; bir arıza sırasında da okunabilmeli.",
+            "Envanter arıza anında okunamazsa nöbetçi kör kalır."),
+        row("R4", 20, "İki SRE yeni bir sistem istemiyor; envanter zaten Aurora'da.",
+            "İki SRE SQL biliyor; envanter Aurora'da üç table'dır ve Terraform hattı oraya yazar. Yeni bir database ve kopyalama hattı istenmiyor.",
+            "İkinci bir sistem iki kişilik ekibe bir nöbet, bir yedek ve bir senkron işi ekler."),
+        row("R5", 20, "Günde 200 soru için her sabit fatura sorunun kendisinden pahalıdır.",
+            "Bütçe sıkıdır; soru başına değil, ay başına bakılır. Var olan bir sisteme ek maliyet tercih edilir.",
+            "Günde 200 soru için ayda yüzlerce dolarlık sabit bir fatura savunulamaz."),
+    ],
+    cands=["aur", "np", "npa"],
+    scores={
+        "aur": [sc(5, "WITH RECURSIVE bağımlılıkları sekiz seviyeye kadar takip eder ve yolu bir dizide taşır. 5 puan kırıldı: değişken derinlik recursive bir sorgu, döngü kontrolü (CYCLE ya da dizi kontrolü) ve yol dizisi ister; bu bir pattern değil, elle yazılmış bir aramadır."),
+                sc(8, "Graph küçüktür ve buffer cache'te durur; sorgu milisaniyelerdir. 2 puan kırıldı: her seviye bir index araması ve birleştirmedir; derinlik arttıkça ara sonuç büyür."),
+                sc(8, "Parçalar ve bağlantılar table'lardır. 2 puan kırıldı: yeni bir parça türü ya yeni bir table ya da genel bir nodes table'ında bir type kolonudur."),
+                sc(10, "Terraform hattı bu table'lara zaten yazıyor; gece farkı bir transaction'dır. Puan kırılmadı."),
+                sc(10, "Günde 200 soru Aurora için önemsizdir. Puan kırılmadı."),
+                sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                sc(10, "Yeni sistem yok, kopyalama yok; ekip SQL biliyor. Puan kırılmadı."),
+                sc(10, "Var olan cluster; üç küçük table için ek fatura yoktur. Puan kırılmadı.")],
+        "np": [sc(10, "MATCH p = (s:Switch {`~id`: $sw})<-[:CONNECTED_TO|RUNS_ON|DEPENDS_ON*1..8]-(svc:Service {customer_facing: true}) RETURN p; değişken uzunlukta path (Ö5) ve openCypher her edge'i bir çözümde en fazla bir kez geçerek döngüyü engeller. Puan kırılmadı."),
+               sc(10, "50 MB'lık graph buffer cache'te durur; traversal yalnız ilgili komşuları okur (Ö3). Puan kırılmadı."),
+               sc(10, "Yeni bir parça türü yeni bir label'dır; şema değişikliği yoktur (Ö1). Puan kırılmadı."),
+               sc(9, "Gece farkı bulk loader ya da UNWIND ile MERGE olarak yazılır (Ö7). 1 puan kırıldı: Terraform'da silinen parçaları bulup DETACH DELETE eden bir fark adımı yazılır."),
+               sc(10, "Günde 200 soru küçüktür. Puan kırılmadı."),
+               sc(10, "Altı kopyalı cluster volume. Puan kırılmadı."),
+               sc(5, "Yönetilen cluster. 5 puan kırıldı: ekip openCypher öğrenir (2), envanteri Aurora'dan Neptune'e taşıyan bir hat kurar (2) ve ikinci bir cluster'ın NCU, parametre ve sürüm işi gelir (1)."),
+               sc(3, "NCU-saat başına ödenir. 7 puan kırıldı: kapasite sıfıra inmez; bir writer ve bir reader en düşük kapasitede ayda yaklaşık 283 USD'dir (eu-central-1, NCU-saat 0,1941 USD, 2026-10-31) ve bu günde 200 sorunun bütün faturasıdır. Tek instance (ayda yaklaşık 142 USD) da seçilebilir, ama arıza anında envanterin okunabilmesi (R3 satırı) bir replica ister; tek instance'la da puan değişmez: 142 USD yine günde 200 sorunun sabit faturasıdır.")],
+        "npa": [sc(10, "Aynı değişken uzunlukta pattern; ayrıca BFS hazır bir algoritmadır (Ö8). Puan kırılmadı."),
+                sc(10, "Graph bellekte durur. Puan kırılmadı."),
+                sc(10, "Yeni tür yeni bir label'dır. Puan kırılmadı."),
+                sc(8, "Graph S3'ten ya da openCypher ile güncellenir. 2 puan kırıldı: gece farkı için bir yükleme ya da MERGE adımı ve silinenleri bulan bir fark adımı yazılır."),
+                sc(10, "Günde 200 soru küçüktür. Puan kırılmadı."),
+                sc(8, "Graph verisi korunur. 2 puan kırıldı: kalıcılık tek instance'a ve snapshot'lara dayanır."),
+                sc(5, "Sunucusuz graph. 5 puan kırıldı: ekip openCypher öğrenir (2), envanteri taşıyan bir hat kurar (2) ve m-NCU boyutu seçilir (1)."),
+                sc(2, "m-NCU-saat başına ödenir. 8 puan kırıldı: en küçük graph da saat başına ödenir (32 m-NCU saatte 1,162 USD, ayda yaklaşık 850 USD); durdurmak mümkündür ama arıza anında açık olması gerekir.")],
+    },
+    h2h={
+        "np": "Graph (Neptune) ile kafa kafaya. Bu kartta engine uyumunu Neptune kazanır ve bunu açıkça söylemek gerekir: \"bu switch düşerse ne düşer\" değişken uzunlukta tek bir pattern'dir, döngüleri openCypher kendisi engeller ve yeni bir parça türü yeni bir label'dır (R1'de 44,5'e 31). "
+              "Ama toplamı R4 ve R5 çevirir: envanter zaten Aurora'dadır ve Terraform hattı oraya yazar; Neptune için ikinci bir cluster, bir kopyalama hattı ve yeni bir dil gerekir ve en düşük kapasitesi ayda yaklaşık 283 USD'dir, bu günde 200 sorunun bütün faturasıdır. "
+              "Hangi koşul değişseydi Neptune seçilirdi: altyapı on kat büyüseydi (yüz binlerce parça), soru her deploy'da otomatik olarak saniyede birçok kez sorulsaydı ya da envanterin kaydı baştan Neptune'de tutulsaydı.",
+        "npa": "Bellek içi graph analitiği (Neptune Analytics) ile kafa kafaya. Engine olarak Neptune Analytics de bu soruyu tek bir pattern ya da hazır bir BFS ile cevaplar ve graph bellekte durur; R1'de Neptune'e yakındır. "
+               "Kaybı servis tasarımındadır: en küçük graph da saat başına ödenir (32 m-NCU ayda yaklaşık 850 USD) ve arıza anında açık olması gerektiği için durdurulamaz (R5); ekip için de yeni bir sistem ve bir kopyalama hattıdır (R4). "
+               "Hangi koşul değişseydi Neptune Analytics seçilirdi: soru arıza anında değil haftalık bir risk analizi olsaydı (\"en çok servisi taşıyan tek nokta hangisi?\", merkezilik algoritmaları) ve graph analizden sonra durdurulabilseydi.",
+    },
+    verdict="Karar: Aurora {aur}, Neptune {np}, Neptune Analytics {npa}. Bu iş yüküne en uygun servis Aurora'dır, ama engine uyumunda Neptune 13,5 puan öndedir. Aurora'yı öne geçiren R4 ve R5'tir: envanter zaten oradadır ve günde 200 soru için ikinci bir database'in sabit faturası savunulamaz. "
+            "Yine de Neptune seçersek artımız: sorgu tek bir pattern'dir, döngüler kendiliğinden engellenir, yeni parça türleri şema değişikliği istemez. "
+            "Eksimiz: envanteri Aurora'dan taşıyan bir hat, ikinci bir cluster'ın işletimi ve ayda yaklaşık 283 USD; uygulama gece farkında silinen parçaları da siler. Bir koşul değişseydi: altyapı on kat büyüseydi ve soru saniyede birçok kez sorulsaydı Neptune kazanırdı."))
+
+# ------------------------------------------------------------------ 7. supply chain risk analysis over the whole graph (Neptune Analytics wins)
+NEPTUNE_W.append(wusecase("supply", 7,
+    title="Tedarik zinciri: tek nokta riskleri (bütün graph analizi)",
+    key="Vertex: Supplier, Part, Product. Edge: SUPPLIES, PART_OF. Soru: her tedarikçi için ona herhangi bir derinlikte bağlı ürün sayısı ve merkezilik; bir tedarikçi çıkarılırsa kaynaksız kalan ürünler.",
+    story="Lale Market'in kendi markalı ürünleri için 900 tedarikçi, 40.000 parça ve 12.000 ürün var; aralarında 300.000 SUPPLIES ve PART_OF edge'i bulunuyor. Satın alma ekibi her hafta bir risk analizi yapar: "
+          "her tedarikçi için ona herhangi bir derinlikte bağlı ürün sayısı ve PageRank ile merkezilik; amaç tek nokta risklerini bulmaktır. Bir kriz haftasında (bir liman kapanır) analistler \"bu üç tedarikçi çıkarsa hangi ürünler kaynaksız kalır?\" sorusunu saatte 50 kez farklı senaryolarla sorar. "
+          "Veri her gece ERP'den S3'e dışa aktarılır. Ekip iki analisttir ve Python ile notebook kullanır. Graph kaybolursa S3'ten yeniden yüklenir.",
+    wnote="R1 toplam 45: soru bir vertex'ten değil bütün graph'tan başlar (10), algoritmanın bütün graph üzerinde çalışması (15) ve hazır algoritmalar (15) bu kartın kendisidir. "
+          "R4 20 ve R5 20 ile ikinci sıradadır: iki analist sistem işletmez ve analiz haftada bir yapılır, sürekli açık bir sistem savunulamaz. R3 5'tir: graph S3'ten yeniden kurulur.",
+    rows=[
+        row("EY", 10, "Soru her tedarikçiden başlar; bir başlangıç vertex'i yoktur.",
+            "\"Her tedarikçi için ona herhangi bir derinlikte bağlı ürünler\" ve \"bu tedarikçiler çıkarsa kaynaksız kalan ürünler\": soru bütün graph üzerindedir.",
+            "Soru 900 ayrı sorguya bölünürse analiz saatler sürer ve senaryolar karşılaştırılamaz."),
+        row("DA", 15, "Algoritma her vertex'i ve her edge'i birkaç kez gezer.",
+            "PageRank ve erişilebilirlik bütün graph'ı birkaç tur okur; bir senaryo birkaç saniyede dönmeli.",
+            "Her senaryo dakikalar sürerse kriz haftasında analistler tahmine döner."),
+        row("AO", 15, "İki analist algoritmaları kendileri yazmamalı.",
+            "PageRank, bağlı bileşenler, en kısa yol ve benzerlik hazır algoritmalar olarak çağrılmalı.",
+            "Algoritmalar Python'da elle yazılırsa veri her seferinde dışarı taşınır ve sonuçlar doğrulanamaz."),
+        row("VM", 5, "Veri doğası gereği bir bağımlılık ağıdır.",
+            "Tedarikçi, parça ve ürün vertex'leri; tedarik ve parça olma edge'leri.",
+            "Ağ table'lara düzleştirilirse her derinlik bir birleştirme daha olur."),
+        row("R2", 10, "Haftada bir analiz ve kriz haftasında saatte 50 senaryo.",
+            "Normal haftada tek bir analiz; kriz haftasında saatte 50 senaryo.",
+            "Kriz haftasında yavaşlayan sistem en çok gerektiği anda yetmez."),
+        row("R3", 5, "Graph her gece S3'e dışa aktarılan veriden yeniden kurulur.",
+            "Düşük: graph S3'teki dışa aktarımdan yeniden yüklenir.",
+            "Kayıp birkaç saatlik yeniden yüklemedir."),
+        row("R4", 20, "İki analist sistem işletmez ve notebook'tan çalışır.",
+            "İki analist Python ve notebook kullanır; sunucu, kapasite ve sürüm işi istenmez.",
+            "İşletme işi analizi geciktirir; analistler sonuçlar yerine altyapıyla uğraşır."),
+        row("R5", 20, "Analiz haftada bir yapılır; sistem geri kalan zamanda kapalı kalabilmeli.",
+            "Haftada birkaç saat kullanım; kullanılmadığında fatura neredeyse sıfır olmalı.",
+            "Haftada birkaç saatlik iş için gece gündüz açık bir sistem ödenirse analizin maliyeti değerini aşar."),
+    ],
+    cands=["npa", "rs", "np"],
+    scores={
+        "npa": [sc(10, "Algoritmalar bütün graph üzerinde çalışır; erişilebilirlik ve senaryo sorguları openCypher'dır (Ö8). Puan kırılmadı."),
+                sc(10, "Graph bellekte durur; algoritmalar birçok iş parçacığıyla bütün graph'ı gezer. Puan kırılmadı."),
+                sc(10, "PageRank, bağlı bileşenler, BFS, en kısa yol ve benzerlik openCypher prosedürleri olarak hazırdır (Ö8). Puan kırılmadı."),
+                sc(10, "Tedarik ağı doğrudan vertex ve edge'tir. Puan kırılmadı."),
+                sc(9, "Kriz haftasında saatte 50 senaryo küçüktür. 1 puan kırıldı: kapasite yalnız bir yönetim işlemiyle büyür."),
+                sc(10, "Graph S3'ten yeniden yüklenir; istenen bu kadardır. Puan kırılmadı."),
+                sc(7, "Sunucusuz graph, notebook desteği, S3'ten yükleme. 3 puan kırıldı: analistler openCypher öğrenir (2) ve m-NCU boyutu graph'ın büyüklüğüne göre seçilir (1)."),
+                sc(7, "m-NCU-saat başına ödenir. 3 puan kırıldı: graph açıkken saat başına ödenir (32 m-NCU saatte 1,162 USD); analizler arasında durdurulan graph fiyatın onda birini öder.")],
+        "rs": [sc(5, "Recursive CTE ile erişilebilirlik yazılır. 5 puan kırıldı: her tedarikçi için recursive bir sorgu ve döngü kontrolü gerekir; AWS recursion derinliğini sınırlamayı önerir."),
+               sc(6, "Columnar tarama ve paralel birleştirme bütün table'ı hızla okur. 4 puan kırıldı: her derinlik bir birleştirme turudur ve PageRank gibi tekrarlı bir algoritma her turda bütün edge table'ını yeniden birleştirir."),
+               sc(4, "Window fonksiyonları ve toplamlar var. 6 puan kırıldı: graph algoritması yoktur; PageRank tekrarlı SQL ya da dışarıda Python ile yazılır."),
+               sc(7, "Edge'ler bir table'dır. 3 puan kırıldı: ağ row'lardaki id çiftleridir; derinlik birleştirme sayısıdır."),
+               sc(9, "Serverless RPU'lar sorgu başına büyür. 1 puan kırıldı: ilk sorgularda kapasite ısınır."),
+               sc(10, "Veri S3'ten yeniden yüklenir. Puan kırılmadı."),
+               sc(7, "Serverless workgroup. 3 puan kırıldı: analistler için yeni bir sistem; recursive SQL ve algoritma kodu onların işidir."),
+               sc(8, "Serverless'ta kullanıldıkça RPU-saat ödenir. 2 puan kırıldı: her sorgu en düşük RPU kapasitesiyle ve en az birkaç dakika olarak faturalanır.")],
+        "np": [sc(6, "Erişilebilirlik değişken uzunlukta bir pattern'dir (Ö5). 4 puan kırıldı: soru bir vertex'ten başlamaz; 900 tedarikçi için 900 traversal ya da bütün graph'ı tarayan tek bir sorgu gerekir."),
+               sc(5, "Traversal komşuları okur (Ö3). 5 puan kırıldı: AWS'e göre Neptune Database \"optimized for transactional type queries that start at a single node or set of nodes and fan out\"; bütün graph'ı birkaç tur okumak bu tasarımın dışındadır; sorgu süresi sınırı R2'de sayıldı."),
+               sc(4, "Index'ler ve değişken uzunlukta path var (Ö2, Ö5). 6 puan kırıldı: Neptune Database'te PageRank, merkezilik ve topluluk algoritmaları yoktur; graph Neptune Analytics'e ya da dışarı taşınır."),
+               sc(10, "Tedarik ağı doğrudan vertex ve edge'tir (Ö1). Puan kırılmadı."),
+               sc(8, "Serverless instance'ları büyür. 2 puan kırıldı: uzun analiz sorguları için sorgu süresi sınırı yükseltilir ve kapasite önceden büyütülür."),
+               sc(10, "Altı kopyalı cluster volume. Puan kırılmadı."),
+               sc(7, "Yönetilen cluster. 3 puan kırıldı: analistler openCypher öğrenir (2) ve NCU aralığı ayarlanır (1)."),
+               sc(6, "NCU-saat başına ödenir. 4 puan kırıldı: haftada birkaç saatlik iş için en az bir instance gece gündüz ödenir.")],
+    },
+    h2h={
+        "rs": "Data warehouse (Redshift) ile kafa kafaya. Redshift büyük tabloları tarar, birleştirir ve toplar ve recursive CTE ile bir ağı aşağı inebilir; kullanıldıkça ödenen serverless modu da bu haftalık iş yüküne uyar (R5). "
+              "Ama bu kartın sorusu bir toplam değil bir graph algoritmasıdır: PageRank birçok tur ister ve her tur bütün edge table'ının yeniden birleştirilmesidir; erişilebilirlik her tedarikçi için recursive bir sorgudur (R1.1–R1.3). Algoritmaları analistler kendileri yazar. "
+              "Hangi koşul değişseydi Redshift seçilirdi: soru \"tedarikçi başına toplam harcama ve geciken teslimat oranı\" gibi bir toplam olsaydı ve derinlik bir ya da iki seviyede kalsaydı; o zaman ağ değil bir tablo sorgulanır.",
+        "np": "Graph (Neptune) ile kafa kafaya. Neptune Database aynı property graph'ı tutar ve tek bir senaryoyu (\"bu tedarikçi çıkarsa ne olur?\") bir pattern olarak cevaplayabilir. "
+              "Ama bu iş yükünün ağırlığı bütün graph üzerindeki algoritmalardadır ve Neptune Database bir vertex'ten başlayıp yayılan sorgular için tasarlanmıştır; PageRank ve merkezilik onun engine'inde yoktur (R1.2, R1.3). "
+              "Haftada birkaç saatlik iş için gece gündüz açık bir cluster da R5'te kaybettirir. Neptune Analytics aynı veri modeliyle bu işi bellekte ve hazır algoritmalarla yapar. "
+              "Hangi koşul değişseydi Neptune seçilirdi: soru haftalık analiz değil, her satın alma siparişinde \"bu parçanın alternatif tedarikçisi var mı?\" gibi bir vertex'ten başlayan, saniyede birçok kez sorulan bir kontrol olsaydı.",
+    },
+    verdict="Karar: Neptune Analytics {npa}, Redshift {rs}, Neptune {np}. Bu iş yüküne en uygun servis Neptune Analytics'tir: soru bütün graph üzerindedir, algoritmalar hazırdır ve graph analizler arasında durdurulabilir. Kararı R1 verir. "
+            "Yine de Neptune seçersek artımız: tek bir senaryo bir pattern'dir ve veri altı kopyalı volume'dadır. "
+            "Eksimiz: PageRank ve merkezilik için graph dışarı taşınır, uzun sorgular sorgu süresi sınırına çarpar ve cluster haftanın geri kalanında da ödenir. "
+            "Doğru mimari çoğunlukla ikisi birliktedir: günlük kontroller Neptune Database'te, haftalık analiz aynı veriden yüklenen bir Neptune Analytics graph'ında. Bir koşul değişseydi: soru her siparişte bir vertex'ten başlasaydı Neptune kazanırdı."))
+
+# ------------------------------------------------------------------ 8. access control graph with nested groups
+NEPTUNE_W.append(wusecase("access", 8,
+    title="Erişim kontrolü graph'ı: iç içe gruplar ve klasörler",
+    key="Vertex: User, Group, Folder, Document. Edge: MEMBER_OF, CAN_READ, IN. Soru: bu kullanıcının, herhangi bir grup ve klasör zinciri üzerinden, bu belgeyi okuma hakkı var mı?",
+    story="Lale Market'in tedarikçi portalında 20.000 kullanıcı, 6 seviyeye kadar iç içe 3.000 grup ve 200.000 klasör ile belge var; haklar klasörden alt klasörlere miras kalır. "
+          "Her belge açılışında soru şudur: \"bu kullanıcının, herhangi bir grup zinciri ve klasör zinciri üzerinden, bu belgeyi okuma hakkı var mı?\" Saniyede 2.000 kontrol yapılır ve her biri 20 ms içinde dönmelidir. "
+          "Yöneticiler dakikada 100 üyelik değiştirir; bir hakkın geri alınması saniyeler içinde etkili olmalıdır, çünkü ayrılan bir çalışanın erişimi sürmemelidir. \"Bütün çalışanlar\" grubunun 20.000 üyesi var. "
+          "Haklar denetim kaydıdır ve kaybolmamalıdır. Ekip dört geliştiriciden oluşur ve SQL bilir; Aurora sistemde zaten çalışır.",
+    wnote="R1 toplam 50: iki zincirli yol sorusu (20), geri alınan hakkın hemen etkili olması (10), üyelik değişikliklerinin biçimi (10) ve 20 ms (10). "
+          "R2 15 ve R3 15: saniyede 2.000 kontrol ve denetim kaydı. R4 ve R5 10'ar.",
+    rows=[
+        row("EY", 20, "Her belge açılışı bu soruyu sorar; iki zincirin derinliği önceden bilinmez.",
+            "\"Kullanıcıdan, 0-6 seviye grup üzerinden, bir hakka; haktan, 0-10 seviye klasör üzerinden, bu belgeye bir yol var mı?\" Cevap evet ya da hayırdır; ilk yol yeterlidir.",
+            "Soru her seviye için ayrı istek olursa 20 ms'ye sığmaz; yanlış cevap ya bir erişimi engeller ya da bir sızıntıdır."),
+        row("DA", 10, "20 ms her belge açılışında geçerlidir; \"bütün çalışanlar\" grubu 20.000 üyelidir.",
+            "Kontrol yalnız bu kullanıcının gruplarına ve bu belgenin klasörlerine bakmalı; büyük gruplar kontrolü yavaşlatmamalı.",
+            "Kontrol yavaşlarsa her belge açılışı yavaşlar; portalın bütün ekranları bekler."),
+        row("TA", 10, "Ayrılan bir çalışanın erişimi sürmemelidir.",
+            "Bir üyelik silindiğinde bir sonraki kontrol onu görmeli; yarım yazılmış bir değişiklik görülmemeli.",
+            "Eski bir üyelik görünmeye devam ederse ayrılan çalışan belge okumaya devam eder."),
+        row("OY", 10, "Dakikada 100 üyelik değişikliği; biri en üst gruptaysa binlerce kullanıcıyı etkiler.",
+            "Bir üyelik tek bir yazmayla eklenir ya da silinir, bir klasör tek yazmayla taşınır; etkilenen kullanıcı sayısı yazmayı büyütmemeli.",
+            "Bir üst grup değişikliği binlerce kaydı yeniden yazdırırsa değişiklik dakikalar sürer ve o arada haklar yanlıştır."),
+        row("R2", 15, "Saniyede 2.000 kontrol portalın bütün trafiğidir.",
+            "Saniyede 2.000 kontrol, her biri 20 ms içinde; dakikada 100 değişiklik.",
+            "Kontrol tepe anında yavaşlarsa portal yavaşlar."),
+        row("R3", 15, "Haklar denetim kaydıdır; bir denetimde geriye dönük sorulur.",
+            "Onaylanan hiçbir hak değişikliği kaybolmamalı; geriye dönük geri yükleme mümkün olmalı.",
+            "Kaybolan bir geri alma işlemi, bir sızıntının kanıtını da siler."),
+        row("R4", 10, "Dört geliştirici SQL biliyor; sunucu işletmek istemiyor.",
+            "Dört geliştirici SQL biliyor; yeni bir sorgu dili kabul edilir, sunucu boyutlandırmak istenmez.",
+            "İşletme işi küçük ekibin portal geliştirme zamanını yer."),
+        row("R5", 10, "Trafik iş saatlerinde yoğun, gece düşüktür.",
+            "Trafik iş saatlerinde yoğun, gece onda birdir.",
+            "Gece boş duran kapasite ödenirse kontrol başına maliyet büyür."),
+    ],
+    cands=["np", "ddb", "aur"],
+    scores={
+        "np": [sc(10, "MATCH (u:User {`~id`: $u})-[:MEMBER_OF*0..6]->(:Group)-[:CAN_READ]->(:Folder)<-[:IN*0..10]-(d:Document {`~id`: $d}) RETURN true AS allowed LIMIT 1; LIMIT 1 ilk bulunan yolda durur ve iki değişken uzunlukta parça tek pattern'dedir (Ö4, Ö5). Puan kırılmadı."),
+               sc(9, "Kontrol kullanıcının ve belgenin vertex'lerinden başlar (Ö2, Ö3). 1 puan kırıldı: \"bütün çalışanlar\" grubu supernode'dur; önceden bilindiği için o gruba verilen haklar ayrı bir property ile kısa yoldan kontrol edilir (A4)."),
+               sc(10, "Okuma sorguları snapshot isolation ile commit edilmiş son durumu görür; silinen üyelik bir sonraki kontrolde yoktur (Ö6). Puan kırılmadı."),
+               sc(10, "Bir üyelik tek bir edge'tir; ekleme ya da silme tek yazmadır ve etkilenen kullanıcı sayısından bağımsızdır (Ö1). Puan kırılmadı."),
+               sc(9, "Kontroller replica'lara dağılır. 1 puan kırıldı: bütün yazmalar tek writer'dan geçer ve replica'lar birkaç milisaniye geridedir; bir geri alma o kadar geç görünür."),
+               sc(10, "Altı kopyalı cluster volume ve 35 güne kadar point-in-time restore. Puan kırılmadı."),
+               sc(7, "Yönetilen cluster. 3 puan kırıldı: ekip openCypher öğrenir (2) ve replica ile NCU aralığını iş saatlerine göre ayarlar (1)."),
+               sc(7, "NCU-saat başına ödenir. 3 puan kırıldı: kapasite gece sıfıra inmez; writer ve reader'ın en düşük NCU'su gece de ödenir.")],
+        "ddb": [sc(6, "Her kullanıcının bütün grupları (iç içe olanlar açılmış hâlde) ve her belgenin bütün hak sahibi grupları önceden düzleştirilir; kontrol iki GetItem ve bir kesişimdir. 4 puan kırıldı: yol sorusu bir kesişime çevrilir ve düzleştirmeyi uygulama tutar."),
+                sc(10, "İki GetItem tek haneli milisaniyedir. Puan kırılmadı."),
+                sc(6, "Her item strongly consistent okunabilir. 4 puan kırıldı: bir üst grup değişikliği binlerce düzleştirilmiş item'ı yeniden yazar; bu bir transaction'a (en fazla 100 item) sığmaz ve yayılma bitene kadar haklar karışıktır."),
+                sc(4, "Tek bir üyelik değişikliği bir item'dır. 6 puan kırıldı: düzleştirme yüzünden \"bütün çalışanlar\" ya da bir üst grup değişikliği 20.000'e kadar item'ı yeniden yazdırır."),
+                sc(10, "On-demand mod kontrolleri ayarsız karşılar. Puan kırılmadı."),
+                sc(10, "Her yazma birkaç AZ'de saklanır; point-in-time recovery. Puan kırılmadı."),
+                sc(8, "Serverless. 2 puan kırıldı: ekip DynamoDB API'ını ve key tasarımını öğrenir; düzleştirme kodu R1'de sayıldı."),
+                sc(9, "İstek başına ödenir; gece maliyet düşer. 1 puan kırıldı: yeniden yazma dalgaları yazma birimi tüketir ve önceden hesaplanmalıdır.")],
+        "aur": [sc(5, "İki WITH RECURSIVE (grup zinciri ve klasör zinciri) ve bir kesişim tek SQL sorgusudur. 5 puan kırıldı: değişken derinlik recursive sorgu ve döngü kontrolü ister; bu bir pattern değil, elle yazılmış bir aramadır."),
+                sc(6, "Her seviye bir index araması ve birleştirmedir. 4 puan kırıldı: saniyede 2.000 recursive sorgu 20 ms bütçesini zorlar; derin klasörlerde ara sonuç büyür."),
+                sc(10, "Transaction'lar; silinen üyelik bir sonraki sorguda yoktur. Puan kırılmadı."),
+                sc(10, "Bir üyelik bir row'dur; ekleme ya da silme tek yazmadır. Puan kırılmadı."),
+                sc(7, "Kontroller reader'lara gider. 3 puan kırıldı: iş saatlerinde saniyede 2.000 recursive sorgu reader'ları yorar."),
+                sc(10, "Üç AZ'de altı kopya ve sürekli yedek. Puan kırılmadı."),
+                sc(9, "Aurora zaten çalışıyor; ekip SQL biliyor. 1 puan kırıldı: iş saatleri için reader sayısı ve ACU aralığı ayarlanır; sorgunun yazılışı R1.1'de sayıldı."),
+                sc(8, "Var olan cluster'a eklenir. 2 puan kırıldı: iş saatleri için reader'lar ve ACU saat başına ödenir.")],
+    },
+    h2h={
+        "ddb": "Key-value (DynamoDB) ile kafa kafaya. DynamoDB bu kontrolü çok hızlı yapabilir: her kullanıcının bütün grupları ve her belgenin bütün hak sahibi grupları önceden düzleştirilirse kontrol iki GetItem ve bir kesişimdir (R1.2'de tam puan), ölçek ve işletim de rakipsizdir. "
+               "Ama düzleştirmenin bedeli yazma tarafındadır: bir üst grup değişikliği binlerce item'ı yeniden yazdırır, bu bir transaction'a sığmaz ve yayılma bitene kadar ayrılan bir çalışanın erişimi sürebilir (R1.3, R1.4). "
+               "Hangi koşul değişseydi DynamoDB seçilirdi: gruplar iç içe olmasaydı ya da en fazla bir seviye olsaydı ve haklar nadiren değişseydi; o zaman düzleştirme ucuzdur ve kontrol tek bir GetItem olur.",
+        "aur": "İlişkisel (Aurora) ile kafa kafaya. Aurora bu kuralı doğru korur: transaction'lar, sürekli yedek ve SQL bilen bir ekip; üyelik bir row'dur ve değişiklik tek yazmadır (R1.3, R1.4 tam). "
+               "Ama soru iki değişken derinlikli zincirdir ve Aurora'da bu iki WITH RECURSIVE ve bir kesişimdir; saniyede 2.000 kontrolde her seviye bir index araması ve birleştirmedir ve 20 ms bütçesi zorlanır (R1.1, R1.2, R2). Aurora'nın R4'teki üstünlüğü (zaten çalışıyor, ekip SQL biliyor) bu farkı kapatmaz, çünkü kontrol her belge açılışında ve iş saatlerinin bütün trafiğinde çalışır. "
+               "Hangi koşul değişseydi Aurora seçilirdi: kontrol saniyede birkaç yüze inseydi ve grup derinliği iki seviyeyle sınırlansaydı; o zaman iki sabit join yeterlidir ve ikinci bir database gerekmez.",
+    },
+    verdict="Karar: Neptune {np}, DynamoDB {ddb}, Aurora {aur}. Bu iş yüküne en uygun servis Neptune'dür: iki değişken derinlikli zincir tek bir pattern'dir ve bir üyelik değişikliği tek bir edge'tir. DynamoDB ile Aurora neredeyse eşittir. "
+            "Neptune seçtiğimizde artımız: kontrol tek bir sorgudur, geri alınan hak bir sonraki kontrolde yoktur ve bir üst grup değişikliği binlerce kaydı yeniden yazdırmaz. "
+            "Eksimiz: ekip openCypher öğrenir, \"bütün çalışanlar\" gibi büyük gruplar için kısa yol tutulur, kritik bir geri almadan sonraki kontrol writer endpoint'inden okunur ve gece de en düşük kapasite ödenir. Bir koşul değişseydi: gruplar iç içe olmasaydı DynamoDB kazanırdı."))
+
+# ------------------------------------------------------------------ 9. customer 360 for the call center (Aurora wins, Neptune third: a clear loss)
+NEPTUNE_W.append(wusecase("c360", 9, sim="w_c360",
+    title="Customer 360: çağrı merkezi ekranı",
+    key="Tek ekranda: müşteri profili, son 20 sipariş, açık destek talepleri, adresler, sadakat puanı. Soru: müşteri id'si ya da telefonla bu müşterinin bütün kayıtları.",
+    story="Lale Market'in çağrı merkezinde 300 temsilci çalışır. Temsilci müşteri id'sini ya da telefon numarasını yazar ve tek bir ekranda profili, son 20 siparişi (tarihe göre), açık destek taleplerini, adresleri ve sadakat puanını görür. "
+          "Saniyede 50 ekran açılır; ekran 500 ms içinde gelmelidir. Siparişler ve müşteriler Aurora PostgreSQL'dedir; destek talepleri her gece destek aracından dışa aktarılır. Finans aynı verilerden aylık rapor alır. "
+          "Bir ürün yöneticisi \"customer 360 bir graph use case'idir\" diyerek Neptune önerdi. İlişkiler tek hop'tur: müşteriden siparişlere, taleplere ve adreslere. Ekip dört geliştiricidir ve SQL bilir.",
+    wnote="R1 toplam 45: id ya da telefonla bulup tek hop'luk listeleri tarihe göre getirmek (15), sabit alanlı kayıtlar (10), az önceki siparişin ekranda görünmesi (10) ve sıralama ile arama araçları (10). "
+          "R4 25 ile ikinci: veri zaten Aurora'dadır ve ekip ikinci bir sistem istemez. R5 15, R2 5: saniyede 50 ekran küçük bir yüktür.",
+    rows=[
+        row("EY", 15, "Her ekran bu soruyla açılır; ilişkiler tek hop'tur.",
+            "Müşteri id'si ya da telefonla müşteri; ondan tek hop'ta siparişler (son 20, tarihe göre), açık talepler ve adresler.",
+            "Ekran birkaç ayrı sorguya bölünür ve yavaşlarsa temsilci müşteriyi bekletir."),
+        row("VM", 10, "Kayıtların alanları sabittir; sipariş, adres ve talep birer tablodur.",
+            "Profil, sipariş, adres ve talep sabit alanlı kayıtlardır; tutarlar ve tarihler tiplidir.",
+            "Alanlar doğrulanmazsa ekranda eksik ya da yanlış tipli değerler görünür."),
+        row("TA", 10, "Müşteri az önce verdiği siparişi soruyor olabilir.",
+            "Ekran checkout'un birkaç saniye önce yazdığı siparişi göstermeli.",
+            "Sipariş ekranda görünmezse temsilci müşteriye yanlış bilgi verir."),
+        row("AO", 10, "Telefonla arama ve tarihe göre sıralama her ekranda kullanılır.",
+            "Telefon numarasıyla arama, sipariş tarihine göre sıralama ve LIMIT; bunları destekleyen index'ler.",
+            "Arama ya da sıralama bir tam taramaya dönerse ekran yavaşlar."),
+        row("R2", 5, "Saniyede 50 ekran küçük bir yüktür.",
+            "Saniyede 50 ekran, 500 ms içinde.",
+            "Bu yük her aday için küçüktür."),
+        row("R3", 10, "Siparişler resmi kayıttır, ama bu ekran onları yalnız okur.",
+            "Ekranın okuduğu veri kaybolmamalı.",
+            "Ekran yanlış ya da eksik veri gösterirse temsilci yanlış işlem yapar."),
+        row("R4", 25, "Veri zaten Aurora'da; ikinci bir sistem bu ekran için en büyük risktir.",
+            "Dört geliştirici SQL biliyor; siparişler ve müşteriler Aurora'da, talepler her gece içeri alınıyor. İkinci bir sistem ve kopyalama hattı ancak bir kazanç varsa kurulmalı.",
+            "Kopyalama hattı bozulursa ekran eski siparişleri gösterir ve hata kimse fark etmeden sürer."),
+        row("R5", 15, "Ekran bir iç araçtır; maliyeti küçük olmalı.",
+            "İç bir ekran için ek maliyet en düşük olmalı.",
+            "İkinci bir database'in sabit faturası ekranın değerinden büyük olabilir."),
+    ],
+    cands=["aur", "doc", "np"],
+    scores={
+        "aur": [sc(10, "WHERE customer_id = ? ya da phone = ? ile müşteri; JOIN ve ORDER BY order_date DESC LIMIT 20 ile siparişler; hepsi index'lerle. Puan kırılmadı."),
+                sc(10, "Sabit alanlar, tipler ve kısıtlar şemadadır. Puan kırılmadı."),
+                sc(10, "Siparişi yazan database'in kendisi; writer'dan okuma son siparişi görür. Puan kırılmadı."),
+                sc(9, "B-tree index'leri (customer_id, order_date) sıralamayı ve LIMIT'i ucuz yapar. 1 puan kırıldı: telefon için normalleştirilmiş bir kolon ve index eklenir."),
+                sc(10, "Saniyede 50 ekran Aurora için küçüktür. Puan kırılmadı."),
+                sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                sc(9, "Yeni sistem yok; ekip SQL biliyor. 1 puan kırıldı: destek taleplerinin gecelik içeri alma işi yazılır."),
+                sc(10, "Var olan cluster; ekran için ek fatura yok denecek kadar azdır. Puan kırılmadı.")],
+        "doc": [sc(8, "Müşteri document'ı adresleri ve sadakat puanını gömer; siparişler ayrı collection'da. 2 puan kırıldı: siparişler ve talepler için ikinci ve üçüncü bir sorgu ya da $lookup gerekir."),
+                sc(8, "Document esnek alanlar taşır. 2 puan kırıldı: sabit alanlı kayıtlarda şema doğrulaması isteğe bağlıdır ve uygulamanın işidir."),
+                sc(10, "Okumalar primary'den commit edilmiş güncel durumu görür. Puan kırılmadı: siparişlerin Aurora'dan kopyalanması ve gecikmesi R4'te sayıldı (Neptune için de)."),
+                sc(9, "Compound index'ler sıralama ve LIMIT'i destekler. 1 puan kırıldı: telefon için bir index eklenir."),
+                sc(10, "Saniyede 50 ekran küçüktür. Puan kırılmadı."),
+                sc(10, "Üç AZ'de kopyalanan volume. Puan kırılmadı."),
+                sc(5, "Yönetilen cluster. 5 puan kırıldı: ikinci bir database, Aurora'dan siparişleri ve müşterileri taşıyan ve gecikmesi izlenen bir hat ve MongoDB API'ı ekip için yenidir."),
+                sc(6, "Instance-saat başına ödenir. 4 puan kırıldı: Aurora'nın yanında ikinci bir cluster yalnız bu ekran için ödenir.")],
+        "np": [sc(8, "Müşteri vertex'i ~id ile ya da phone property'siyle bulunur (Ö2) ve siparişler tek hop'tur (Ö3). 2 puan kırıldı: \"son 20 sipariş\" müşterinin bütün sipariş edge'leri okunduktan sonra ORDER BY ile sıralanır; tek hop'ta graph'ın bir kazancı yoktur."),
+               sc(6, "Kayıtlar property'li vertex'lerdir (Ö1). 4 puan kırıldı: sabit alanlı ve tipli kayıtlar için şema ve kısıt yoktur; tutar, tarih ve zorunlu alanları uygulama doğrular."),
+               sc(10, "Okuma sorguları snapshot isolation ile commit edilmiş son durumu görür (Ö6). Puan kırılmadı."),
+               sc(7, "Üç varsayılan index (SPOG, POGS, GPSO) id ve property araması verir (Ö2). 3 puan kırıldı: kullanıcının tanımladığı bir index yoktur ve telefonun bir kısmıyla ya da normalleştirilmiş bir biçimiyle arama OpenSearch entegrasyonu ister; sıralama R1.1'de, şema R1.2'de sayıldı."),
+               sc(10, "Saniyede 50 ekran küçüktür. Puan kırılmadı."),
+               sc(10, "Altı kopyalı cluster volume. Puan kırılmadı."),
+               sc(4, "Yönetilen cluster. 6 puan kırıldı: ekip openCypher öğrenir (2), siparişleri ve müşterileri Aurora'dan taşıyan bir hat kurar (2), talepleri ayrıca içeri alır (1) ve NCU aralığını ayarlar (1)."),
+               sc(4, "NCU-saat başına ödenir. 6 puan kırıldı: Aurora'nın yanında en az iki instance yalnız bu ekran için gece gündüz ödenir (en düşük kapasitede ayda yaklaşık 283 USD).")],
+    },
+    h2h={
+        "doc": "Document (DocumentDB) ile kafa kafaya. DocumentDB müşteri profilini, adresleri ve sadakat puanını tek bir document'ta tutabilir; esnek alanlar ve compound index'ler bu ekran için yeterlidir (R1'de 37). "
+               "Ama veri Aurora'dan gelir: siparişler ve müşteriler kopyalanır, ekran kopyanın gecikmesi kadar geride kalabilir ve sabit alanlı kayıtlarda şema doğrulaması uygulamanın işidir. "
+               "Kaybın büyük kısmı R4 ve R5'tedir: ikinci bir database, bir kopyalama hattı ve yeni bir API yalnız bu ekran için kurulur ve ödenir. "
+               "Hangi koşul değişseydi DocumentDB seçilirdi: müşteri verisi baştan bir document database'te tutulsaydı (her ülkede farklı alanlar, iç içe tercihler) ve siparişler de orada yaşasaydı.",
+        "np": "Graph (Neptune) ile kafa kafaya. Neptune bu ekranı yapabilir: müşteri vertex'i id ya da telefonla bulunur ve siparişler tek hop'tur. Ama graph'ın gücü çok hop'lu yollardadır ve bu ekranın bütün ilişkileri tek hop'tur; Neptune burada bir kazanç vermez. "
+              "Sabit alanlı kayıtlar için şema ve kısıt yoktur, \"son 20 sipariş\" için bileşik bir index yoktur (R1.2, R1.4). Veri de Aurora'dadır: ikinci bir database, bir kopyalama hattı ve yeni bir dil yalnız bu ekran için kurulur ve ödenir (R4, R5). "
+              "\"Customer 360 bir graph use case'idir\" cümlesi, müşterinin kayıtları arasında çok hop'lu sorular varsa doğrudur. Hangi koşul değişseydi Neptune seçilirdi: ekran \"bu müşteriyle aynı adresi ya da kartı paylaşan diğer müşteriler ve onların iadeleri\" gibi iki üç hop'luk sorular sorsaydı.",
+    },
+    verdict="Karar: Aurora {aur}, DocumentDB {doc}, Neptune {np}. Bu iş yüküne en uygun servis Aurora'dır ve fark büyüktür: ilişkiler tek hop'tur, veri zaten oradadır ve sabit alanlı kayıtlar için şema bir güvencedir. "
+            "Yine de Neptune seçersek artımız: ileride çok hop'lu sorular (ortak adres, ortak kart, aile hesapları) için graph hazır olur. "
+            "Eksimiz: ikinci bir database, siparişleri ve müşterileri taşıyan bir hat, yeni bir dil ve ayda yaklaşık 283 USD; uygulama alanları kendisi doğrular ve ekran kopyanın gecikmesi kadar geride kalabilir. "
+            "Bir koşul değişseydi: ekran çok hop'lu ilişki soruları sorsaydı Neptune, Aurora'nın yanında ikinci bir database olarak anlam kazanırdı; doğru mimari o zaman ikisi birliktedir."))
+
+# ------------------------------------------------------------------ 10. drug interaction graph (RDF and SPARQL)
+NEPTUNE_W.append(wusecase("drugs", 10,
+    title="İlaç etkileşim graph'ı (RDF ve SPARQL)",
+    key="RDF üçlüleri: ilaç, sınıf (rdfs:subClassOf), enzim, etkileşim. Soru: bu reçetedeki ilaçlar arasında doğrudan, sınıf üzerinden ya da ortak enzim üzerinden bir etkileşim var mı ve neden?",
+    story="Lale Market'in eczane ortağı her reçete sepetinde bir etkileşim kontrolü yapar. Hastanın kullandığı ilaçlar (ortalama 6) ve yeni ilaç için soru şudur: aralarında doğrudan bir etkileşim, bir üst sınıf düzeyinde tanımlı bir etkileşim ya da ortak bir enzim üzerinden dolaylı bir etkileşim var mı? "
+          "Bilgi kamuya açık bir ontolojiden RDF olarak gelir: 50.000 ilaç ve 2 milyon üçlü; sınıf hiyerarşisi 8 seviyeye kadar iner. Ontoloji her ay yeni bir sürümle güncellenir ve yeni ilişki türleri (predicate) ekleyebilir. "
+          "Saniyede 40 kontrol yapılır, her biri 200 ms içinde; cevap etkileşimin nedenini (yolunu) da göstermelidir. Ekipteki iki eczacı-bilişimci SPARQL bilir.",
+    wnote="R1 toplam 50: verinin RDF ontolojisi olması (15), sınıf hiyerarşisinden ve enzimden geçen soru (15), her ay değişen predicate'ler (10) ve sorgu araçları (10). "
+          "R4 20 ile ikinci: ekip SPARQL bilir. R5 15: kontrol bir hizmet maliyetidir. R2 5: saniyede 40 kontrol.",
+    rows=[
+        row("VM", 15, "Bilgi standart bir RDF ontolojisi olarak gelir; şekli iş yükünün kendisidir.",
+            "Veri RDF üçlüleridir: IRI'li ilaçlar, sınıflar, enzimler; rdfs:subClassOf hiyerarşisi. Kaynak ontolojinin kimlikleri korunmalı.",
+            "Ontoloji başka bir şekle çevrilirse kaynakla bağ kopar ve her ay çeviri yeniden yapılır."),
+        row("EY", 15, "Her reçete sepeti bu soruyu sorar ve cevap nedenini de göstermelidir.",
+            "İlaç çiftleri için: doğrudan etkileşim; bir üst sınıf düzeyinde tanımlı etkileşim (hiyerarşi 8 seviye); bir ilaç bir enzimi engelliyor, diğeri o enzimle işleniyor (iki hop). Yol döner.",
+            "Sınıf düzeyindeki bir etkileşim kaçarsa tehlikeli bir kombinasyon onaylanır."),
+        row("ŞE", 10, "Ontoloji her ay yeni predicate'ler ekleyebilir.",
+            "Yeni bir ilişki türü (ör. yeni bir enzim ilişkisi) şema değişikliği olmadan yüklenmeli.",
+            "Her ay bir şema değişikliği gerekirse güncel ontoloji haftalarca gecikir."),
+        row("AO", 10, "Ekip hiyerarşi ve yol sorgularını standart araçlarla yazmak istiyor.",
+            "Hiyerarşi gezintisi (property path), adlandırılmış graph'lar (her ontoloji sürümü ayrı) ve standart bir sorgu dili.",
+            "Bu araçlar yoksa ekip hiyerarşiyi uygulama kodunda gezer ve kontrol doğrulanamaz."),
+        row("R2", 5, "Saniyede 40 kontrol küçük ve düzenlidir.",
+            "Saniyede 40 kontrol, her biri 200 ms içinde.",
+            "Bu yük her aday için küçüktür."),
+        row("R3", 10, "Ontoloji yeniden yüklenebilir, ama yerel notlar ve onaylar kaybolmamalı.",
+            "Eczacıların eklediği yerel etkileşim notları kaybolmamalı.",
+            "Yerel notlar kaybolursa bilinen bir risk yeniden onaylanır."),
+        row("R4", 20, "İki kişilik ekip SPARQL bilir; başka bir dil öğrenmek istemez.",
+            "İki eczacı-bilişimci SPARQL biliyor; sunucu işletmek istemiyorlar.",
+            "Bilinen dilden vazgeçmek bilgiyi ve doğrulanmış sorguları kaybettirir."),
+        row("R5", 15, "Kontrol her reçetede yapılan bir hizmet maliyetidir.",
+            "Gün boyu düzenli trafik; maliyet reçete başına küçük olmalı.",
+            "Büyük bir sabit fatura küçük bir eczane ortağı için kontrolü pahalı yapar."),
+    ],
+    cands=["np", "ddb", "aur"],
+    scores={
+        "np": [sc(10, "Neptune RDF üçlülerini (quad) doğrudan saklar ve SPARQL 1.1 ile sorgular; IRI'ler korunur (Ö1). Puan kırılmadı."),
+               sc(10, "SPARQL property path (rdfs:subClassOf*) hiyerarşiyi her derinlikte gezer ve enzim yolu iki üçlüdür; değişken uzunlukta yol (Ö5) yolu da döndürür. Puan kırılmadı."),
+               sc(10, "Yeni bir predicate yeni bir üçlüdür; şema yoktur, bulk loader yeni sürümü yükler (Ö7). Puan kırılmadı."),
+               sc(9, "Property path, adlandırılmış graph'lar ve SPARQL; index'ler (SPOG, POGS, GPSO) her pozisyonda arar (Ö2). 1 puan kırıldı: hiyerarşi her kontrolde property path ile yeniden gezilir; sık kullanılan genişletmeler yükleme sırasında önceden yazılabilir."),
+               sc(10, "Saniyede 40 kontrol küçüktür. Puan kırılmadı."),
+               sc(10, "Altı kopyalı cluster volume; yerel notlar ayrı bir adlandırılmış graph'ta. Puan kırılmadı."),
+               sc(9, "Yönetilen cluster ve ekip SPARQL biliyor. 1 puan kırıldı: NCU aralığı ve replica ayarlanır."),
+               sc(8, "NCU-saat başına ödenir; düzenli trafiğe uyar. 2 puan kırıldı: en az iki instance gece gündüz ödenir.")],
+        "ddb": [sc(4, "Bütün ilaç çiftlerinin etkileşimleri her ay dışarıda hesaplanıp item olarak yazılır. 6 puan kırıldı: ontoloji düzleştirilir; IRI'ler ve hiyerarşi kaybolur, yalnız sonuç kalır."),
+                sc(8, "Reçetedeki çiftler BatchGetItem ile tek istekte okunur. 2 puan kırıldı: \"neden\" yolu ayrıca hesaplanıp item'a yazılmazsa cevapta yoktur."),
+                sc(7, "Item'lar şemasızdır. 3 puan kırıldı: yeni predicate bir kolon değil, dışarıdaki hesaplama kodunda bir değişikliktir."),
+                sc(5, "Key ile okuma. 5 puan kırıldı: hiyerarşi ve yol araçları yoktur; genişletme her ay başka bir araçla yapılır."),
+                sc(10, "On-demand mod küçük yükü kolayca karşılar. Puan kırılmadı."),
+                sc(10, "Her yazma birkaç AZ'de saklanır. Puan kırılmadı."),
+                sc(5, "Serverless. 5 puan kırıldı: ekip SPARQL bilgisinden vazgeçer ve aylık genişletme hattını yeni bir araçla yazar."),
+                sc(10, "İstek başına ödenir; saniyede 40 kontrol çok ucuzdur. Puan kırılmadı.")],
+        "aur": [sc(5, "Üçlüler (subject, predicate, object) table'ında saklanır. 5 puan kırıldı: IRI'ler ve tipler metin olur; RDF'in modeli bir genel table'a sıkıştırılır."),
+                sc(5, "WITH RECURSIVE hiyerarşiyi, iki join enzim yolunu gezer. 5 puan kırıldı: değişken derinlik recursive bir sorgu ve döngü kontrolü ister; bu bir pattern değil, elle yazılmış bir aramadır."),
+                sc(6, "Genel üçlü table'ı yeni predicate'i kabul eder. 4 puan kırıldı: ya bu genel table'da tip ve kısıt kaybolur ya da her yeni predicate bir şema değişikliğidir."),
+                sc(6, "Index'ler ve recursive SQL var. 4 puan kırıldı: property path, adlandırılmış graph ve RDF yükleyici yoktur; sürümler bir kolonla ayrılır."),
+                sc(10, "Saniyede 40 kontrol küçüktür. Puan kırılmadı."),
+                sc(10, "Üç AZ'de altı kopya. Puan kırılmadı."),
+                sc(6, "Yönetilen ve tanıdık. 4 puan kırıldı: ekip SPARQL sorgularını SQL'e yeniden yazar ve bir RDF yükleme işi kurar."),
+                sc(9, "Serverless v2 ACU-saat başına ödenir ve düşük trafikte küçülür. 1 puan kırıldı: en düşük ACU gece de ödenir.")],
+    },
+    h2h={
+        "ddb": "Key-value (DynamoDB) ile kafa kafaya. DynamoDB'nin cevabı akıllıcadır: bütün ilaç çiftlerinin etkileşimleri her ay dışarıda hesaplanıp item olarak yazılırsa kontrol tek bir BatchGetItem'dır, hızlı ve çok ucuzdur (R2, R5). "
+               "Ama ontoloji bu şekilde düzleştirilir: IRI'ler, sınıf hiyerarşisi ve nedeni gösteren yol kaybolur, yalnız sonuç kalır (R1.1, R1.2). Her ay genişletmeyi yapan başka bir araç ve onun hattı gerekir ve ekip SPARQL bilgisinden vazgeçer (R4). Bir sınıf düzeyinde yeni bir etkileşim eklendiğinde bütün çiftler yeniden hesaplanana kadar kontrol eski bilgiyle çalışır. "
+               "Hangi koşul değişseydi DynamoDB seçilirdi: kontrol saniyede binlerce olsaydı ve \"neden\" yolu gerekmeseydi; o zaman doğru mimari ikisi birliktedir: ontoloji Neptune'de, gecelik genişletilmiş çiftler DynamoDB'de.",
+        "aur": "İlişkisel (Aurora) ile kafa kafaya. Aurora RDF üçlülerini bir table'da tutabilir ve WITH RECURSIVE hiyerarşiyi gezebilir; dayanıklılık ve işletim güçlüdür. "
+               "Ama RDF'in modeli genel bir üçlü table'ına sıkıştırılır: tipler ve kısıtlar kaybolur, property path, adlandırılmış graph ve RDF yükleyici yoktur, her yeni predicate ya tipsizdir ya da bir şema değişikliğidir (R1). "
+               "Ekip SPARQL sorgularını SQL'e yeniden yazar ve her ay bir RDF dosyasını table'lara çeviren bir yükleme işi kurar (R4); Aurora'nın tanıdık işletimi bu farkı kapatmaz. "
+               "Hangi koşul değişseydi Aurora seçilirdi: etkileşimler bir ontolojiden değil, sabit bir ilaç çifti listesinden gelseydi ve hiyerarşi iki seviyede kalsaydı; o zaman iki table ve iki join yeterlidir.",
+    },
+    verdict="Karar: Neptune {np}, DynamoDB {ddb}, Aurora {aur}. Bu iş yüküne en uygun servis Neptune'dür ve fark büyüktür: veri bir RDF ontolojisidir, Neptune onu doğrudan saklar ve SPARQL ile hiyerarşiyi ve enzim yolunu tek sorguda gezer. "
+            "Neptune seçtiğimizde artımız: ontoloji her ay olduğu gibi yüklenir, yeni predicate'ler şema değişikliği istemez, cevap nedenini gösterir ve ekip bildiği dili kullanır. "
+            "Eksimiz: en az iki instance gece gündüz ödenir ve hiyerarşi her kontrolde yeniden gezilir; uygulama sık kullanılan genişletmeleri yükleme sırasında önceden yazabilir. Bir koşul değişseydi: kontrol saniyede binlerce olsaydı ve yol gerekmeseydi genişletilmiş çiftler DynamoDB'de durur, Neptune onların kaynağı olurdu."))
+
+USECASES_W["neptune"] = NEPTUNE_W
+PAGE_SVC["neptune"] = "np"

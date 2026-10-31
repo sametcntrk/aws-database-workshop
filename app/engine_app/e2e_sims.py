@@ -2055,6 +2055,19 @@ EXTRA_TABLES["g_customers"] = {"cols": ["~id", "name"], "rows": G_CUST}
 EXTRA_TABLES["g_products"] = {"cols": ["~id", "name"], "rows": G_PROD}
 EXTRA_TABLES["g_bought"] = {"cols": ["~id", "~from", "~to", "~label"], "rows": [e + ["BOUGHT"] for e in G_EDGES]}
 G_NAME = dict(G_CUST + G_PROD)
+# The Turkish page (model 2): the same ten edges with their properties (example order ids and quantities), and the vertices with
+# one more property each. The legacy tables above stay for the old English page.
+NP_ORDER = {"e1": ("O000003", 1), "e2": ("O000011", 2), "e3": ("O000017", 1), "e4": ("O000017", 1), "e5": ("O000025", 1),
+            "e6": ("O000032", 1), "e7": ("O000032", 3), "e8": ("O000040", 1), "e9": ("O000051", 1), "e10": ("O000051", 1)}
+EXTRA_TABLES["np_bought"] = {"cols": ["~id", "~from", "~to", "~label", "order_id", "qty"],
+                             "rows": [e + ["BOUGHT", *NP_ORDER[e[0]]] for e in G_EDGES]}
+EXTRA_TABLES["np_customers"] = {"cols": ["~id", "~label", "name", "city"],
+                                "rows": [["C00001", "Customer", "Ayşe Yılmaz", "İstanbul"], ["C00002", "Customer", "Mert Doğan", "Ankara"],
+                                         ["C00003", "Customer", "Elif Kaya", "İzmir"], ["C00005", "Customer", "Zeynep Şahin", "İstanbul"]]}
+EXTRA_TABLES["np_products"] = {"cols": ["~id", "~label", "name", "category"],
+                               "rows": [["P0001", "Product", "Alpen Kablosuz Kulaklık 1", "Elektronik"], ["P0016", "Product", "Nordwind Powerbank 16", "Elektronik"],
+                                        ["P0175", "Product", "Toros Bluetooth Hoparlör 175", "Elektronik"], ["P0044", "Product", "Kapadokya Bulut Mimarisi 44", "Kitap"],
+                                        ["P0179", "Product", "Toros Python ile Veri 179", "Kitap"]]}
 
 
 def _gtable(lang):
@@ -2196,6 +2209,46 @@ def np_path(lang):
     return {"tables": [_gtable(lang)], "out": {"name": T(lang, "vertices reached", "ulaşılan vertex'ler"), "cols": [T(lang, "level", "seviye"), "~id", "name", T(lang, "via edge", "edge")]}, "steps": steps}
 
 
+def np_retry(lang, merge):
+    """One order line, a lost reply and a retry: CREATE writes the edge twice, MERGE writes it once (B4)."""
+    edges = [["e1", "C00001", "P0001", "O000003"], ["e2", "C00001", "P0016", "O000011"]]
+    log, steps = [], []
+    verb = "MERGE" if merge else "CREATE"
+    q = f"{verb} (c)-[:BOUGHT {{order_id: 'W000017'}}]->(p)"
+
+    def n():
+        return sum(1 for e in edges if e[3] == "W000017")
+
+    def snap(say, marks, extra=None):
+        steps.append({"say": say, "marks": {"e": marks}, "rows": {"e": deepcopy(edges)}, "out": deepcopy(log),
+                      "outmarks": {len(log) - 1: extra} if (log and extra) else {}, "count": {"edges of W000017": n()}})
+    snap(T(lang, f"Ayşe Yılmaz (C00001) buys P0044 in order W000017. The Engine App writes one BOUGHT edge with {verb}. The table shows her BOUGHT edges before the write.",
+           f"Ayşe Yılmaz (C00001) W000017 siparişinde P0044 alıyor. Engine App tek bir BOUGHT edge'ini {verb} ile yazar. Table, yazmadan önceki BOUGHT edge'lerini gösterir."), {})
+    edges.append(["e101", "C00001", "P0044", "W000017"])
+    log.append(["1", q, T(lang, "commit, the reply is lost (network timeout)", "commit edildi, cevap kayboldu (ağ zaman aşımı)")])
+    snap(T(lang, "Request 1. Neptune finds no edge for W000017, writes e101 and commits. The reply does not reach the app: the connection times out. The app does not know that the write happened.",
+           "İstek 1. Neptune W000017 için bir edge bulmaz, e101'i yazar ve commit eder. Cevap uygulamaya ulaşmaz: bağlantı zaman aşımına uğrar. Uygulama yazmanın olduğunu bilmez.") if merge else
+         T(lang, "Request 1. Neptune writes e101 and commits. The reply does not reach the app: the connection times out. The app does not know that the write happened.",
+           "İstek 1. Neptune e101'i yazar ve commit eder. Cevap uygulamaya ulaşmaz: bağlantı zaman aşımına uğrar. Uygulama yazmanın olduğunu bilmez."), {2: "new"}, "lock")
+    if merge:
+        log.append(["2", q, T(lang, "the edge exists, nothing is written", "edge var, hiçbir şey yazılmaz")])
+        snap(T(lang, "Request 2, the retry. MERGE first looks for a BOUGHT edge from C00001 to P0044 with order_id W000017. It finds e101 and writes nothing. A mutation query reads under range locks, so two retries at the same time cannot both create the edge.",
+               "İstek 2, yeniden deneme. MERGE önce C00001'den P0044'e order_id'si W000017 olan bir BOUGHT edge'i arar. e101'i bulur ve hiçbir şey yazmaz. Mutation sorgusu range lock'larla okur; aynı anda gelen iki deneme edge'i iki kez oluşturamaz."), {2: "match"}, "match")
+        snap(T(lang, "Result: one order line, one edge. The retry is safe. The recommendation score and the customer graph count the purchase once. The cost: MERGE reads before it writes.",
+               "Sonuç: bir sipariş satırı, bir edge. Yeniden deneme güvenlidir. Öneri score'u ve müşteri graph'ı satın almayı bir kez sayar. Bedeli: MERGE yazmadan önce okur."), {2: "done"}, "match")
+    else:
+        edges.append(["e102", "C00001", "P0044", "W000017"])
+        log.append(["2", q, T(lang, "commit, a second edge", "commit edildi, ikinci bir edge")])
+        snap(T(lang, "Request 2, the retry. CREATE does not look first: it writes a new edge e102 with a new ~id. Neptune accepts it, because two vertices can have many edges between them.",
+               "İstek 2, yeniden deneme. CREATE önce bakmaz: yeni bir ~id ile yeni bir edge, e102 yazar. Neptune bunu kabul eder, çünkü iki vertex arasında birçok edge olabilir."), {2: "bad", 3: "bad"}, "bad")
+        snap(T(lang, "Result: one order line, two edges. count(DISTINCT c) still counts Ayşe once, but count(*) and the sum of qty count the purchase twice, and the customer graph shows a second order. The fix is MERGE with the order_id (next simulation).",
+               "Sonuç: bir sipariş satırı, iki edge. count(DISTINCT c) Ayşe'yi yine bir kez sayar, ama count(*) ve qty toplamı satın almayı iki kez sayar ve müşteri graph'ı ikinci bir sipariş gösterir. Düzeltme, order_id ile MERGE'dür (sonraki simülasyon)."), {2: "bad", 3: "bad"}, "bad")
+    return {"tables": [{"id": "e", "name": T(lang, "BOUGHT edges of C00001", "C00001'in BOUGHT edge'leri"), "cols": ["~id", "~from", "~to", "order_id"],
+                        "rows": [["e1", "C00001", "P0001", "O000003"], ["e2", "C00001", "P0016", "O000011"]], "key": [0], "ref": [1, 2]}],
+            "out": {"name": T(lang, "requests and answers", "istekler ve cevaplar"), "cols": ["#", T(lang, "request", "istek"), T(lang, "answer of Neptune", "Neptune'ün cevabı")]},
+            "steps": steps}
+
+
 NP_CANDS = ["Neptune", "Aurora PostgreSQL", "DynamoDB", "OpenSearch", "Redshift"]
 
 
@@ -2223,11 +2276,16 @@ def neptune(lang):
                                          ("Join facts and dimensions with SQL", "Fact'leri ve dimension'ları SQL ile join'le"),
                                          ("Do not slow the checkout database", "Checkout database'ini yavaşlatma")], NP_CANDS, w2),
         "hop2": np_hop2(lang), "hop3": np_hop3(lang), "path": np_path(lang),
+        # decide_recs and decide_report above are the legacy 2/1/0 decisions of the old English page only
+        **({"retry_create": np_retry(lang, False), "retry_merge": np_retry(lang, True)} if lang == "tr" else {}),
+        **({uc["sim"]: weighted_scorecard(lang, uc) for uc in _ucw.NEPTUNE_W if uc["sim"]} if lang == "tr" else {}),   # model 2, Turkish page
     }
     return {k: _localize(v, lang) for k, v in spec.items()}
 
 
+SVC.setdefault("npa", "Neptune Analytics")   # in-memory graph analytics engine (Neptune page, model 2); "np" is Neptune Database
 COUNT_TR.update({"edges read": "okunan edge", "vertices reached": "ulaşılan vertex", "similar customers": "benzer müşteri", "levels": "seviye"})
+COUNT_TR.update({"edges of W000017": "W000017'nin edge'leri"})
 SIMS["neptune"] = neptune
 
 
