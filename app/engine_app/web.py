@@ -23,7 +23,7 @@ import yaml
 from flask import Blueprint, Flask, abort, jsonify, redirect, render_template, request
 from jinja2 import TemplateNotFound
 
-from . import admin, catalog, e2e_sims, simlimit, trace, visitor
+from . import admin, catalog, e2e_sims, e2e_veri, simlimit, trace, visitor  # noqa: F401 (e2e_veri registers the 00 page's simulations)
 
 log = logging.getLogger("engine_app")
 HERE = Path(__file__).parent
@@ -260,13 +260,14 @@ def create_app():
 
         @app.get("/e2etutorial/<eid>")
         def e2e_lesson(eid):
-            if eid not in catalog.META and eid != "glossary":
+            intro = e2e_index().get("intro") or {}
+            if eid not in catalog.META and eid not in ("glossary", intro.get("id")):
                 abort(404)
-            entry = next((x for x in e2e_index()["lessons"] if x["id"] == eid), None)
+            entry = intro if eid == intro.get("id") else next((x for x in e2e_index()["lessons"] if x["id"] == eid), None)
             has_tr = (HERE / "templates" / "e2e" / f"{eid}.tr.html").exists()
             lang = "tr" if has_tr else "en"  # EN option removed: every page with a TR version shows TR
             name = f"e2e/{eid}.tr.html" if lang == "tr" else f"e2e/{eid}.html"
-            return render_template(name, **ctx(eid=eid, entry=entry, meta=catalog.META.get(eid, {}),
+            return render_template(name, **ctx(eid=eid, entry=entry, meta=catalog.META.get(eid, intro if eid == intro.get("id") else {}), is_intro=eid == intro.get("id"),
                                                lang=lang, has_tr=has_tr, ui=e2e_ui()[lang],
                                                sims=e2e_sims.SIMS[eid](lang) if eid in e2e_sims.SIMS else {},
                                                sample_data=e2e_sims.tables(), usecases=e2e_sims.usecases(eid, lang),

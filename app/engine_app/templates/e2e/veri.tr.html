@@ -1,0 +1,566 @@
+{% extends "e2e/_base.html" %}
+{% import "e2e/_macros.html" as k with context %}
+{# 00 tutorial: what data is, its types and structure, how it is stored (layout, file formats, file systems) and how it
+   is queried (languages, drivers, JDBC, OLTP/OLAP). Turkish only. Simulations: e2e_veri.py. Scope: docs/veri.scope.md. #}
+{% block title %}Veri nedir?{% endblock %}
+{% block body %}
+
+<h2 id="goal" data-short="Ne öğreneceksin" data-group="Başlarken">Ne öğreneceksin, bu sayfayı nasıl kullanacaksın</h2>
+<p>Bu sayfa on veritabanı tutorial'ının öncesidir. Hiçbir AWS servisini anlatmaz; hepsinin üzerinde durduğu ortak fikirleri anlatır. Üç bölümden oluşur:</p>
+<ol>
+  <li><b>Bölüm A, Verinin kendisi.</b> Verinin ne olduğu, hangi tiplerde geldiği, ne kadar düzenli olduğu, hangi modellerle düzenlendiği ve birlikte değişen veriyi doğru tutmanın iki yaklaşımı.</li>
+  <li><b>Bölüm B, Verinin saklanması.</b> Aynı tablonun diske iki farklı dizilişi, dosya biçimleri (CSV, JSON, Avro, Parquet, ORC) ve verinin durduğu depolama türleri: bir bilgisayarın diski, bir dosya sistemi, binlerce makineye yayılmış bir dosya sistemi ve nesne deposu.</li>
+  <li><b>Bölüm C, Verinin kullanılması.</b> Bir veritabanına nasıl soru sorulduğu, uygulamanın veritabanına nasıl bağlandığı (JDBC dahil), günlük işlemlerle analizin neden ayrı tutulduğu ve büyük veri mimarileri.</li>
+</ol>
+<p>Örnekler Lale Market'ten gelir: aynı müşteriler, ürünler ve siparişler bütün tutorial'larda kullanılır. Bu sayfadaki dört simülasyon da bu küçük veri setinden hesaplanır.</p>
+<p>Bu sayfanın sonunda şunları yapabilirsin:</p>
+<ol>
+  <li>Bir değerin hangi tiple saklanması gerektiğini söylemek ve para için neden kayan noktalı sayı kullanılmadığını açıklamak.</li>
+  <li>Bir verinin ne kadar düzenli olduğuna bakıp ona uyan veri modelini ve Lale Market'teki veritabanını bulmak.</li>
+  <li>Satır ve sütun düzeninin, CSV ile Parquet'in ve NTFS ile HDFS'in farkını bir rapor sorgusu üzerinden anlatmak.</li>
+  <li>Bir uygulamanın veritabanına bağlanırken attığı adımları sıralamak ve bağlantı havuzunun neyi kazandırdığını göstermek.</li>
+  <li>Bir iş yükünün OLTP mi OLAP mı olduğunu ayırt etmek ve iki işin neden ayrı sistemlerde çalıştığını savunmak.</li>
+</ol>
+<p>Dört tür kutu sana yardım eder. <b>Simülasyon</b>: Oynat'a ya da Sonraki adım'a bas. <b>Önce tahmin et</b>: cevabı açmadan önce kendi cevabını yaz.
+   <b>Checkpoint</b>: tek doğru cevabı olan bir soru. <b>Analoji</b>: günlük hayattan bir resim.</p>
+
+<!-- ============================================================ PART A -->
+<div class="part"><b>Bölüm A</b><h2 id="partA" data-short="Bölüm A: Verinin kendisi">Verinin kendisi: ne, hangi tipte, ne kadar düzenli</h2>
+<p>Bir veritabanını seçmeden önce saklayacağın şeyi tanıman gerekir. Bu bölüm verinin en küçük parçasından başlar ve verinin nasıl düzenlendiğine kadar gider. Her kavramın bütün durumları bir tabloda.</p></div>
+
+<h2 id="data" data-short="Veri, kayıt, metadata"><span class="sec">A1</span>Veri, bilgi, kayıt ve metadata</h2>
+<p>Lale Market'ten bir kazak aldığını düşün. Kasada bir fiş çıkar: tarih, ürün adı, adet, fiyat, toplam. Fişin üstündeki her parça tek başına küçük bir gerçektir: "3", "2.721,65", "2026-06-08".
+   Bu parçalar bir araya gelince bir anlam taşır: "Ayşe Yılmaz 8 Haziran'da 1 kazak aldı." Mağaza binlerce fişi toplayınca yeni bir şey öğrenir: "Haziran'da en çok kazak satıldı."</p>
+{{ k.concept("Veri (data)",
+   "Kaydedilmiş gerçekler: sayılar, metinler, tarihler, resimler. Veri tek başına bir anlam taşımayabilir; ne olduğunu bilmek için bağlamı gerekir.",
+   "<code>3</code>, <code>2721.65</code>, <code>2026-06-08</code>, <code>C00001</code>. Bunlar Lale Market'in order_items ve orders tablolarındaki değerlerdir.",
+   "Fişin üstündeki tek tek rakamlar.") }}
+{{ k.concept("Bilgi (information)",
+   "Bağlamı eklenmiş, yorumlanmış veri. Bir soruya cevap verir.",
+   "\"C00001 numaralı müşteri, yani Ayşe Yılmaz, O000001 siparişinde 4 farklı üründen toplam 7 adet aldı.\"",
+   "Fişi okuyan kişinin vardığı sonuç: \"Dün 15.000 lira harcamışım.\"") }}
+{{ k.concept("Kayıt (record)",
+   "Birlikte anlam taşıyan değerlerin bir arada saklanan grubu. Her değer bir <b>alan</b>da (field) durur ve alanın bir adı vardır. Bir tabloda kaydın adı <b>satır</b>dır (row), alanınki <b>sütun</b>dur (column).",
+   "orders tablosunda bir satır: <code>O000001 · C00001 · 2026-06-08 · delivered · 14988.97</code>. Beş alanı var: order_id, customer_id, order_date, status, total.",
+   "Bir fiş. Ya da bir nüfus cüzdanı: ad, soyad, doğum tarihi aynı kartta durur.") }}
+{{ k.concept("Metadata (veri hakkında veri)",
+   "Veri hakkında veri: bir değerin adı, tipi, birimi, kim tarafından ve ne zaman yazıldığı, ne kadar yer kapladığı.",
+   "\"total sütunu numeric(10,2) tipindedir, birimi TL'dir.\" S3'te bir görselin yanında duran <code>Content-Type: image/jpeg</code> bilgisi.",
+   "Bir kitabın künyesi: yazar, yayınevi, basım yılı. Kitabın kendisi değil, kitap hakkındaki bilgi.") }}
+<table class="data">
+  <caption>bütün durumlar: bir değeri anlamlı yapan nedir</caption>
+  <thead><tr><th>Elimizde olan</th><th>Örnek</th><th>Anlamı belli mi?</th></tr></thead>
+  <tbody>
+    <tr><td>Tek bir değer, adı yok</td><td><code>2721.65</code></td><td><b>Hayır</b>: fiyat mı, toplam mı, kilo mu bilinmez.</td></tr>
+    <tr><td>Değer ve alan adı</td><td><code>unit_price = 2721.65</code></td><td>Kısmen: neyin fiyatı olduğu bilinmez.</td></tr>
+    <tr><td>Bir kaydın içinde</td><td><code>O000001 · P0095 · 1 · 2721.65</code></td><td>Evet: O000001 siparişinde P0095 ürününün birim fiyatı.</td></tr>
+    <tr><td>Metadata ile</td><td>unit_price: numeric(10,2), TL, KDV dahil</td><td>Evet, ayrıca birimi ve hassasiyeti de belli.</td></tr>
+    <tr><td>Birçok kayıt bir arada</td><td>Haziran'ın bütün siparişleri</td><td>Evet, üstüne yeni bir soru sorulabilir: "Haziran'da en çok satan kategori hangisi?"</td></tr>
+  </tbody>
+</table>
+<div class="flow"><div class="box">Veri<small>2721.65 · 1 · P0095</small></div><span class="arrow">→</span><div class="box pk">Kayıt<small>bir sipariş satırı</small></div><span class="arrow">→</span><div class="box sk">Bilgi<small>"Ayşe 1 kazak aldı"</small></div><span class="arrow">→</span><div class="box hit">Karar<small>"Haziran'da kazak stoğunu artır"</small></div></div>
+<p class="flow-cap">Veri kayıtlarda bir araya gelir, kayıtlar okununca bilgi olur, bilgi bir karara dönüşür. Bu sayfanın geri kalanı ilk iki kutuyla ilgilidir: veriyi doğru saklamak ve hızlı bulmak.</p>
+{% call k.ask("Metadata da veri değil mi?") %}<p>Evet, o da kaydedilmiş bir gerçektir. Fark rolündedir: metadata başka bir veriyi anlatır. Bir veritabanı kendi metadata'sını da tablolarda tutar.
+   PostgreSQL'de <code>information_schema.columns</code> bir tablodur ve her sütunun adını ve tipini bir satır olarak gösterir.</p>{% endcall %}
+{% call k.ask("Bir resim ya da bir ses kaydı da veri mi?") %}<p>Evet. Bir JPEG dosyası milyonlarca byte'tan oluşan bir veridir. İçinden anlam çıkarmak için önce işlenmesi gerekir (örneğin bir modelin resimde "kazak" görmesi).
+   A3 bu tür veriye yapılandırılmamış veri der ve B3, Lale Market'in görselleri nerede tuttuğunu gösterir.</p>{% endcall %}
+{{ k.quiz("veri-a1", "Aşağıdakilerden hangisi metadata'dır?",
+   ["Bir siparişin toplam tutarı: 14.988,97", "total sütununun tipi: numeric(10,2)", "Ayşe Yılmaz'ın e-posta adresi", "Haziran'ın en çok satan kategorisi"],
+   1, "Sütunun tipi, sütundaki değerler hakkında bir bilgidir; değerin kendisi değildir. Diğer üçü veri ya da veriden çıkan bilgidir.") }}
+
+<h2 id="types" data-short="Veri tipleri"><span class="sec">A2</span>Veri tipleri: her değer bir türdedir</h2>
+<p>Bir değeri saklarken veritabanı onun hangi türde olduğunu bilmek ister. "3" bir sayı ise toplanabilir; bir metin ise toplanamaz. Tür, değerin diskte kaç byte tutacağını, hangi işlemlerin yapılabileceğini ve nasıl sıralanacağını belirler.</p>
+{{ k.concept("Veri tipi (data type)",
+   "Bir değerin türü: tam sayı, ondalıklı sayı, metin, tarih, doğru/yanlış, ikili veri. Tip; değerin aralığını, kapladığı yeri ve üzerinde yapılabilecek işlemleri belirler.",
+   "orders tablosunda <code>order_date</code> bir tarihtir, <code>total</code> ondalıklı bir sayıdır, <code>status</code> bir metindir.",
+   "Bir formdaki kutular: doğum tarihi kutusuna isim yazılmaz, telefon kutusuna harf girilmez.") }}
+<p>Aşağıdaki tablo PostgreSQL'in tiplerini örnek alır; Aurora PostgreSQL aynı tipleri kullanır. Başka veritabanlarında adlar değişir ama aileler aynıdır. Byte sayıları ve aralıklar PostgreSQL dokümantasyonundan gelir.</p>
+<table class="data">
+  <caption>bütün durumlar: temel veri tipleri</caption>
+  <thead><tr><th>Aile</th><th>Tip (PostgreSQL)</th><th>Kapladığı yer ve aralık</th><th>Lale Market'te</th><th>Dikkat</th></tr></thead>
+  <tbody>
+    <tr><td>Tam sayı</td><td><code>integer</code>, <code>bigint</code></td><td>4 byte: yaklaşık ±2,1 milyar. 8 byte: yaklaşık ±9,2 × 10<sup>18</sup>.</td><td><code>qty</code>, <code>stock</code></td><td>Sınırı aşan değer yazılamaz: <b>hata</b> verir, sessizce kesilmez. PostgreSQL'de işaretsiz (unsigned) tam sayı tipi yoktur.</td></tr>
+    <tr><td>Kesin ondalıklı sayı</td><td><code>numeric(p,s)</code></td><td>Değişken; tam olarak saklar.</td><td><code>price</code>, <code>total</code></td><td>Para için doğru seçim. Kayan noktalı sayıdan yavaştır.</td></tr>
+    <tr><td>Kayan noktalı sayı</td><td><code>real</code>, <code>double precision</code></td><td>4 byte: 6 basamak hassasiyet. 8 byte: 15 basamak.</td><td><code>rating</code>, sensör sıcaklığı</td><td>0,1 gibi değerleri <b>tam saklayamaz</b>: yaklaşık saklar. Para için kullanılmaz.</td></tr>
+    <tr><td>Metin</td><td><code>text</code>, <code>varchar(n)</code></td><td>Değişken; bir değer en fazla yaklaşık 1 GB.</td><td><code>name</code>, <code>status</code></td><td>Byte sayısı karakter sayısı değildir: UTF-8'de "a" 1 byte, "ğ" 2 byte.</td></tr>
+    <tr><td>Tarih ve zaman</td><td><code>date</code>, <code>timestamp</code>, <code>timestamptz</code></td><td>4 ve 8 byte.</td><td><code>order_date</code></td><td>Saat dilimi olmayan zaman, başka bir ülkede yanlış saati gösterebilir. Olay zamanı için <code>timestamptz</code>.</td></tr>
+    <tr><td>Mantıksal</td><td><code>boolean</code></td><td>1 byte: true, false.</td><td>"ödeme başarısız mı?"</td><td>Üçüncü bir durum da var: NULL (bilinmiyor).</td></tr>
+    <tr><td>İkili veri</td><td><code>bytea</code></td><td>Değişken.</td><td>Kullanılmaz: görseller S3'te.</td><td>Büyük dosyayı veritabanına koymak yedeği ve okumayı ağırlaştırır (B3).</td></tr>
+    <tr><td>Yarı yapılandırılmış</td><td><code>jsonb</code></td><td>Değişken.</td><td>DocumentDB'de ürün özellikleri (A3).</td><td>İçindeki alanlara tip zorlanmaz, uygulama kontrol eder.</td></tr>
+    <tr><td>Değer yok</td><td><code>NULL</code></td><td>Her tipte olabilir.</td><td>Henüz kargoya verilmemiş bir siparişin kargo tarihi.</td><td>NULL sıfır ya da boş metin değildir. <code>NULL = NULL</code> doğru değil, "bilinmiyor" döner.</td></tr>
+  </tbody>
+</table>
+{% call k.predict("Bir uygulama fiyatları double precision ile tutuyor. 0,1 TL ile 0,2 TL toplanıyor. Sonuç 0,3'e eşit mi?") %}
+<p>Hayır. Kayan noktalı sayılar değeri ikili kesirlerle yaklaşık tutar. 0,1 + 0,2 sonucu 0,30000000000000004 olur ve <code>= 0.3</code> karşılaştırması yanlış döner.
+   Bu küçük farklar eşitlik karşılaştırmalarını bozar ve yuvarlama sırasında kuruş hatalarına yol açabilir. Bu yüzden Lale Market fiyatları <code>numeric(10,2)</code> ile tutar: 10 basamak, 2'si virgülden sonra.</p>{% endcall %}
+{% call k.ask("Telefon numarası bir sayı mı?") %}<p>Hayır, metindir. Onunla toplama yapılmaz, baştaki sıfır ve "+90" korunmalıdır. Bir değer rakamlardan oluşuyor diye sayı tipi seçilmez; üzerinde aritmetik yapılıyorsa sayıdır.
+   Aynı kural ürün kodu (P0001) ve posta kodu için de geçerlidir.</p>{% endcall %}
+{% call k.ask("Her veritabanında tipler aynı mı?") %}<p>Aileler aynı, kurallar farklı. DynamoDB'de bir sayının tipi tek: Number, 38 basamağa kadar kesin saklar. ElastiCache (Valkey) her değeri byte dizisi olarak tutar; sayıyı sayı olarak yorumlayan komuttur (INCR).
+   InfluxDB bir ölçümün değerini float, integer, string ya da boolean tutar. Her tutorial'ın B bölümü o veritabanının tip tablosunu verir.</p>{% endcall %}
+{{ k.quiz("veri-a2", "Bir ürünün stok adedi için hangi tip en uygundur?",
+   ["double precision", "text", "integer", "boolean"],
+   2, "Stok bir tam sayıdır ve üzerinde aritmetik yapılır (düşürülür, artırılır). integer bunu tam ve küçük bir yerle saklar.") }}
+
+<h2 id="structure" data-short="Yapı ve şema"><span class="sec">A3</span>Verinin yapısı: yapılandırılmış, yarı yapılandırılmış, yapılandırılmamış</h2>
+<p>Bütün siparişler aynı beş alana sahiptir. Ama ürünler öyle değil: bir kulaklığın garanti süresi, bir kitabın sayfa sayısı, bir kazağın beden ölçüsü vardır. Bir ürün görselinin ise hiç alanı yoktur. Verinin ne kadar düzenli olduğu, onu nasıl saklayacağını belirler.</p>
+{{ k.concept("Şema (schema)",
+   "Verinin yapısının tarifi: hangi alanlar var, adları ne, tipleri ne, hangisi boş kalabilir. Şemanın nerede kontrol edildiği bir tasarım kararıdır.",
+   "orders tablosunun şeması: order_id (metin), customer_id (metin), order_date (tarih), status (metin), total (numeric). Bir satır bu şemaya uymazsa yazılmaz.",
+   "Bir başvuru formunun boş hâli: kutular ve her kutuya ne yazılacağı.") }}
+<table class="data">
+  <caption>bütün durumlar: verinin ne kadar düzenli olduğu ve iki özel biçim</caption>
+  <thead><tr><th>Tür</th><th>Tanımı</th><th>Lale Market örneği</th><th>Uyan saklama</th></tr></thead>
+  <tbody>
+    <tr><td><b>Yapılandırılmış</b> (structured)</td><td>Her kaydın alanları aynı, tipleri sabit. Tabloya doğal olarak oturur.</td><td>Siparişler, sipariş satırları, müşteriler.</td><td>İlişkisel veritabanı (Aurora), sütun bazlı depo (Redshift).</td></tr>
+    <tr><td><b>Yarı yapılandırılmış</b> (semi-structured)</td><td>Kayıt kendi alan adlarını taşır. Kayıttan kayda alanlar değişebilir, iç içe olabilir.</td><td>Ürünler: kulaklıkta <code>garanti_ay</code>, kitapta <code>sayfa</code> var.</td><td>Doküman veritabanı (DocumentDB), JSON dosyaları, arama motoru (OpenSearch).</td></tr>
+    <tr><td><b>Yapılandırılmamış</b> (unstructured)</td><td>Alan yok: bir dosyanın byte'ları. Anlamı içerikte saklı.</td><td>Ürün görselleri, satıcının yüklediği PDF'ler.</td><td>Nesne deposu (S3). Veritabanında sadece adresi ve metadata'sı tutulur.</td></tr>
+    <tr><td>Zamanla gelen ölçümler</td><td>Yapılandırılmış ama her satır bir zaman damgası taşır ve sürekli eklenir.</td><td>Depo sıcaklıkları, dakikadaki sipariş sayısı.</td><td>Zaman serisi veritabanı (InfluxDB).</td></tr>
+    <tr><td>İlişkilerin kendisi</td><td>Önemli olan kayıtlar değil, aralarındaki bağlantılar.</td><td>"Bu ürünü alanlar şunları da aldı."</td><td>Graf veritabanı (Neptune).</td></tr>
+  </tbody>
+</table>
+{% call k.live("Yarı yapılandırılmış veri: DocumentDB'deki P0001 ürünü, GET /docdb/api/product/P0001 (2026-10-31)") %}<pre><code>{
+  "product_id": "P0001",
+  "name": "Alpen Kablosuz Kulaklık 1",
+  "category": "Elektronik",
+  "price": 3373.84,
+  "stock": 128,
+  "rating": 4.8,
+  "attributes": { "renk": "siyah", "garanti_ay": 12, "agirlik_kg": 2.45 },
+  "tags": [ "hızlı kargo", "çevreci" ]
+}</code></pre>{% endcall %}
+<p>Tablonun ilk üç satırı düzen derecesidir: yapılandırılmıştan yapılandırılmamışa. Son iki satır, yapılandırılmış verinin kendi veritabanını isteyen iki özel biçimidir.</p>
+<p>Bu dokümanda <code>attributes</code> iç içe bir bölümdür ve <code>tags</code> bir listedir. Bir kitabın dokümanında <code>attributes</code> içinde <code>garanti_ay</code> yerine sayfa sayısı durur. Aynı koleksiyonda iki farklı şekil yan yana yaşar.</p>
+{{ k.concept("Schema-on-write ve schema-on-read",
+   "<b>Schema-on-write</b>: şema yazma anında kontrol edilir; şemaya uymayan kayıt reddedilir. <b>Schema-on-read</b>: veri olduğu gibi yazılır; yapı okuma anında, okuyan program tarafından yorumlanır.",
+   "Aurora'da orders tablosu schema-on-write'tır: total sütununa \"abc\" yazılamaz. S3'teki bir JSON dosyası schema-on-read'dir: dosyayı okuyan rapor, alanların ne anlama geldiğine karar verir.",
+   "Schema-on-write: kapıda bilet ve koltuk numarası kontrol edilir. Schema-on-read: herkes içeri girer, kimin nereye oturacağı salonda belirlenir.") }}
+<table class="data">
+  <caption>bütün durumlar: şemanın kontrol edildiği yer</caption>
+  <thead><tr><th>Yaklaşım</th><th>Kazandırdığı</th><th>Bedeli</th><th>Nerede görülür</th></tr></thead>
+  <tbody>
+    <tr><td>Schema-on-write, katı</td><td>Bozuk veri hiç girmez. Okuyan herkes şemaya güvenir.</td><td>Yeni bir alan için şema değişikliği (ALTER TABLE) gerekir.</td><td>Aurora, Redshift, Keyspaces.</td></tr>
+    <tr><td>Schema-on-write, esnek</td><td>Bazı alanlar zorunlu, gerisi serbest.</td><td>Kurallar parça parça yazılır.</td><td>MongoDB uyumlu veritabanlarında <code>$jsonSchema</code> doğrulaması, PostgreSQL'de zorunlu sütunların yanında bir <code>jsonb</code> sütunu.</td></tr>
+    <tr><td>Schema-on-read</td><td>Her şey hemen yazılır; aynı veri farklı okumalara açıktır.</td><td>Bozuk kayıt okuma anında ortaya çıkar; her okuyan aynı yorumu yapmak zorundadır.</td><td>S3'teki dosyalar, bir data lake (C4).</td></tr>
+    <tr><td>Şema yok</td><td>Sadece byte'lar.</td><td>Veritabanı içeriğe göre <b>arama yapamaz</b>.</td><td>ElastiCache'teki bir değer, S3'teki bir görsel.</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Esnek şema \"şemasız\" demek mi?") %}<p>Hayır. Şema yine vardır, sadece veritabanında değil uygulamanın kodunda yaşar. Kod <code>attributes.renk</code> alanını okuyorsa, o alanın adı ve anlamı bir sözleşmedir.
+   Fark, kuralı kimin uyguladığındadır: veritabanı mı, her okuyan program mı.</p>{% endcall %}
+{% call k.ask("Yapılandırılmamış bir dosyayı nasıl ararım?") %}<p>Dosyanın içinden yapılandırılmış bir şey çıkarırsın ve onu ararsın. Bir PDF'in metni çıkarılıp arama motoruna konur; bir görsel için etiketler ya da bir vektör üretilir.
+   Dosya nesne deposunda kalır, arama çıkarılan veri üzerinde yapılır.</p>{% endcall %}
+{{ k.quiz("veri-a3", "Lale Market'in ürün özellikleri (kulaklıkta garanti, kitapta sayfa sayısı) hangi türdedir?",
+   ["Yapılandırılmış", "Yarı yapılandırılmış", "Yapılandırılmamış", "Zaman serisi"],
+   1, "Her ürün kendi alan adlarını taşır ve alanlar üründen ürüne değişir. Bu yarı yapılandırılmış veridir; DocumentDB onu doküman olarak saklar.") }}
+
+<h2 id="models" data-short="Veri modelleri"><span class="sec">A4</span>Veri modelleri: veriyi düzenlemenin dokuz yolu</h2>
+<p>Bir veri modeli, kayıtların nasıl gruplandığını ve birbirine nasıl bağlandığını söyler. Lale Market her işi en uygun modeli kullanan bir veritabanına verir. Bu yüzden on tutorial'ın her biri bir modeli anlatır.</p>
+{{ k.concept("Veri modeli (data model)",
+   "Verinin düzenlenme biçimi: kayıt neye benzer (satır, doküman, çift, düğüm), kayıtlar nasıl bulunur ve aralarındaki bağlar nasıl kurulur.",
+   "Bir sipariş Aurora'da üç tablonun satırlarıdır. Aynı siparişin canlı sıralamaya etkisi ElastiCache'te bir sayıdır, önerilere etkisi Neptune'da bir çizgidir.",
+   "Aynı kütüphane: raflara konuya göre dizilir (tablo), bir dosya dolabında klasör klasör durur (doküman), ya da bir arkadaşlık ağı gibi çizilir (graf).") }}
+<table class="data">
+  <caption>bütün durumlar: veri modelleri ve Lale Market'teki yerleri</caption>
+  <thead><tr><th>Model</th><th>Kaydın şekli</th><th>Hızlı soru</th><th>Zayıf olduğu soru</th><th>Lale Market'te</th></tr></thead>
+  <tbody>
+    <tr><td>İlişkisel (relational)</td><td>Tablolarda satırlar; tablolar key'lerle bağlanır.</td><td>Her türlü soru, JOIN ile birleştirme, birlikte değişen satırlar.</td><td>Milyarlarca satırı tek makinede ölçeklemek.</td><td><a href="/e2etutorial/aurora">Aurora</a>: siparişler, stok.</td></tr>
+    <tr><td>Key-value</td><td>Bir key ve ona ait value.</td><td>Key ile her boyutta aynı hızda okuma ve yazma.</td><td>Key'i bilmeden arama: <b>verimli yapılamaz</b>; ikinci bir index yoksa bütün veri taranır.</td><td><a href="/e2etutorial/dynamodb">DynamoDB</a>: sepet. <a href="/e2etutorial/elasticache">ElastiCache</a>: oturum, sayaç.</td></tr>
+    <tr><td>Doküman (document)</td><td>İç içe alanları olan bir doküman (JSON benzeri).</td><td>Bir nesnenin bütün bilgisini tek okumada almak.</td><td>Dokümanlar arası birleştirme.</td><td><a href="/e2etutorial/docdb">DocumentDB</a>: ürün kataloğu.</td></tr>
+    <tr><td>Wide-column</td><td>Bir partition içinde sıralı satırlar.</td><td>"Bu kişinin son 100 olayı" gibi, tasarıma uyan soru.</td><td>Tasarlanmamış soru: ayrı bir tablo gerekir.</td><td><a href="/e2etutorial/keyspaces">Keyspaces</a>: hareket geçmişi.</td></tr>
+    <tr><td>Graf (graph)</td><td>Düğümler ve aralarındaki kenarlar.</td><td>"Benim gibi alanlar ne aldı?": bağlantı üzerinden yürümek.</td><td>Bütün veriyi toplayan raporlar.</td><td><a href="/e2etutorial/neptune">Neptune</a>: öneriler.</td></tr>
+    <tr><td>Zaman serisi (time series)</td><td>Zaman damgalı ölçümler.</td><td>"Son 6 saatin saatlik ortalaması."</td><td>Tek bir eski ölçümü güncellemek.</td><td><a href="/e2etutorial/influxdb">InfluxDB</a>: depo sıcaklıkları.</td></tr>
+    <tr><td>Arama index'i</td><td>Kelimelerden dokümanlara giden liste.</td><td>Yazım hatasına dayanıklı, puanlı metin araması.</td><td>Birlikte değişen kayıtların kesin kaydı.</td><td><a href="/e2etutorial/opensearch">OpenSearch</a>: ürün arama.</td></tr>
+    <tr><td>Sütun bazlı depo (columnar)</td><td>Tablo, ama diskte sütun sütun (B1).</td><td>Milyonlarca satırı az sütunla toplamak.</td><td>Tek bir satırı sık sık güncellemek.</td><td><a href="/e2etutorial/redshift">Redshift</a>: satış raporları.</td></tr>
+    <tr><td>Nesne (object)</td><td>Bir anahtar, byte'lar ve metadata.</td><td>Her boyutta dosyayı saklamak ve paylaşmak.</td><td>Bir dosyanın ortasını değiştirmek: <b>yapılamaz</b>, nesne bütün olarak yeniden yazılır.</td><td><a href="/e2etutorial/s3">S3</a>: ürün görselleri.</td></tr>
+  </tbody>
+</table>
+<p>Aynı veri birden fazla modelde yaşayabilir. Bir sipariş verildiğinde Aurora asıl kaydı yazar; ardından altı veritabanı kendi modeline uyan payını alır (Guided görevin <a href="/guided-e-commerce-app/?adim=25">25. adımı</a>). Bu yaklaşıma polyglot persistence denir: her iş için uygun veritabanı.</p>
+{{ k.concept("Normalizasyon ve denormalizasyon",
+   "<b>Normalizasyon</b>: her bilgiyi tek bir yerde tutmak ve gerektiğinde key'lerle birleştirmek. <b>Denormalizasyon</b>: okumayı hızlandırmak için bir bilgiyi birden fazla yere kopyalamak.",
+   "Normalize: müşterinin şehri sadece customers tablosunda durur; sipariş customer_id ile ona bağlanır. Denormalize: Keyspaces'teki her hareket satırı ürünün adını da taşır, böylece \"son baktıkların\" listesi DocumentDB'ye sormadan çizilir.",
+   "Normalize: telefon numaran tek bir rehberde, herkes oraya bakar. Denormalize: numaran on kişinin telefonunda kayıtlı; değişirse on yerde güncellenmeli.") }}
+<table class="data">
+  <caption>bütün durumlar: bir bilgiyi kaç yerde tutmak</caption>
+  <thead><tr><th>Seçim</th><th>Okuma</th><th>Yazma ve değişiklik</th><th>Ne zaman</th></tr></thead>
+  <tbody>
+    <tr><td>Normalize (tek yer)</td><td>Birleştirme gerekir (JOIN); soru zenginse sorun değil.</td><td>Bir değişiklik tek satırda; tutarsızlık olamaz.</td><td>Kesin kayıt: siparişler, stok, para.</td></tr>
+    <tr><td>Denormalize (kopya)</td><td>Tek okumada her şey hazır.</td><td>Her kopya güncellenmeli; biri unutulursa iki yer farklı söyler.</td><td>Çok okunan, az değişen bilgi; birleştirme yapamayan modeller (key-value, wide-column).</td></tr>
+    <tr><td>Kopya ama otomatik</td><td>Tek okumada hazır.</td><td>Kopyayı sistem günceller (index, zero-ETL, değişiklik akışı).</td><td>Arama index'i, rapor kopyası.</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Denormalizasyon kötü bir alışkanlık mı?") %}<p>Hayır, bir takastır. Okuma yazmadan çok daha sıksa ve kopyanın kısa süre eski kalması kabul edilebiliyorsa denormalizasyon doğru seçimdir.
+   Kesin olması gereken bilgi (bir siparişin tutarı) tek bir yerde kalır; kopyalar ondan türer.</p>{% endcall %}
+{% call k.ask("Bir projede tek bir model seçmek daha kolay olmaz mı?") %}<p>Küçük bir projede evet: çoğu uygulama tek bir ilişkisel veritabanıyla başlar ve uzun süre öyle kalır. Bir iş, modelin zayıf olduğu soruya dönüşünce (milyarlarca olay, yazım hatalı arama, milisaniye altı sayaç) o iş için ikinci bir veritabanı eklenir.
+   Her ek veritabanı işletme yükü getirir; bu yüzden her tutorial'ın "Mimar gözüyle" bölümü bu kararı puanlarla tartar.</p>{% endcall %}
+{{ k.quiz("veri-a4", "\"Bu ürünü alanlar başka neler aldı?\" sorusu en doğal olarak hangi modelde cevaplanır?",
+   ["Key-value", "Zaman serisi", "Graf", "Nesne"],
+   2, "Soru müşteri ile ürün arasındaki bağlantılar üzerinden yürür. Graf modeli bu bağlantıları doğrudan saklar ve takip eder.") }}
+
+<h2 id="acid" data-short="ACID ve BASE"><span class="sec">A5</span>Birlikte değişen veri: ACID ve BASE</h2>
+<p>Bir sipariş birkaç yazmadan oluşur: stok düşer, sipariş ve satırları yazılır. Bunların yarısı yapılıp yarısı yapılamazsa veri yanlış olur. Bir veritabanının bu duruma verdiği söz, onu seçerken bakılan ilk şeylerdendir.</p>
+{{ k.concept("Transaction",
+   "Bir bütün olarak çalışan yazmalar grubu: ya hepsi kalıcı olur (COMMIT) ya hiçbiri (ROLLBACK).",
+   "Checkout: <code>UPDATE products SET stock = stock - 1</code>, <code>INSERT INTO orders</code>, <code>INSERT INTO order_items</code>, sonra COMMIT. Ödeme başarısız olursa ROLLBACK ve stok geri gelir (Guided <a href=\"/guided-e-commerce-app/?adim=23\">adım 23</a>).",
+   "Bir banka havalesi: bir hesaptan düşüp diğerine eklenmeyen para olamaz.") }}
+<table class="data">
+  <caption>bütün durumlar: ACID'in dört sözü</caption>
+  <thead><tr><th>Harf</th><th>Söz</th><th>Lale Market'te</th><th>Olmasaydı</th></tr></thead>
+  <tbody>
+    <tr><td><b>A</b>tomicity (bölünmezlik)</td><td>Transaction'ın yazmaları ya hep birlikte olur ya hiç olmaz.</td><td>Stok düştü ama sipariş yazılamadıysa stok geri gelir.</td><td>Satılmamış bir ürün stoktan eksilir.</td></tr>
+    <tr><td><b>C</b>onsistency (tutarlılık)</td><td>Her transaction veriyi kurallara uyan bir hâlden yine kurallara uyan bir hâle taşır.</td><td><code>CHECK (stock &gt;= 0)</code>: stok eksiye düşemez.</td><td>Eksi stoklu ürünler satılır.</td></tr>
+    <tr><td><b>I</b>solation (yalıtım)</td><td>Aynı anda çalışan transaction'lar birbirinin yarım işini görmez.</td><td>İki müşteri son parçayı aynı anda alırken biri bekler.</td><td>İki kişi aynı son parçayı alır.</td></tr>
+    <tr><td><b>D</b>urability (kalıcılık)</td><td>COMMIT edilen veri bir çökme sonrası da yerindedir.</td><td>"Sipariş alındı" mesajından sonra sunucu kapansa da sipariş durur.</td><td>Müşteri onay aldığı siparişi kaybeder.</td></tr>
+  </tbody>
+</table>
+{{ k.concept("BASE yaklaşımı",
+   "<b>B</b>asically <b>A</b>vailable, <b>S</b>oft state, <b>E</b>ventual consistency. Sistem her zaman cevap verir (basically available); yeni yazma gelmese bile kopyalar uzlaştıkça durum değişebilir (soft state); kopyalar bir süre farklı olabilir ve sonunda aynı hâle gelir (eventual consistency). Dağıtık sistemlerin çoğu bu yaklaşımı varsayılan olarak seçer, bazıları istenince daha güçlü garantiler de verir.",
+   "OpenSearch'teki ürün index'i katalogdan kısa bir süre geride kalabilir. Keyspaces'te tek bir kopyadan (LOCAL_ONE ayarıyla) okunan bir hareket, en son yazmayı henüz görmeyebilir (Guided <a href=\"/guided-e-commerce-app/?adim=28\">adım 28</a>).",
+   "Bir haberin bütün gazetelere ulaşması: bir süre bazıları eski haberi verir, sonunda hepsi aynı haberi verir.") }}
+<table class="data">
+  <caption>bütün durumlar: ACID ve BASE yan yana</caption>
+  <thead><tr><th>Konu</th><th>ACID yaklaşımı</th><th>BASE yaklaşımı</th></tr></thead>
+  <tbody>
+    <tr><td>Bir yazmadan hemen sonra okuma</td><td>Her okuma en son COMMIT'i görür.</td><td>Bir kopya eski değeri verebilir (eventual consistency); güçlü okuma istenirse çoğu sistem verir, bedeli daha yüksektir.</td></tr>
+    <tr><td>Birçok kaydı birlikte değiştirmek</td><td>Bir transaction ile.</td><td>Çoğu zaman tek kayıt garantisi; çok kayıtlı transaction ya hiç yoktur ya da sınırlıdır.</td></tr>
+    <tr><td>Bir sunucu ya da bölge kesilince</td><td>Kesinlik korunur, kısa bir süre yazma bekleyebilir.</td><td>Sistem cevap vermeye devam eder; kopyalar sonra uzlaşır.</td></tr>
+    <tr><td>Ölçek</td><td>Yazmalar çoğu zaman tek bir sunucuda toplanır.</td><td>Yazmalar birçok makineye dağılır.</td></tr>
+    <tr><td>Lale Market</td><td>Aurora (siparişler), DynamoDB'de tek item ve transaction API'si.</td><td>OpenSearch index'i, Keyspaces'in tek kopyadan okuması (LOCAL_ONE), zero-ETL ile Redshift kopyası (yaklaşık 30 saniye geride).</td></tr>
+  </tbody>
+</table>
+{% call k.ask("BASE bir veritabanı yanlış veri mi verir?") %}<p>Hayır, eski veri verebilir. Bir kopya en son yazmayı henüz almamışsa bir önceki doğru değeri döndürür. Eski bir değerin kabul edilebildiği yerde (ürün araması, öneriler) bu takas hız ve erişilebilirlik kazandırır.
+   Kabul edilemediği yerde (sepetin ödeme anındaki hâli, stok) güçlü okuma ya da ACID bir veritabanı seçilir.</p>{% endcall %}
+{% call k.ask("ACID ve BASE bir veritabanının sabit etiketi mi?") %}<p>Değil, çoğu zaman bir ayardır. DynamoDB'de aynı tablo hem eventually consistent hem strongly consistent okunabilir; Keyspaces'te tutarlılık seviyesi her sorguda seçilir.
+   Doğru soru şudur: "Bu ekran, bu okuma için hangi garantiyi istiyor?"</p>{% endcall %}
+{{ k.quiz("veri-a5", "Ödeme stoğu düştükten sonra başarısız oluyor ve stok geri geliyor. ACID'in hangi harfi bunu sağlar?",
+   ["Atomicity", "Isolation", "Durability", "Eventual consistency"],
+   0, "Atomicity, transaction'ın yazmalarının ya hep birlikte ya hiç olmamasıdır. Ödeme başarısız olunca ROLLBACK stok düşüşünü de geri alır.") }}
+
+<!-- ============================================================ PART B -->
+<div class="part"><b>Bölüm B</b><h2 id="partB" data-short="Bölüm B: Saklama">Verinin saklanması: diskte dizilim, dosya biçimi, depolama türü</h2>
+<p>Bir tablo ekranda satır ve sütunlardan oluşur. Diskte ise byte'lardan oluşur. Byte'ların hangi sırada dizildiği, hangi dosya biçiminde durduğu ve hangi depolamada tutulduğu, bir sorgunun ne kadar veri okuyacağını belirler.</p></div>
+
+<h2 id="layout" data-short="Satır ve sütun düzeni"><span class="sec">B1</span>Aynı tablo, iki dizilim: satır düzeni ve sütun düzeni</h2>
+<p>Disk veriyi bloklar hâlinde okur: bir blok birkaç kilobyte'tır ve bir bütün olarak okunur. Bir tablonun değerlerini bloklara iki türlü dizebilirsin.</p>
+{{ k.concept("Satır düzeni (row-oriented)",
+   "Bir satırın bütün değerleri diskte yan yana durur; sonra bir sonraki satır gelir.",
+   "Blokta: <code>O000001, P0044, 1, 2651.39</code> ardından <code>O000001, P0095, 1, 2721.65</code>.",
+   "Bir defterin her sayfasında bir müşterinin bütün bilgisi.") }}
+{{ k.concept("Sütun düzeni (column-oriented)",
+   "Bir sütunun bütün değerleri yan yana durur; sonra bir sonraki sütun gelir. Aynı türden değerler yan yana olduğu için iyi sıkışır.",
+   "Bir blokta bütün <code>qty</code> değerleri: <code>1, 1, 3, 2, 5, 10, 2, 1, 1</code>. Başka bir blokta bütün <code>unit_price</code> değerleri.",
+   "Bir sınıfın not çizelgesi: her sütun bir ders; matematik ortalaması için sadece o sütun okunur.") }}
+<div class="parts">
+  <div class="on"><h4>satır düzeni</h4><span class="chip">O000001 · P0044 · 1 · 2651.39</span><span class="chip">O000001 · P0095 · 1 · 2721.65</span><span class="chip">O000001 · P0142 · 3 · 2693.65</span></div>
+  <div><h4>sütun düzeni</h4><span class="chip">order_id: O000001, O000001, O000001…</span><span class="chip">product_id: P0044, P0095, P0142…</span><span class="chip">qty: 1, 1, 3…</span><span class="chip">unit_price: 2651.39, 2721.65, 2693.65…</span></div>
+</div>
+<p class="flow-cap">Aynı üç satır, iki dizilim. Solda bir blok üç satırın bütün değerlerini tutar; sağda her blok tek bir sütunun değerlerini tutar.</p>
+{% call k.predict("Rapor bütün satırların qty × unit_price toplamını istiyor. Tabloda 4 sütun ve 9 satır var. Satır düzeni kaç değer okur, sütun düzeni kaç değer okur?") %}
+<p>Satır düzeni 36 değerin hepsini okur, çünkü her blok satırların bütün sütunlarını taşır. Sütun düzeni sadece qty ve unit_price bloklarını okur: 18 değer. Simülasyon bunu blok blok gösteriyor.</p>{% endcall %}
+{{ k.sim("rowcol", "Bir rapor sorgusu: satır düzeni ve sütun düzeni") }}
+<table class="data">
+  <caption>bütün durumlar: hangi iş hangi dizilimi ister</caption>
+  <thead><tr><th>İş</th><th>Satır düzeni</th><th>Sütun düzeni</th></tr></thead>
+  <tbody>
+    <tr><td>Bir siparişin bütün bilgisini okumak</td><td><b>Hızlı</b>: tek blok.</td><td>Yavaş: her sütunun bloğuna ayrı ayrı gidilir.</td></tr>
+    <tr><td>Yeni bir sipariş eklemek</td><td><b>Hızlı</b>: bloğun sonuna bir satır.</td><td>Yavaş: her sütunun bloğuna bir değer; bu yüzden sütun depoları yazmaları toplu yapar.</td></tr>
+    <tr><td>Milyonlarca satırı 2 sütunla toplamak</td><td>Yavaş: kullanılmayan sütunlar da okunur.</td><td><b>Hızlı</b>: sadece gereken sütunlar.</td></tr>
+    <tr><td>Sıkıştırma</td><td>Orta: bir blokta farklı türden değerler.</td><td><b>Güçlü</b>: bir blokta aynı türden, sık tekrar eden değerler (status: delivered, delivered, shipped…).</td></tr>
+    <tr><td>Tek bir değeri güncellemek</td><td>Kolay.</td><td>Pahalı: sıkıştırılmış bloğun yeniden yazılması gerekir.</td></tr>
+    <tr><td>Nerede</td><td>Aurora (PostgreSQL), DocumentDB, DynamoDB.</td><td>Redshift, Parquet ve ORC dosyaları (B2).</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Neden her şeyi sütun düzeniyle saklamıyoruz?") %}<p>Çünkü günlük işlemlerin çoğu tek bir kaydın bütün alanlarıyla çalışır: bir siparişi yaz, bir müşteriyi göster. Sütun düzeninde bu iş her sütun için ayrı bir okuma ya da yazma demektir.
+   Bu yüzden siparişler satır düzenindeki Aurora'da yazılır, raporlar sütun düzenindeki Redshift'te okunur. C3 bu ayrımın adını verir.</p>{% endcall %}
+{% call k.ask("Bir blok gerçekte ne kadar büyük?") %}<p>Simülasyonda bir blok 3 satır tutar, okumak kolay olsun diye. PostgreSQL'in sayfası 8 KB'tır ve yüzlerce satır taşır. Redshift bir sütunun değerlerini 1 MB'lık bloklarda tutar.
+   Oran aynı kalır: rapor ne kadar az sütun kullanıyorsa sütun düzeni o kadar az okur.</p>{% endcall %}
+
+<h2 id="formats" data-short="Dosya biçimleri"><span class="sec">B2</span>Dosya biçimleri: CSV, JSON, Avro, Parquet, ORC</h2>
+<p>Veri bir veritabanının içinde olmadığında, örneğin bir dışa aktarmada ya da bir data lake'te, bir dosyada durur. Dosyanın biçimi, verinin B1'deki iki dizilimden hangisiyle yazılacağını ve şemanın dosyada olup olmadığını belirler.</p>
+{{ k.concept("Metin ve ikili biçim",
+   "<b>Metin biçimi</b>: her değer okunabilir karakterlerle yazılır (\"2721.65\"). <b>İkili biçim</b> (binary): değer, makinenin doğrudan kullandığı byte'larla yazılır; bir sayı her zaman aynı sayıda byte tutar ve metin hâline çevrilmesi gerekmez.",
+   "orders.csv bir metin dosyasıdır, bir not defteriyle açılır. orders.parquet ikili bir dosyadır; okumak için Parquet'i anlayan bir program gerekir.",
+   "Metin: elle yazılmış bir mektup, herkes okur. İkili: bir barkod, okuyucusu olan makine çok hızlı okur.") }}
+<table class="data">
+  <caption>bütün durumlar: yaygın dosya biçimleri</caption>
+  <thead><tr><th>Biçim</th><th>Dizilim</th><th>Metin / ikili</th><th>Şema nerede</th><th>Güçlü olduğu</th><th>Zayıf olduğu</th></tr></thead>
+  <tbody>
+    <tr><td>CSV</td><td>Satır</td><td>Metin</td><td>Yok; ilk satır sadece sütun adlarını verir, tipleri vermez.</td><td>Her araç açar; tabloyu elle incelemek.</td><td>Tip yok, iç içe veri yok; virgül içeren bir değer tırnak ister.</td></tr>
+    <tr><td>JSON / JSON Lines</td><td>Satır</td><td>Metin</td><td>Her kayıt kendi alan adlarını taşır.</td><td>İç içe ve değişken alanlar; API'ler.</td><td>Alan adları her kayıtta tekrar eder: dosya büyür.</td></tr>
+    <tr><td>Avro</td><td>Satır</td><td>İkili</td><td>Dosyanın başında, JSON ile yazılmış bir şema.</td><td>Kayıt kayıt yazılan akışlar, şemanın zamanla değişmesi.</td><td>Az sütunlu raporda bütün satırı okur.</td></tr>
+    <tr><td>Parquet</td><td>Sütun (satır grupları içinde)</td><td>İkili</td><td>Dosyanın sonunda: şema ve her sütun parçası için min/max istatistiği.</td><td>Analiz sorguları; gereksiz sütunları ve parçaları atlamak.</td><td>Tek bir satırı eklemek ya da değiştirmek: dosya yeniden yazılır.</td></tr>
+    <tr><td>ORC</td><td>Sütun (stripe denen satır grupları içinde)</td><td>İkili</td><td>Dosyanın sonunda, istatistiklerle.</td><td>Parquet ile aynı iş; Hadoop'un SQL aracı Hive ile kurulan sistemlerde yaygın.</td><td>Parquet ile aynı.</td></tr>
+  </tbody>
+</table>
+{{ k.sim("formats", "Aynı siparişler üç biçimde: hangisi ne kadar okur?") }}
+<p>Simülasyondaki byte sayıları öğretim verisinin gerçek CSV ve JSON hâlinden hesaplanır. Parquet dosyası için byte sayısı vermiyoruz: dört siparişlik bir dosyada başlık ve istatistik bölümü veriden büyüktür. Parquet'in kazancı milyonlarca satırda, sütunların sıkışması ve atlanmasıyla gelir.</p>
+{{ k.concept("Sıkıştırma ve kodlama (compression, encoding)",
+   "Aynı bilgiyi daha az byte ile yazmak. <b>Sözlük kodlama</b> (dictionary encoding) tekrar eden metinleri bir kez yazar ve satırlarda küçük bir numara tutar. <b>Genel sıkıştırma</b> (Snappy, ZSTD, gzip) byte'lardaki tekrarı küçültür.",
+   "status sütununda sadece üç farklı değer var: cancelled, delivered, shipped. Sözlükte 0, 1, 2 olurlar; milyonlarca satırda her satır bir metin yerine bir numara tutar.",
+   "Bir sınıf listesinde her öğrencinin yanına okulun adını yazmak yerine en üste bir kez yazmak.") }}
+{% call k.ask("Parquet dosyasını bir veritabanı gibi sorgulayabilir miyim?") %}<p>Evet, onu anlayan bir motorla. Redshift Spectrum ve Amazon Athena (S3'teki dosyaları SQL ile sorgulayan servis) Parquet dosyalarını okur; sadece gereken sütunları ve min/max'ı sorguya uyan parçaları okur.
+   Dosya bir veritabanı değildir: transaction yoktur, iki program aynı anda aynı dosyayı yazamaz. C4 bu açığı kapatan tablo biçimlerini anlatır.</p>{% endcall %}
+{% call k.ask("CSV neden hâlâ bu kadar yaygın?") %}<p>Çünkü her araç onu okur ve yazar: bir tablo programı, bir metin editörü, her programlama dili. Küçük bir veriyi bir ekipten diğerine taşımak için hâlâ en kolay yol.
+   Büyük veride ve tekrar tekrar sorgulanan veride ise ikili ve sütun bazlı bir biçime çevrilir.</p>{% endcall %}
+{{ k.quiz("veri-b2", "Bir veri ekibi yılda milyarlarca satırı S3'te saklayacak ve sorguları genellikle 50 sütunun 4'ünü kullanacak. Hangi biçim en uygundur?",
+   ["CSV", "JSON Lines", "Avro", "Parquet"],
+   3, "Parquet sütun bazlıdır: sorgu sadece 4 sütunun parçalarını okur, min/max istatistikleriyle uymayan parçaları atlar ve sütunlar iyi sıkışır.") }}
+
+<h2 id="storage" data-short="Depolama ve dosya sistemleri"><span class="sec">B3</span>Verinin durduğu yer: blok, dosya ve nesne depolama; NTFS, ext4, HDFS, S3</h2>
+<p>Bir dosyanın byte'ları sonunda bir diske yazılır. Arada byte'ları düzenleyen bir katman vardır ve bu katmanın türü, verinin nasıl adreslendiğini, kaç makineye yayıldığını ve nasıl korunduğunu belirler.</p>
+{{ k.concept("Depolama türleri (block, file, object)",
+   "<b>Blok depolama</b>: disk, numaralı ve eşit büyüklükte bloklar olarak sunulur; bir bloğun içinde ne olduğunu bilmez. Bloklara anlam veren, üstüne kurulan dosya sistemi ya da veritabanıdır. <b>Dosya depolama</b>: veri, klasörlerin içinde adı olan dosyalardır ve bir dosyanın herhangi bir byte'ı değiştirilebilir. <b>Nesne depolama</b>: veri, düz bir alanda bir anahtar, byte'lar ve metadata'dan oluşan nesnelerdir; nesne bütün olarak yazılır ve okunur.",
+   "Aurora'nın verisi blok seviyesinde, AWS'in yönettiği dağıtık bir depolamada. Uygulama sunucusunun diski blok depolamadır (EBS: EC2 sunucusuna ağ üzerinden bağlanan disk) ve üstünde bir dosya sistemi vardır. Ürün görselleri S3'te nesnedir: <code>products/P0001.jpg</code>.",
+   "Blok: bir depodaki numaralı raflar. Dosya: rafları klasörlere ayıran ve her klasöre etiket yapıştıran bir arşiv. Nesne: bir emanet dolabı; numarayı verirsin, paketi bütün olarak alırsın.") }}
+{{ k.concept("Dosya sistemi (file system)",
+   "Blokları dosyalara ve klasörlere çeviren katman. Bir dosyanın hangi bloklarda durduğunu, adını, boyutunu ve izinlerini kendi tablolarında tutar.",
+   "Uygulama sunucusunda <code>/opt/engine-app/app/engine_app/web.py</code> bir dosyadır. Dosya sistemi onun byte'larının diskin hangi bloklarında olduğunu bilir.",
+   "Bir kitabın içindekiler sayfası: bölümün adı ve hangi sayfada başladığı.") }}
+<p>Aşağıdaki tabloyu soldan sağa oku: veri tek bir makineden binlerce makineye, oradan bir servise yayılır; yönetim de senden AWS'e geçer.</p>
+<table class="data">
+  <caption>bütün durumlar: dosya sistemleri ve nesne deposu yan yana</caption>
+  <thead><tr><th>Özellik</th><th>NTFS (Windows), ext4 (Linux)</th><th>HDFS</th><th>S3 (nesne deposu)</th></tr></thead>
+  <tbody>
+    <tr><td>Nerede çalışır</td><td>Tek bir makinenin diski.</td><td>Yüzlerce, binlerce makineye yayılmış bir küme (Hadoop).</td><td>AWS'in yönettiği bir servis; makine görmezsin.</td></tr>
+    <tr><td>Birim</td><td>NTFS cluster: varsayılan 4 KB (16 TB'a kadar birimlerde). ext4 blok: genellikle 4 KB.</td><td>Blok: varsayılan 128 MB.</td><td>Nesne: tek bir PUT ile 5 GB'a, parça parça yüklemeyle (multipart upload) 50 TB'a kadar.</td></tr>
+    <tr><td>Adresleme</td><td>Klasör yolu: <code>C:\veri\a.csv</code>, <code>/data/a.csv</code></td><td>Küme içinde yol: <code>hdfs://nn/data/a.csv</code></td><td>Bucket ve anahtar: <code>s3://bucket/data/a.csv</code>. Klasör yoktur, anahtarın önekidir.</td></tr>
+    <tr><td>Dosyanın ortasını değiştirmek</td><td>Evet.</td><td><b>Hayır</b>: dosya bir kez yazılır, sadece sonuna eklenebilir.</td><td><b>Hayır</b>: nesne bütün olarak yeniden yazılır.</td></tr>
+    <tr><td>Bir disk bozulursa</td><td>Veri o diskle gider; yedek ya da RAID (diskleri birbirinin kopyası yapan düzen) gerekir.</td><td>Her blok varsayılan olarak 3 makinede kopyalıdır; biri bozulunca küme yeni kopya üretir.</td><td>S3 Standard veriyi birden fazla Availability Zone'da (bir bölgedeki ayrı veri merkezleri) saklar; One Zone sınıfları tek AZ'dedir. AWS 11 dokuz (%99,999999999) dayanıklılık için tasarlar.</td></tr>
+    <tr><td>Kapasite</td><td>O diskin boyutu.</td><td>Makine ekledikçe büyür.</td><td>Pratikte sınırsız; kullandığın kadar ödersin.</td></tr>
+    <tr><td>Kim yönetir</td><td>Sen.</td><td>Sen: NameNode, DataNode'lar, yükseltmeler.</td><td>AWS.</td></tr>
+    <tr><td>Hesaplama ile ilişkisi</td><td>Aynı makine.</td><td>Hesaplama verinin olduğu makineye gider (data locality).</td><td>Hesaplama ayrı; birçok motor aynı veriyi okur: Athena, Redshift, EMR (AWS'in yönettiği Hadoop ve Spark kümeleri).</td></tr>
+  </tbody>
+</table>
+<p>HDFS'te iki tür makine vardır: bir yönetici makine (NameNode) hangi dosyanın hangi bloklardan oluştuğunu ve blokların nerede durduğunu tutar; veri makineleri (DataNode) blokların kendisini saklar.</p>
+<div class="flow"><div class="box">İstemci<small>"/data/orders.csv nerede?"</small></div><span class="arrow">→</span><div class="box pk">NameNode<small>blok 1: makine A, C, F · blok 2: B, D, F</small></div><span class="arrow">→</span><div class="box hit">DataNode'lar<small>istemci blokları doğrudan makinelerden okur</small></div></div>
+<p class="flow-cap">HDFS'te bir dosyayı okumak: NameNode sadece blokların nerede olduğunu söyler, veri doğrudan DataNode'lardan gelir. 128 MB'lık bloklar büyük dosyaları birçok makinede paralel okumayı mümkün kılar. Küçük dosyalar için bu yapı ağırdır: NameNode her dosyanın ve bloğun kaydını bellekte tutar, milyonlarca küçük dosya bu belleği doldurur.</p>
+{% call k.ask("HDFS ile S3 aynı işi mi yapıyor? Neden ikisi de var?") %}<p>İkisi de büyük veriyi birçok makineye yayar ama farklı dönemlerin cevabıdır. HDFS, verinin ve hesaplamanın aynı makinelerde durduğu bir küme için tasarlandı: diskler o makinelere bağlıdır ve kümeyi sen işletirsin.
+   S3'te depolama ve hesaplama ayrıdır: veri tek yerde durur, istediğin kadar motor (Athena, Redshift Spectrum, EMR) onu okur ve hesaplamayı kapattığında veri kalır. Bugün bulutta yeni bir data lake genellikle S3 üzerine kurulur; EMR, HDFS'i hâlâ geçici veri için kullanabilir.</p>{% endcall %}
+{% call k.ask("Veritabanının verisi de bir dosya sisteminde mi durur?") %}<p>Kendi kurduğun bir PostgreSQL'de evet: veri, ext4 gibi bir dosya sistemindeki 8 KB sayfalardan oluşan dosyalardır. Aurora'da hayır: Aurora'nın depolaması üç Availability Zone'a yayılmış, AWS'in yönettiği özel bir katmandır ve veriyi altı kopya tutar (<a href="/e2etutorial/aurora">Aurora tutorial'ı</a>).
+   Bir veritabanı seçerken verinin hangi depolamada durduğu, bir arızada ne kaybedileceğini belirler.</p>{% endcall %}
+{% call k.ask("Ürün görselleri neden Aurora'da değil de S3'te?") %}<p>Görsel yapılandırılmamış ve büyüktür; veritabanının sorgu yetenekleri ona bir şey katmaz. Veritabanına konsa her yedek ve her kopya onu da taşır. S3'te durur ve tarayıcı onu doğrudan S3'ten indirebilir (Guided <a href="/guided-e-commerce-app/?adim=36">adım 36</a>).
+   Veritabanında sadece görselin anahtarı ve metadata'sı tutulur.</p>{% endcall %}
+{{ k.quiz("veri-b3", "Bir dosyanın ortasındaki birkaç byte'ı sık sık değiştiren bir program hangi depolamada en rahat çalışır?",
+   ["S3", "HDFS", "Bir makinenin diskindeki ext4 ya da NTFS", "Hiçbirinde yapılamaz"],
+   2, "Yerel dosya sistemleri bir dosyanın herhangi bir byte'ını değiştirmeye izin verir. HDFS'te dosyalar bir kez yazılır, S3'te nesne bütün olarak yeniden yazılır.") }}
+
+<!-- ============================================================ PART C -->
+<div class="part"><b>Bölüm C</b><h2 id="partC" data-short="Bölüm C: Kullanma">Verinin kullanılması: soru sormak, bağlanmak, işlemek ve analiz</h2>
+<p>Veri saklandı. Şimdi bir uygulamanın ona nasıl soru sorduğu, veritabanına nasıl bağlandığı ve günlük işlerle büyük analizlerin neden farklı sistemlerde çalıştığı.</p></div>
+
+<h2 id="query" data-short="Sorgu dilleri"><span class="sec">C1</span>Soru sormak: SQL ve diğer sorgu dilleri</h2>
+<p>Bir veritabanına ne istediğini söylemenin yolu sorgu dilidir. Bazı diller "ne istiyorum" der ve nasıl bulunacağına veritabanı karar verir; bazıları ise adımları tek tek söyler.</p>
+{{ k.concept("Sorgu (query)",
+   "Bir veritabanına gönderilen istek: hangi veriyi istediğini ya da neyi değiştirmek istediğini söyler. Bir sorgu okuyabilir (SELECT), yazabilir (INSERT, UPDATE, DELETE) ya da yapıyı değiştirebilir (CREATE TABLE).",
+   "<code>SELECT name, price FROM products WHERE product_id = 'P0001'</code>: P0001'in adını ve fiyatını ister.",
+   "Bir kütüphaneciye verilen not: \"2020'den sonra basılmış, Türkçe veri kitapları.\"") }}
+<table class="data">
+  <caption>bütün durumlar: Lale Market'in sorgu dilleri ve bağlantı yolları (uygulamanın kodundan)</caption>
+  <thead><tr><th>Veritabanı</th><th>Dil ya da API</th><th>Uygulamanın kütüphanesi</th><th>Bağlantı</th><th>Örnek</th></tr></thead>
+  <tbody>
+    <tr><td>Aurora PostgreSQL</td><td>SQL</td><td>psycopg</td><td>PostgreSQL protokolü, port 5432, TLS</td><td><code>SELECT … FROM orders JOIN order_items …</code></td></tr>
+    <tr><td>Redshift</td><td>SQL</td><td>redshift_connector</td><td>PostgreSQL protokolü, port 5439, TLS</td><td><code>SELECT city, SUM(revenue) … GROUP BY city</code></td></tr>
+    <tr><td>DocumentDB</td><td>MongoDB sorgu dili</td><td>pymongo</td><td>MongoDB protokolü, port 27017, TLS</td><td><code>find({category: "Elektronik"})</code></td></tr>
+    <tr><td>DynamoDB</td><td>API çağrıları (GetItem, Query, UpdateItem); PartiQL da var</td><td>boto3</td><td>HTTPS, her istek imzalı (SigV4)</td><td><code>UpdateItem … ADD qty :n</code></td></tr>
+    <tr><td>ElastiCache (Valkey)</td><td>Komutlar</td><td>redis-py</td><td>RESP protokolü, port 6379, TLS</td><td><code>DECR lm:deal:stock</code></td></tr>
+    <tr><td>Keyspaces</td><td>CQL (SQL'e benzer)</td><td>cassandra-driver</td><td>Cassandra protokolü, port 9142, TLS</td><td><code>SELECT … WHERE user_id = ? LIMIT 20</code></td></tr>
+    <tr><td>OpenSearch</td><td>Query DSL (JSON)</td><td>opensearch-py</td><td>HTTPS (443), imzalı</td><td><code>{"match": {"name": {"query": "kulaklik", "fuzziness": "AUTO"}}}</code></td></tr>
+    <tr><td>Neptune</td><td>openCypher</td><td>requests</td><td>HTTPS, port 8182, imzalı</td><td><code>MATCH (c)-[:BOUGHT]-&gt;(p) RETURN p</code></td></tr>
+    <tr><td>InfluxDB</td><td>Flux</td><td>influxdb-client</td><td>HTTPS API, port 8086</td><td><code>from(bucket) |&gt; range(start: -6h) |&gt; aggregateWindow(every: 1h, fn: mean)</code></td></tr>
+    <tr><td>S3</td><td>API çağrıları (PutObject, GetObject)</td><td>boto3</td><td>HTTPS, imzalı</td><td><code>GetObject products/P0001.jpg</code></td></tr>
+  </tbody>
+</table>
+{% call k.ask("SQL neden bu kadar yaygın?") %}<p>SQL bildirimseldir (declarative): ne istediğini yazarsın, nasıl bulunacağına veritabanının planlayıcısı karar verir. Aynı sorgu küçük tabloda ve milyar satırlık tabloda aynı kalır; değişen plandır.
+   1970'lerde doğdu, 1986'dan beri bir ANSI ve ISO standardıdır ve neredeyse her veri aracı onu konuşur. Bu yüzden SQL olmayan sistemler bile çoğu zaman SQL'e benzeyen bir dil sunar (CQL, PartiQL, OpenSearch SQL).</p>{% endcall %}
+{% call k.ask("Bildirimsel olmayan dil ne demek?") %}<p>Adımları senin söylediğin dil. ElastiCache'te "sıralı kümenin ilk 10 üyesini ver" bir komuttur; veritabanı plan yapmaz, komutu çalıştırır. DynamoDB'de hangi key'i okuyacağını sen söylersin.
+   Kazancı öngörülebilir hızdır, bedeli yeni bir soru için kodun değişmesidir.</p>{% endcall %}
+
+<h2 id="connect" data-short="Bağlantı ve JDBC"><span class="sec">C2</span>Bağlanmak: sürücü, JDBC, connection string ve bağlantı havuzu</h2>
+<p>Uygulama ile veritabanı ayrı makinelerdedir. Bir sorgunun gidebilmesi için önce bir bağlantı kurulur: makine bulunur, şifreli bir kanal açılır, kimlik doğrulanır. Bu işi uygulamanın içindeki bir kütüphane yapar.</p>
+{{ k.concept("Sürücü (driver)",
+   "Uygulamanın dilinde yazılmış ve bir veritabanının ağ protokolünü konuşan kütüphane. Uygulama \"şu sorguyu çalıştır\" der; sürücü sorguyu doğru byte'lara çevirir, gönderir ve cevabı uygulamanın anlayacağı satırlara çevirir.",
+   "Lale Market'in Python kodunda Aurora'nın sürücüsü psycopg, Redshift'inki redshift_connector'dır. Bir Java uygulaması aynı Aurora'ya PostgreSQL JDBC sürücüsüyle bağlanırdı.",
+   "Bir tercüman: sen Türkçe konuşursun, karşı taraf Japonca; tercüman ikisini birbirine çevirir.") }}
+{{ k.concept("JDBC ve ODBC",
+   "<b>JDBC</b> (Java Database Connectivity): Java uygulamalarının her veritabanıyla aynı biçimde konuşmasını sağlayan standart arayüz. Uygulama hep aynı komutları kullanır (<code>getConnection</code>, <code>executeQuery</code>); her veritabanının üreticisi kendi JDBC sürücüsünü yazar. <b>ODBC</b> aynı fikrin C dilindeki karşılığıdır ve tablo programları ile raporlama araçları onu kullanır.",
+   "Bir rapor aracı Redshift'e Redshift JDBC sürücüsüyle bağlanır. Aracın kodu Aurora'ya bağlanırken de aynı JDBC komutlarını kullanır; sadece sürücü ve adres değişir.",
+   "Elektrik prizi: her cihaz aynı fişi takar (arayüz), arkadaki santral farklı olabilir (veritabanı).") }}
+{{ k.concept("Connection string (bağlantı adresi)",
+   "Bağlantının adresi ve ayarları tek satırda: hangi sürücü, hangi makine, hangi port, hangi veritabanı, şifreleme nasıl.",
+   "<code>jdbc:postgresql://aurora-host:5432/shop?sslmode=verify-full</code>. Parçaları: <code>jdbc:postgresql</code> sürücüyü seçer, <code>aurora-host:5432</code> makine ve port, <code>shop</code> veritabanı, <code>sslmode=verify-full</code> şifreleme ve sunucu sertifikasının doğrulanması. Kullanıcı adı ve şifre ayrı verilir; Lale Market onları AWS Secrets Manager'dan alır.",
+   "Bir mektubun zarfı: ülke, şehir, sokak, kapı numarası.") }}
+<table class="data">
+  <caption>bütün durumlar: connection string örnekleri</caption>
+  <thead><tr><th>Veritabanı</th><th>Örnek</th><th>Not</th></tr></thead>
+  <tbody>
+    <tr><td>PostgreSQL / Aurora (JDBC)</td><td><code>jdbc:postgresql://host:5432/shop?sslmode=verify-full</code></td><td>Lale Market'in Python kodu aynı ayarları ayrı parametrelerle verir: host, port 5432, dbname shop, sslmode require.</td></tr>
+    <tr><td>Redshift (JDBC)</td><td><code>jdbc:redshift://workgroup.account.region.redshift-serverless.amazonaws.com:5439/dev</code></td><td>Port 5439.</td></tr>
+    <tr><td>MongoDB / DocumentDB</td><td><code>mongodb://user@host:27017/?tls=true&amp;replicaSet=rs0</code></td><td>JDBC değil, MongoDB'nin kendi URI biçimi.</td></tr>
+    <tr><td>ODBC</td><td><code>Driver={Amazon Redshift (x64)};Server=…;Port=5439;Database=dev</code></td><td>Anahtar=değer biçimi.</td></tr>
+    <tr><td>HTTPS API'leri (DynamoDB, S3)</td><td>Connection string <b>yok</b>: bir bölge ve kimlik bilgisi yeter.</td><td>Her istek kendi başına imzalanır; veritabanında bir oturum açılmaz. Kütüphane alttaki TLS bağlantısını sonraki isteklerde yeniden kullanabilir.</td></tr>
+  </tbody>
+</table>
+{% call k.predict("Uygulama P0001'in fiyatını istiyor ve henüz açık bir bağlantı yok. Sorgunun kendisi 1 gidiş-dönüş. Bağlantıyı kurmak kaç gidiş-dönüş daha alır?") %}
+<p>Bu örnekte 7: DNS, TCP, şifreleme isteği, TLS el sıkışması ve üç adımlı kimlik doğrulama. Sorguyla birlikte 8. Bağlantı havuzu bu 7 adımı her istekte tekrar etmez. Simülasyon mesajları PostgreSQL protokolündeki adlarıyla gösteriyor.</p>{% endcall %}
+{{ k.sim("connect", "Bir veritabanı bağlantısı, mesaj mesaj: havuzsuz ve havuzlu") }}
+{{ k.concept("Bağlantı havuzu (connection pool)",
+   "Açık ve kimliği doğrulanmış bağlantıları saklayan, uygulamaya ödünç veren ve geri alan katman. Her istekte bağlantı kurma maliyeti ödenmez, veritabanındaki bağlantı sayısı da sınırlı kalır.",
+   "Lale Market'in Aurora kodu sadelik için her istekte yeni bir bağlantı açar (<code>engines/aurora.py</code>, <code>conn()</code>). Gerçek bir mağaza psycopg_pool gibi bir havuz ya da Amazon RDS Proxy kullanır.",
+   "Bir taksi durağı: her yolculuk için yeni bir taksi çağırmak yerine bekleyen taksilerden birine binersin.") }}
+<table class="data">
+  <caption>bütün durumlar: bağlantı yönetimi</caption>
+  <thead><tr><th>Yol</th><th>Her istekte</th><th>Bedeli</th><th>Ne zaman</th></tr></thead>
+  <tbody>
+    <tr><td>Her istekte yeni bağlantı</td><td>Bütün el sıkışmalar</td><td>Gecikme ve veritabanında her bağlantı için bellek; trafik artınca bağlantı sınırı aşılabilir.</td><td>Seyrek çalışan bir script, bir eğitim ortamı.</td></tr>
+    <tr><td>Uygulamanın içinde havuz</td><td>Sadece sorgu</td><td>Her uygulama sunucusu kendi havuzunu tutar; 50 sunucu × 20 bağlantı = 1.000 bağlantı.</td><td>Sürekli çalışan web uygulamaları.</td></tr>
+    <tr><td>Ayrı bir proxy (RDS Proxy, PgBouncer)</td><td>Sadece sorgu</td><td>Ek bir bileşen.</td><td>Çok sayıda kısa ömürlü istemci (Lambda), veritabanı bağlantı sınırına yakın yükler.</td></tr>
+    <tr><td>Bağlantısız HTTPS API</td><td>İmzalı tek istek</td><td>Her istek imzalanır; veritabanında oturum yoktur, alttaki TLS bağlantısını kütüphane yeniden kullanabilir.</td><td>DynamoDB, S3, OpenSearch, Neptune.</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Bağlantı sırasında bir şey ters giderse ne olur?") %}<p>Sunucu şifrelemeye "N" (hayır) derse, <code>sslmode=require</code> ve üstündeki ayarlarda sürücü bağlantıyı keser. Şifre yanlışsa sunucu bir hata mesajı (ErrorResponse) gönderir ve bağlantıyı kapatır.
+   Havuz doluysa uygulama boş bir bağlantı için belli bir süre bekler, süre dolarsa hata alır. Havuzdaki bir bağlantı ağ kesintisiyle kopmuşsa, iyi bir havuz onu ödünç vermeden önce test eder ve yenisini açar.</p>{% endcall %}
+{% call k.ask("JDBC sadece Java için mi?") %}<p>Arayüz Java içindir, ama JVM üzerinde çalışan her dil (Scala, Kotlin) ve Java ile yazılmış her araç (birçok rapor ve ETL aracı, Spark) onu kullanır. Python'da aynı rolü DB-API standardı oynar: psycopg, redshift_connector ve diğerleri aynı komutları (<code>connect</code>, <code>cursor</code>, <code>execute</code>) sunar.
+   Sürücü dile göre değişir; ağdaki protokol aynıdır. Java ile psycopg, Aurora'ya aynı PostgreSQL mesajlarıyla konuşur.</p>{% endcall %}
+{% call k.ask("sslmode=require ile verify-full arasındaki fark ne?") %}<p><code>require</code> trafiği şifreler ama sunucunun kimliğini doğrulamaz: araya giren biri kendini veritabanı gibi gösterebilir. <code>verify-full</code> sunucunun sertifikasını ve adını da doğrular.
+   Lale Market'in Aurora kodu <code>require</code> kullanır: trafik şifrelidir ama sunucunun kimliği doğrulanmaz. Bu, eğitim ortamı için bir kısayoldur; üretimde <code>verify-full</code> seçilir. Redshift bağlantısı <code>verify-ca</code> kullanır: sertifikanın güvenilir bir otoriteden geldiğini doğrular, sunucunun adını kontrol etmez.</p>{% endcall %}
+{{ k.quiz("veri-c2", "Binlerce Lambda fonksiyonu kısa sürelerle aynı Aurora'ya bağlanıyor ve veritabanı bağlantı sınırına yaklaşıyor. En doğru adım hangisi?",
+   ["Her fonksiyonda yeni bir bağlantı açmaya devam etmek", "Araya RDS Proxy gibi bir bağlantı havuzu koymak", "Bağlantı string'inden sslmode'u kaldırmak", "Sorguları JSON'a çevirmek"],
+   1, "Bir proxy, az sayıda kalıcı bağlantıyı birçok kısa ömürlü istemci arasında paylaştırır. Veritabanı bağlantı sınırının altında kalır ve el sıkışmalar tekrar etmez.") }}
+
+<h2 id="oltp" data-short="OLTP ve OLAP"><span class="sec">C3</span>Günlük işlem ve analiz: OLTP, OLAP, ETL, ELT ve zero-ETL</h2>
+<p>Lale Market'te aynı sipariş verisi iki çok farklı işte kullanılır. Bir müşteri sipariş verir: birkaç satır, milisaniyeler, her saniye. Bir analist yılın cirosunu şehre göre ister: milyonlarca satır, saniyeler, saatte birkaç kez.</p>
+{{ k.concept("OLTP (Online Transaction Processing)",
+   "Çok sayıda kısa işlem: her biri birkaç kaydı key ile okur ya da yazar ve hemen biter. Doğruluk (ACID) ve kısa cevap süresi önemlidir.",
+   "Checkout: bir ürünün stoğu düşer, bir sipariş ve satırları yazılır. Aurora bunu yapar.",
+   "Bir market kasası: her müşteri birkaç ürün, hızlı ve doğru.") }}
+{{ k.concept("OLAP (Online Analytical Processing)",
+   "Az sayıda büyük sorgu: her biri çok sayıda kaydı okur, az sütunu kullanır, gruplar ve toplar. Okuma hızı ve geçmişin tamamı önemlidir.",
+   "\"Son bir yılın cirosu şehre ve aya göre.\" Redshift bunu yapar (Guided <a href=\"/guided-e-commerce-app/?adim=29\">adım 29</a>).",
+   "Yıl sonunda bütün kasa fişlerini toplayıp hangi şubenin ne sattığını çıkaran muhasebe ekibi.") }}
+{{ k.sim("oltp_olap", "Aynı veri, iki iş: bir sipariş (OLTP) ve şehre göre ciro (OLAP)") }}
+<table class="data">
+  <caption>bütün durumlar: OLTP ve OLAP yan yana</caption>
+  <thead><tr><th>Konu</th><th>OLTP</th><th>OLAP</th></tr></thead>
+  <tbody>
+    <tr><td>Tipik soru</td><td>"P0001'in stoğunu 1 düşür ve siparişi yaz."</td><td>"2026'nın cirosu şehre ve kategoriye göre."</td></tr>
+    <tr><td>Bir sorgunun dokunduğu satır</td><td>Birkaç; key ile bulunur.</td><td>Milyonlar; çoğu zaman hepsi.</td></tr>
+    <tr><td>Sorgu sayısı</td><td>Saniyede yüzlerce, binlerce.</td><td>Saatte birkaç ile birkaç yüz arası.</td></tr>
+    <tr><td>Cevap süresi hedefi</td><td>Milisaniyeler.</td><td>Saniyeler, bazen dakikalar.</td></tr>
+    <tr><td>Veri</td><td>Bugünün güncel hâli.</td><td>Yılların geçmişi; çoğu zaman biraz geriden gelen bir kopya.</td></tr>
+    <tr><td>Dizilim (B1)</td><td>Satır düzeni.</td><td>Sütun düzeni.</td></tr>
+    <tr><td>Şema tasarımı</td><td>Normalize (A4).</td><td>Analize göre: ortada satışların durduğu bir olgu tablosu, çevresinde müşteri, ürün ve tarih tabloları (star schema).</td></tr>
+    <tr><td>Lale Market</td><td>Aurora, DynamoDB.</td><td>Redshift.</td></tr>
+    <tr><td>İkisi aynı veritabanında</td><td colspan="2">Mümkün ama riskli: büyük bir rapor, checkout'un kısa işlerini yavaşlatabilir. Bu yüzden veri bir analiz deposuna kopyalanır.</td></tr>
+  </tbody>
+</table>
+{{ k.concept("Veriyi taşımak: ETL, ELT, zero-ETL",
+   "<b>ETL</b> (Extract, Transform, Load): veri kaynaktan çıkarılır, ayrı bir yerde dönüştürülür, sonra analiz deposuna yüklenir. <b>ELT</b>: veri önce olduğu gibi yüklenir, dönüşüm analiz deposunun içinde SQL ile yapılır. <b>Zero-ETL</b>: kopyalamayı kod yazmadan, sürekli ve yönetilen bir entegrasyon yapar.",
+   "Lale Market'te Aurora'daki siparişler zero-ETL ile Redshift'e kopyalanır. Bu workshop'ta yeni bir siparişin kopyaya ulaşması yaklaşık 30 saniye sürüyor (2026-10-31'de iki ölçüm; Guided <a href=\"/guided-e-commerce-app/?adim=31\">adım 31</a>).",
+   "ETL: sebzeleri pazarda yıkayıp doğrayıp eve getirmek. ELT: eve getirip mutfakta doğramak. Zero-ETL: bahçeden mutfağa giden bir boru.") }}
+<table class="data">
+  <caption>bütün durumlar: veriyi analiz deposuna taşımanın yolları</caption>
+  <thead><tr><th>Yol</th><th>Ne kadar taze</th><th>Kim yazar, kim işletir</th><th>Ne zaman</th></tr></thead>
+  <tbody>
+    <tr><td>Gecelik toplu yükleme (batch ETL)</td><td>Bir gün geride.</td><td>Ekip bir iş yazar ve her gece çalıştırır (AWS Glue, Airflow).</td><td>Dünün raporu yetiyorsa; kaynak çok farklı biçimlerdeyse.</td></tr>
+    <tr><td>ELT</td><td>Yüklemenin sıklığı kadar.</td><td>Ham veri yüklenir; dönüşüm SQL'i depoda yaşar.</td><td>Analiz deposu güçlüyse ve dönüşüm sık değişiyorsa.</td></tr>
+    <tr><td>Değişiklik akışı (CDC: Change Data Capture, kaynağın değişiklik kaydını okumak)</td><td>Saniyeler ile dakikalar.</td><td>Kaynağın değişiklik kaydı okunur ve hedefe uygulanır (AWS DMS, Debezium gibi araçlarla); ekip işletir.</td><td>Birçok kaynak, birçok hedef.</td></tr>
+    <tr><td>Zero-ETL</td><td>Kısa bir gecikme; burada yaklaşık 30 saniye.</td><td>AWS yönetir; kod yok.</td><td>Desteklenen bir kaynak ve hedef çifti (Aurora → Redshift gibi).</td></tr>
+    <tr><td>Kopyasız, kaynağı doğrudan sorgulamak</td><td>Anlık.</td><td>Yok.</td><td>Küçük veri ve seyrek rapor; aksi hâlde OLTP yavaşlar.</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Rapor birkaç saniye eski olursa ne olur?") %}<p>Çoğu rapor için hiçbir şey: "dünün cirosu" 30 saniyelik bir gecikmeden etkilenmez. Anlık doğruluk gereken ekranlar (stok, sepetin ödeme anındaki hâli) kopyadan değil, OLTP veritabanından okur.
+   Bir raporun ne kadar taze olması gerektiği bir iş kararıdır; kopyalama yolunu bu karar seçer.</p>{% endcall %}
+{% call k.ask("HTAP diye bir şey duydum. OLTP ve OLAP birleşebilir mi?") %}<p>HTAP (Hybrid Transactional/Analytical Processing), iki işi aynı sistemde yapmayı hedefleyen veritabanlarına verilen addır: veriyi hem satır hem sütun düzeninde tutarlar. Belli boyutlara kadar işe yarar.
+   Lale Market iki işi ayırır, çünkü her ikisinde de ölçeği ve maliyeti ayrı ayrı ayarlamak istenir.</p>{% endcall %}
+{{ k.quiz("veri-c3", "Hangisi bir OLAP sorgusudur?",
+   ["Sepete bir ürün eklemek", "Bir müşterinin şifresini değiştirmek", "Son üç yılın satışlarını kategoriye ve çeyreğe göre toplamak", "Bir siparişin durumunu shipped yapmak"],
+   2, "OLAP sorgusu çok sayıda satırı okur, az sütun kullanır ve gruplayıp toplar. Diğer üçü birkaç satıra key ile dokunan OLTP işlemleridir.") }}
+
+<h2 id="arch" data-short="Warehouse, lake, lakehouse"><span class="sec">C4</span>Büyük veri mimarileri: data warehouse, data lake ve lakehouse</h2>
+<p>Bir şirketin analiz verisi tek bir uygulamadan gelmez: satış, web tıklamaları, sensörler, muhasebe. Bu verinin nerede ve hangi düzende toplanacağı sorusunun üç yaygın cevabı var.</p>
+{{ k.concept("Data warehouse",
+   "Analiz için düzenlenmiş, schema-on-write bir veritabanı. Veri yüklenmeden önce temizlenir ve tablolara oturtulur; SQL ile hızlı sorgulanır.",
+   "Redshift: <code>sales</code> tablosu ve Aurora'dan gelen <code>aurora_live</code> kopyası.",
+   "Düzenli bir arşiv: her belge etiketli, doğru klasörde.") }}
+{{ k.concept("Data lake (veri gölü)",
+   "Her türden verinin ham hâliyle, ucuz bir nesne deposunda toplandığı yer. Schema-on-read: yapı okuma anında verilir. Farklı motorlar aynı veriyi okur.",
+   "Lale Market'in tıklama kayıtları ve sensör ölçümleri S3'te JSON ve Parquet dosyaları olarak toplanabilir; Athena onları SQL ile okur. (Workshop'ta kurulmadı; gerçek bir mağazanın yolu.)",
+   "Bir depo: her şey içeride, ama bir şeyi bulmak için önce ne aradığını bilmen gerekir.") }}
+{{ k.concept("Lakehouse",
+   "Data lake'in dosyaları üzerinde bir tablo katmanı: Apache Iceberg, Delta Lake ya da Apache Hudi gibi tablo biçimleri dosyalara transaction, şema ve geçmişi ekler. Ucuz depolama ve warehouse benzeri güvenilirlik birlikte.",
+   "S3'teki Parquet dosyaları bir Iceberg tablosu olur: iki iş aynı anda yazsa da tablo bozulmaz, dünkü hâline geri dönülebilir.",
+   "Deponun içine kurulmuş bir kayıt sistemi: hangi rafta ne var, kim ne zaman değiştirdi.") }}
+<table class="data">
+  <caption>bütün durumlar: üç mimari yan yana</caption>
+  <thead><tr><th>Konu</th><th>Data warehouse</th><th>Data lake</th><th>Lakehouse</th></tr></thead>
+  <tbody>
+    <tr><td>Veri türü</td><td>Yapılandırılmış.</td><td>Her tür: yapılandırılmış, yarı, yapılandırılmamış.</td><td>Her tür; tablolar yapılandırılmış ve yarı yapılandırılmış veri için.</td></tr>
+    <tr><td>Şema</td><td>Schema-on-write.</td><td>Schema-on-read.</td><td>Tablo biçiminde şema; değişebilir.</td></tr>
+    <tr><td>Depolama</td><td>Warehouse'un kendi depolaması.</td><td>Nesne deposu (S3).</td><td>Nesne deposu, açık dosya biçimleri (Parquet).</td></tr>
+    <tr><td>Transaction</td><td>Var.</td><td><b>Yok</b>: iki iş aynı dosyayı yazarsa veri bozulabilir.</td><td>Tablo biçimi sağlar.</td></tr>
+    <tr><td>Kim okur</td><td>SQL kullanan analistler, raporlar.</td><td>Veri bilimciler, toplu işler, birçok motor.</td><td>İkisi de.</td></tr>
+    <tr><td>Risk</td><td>Ham ve yeni veri için katı; her şeyi yüklemek pahalı.</td><td>Düzen yoksa kimsenin güvenmediği bir "veri bataklığı".</td><td>Daha yeni araçlar; ekip tablo biçimini öğrenmeli.</td></tr>
+    <tr><td>AWS'te</td><td>Redshift.</td><td>S3 + AWS Glue Data Catalog + Athena.</td><td>S3 + Iceberg tabloları (Athena, Redshift, EMR, S3 Tables).</td></tr>
+  </tbody>
+</table>
+{% call k.ask("Lale Market neden bir data lake kurmadı?") %}<p>Workshop'un analiz ihtiyacı tek bir kaynaktan (siparişler) geliyor ve Redshift'in zero-ETL kopyası bunu karşılıyor. Tıklama kayıtları, sensör geçmişi ve görsel etiketleri gibi farklı kaynaklar biriktiğinde onları ham hâliyle S3'te toplamak, warehouse'a sadece işlenmiş kısmı yüklemek mantıklı olur.
+   Çoğu şirket ikisini birlikte kullanır.</p>{% endcall %}
+{% call k.ask("Lakehouse warehouse'u gereksiz mi yapar?") %}<p>Her zaman değil. Lakehouse çok sayıda motorun aynı veriyi paylaşmasında güçlüdür; bir warehouse ise yoğun ve eşzamanlı SQL raporlarında genellikle daha hızlı ve yönetimi daha kolaydır.
+   Seçim, verinin kaç motor tarafından okunduğuna ve ekibin neyi işletebildiğine bağlıdır.</p>{% endcall %}
+
+<h2 id="map" data-short="Özet harita"><span class="sec">C5</span>Özet: bu sayfanın haritası ve sonraki tutorial'lar</h2>
+<p>Her kavram, on tutorial'dan birinde derinleşir. Bir tutorial'a başlamadan önce bu tabloya bakarak orada hangi fikrin üzerinde durulacağını görebilirsin.</p>
+<table class="data">
+  <caption>kavram → Lale Market'te nerede → hangi tutorial</caption>
+  <thead><tr><th>Bu sayfada</th><th>Lale Market'te</th><th>Derinleştiği tutorial</th></tr></thead>
+  <tbody>
+    <tr><td>A2 tipler, A5 ACID, C3 OLTP</td><td>Checkout, stok, sipariş geçmişi</td><td><a href="/e2etutorial/aurora">01 Aurora</a></td></tr>
+    <tr><td>A4 key-value, A5 BASE ve güçlü okuma</td><td>Sepet</td><td><a href="/e2etutorial/dynamodb">02 DynamoDB</a></td></tr>
+    <tr><td>A3 yarı yapılandırılmış, A4 doküman</td><td>Ürün kataloğu</td><td><a href="/e2etutorial/docdb">03 DocumentDB</a></td></tr>
+    <tr><td>A4 key-value, bellekte veri</td><td>Fırsat sayacı, oturum, canlı sıralama</td><td><a href="/e2etutorial/elasticache">04 ElastiCache</a></td></tr>
+    <tr><td>A4 wide-column, A4 denormalizasyon</td><td>Hareket geçmişi</td><td><a href="/e2etutorial/keyspaces">05 Keyspaces</a></td></tr>
+    <tr><td>A4 arama index'i</td><td>Ürün arama, mağaza bulucu</td><td><a href="/e2etutorial/opensearch">06 OpenSearch</a></td></tr>
+    <tr><td>A4 graf</td><td>Öneriler, müşteri grafı</td><td><a href="/e2etutorial/neptune">07 Neptune</a></td></tr>
+    <tr><td>B1 sütun düzeni, C3 OLAP ve zero-ETL, C4 warehouse</td><td>Satış raporları</td><td><a href="/e2etutorial/redshift">08 Redshift</a></td></tr>
+    <tr><td>A3 zaman serisi</td><td>Depo sıcaklıkları, dakikadaki siparişler</td><td><a href="/e2etutorial/influxdb">09 InfluxDB</a></td></tr>
+    <tr><td>A3 yapılandırılmamış, B3 nesne deposu, C4 data lake</td><td>Ürün görselleri, satıcı yüklemeleri</td><td><a href="/e2etutorial/s3">10 S3</a></td></tr>
+  </tbody>
+</table>
+
+<h2 id="recall" data-short="Hatırlama testi" data-group="Sonunda">Hatırlama testi</h2>
+<p>Bölümlere geri bakmadan cevapla.</p>
+{{ k.quiz("veri-r1", "Bir raporu 100 sütunlu bir tablonun 3 sütunuyla milyonlarca satır üzerinde çalıştırıyorsun. Hangi dizilim daha az okur?",
+   ["Satır düzeni", "Sütun düzeni", "İkisi aynı okur", "Hangisinin daha az okuduğu satır sayısına bağlıdır"],
+   1, "Sütun düzeni sadece kullanılan 3 sütunun bloklarını okur. Satır düzeni her satırın 100 sütununu birlikte okur.") }}
+{{ k.quiz("veri-r2", "HDFS ile bir dizüstü bilgisayardaki NTFS arasındaki en önemli fark hangisidir?",
+   ["HDFS sadece metin dosyası saklar", "HDFS dosyayı büyük bloklara bölüp birçok makineye ve kopyalara yayar", "NTFS dosyanın ortasını değiştiremez", "HDFS bir veritabanıdır ve SQL konuşur"],
+   1, "HDFS, 128 MB'lık blokları bir kümenin makinelerine dağıtır ve her bloğu varsayılan olarak 3 makinede tutar. NTFS tek bir makinenin diskini yönetir.") }}
+{{ k.quiz("veri-r3", "Bir Java rapor aracı Redshift'e ve Aurora'ya aynı kodla bağlanabiliyor. Bunu sağlayan nedir?",
+   ["İki veritabanının aynı şifreyi kullanması", "JDBC arayüzü ve her veritabanının kendi JDBC sürücüsü", "Verinin Parquet biçiminde olması", "Zero-ETL entegrasyonu"],
+   1, "JDBC, Java'dan her veritabanına aynı komutlarla konuşmayı sağlar. Farklı olan sadece sürücü ve connection string'dir.") }}
+{{ k.quiz("veri-r4", "Fiyatları kuruşu kuruşuna doğru tutmak için hangi tip seçilir?",
+   ["double precision", "numeric(10,2)", "text", "real"],
+   1, "numeric kesin ondalıklı bir tiptir; 0,1 gibi değerleri tam saklar. Kayan noktalı tipler yaklaşık saklar.") }}
+{{ k.quiz("veri-r5", "Bir sipariş verildikten 30 saniye sonra raporda görünüyor. Bu hangi yaklaşımın sonucudur?",
+   ["ACID transaction'ın yavaş olması", "Analiz deposunun kaynaktan kısa bir gecikmeyle kopyalanması", "Siparişin JSON olarak saklanması", "Bağlantı havuzunun dolu olması"],
+   1, "Rapor OLTP veritabanını değil, analiz deposundaki kopyayı okur. Zero-ETL kopyayı kısa bir gecikmeyle günceller; bu workshop'ta yaklaşık 30 saniye.") }}
+
+<section class="lesson-foot">
+  <h2>Daha derine in</h2>
+  <ul>
+    <li><b>Veri tipleri:</b> <a href="https://www.postgresql.org/docs/current/datatype.html">PostgreSQL: Data Types</a> (sayısal tiplerin aralıkları, metnin 1 GB sınırı, tarih ve zaman tipleri).
+     <b>ACID ve transaction:</b> <a href="https://www.postgresql.org/docs/current/tutorial-transactions.html">PostgreSQL: Transactions</a>.</li>
+    <li><b>Dosya biçimleri:</b> <a href="https://parquet.apache.org/docs/">Apache Parquet</a>, <a href="https://avro.apache.org/docs/">Apache Avro</a>, <a href="https://orc.apache.org/docs/">Apache ORC</a>.
+     <b>Dosya sistemleri:</b> <a href="https://hadoop.apache.org/docs/stable/hadoop-project-dist/hadoop-hdfs/HdfsDesign.html">HDFS Architecture</a> (128 MB blok, 3 kopya),
+     <a href="https://learn.microsoft.com/en-us/troubleshoot/windows-server/backup-and-storage/default-cluster-size-for-ntfs-fat-exfat">Default cluster size for NTFS</a>,
+     <a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/upload-objects.html">Amazon S3: Uploading objects</a> (tek PUT 5 GB) ve <a href="https://aws.amazon.com/about-aws/whats-new/2025/12/amazon-s3-maximum-object-size-50-tb/">S3 en büyük nesne boyutu 50 TB</a> (Aralık 2025),
+     <a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/DataDurability.html">Amazon S3: Data protection</a> (dayanıklılık).</li>
+    <li><b>Bağlantı:</b> <a href="https://docs.oracle.com/javase/tutorial/jdbc/basics/index.html">Oracle: JDBC Basics</a>, <a href="https://jdbc.postgresql.org/documentation/use/">PostgreSQL JDBC Driver</a>,
+     <a href="https://www.postgresql.org/docs/current/protocol-flow.html">PostgreSQL: Message Flow</a> (simülasyondaki mesajlar), <a href="https://www.postgresql.org/docs/current/libpq-ssl.html">PostgreSQL: SSL Support</a> (sslmode),
+     <a href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/rds-proxy.html">Amazon RDS Proxy</a>.</li>
+    <li><b>OLTP, OLAP ve mimariler:</b> <a href="https://aws.amazon.com/compare/the-difference-between-olap-and-oltp/">AWS: OLAP ve OLTP farkı</a>,
+     <a href="https://aws.amazon.com/what-is/data-lake/">AWS: What is a data lake?</a>, <a href="https://docs.aws.amazon.com/redshift/latest/mgmt/zero-etl-using.html">Amazon Redshift: zero-ETL integrations</a>,
+     <a href="https://iceberg.apache.org/docs/latest/">Apache Iceberg</a>.</li>
+    <li><b>Sırada:</b> <a href="/e2etutorial/aurora">01 Aurora PostgreSQL</a>: ilişkisel model, transaction'lar ve SQL'in planlayıcısı, gerçek Lale Market verisiyle.</li>
+    <li><b>Soru sor.</b> Bir kısım net değilse eğitmenine ya da AI asistanına sor. Kendi işinden bir veriyi al ve bu sayfadaki tablolarla tipini, yapısını ve hangi modele uyduğunu birlikte bulun.</li>
+  </ul>
+</section>
+{% endblock %}

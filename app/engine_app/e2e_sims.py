@@ -2619,7 +2619,7 @@ S3_CANDS = ["Amazon S3", "Aurora PostgreSQL", "DynamoDB", "DocumentDB", "ElastiC
 
 def s3(lang):
     w1 = verdicts(S3_CANDS, [
-        V((1, "objects up to 5 TB", "5 TB'a kadar object'ler"), (0, "large binaries make tables, backups and replicas heavy", "büyük binary'ler table'ları, yedekleri ve replica'ları ağırlaştırır"),
+        V((1, "objects up to 50 TB", "50 TB'a kadar object'ler"), (0, "large binaries make tables, backups and replicas heavy", "büyük binary'ler table'ları, yedekleri ve replica'ları ağırlaştırır"),
           (0, "an item is at most 400 KB", "bir item en fazla 400 KB"), (0, "a document is at most 16 MB", "bir document en fazla 16 MB"), (0, "memory is expensive and not the durable store", "bellek pahalıdır ve kalıcı depo değildir")),
         V((1, "presigned URL or CloudFront", "presigned URL ya da CloudFront"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi")),
         V((1, "versioning", "versioning"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi"), (0, "removed earlier", "daha önce elendi")),
