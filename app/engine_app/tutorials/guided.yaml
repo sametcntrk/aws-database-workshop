@@ -22688,52 +22688,494 @@ steps:
           - [Flux, "InfluxDB'nin sorgu dili; adımlar |> ile birbirine bağlanır."]
           - [aggregateWindow, "Zamanı pencerelere bölüp her pencere için tek değer hesaplayan adım."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde zaman serisi deposu için hazırlık
-        intro: >-
-          Grafik hiç açılmadan, ölçümlerin şekli, saklama süresi ve sorguları belirlenir. Aşağıdaki beş adım bu hazırlığın
-          sırasıdır.
-        text:
-          - title: Önce ekranın soruları yazılır
-            text: >-
-              "Son X saatte her depo için sıcaklığın Y dakikalık ortalaması" ve "dakikadaki sipariş sayısının toplamı". Hepsi bir
-              zaman aralığı, bir filtre ve bir pencere toplamasıdır.
-            code: |-
-              from(bucket: "metrics") |> range(start: -6h)
-                |> filter(fn: (r) => r._measurement == "warehouse_env" and r.sensor == "temperature")
-                |> aggregateWindow(every: 1h, fn: mean)
-          - title: Nokta şekli tasarlanır
-            text: >-
-              Filtrelenecek ve gruplanacak bilgiler etiket (tag), ölçülen sayılar alan (field) olur. Etiketin farklı değer sayısı
-              (cardinality) sınırlı tutulur; kullanıcı kimliği gibi sınırsız değerler etikete konmaz.
-            code: |-
-              warehouse_env,warehouse=istanbul,sensor=temperature value=21.43 1793390400
-          - title: Saklama süresi belirlenir
-            text: >-
-              Bucket'a bir saklama süresi (retention) verilir; eski ham noktalar kendiliğinden silinir. Uzun dönem için ham veri
-              yerine saatlik özetler ayrı bir bucket'a yazılır (downsampling).
-          - title: Yazma toplu yapılır
-            text: >-
-              Sensörler noktaları tek tek değil, gruplar hâlinde gönderir; satır protokolü (line protocol) çok noktayı tek istekte
-              taşır. Zaman damgası ölçümün kendi zamanıdır.
-          - title: Ekran zaman aralığı ve pencereyle sınırlanır
-            text: >-
-              Ekran her zaman bir aralık ve pencere ister; sınırsız aralıkta ham nokta istenmez. Pencere ne kadar büyükse dönen nokta
-              o kadar azdır.
-      feed:
-        title: Veri nereden geliyor?
-        writes: >-
-          Depolardaki sensörler (ya da onları toplayan bir ajan, ör. Telegraf) ve uygulama (sipariş başına bir nokta).
-        reads: Operasyon ekranı ve alarm kuralları.
-        kind: >-
-          Kaynaktan doğrudan yazma: sensörler ve uygulama InfluxDB'ye kendileri yazar. InfluxDB başka bir veritabanından
-          kendiliğinden veri çekmez.
-        with: >-
-          Sipariş sayacının kaynağı siparişlerdir (Aurora'da asıl kayıt); operasyon ekranı onun zaman serisi hâlini InfluxDB'den
-          okur. Sensör verisinin başka bir kopyası yoktur.
-        best: >-
-          Sensör ve metrik gibi çok sık, zaman damgalı ve hiç güncellenmeyen veri bir zaman serisi veritabanında, saklama süresi
-          ve özetlerle tutulur. İş verisi (sipariş) asıl veritabanında kalır.
+      t1:
+        title: "Önceden ne vardı? Sensör ölçümleri ve siparişler aynı grafiğe nasıl geldi?"
+        intro: "Sen operasyon ekranını açmadan önce (31 Eki 10:58) InfluxDB'nin metrics bucket'ı zaten dolu. İçine iki ayrı türde ölçüm, iki ayrı yoldan geliyor. Depo sensörlerinin sıcaklık ve nemi, depodaki küçük bir cihazdan (ağ geçidi) VPN üzerinden gelir; bu ölçümlerin InfluxDB ve onun yedekleri dışında kaydı yoktur. Sipariş sayısı ise Aurora'daki siparişlerden, Adım 25'in zinciriyle gelir; asıl kaydı Aurora'dadır. Bu bölüm iki yolu, bir noktanın neden o şekilde yazıldığını, geç ya da iki kez gelen noktanın ne olduğunu, eski verinin nasıl özetlenip silindiğini ve bir sensör susunca kimin fark ettiğini anlatıyor. Önce zincirin bileşenleri, sonra bir simülasyon, sonra dört aşama (tasarım, ilk yükleme, sürekli besleme, tutarlılık ve onarım)."
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1, t0 ve saatler", "t0: senin operasyon ekranını açıp \"1 hour\" butonuna bastığın an, 31 Eki 10:58. t-1: ondan önceki zaman. Saatler Türkiye saatidir (UTC+3); sonu Z ile biten zamanlar UTC'dir (07:55Z = 10:55). Depo kodları ve ölçümün şekli canlı sistemden; saatler, süreler, 12 sıcaklık değeri ve sayılar temsilîdir (uydurulmuş ama gerçekçi)."]
+          - ["Ekip, eski site ve T anı", "Ekip: mağazanın sistemini kuran ve işleten mühendisler; kurulum komutlarını onlar gönderir, alarmlara onlar bakar. Eski site: mağazanın bu sistemden önceki sitesi; sipariş geçmişi 30 Eyl'de Aurora'ya taşındı. Mağaza 1 Eki'de bu sistemle açıldı. T anı (1 Eki 03:00): sipariş zincirinin başladığı an; öncesini ilk yükleme, sonrasını akış sayar (Adım 25)."]
+          - ["Zaman serisi ve nokta (point)", "Zaman damgalı ölçümlerin dizisi. Her ölçüm bir noktadır; termometre okumasını saatiyle deftere yazmak gibi. Nokta dört parçadır: ölçü adı, etiketler, alanlar, zaman damgası."]
+          - ["Ölçü adı (measurement), etiket (tag), alan (field)", "Ölçü adı: bu ne ölçümü (warehouse_env, orders). Etiket: hangi depo, hangi sensör; üzerine filtre konur ve index'lenir, defterin sekmeleri gibi. Alan: ölçülen sayının kendisi (value=23.3); index'lenmez, defterdeki sayı gibi."]
+          - ["Seri (series)", "Aynı ölçü adı, aynı etiketler ve aynı alan adını taşıyan noktalar; grafikteki tek bir çizgi. Aynı seri + aynı zaman damgası aynı noktadır: ikinci yazma ilkinin üzerine düşer."]
+          - ["Cardinality", "Farklı seri sayısı. InfluxDB her seri için bellekte ve index'te bir kayıt tutar. Apartmanda her daireye bir sayaç sorun değildir; her ziyaretçiye ayrı sayaç takmak duvarda yer bırakmaz."]
+          - ["Line protocol", "Bir noktayı tek satırda yazan metin: ölçü adı ve etiketler, boşluk, alanlar, boşluk, zaman damgası. Sayıda ondalık ayırıcı noktadır (23.3); sondaki i tam sayı demektir (count=1i). Zaman damgası 1 Ocak 1970 UTC'den beri geçen süredir."]
+          - ["Bucket, retention, shard group", "Bucket: noktaların durduğu, kendi saklama süresi olan depo (metrics). Retention: o süre. Shard group: bir zaman aralığının (metrics'te bir günün, 2 yıllık bucket'ta bir haftanın) noktalarını tutan dosya grubu; süre dolunca tek seferde silinir, gazete arşivinden bir günün klasörünü atmak gibi."]
+          - ["Downsampling ve task", "Downsampling: ham noktaları özetleyip (saatlik ortalama) ikinci bir bucket'a yazmak. Task: InfluxDB'nin içinde belli aralıkla kendiliğinden çalışan sorgu; her sabah 9'da kasayı sayan muhasebeci gibi, kasa açıldığında değil saat gelince çalışır."]
+          - ["Check, deadman ve _monitoring", "Check: son pencereye bakıp durumu ok ya da crit (kritik) yapan task. Deadman: \"bu seri belli süredir nokta yazmadı\" diyen check; nöbetçinin \"saat başı haber ver, vermezsen sana geliyorum\" demesi gibi. _monitoring: InfluxDB'nin check sonuçlarını yazdığı kendi bucket'ı."]
+          - ["Ağ geçidi (gateway) ve Telegraf", "Ağ geçidi: depoda duran, sensörleri okuyan küçük bilgisayar. Telegraf: onun üzerinde çalışan açık kaynak ajan; ölçümleri toplar, tampona koyar, InfluxDB'ye yazar. inputs.modbus: Telegraf'ın sensörlerle konuştuğu endüstriyel iletişim dili (Modbus) için eklentisi."]
+          - ["Tampon (buffer) ve toplu yazma (batch)", "Tampon: gönderilemeyen noktaların bellekte beklediği yer; postaneye gidilemeyince mektupların çekmecede beklemesi gibi. Toplu yazma: birçok satırı tek istekte göndermek; her mektup için ayrı yola çıkmamak."]
+          - ["AWS Site-to-Site VPN ve NTP", "VPN: bir deponun ağını AWS'teki özel ağa (VPC) bağlayan şifreli tünel; her deponun kendi tüneli var. InfluxDB internete kapalı olduğu için depolar ona bu tünelden ulaşır; Ölçü tüketicisi ve diğer işler zaten aynı özel ağda çalışır. NTP: cihazların saatini internet üzerinden doğru tutan protokol."]
+          - ["Multi-AZ standby ve failover", "AZ: aynı bölgedeki ayrı veri merkezi. Standby: başka AZ'de, verinin aynısını anında alan bekleyen ikiz; okuma almaz. Yanlış yazılan ya da silinen veri ona da gider, bu yüzden yedeğin yerini tutmaz. Failover: asıl sunucu arızalanınca hizmetin ona geçmesi; AWS'e göre genellikle 60–120 saniye."]
+          - ["Sipariş zincirinin parçaları (Adım 25)", "Aurora: siparişin asıl kaydı. Outbox: siparişle aynı iş paketinde yazılan \"sipariş verildi\" satırı. Değişiklik kaydı (WAL): kaydedilen her değişikliğin sırayla yazıldığı defter. AWS DMS: o defteri okuyup değişiklikleri taşıyan servis (CDC: değişiklik yakalama). COMMIT: paketi kalıcı yapan son komut. Okuma kopyası: Aurora'nın sadece okuma yapan ikinci sunucusu. Kinesis: olay akışı. Lambda: olay gelince kısa bir kod çalıştıran servis; tüketici bu kodun adıdır. Şerit (shard): akışın paralel kolu."]
+          - ["DLQ, IteratorAge, CloudWatch, EventBridge Scheduler", "DLQ (hata kuyruğu): işlenemeyen olayın yerinin bırakıldığı kuyruk. IteratorAge: tüketici akışın ne kadar gerisinde. CloudWatch: AWS'in ölçüm ve alarm servisi. EventBridge Scheduler: bir işi belli saatte başlatan AWS servisi."]
+          - ["Kod kartlarındaki sözcükler", "Flux (InfluxDB'nin sorgu dili): from hangi bucket; range hangi zaman aralığı; filter hangi seriler; aggregateWindow(every, fn) zamanı pencerelere böl ve her pencereden tek değer çıkar; mean ortalama; sum toplam; createEmpty: false noktası olmayan pencereyi atla; to sonucu başka bucket'a yaz; option task her kaç dakikada çalışacağı; offset saat geldikten kaç saniye sonra başlayacağı. Telegraf: interval kaç dakikada bir okuyacağı; round_interval tam dakikalara hizalama; flush_interval kaç saniyede bir göndereceği. 204: \"yazdım\" cevabı. org=dbws: InfluxDB'de kurumun adı. token: yazma izni veren anahtar. Delete API: bir zaman aralığını ve etiket koşulunu silen komut. EngineUptime: InfluxDB'nin kaç saniyedir çalıştığı; yeniden başlayınca sıfırlanır. TunnelState: tünelin açık (1) ya da kapalı (0) olduğu."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: "İş yapan her parça bir satır. \"Aşama\" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, \"Önce → Sonra\" sütunu veriyi kimden alıp kime verdiğini söyler. \"AWS\" etiketli parçaları AWS çalıştırır; \"bizim kodumuz\" etiketli parçaları mağazanın ekibi yazar ya da ayarlar (sensörler ve ağ geçidi de mağazanındır). Aynı parçalar aşağıdaki simülasyonda birer kutu: üstte sensör yolu, ortada sipariş yolu, sonra hedef, altta yandaki işler."
+        inventory:
+          - {id: sensors, name: "Depo sensörleri", kind: code, what: "4 depoda sıcaklık ve nem cihazı", does: "IST-1, ANK-1, FRA-1 ve BER-1 depolarının her birinde bir sıcaklık, bir nem sensörü: toplam 8 sensör. Sadece o anki değeri verir; geçmiş tutmaz.", box: "Anlık değeri verir; geçmiş tutmaz.", phases: [2, 3, 4], before: "Depo havası", after: gateway}
+          - {id: gateway, name: "Depo ağ geçidi (Telegraf)", kind: code, what: "depoda küçük bilgisayar + açık kaynak ajan, ayarı bizim", does: "Her 5 dakikada tam dakikada sensörleri okur, zaman damgasını kendi saatiyle koyar, line protocol'e çevirir, tampona koyar ve toplu gönderir. Yazma başarısızsa noktaları tamponda tutup yeniden dener.", box: "Okur, damgalar, tamponlar, toplu yazar; hata alırsa yeniden dener.", phases: [1, 2, 3, 4], before: sensors, after: vpn}
+          - {id: vpn, name: "AWS Site-to-Site VPN", kind: aws, what: "depo başına bir şifreli tünel", does: "Depo başına bir tünel: her depoyu AWS'teki özel ağa bağlar. InfluxDB internete kapalıdır; ağ geçidinin yazmaları bu tünelden geçer. Veriyi değiştirmez, saklamaz. AWS'teki işler tünel kullanmaz; aynı özel ağdadır.", box: "Depo ağını özel ağa bağlar; veri saklamaz.", phases: [1, 2, 3, 4], before: gateway, after: influx}
+          - {id: app, name: "Uygulama", kind: code, what: "mağazanın arka uç programı (EC2 sunucusunda)", does: "Siparişi ve \"sipariş verildi\" olayını aynı iş paketinde Aurora'ya yazar. InfluxDB'ye yazmaz; ekranda okuma isteklerini o gönderir (t0).", box: "Siparişi ve olayını Aurora'ya yazar; ölçüye dokunmaz.", phases: [3], before: "Tarayıcı (sipariş butonu)", after: aurora}
+          - {id: aurora, name: "Aurora PostgreSQL (shop)", kind: aws, what: "işlemsel veritabanı, siparişin asıl kaydı", does: "shop.orders ve outbox. Sipariş sayısının doğrusu hep buradan hesaplanır; ilk yükleme ve gece karşılaştırması buradan okur.", box: "Siparişin asıl kaydı + outbox.", phases: [2, 3, 4], before: app, after: [wal, backfill, reconcile]}
+          - {id: wal, name: "Aurora'nın değişiklik kaydı (WAL)", kind: aws, what: "Aurora'nın içinde", does: "COMMIT edilen her değişikliği sırayla yazar. DMS bu kaydı okur.", box: "Her COMMIT'i sırayla yazar.", phases: [3], before: aurora, after: dms}
+          - {id: dms, name: "AWS DMS (CDC görevi)", kind: aws, what: "değişiklik yakalama servisi", does: "Değişiklik kaydından outbox'a eklenen satırları okur, her birini Kinesis akışına koyar. Kurulumu ve T anı Adım 25'te.", box: "outbox'a eklenen satırı akışa koyar.", phases: [2, 3], before: wal, after: kinesis}
+          - {id: kinesis, name: "Kinesis Data Streams (lm-order-events)", kind: aws, what: "olay akışı", does: "Olayları şeritlerde sırayla saklar; beş tüketici okur, biri Ölçü tüketicisi. Tüketici durursa olaylar bekler.", box: "Olayları saklar; tüketici durursa bekletir.", phases: [3], before: dms, after: metcons}
+          - {id: metcons, name: "Ölçü tüketicisi (Lambda)", kind: code, what: "AWS Lambda'da çalışan kod (Adım 25)", does: "Her sipariş için orders ölçüsüne tek bir nokta yazar (count = 1, total = tutar). Damga siparişin zamanıdır (olaydaki created_at, orders.order_date'in aynı değeri), sonuna sipariş numarasından türeyen 0–999 nanosaniye eklenir; aynı olay hep aynı noktaya düşer.", box: "Sipariş başına bir nokta; aynı olay, aynı damga.", phases: [3, 4], before: kinesis, after: [influx, dlq]}
+          - {id: influx, name: "Timestream for InfluxDB (dbws-influxdb)", kind: aws, what: "zaman serisi veritabanı, InfluxDB 2", does: "metrics (ham noktalar, 30 gün), metrics_1m (siparişlerin dakikalık toplamı, 90 gün) ve metrics_1h (saatlik özetler, 2 yıl) bucket'ları; süreler temsilî. Sensör ölçümünün tek kaydı burasıdır. db.influx.medium, Multi-AZ standby.", box: "Noktaları zamana ve seriye göre saklar; pencere hesabını okurken yapar.", phases: [1, 2, 3, 4], before: [vpn, metcons, backfill, tasks, reconcile], after: [tasks, retention, check, "Operasyon ekranı (t0)"]}
+          - {id: backfill, name: "İlk yükleme işi", kind: code, what: "Ekip'in bir kez başlattığı program (Adım 25)", does: "T anından (1 Eki 03:00) önceki 30 günün siparişlerini Aurora'nın okuma kopyasından alır; tüketicinin yazacağı noktanın aynısını toplu yazar, sonra o aralığın özetlerini bir kez yazdırır. Sensörlere dokunmaz: onların geçmişi yoktur.", box: "T'den önceki 30 günün siparişleri, tüketiciyle aynı nokta.", phases: [2], before: aurora, after: influx}
+          - {id: tasks, name: "Özet task'ları (orders-1m, orders-1h, env-1h)", kind: code, what: "InfluxDB'nin kendi zamanlayıcısının çalıştırdığı Flux sorguları", does: "Ham noktaları özetler: siparişleri dakikalık toplama (metrics_1m), onları saatlik toplama, sensörleri saatlik ortalamaya (metrics_1h). Son aralığı yeniden hesapladığı için geç gelen nokta özete girer.", box: "Ham → 1 dakika → 1 saat; sonucu başka bucket'a yazar.", phases: [3, 4], before: influx, after: influx}
+          - {id: retention, name: "Retention servisi", kind: aws, what: "InfluxDB'nin içinde arka planda çalışır", does: "Bütün noktaları süreden eski olan shard group'u tek seferde siler. Uygulama silme isteği göndermez.", box: "Süresi dolan günü tek seferde siler.", phases: [4], before: influx, after: "(silinir)"}
+          - {id: check, name: "Deadman check ve bildirim", kind: code, what: "InfluxDB'nin içinde çalışan check + bildirim kuralı", does: "Her 5 dakikada 8 sensör serisine bakar. Bir seri 15 dakikadır (temsilî) nokta yazmadıysa durumu crit yapar, _monitoring'e yazar ve bildirim kuralı Ekip'e haber verir.", box: "Susan sensörü bulur; Ekip'e haber verir.", phases: [4], before: influx, after: "Ekip (nöbetçi)"}
+          - {id: backup, name: "Otomatik yedek", kind: aws, what: "Timestream for InfluxDB'nin yedek yapılandırması", does: "Her gece (temsilî) instance'ın yedeğini alır, 35 gün (temsilî) saklar. Diskin ya da verinin kaybında yeni bir instance'a geri yüklenir; son yedekten sonraki sensör ölçümleri gelmez.", box: "Her gece yedek; son yedeğe kadar geri getirir.", phases: [4], before: influx, after: "Ekip (geri yükler)"}
+          - {id: dlq, name: "Hata kuyruğu (SQS DLQ, Ölçü tüketicisi)", kind: aws, what: "Amazon SQS kuyruğu (Adım 25)", does: "Tekrar tekrar hata veren olayın yerini (şerit ve sıra numarası) saklar; akış durmaz, Ekip olayı sonra işler.", box: "İşlenemeyen olayın yerini saklar.", phases: [4], before: metcons, after: "Ekip (inceler, yeniden gönderir)"}
+          - {id: monitor, name: "CloudWatch (lm-order-fanout panosu ve alarmlar)", kind: aws, what: "AWS'in izleme servisi", does: "InfluxDB tarafında CPU, disk, seri sayısı (SeriesCardinality), zaman aşımına uğrayan yazmalar (WriteTimeouts) ve başarısız task'lar (TaskExecutionFailures); VPN tünellerinin durumu (TunnelState); Ölçü tüketicisi tarafında gecikme (IteratorAge) ve DLQ.", box: "Disk, seri sayısı, task hataları, tüketici gecikmesi.", phases: [4], before: [influx, vpn, metcons, dlq], after: "Ekip (alarm)"}
+          - {id: reconcile, name: "Gece karşılaştırma işi", kind: code, what: "her gece 03:00'te çalışan program (EventBridge Scheduler + Lambda, Adım 25)", does: "Dünün dakika başına sipariş sayısını Aurora ve InfluxDB'de karşılaştırır, eksik noktayı aynı damgayla yazar. Sensörleri karşılaştıramaz: onların başka kaydı yoktur.", box: "Siparişte Aurora = InfluxDB mi? Sensörde karşılaştıracak kayıt yok.", phases: [4], before: [aurora, influx], after: influx}
+        sim_title: "Simülasyon: iki tür ölçüm InfluxDB'ye nasıl geldi?"
+        sim:
+          kind: pipeline
+          title: "Sensör → Telegraf → VPN → InfluxDB ve Aurora → DMS → Kinesis → Ölçü tüketicisi → InfluxDB"
+          caption: "Kesit: 8 sensör serisinden sadece IST-1 sıcaklığının t0'daki 12 noktası ve bugünün siparişleri. Önce kurulum ve ilk yükleme, sonra Adım 25'teki siparişin (W1793396741) ve 10:55 sıcaklık ölçümünün her kutudan geçişi, en sonda aynı noktanın iki kez gelmesi, geç gelen noktalar, susan sensör, silme ve onarımlar oynuyor. \"Örnek durum\" gerçekten olmuş sayılan, \"Olsaydı\" hiç yaşanmamış ayrı bir durumdur; sayılar temsilîdir. Son karede tablo, t0'daki simülasyonun başladığı 12 nokta."
+          tick_ms: 3000
+          phases: {2: "İlk yükleme", 3: "Sürekli besleme", 4: "Tutarlılık ve onarım"}
+          rows:
+            - {id: device, title: "Sensör yolu: bu ölçümlerin başka kopyası yok", flow: true}
+            - {id: order, title: "Sipariş yolu: asıl kayıt Aurora'da (Adım 25'in zinciri)", flow: true}
+            - {id: store, title: "Hedef: üç bucket"}
+            - {id: side, title: "Yandaki işler: ilk yükleme, özet, silme, izleme, onarım", side: true}
+          summary: "Sıcaklık noktasını Telegraf okudu, damgaladı ve VPN'den yazdı; sipariş noktasını Ölçü tüketicisi yazdı. Aynı nokta ikinci kez gelince üzerine düştü, geç gelen nokta kendi zamanına yerleşti. Özetleri task'lar, silmeyi retention yaptı; susan sensörü deadman yakaladı. Son durum, t0'daki simülasyonun başladığı 12 nokta (tek depo, son saat)."
+          boxes:
+            - {id: sensors, row: device}
+            - {id: gateway, row: device}
+            - {id: vpn, row: device}
+            - {id: app, row: order}
+            - {id: aurora, row: order}
+            - {id: wal, row: order}
+            - {id: dms, row: order}
+            - {id: kinesis, row: order}
+            - {id: metcons, row: order}
+            - id: influx
+              row: store
+              tables:
+                - name: "metrics · warehouse_env, IST-1, temperature (kesit: t0'daki 12 nokta)"
+                  cols: [zaman, value]
+                  rows:
+                    - {key: t1000, zaman: "10:00", value: 21.4, hidden: true}
+                    - {key: t1005, zaman: "10:05", value: 21.9, hidden: true}
+                    - {key: t1010, zaman: "10:10", value: 22.3, hidden: true}
+                    - {key: t1015, zaman: "10:15", value: 21.7, hidden: true}
+                    - {key: t1020, zaman: "10:20", value: 22.8, hidden: true}
+                    - {key: t1025, zaman: "10:25", value: 23.1, hidden: true}
+                    - {key: t1030, zaman: "10:30", value: 22.6, hidden: true}
+                    - {key: t1035, zaman: "10:35", value: 23.4, hidden: true}
+                    - {key: t1040, zaman: "10:40", value: 22.9, hidden: true}
+                    - {key: t1045, zaman: "10:45", value: 23.6, hidden: true}
+                    - {key: t1050, zaman: "10:50", value: 24.0, hidden: true}
+                    - {key: t1055, zaman: "10:55", value: 23.3, hidden: true}
+                    - {key: tdup, zaman: "10:55 ikinci yazma", value: 23.3, hidden: true}
+                - name: "metrics · orders, channel=web (kesit: bugünün noktaları)"
+                  cols: [zaman, nokta, count]
+                  rows:
+                    - {key: p0, zaman: "00:00–08:52", nokta: "17 nokta", count: "17", hidden: true}
+                    - {key: p1, zaman: "08:53:27.412", nokta: "İrem Kurt (W…1207)", count: "1", hidden: true}
+                    - {key: p2, zaman: "08:54–10:24", nokta: "23 nokta", count: "23", hidden: true}
+                    - {key: p3, zaman: "10:25:01.206", nokta: "senin siparişin (W…6741)", count: "1", hidden: true}
+                    - {key: p4, zaman: "10:26–10:58", nokta: "2 nokta", count: "2", hidden: true}
+                - name: "metrics_1m · orders (kesit: iki dakika)"
+                  cols: [pencere, sum]
+                  rows:
+                    - {key: m1, pencere: "08:53–08:54", sum: "1", hidden: true}
+                    - {key: m2, pencere: "10:25–10:26", sum: "1", hidden: true}
+                - name: "metrics_1h · IST-1 sıcaklık (kesit: iki saat)"
+                  cols: [pencere, mean]
+                  rows:
+                    - {key: h8, pencere: "08:00–09:00", mean: 20.4, hidden: true}
+                    - {key: h9, pencere: "09:00–10:00", mean: 20.9, hidden: true}
+            - {id: backfill, row: side}
+            - {id: tasks, row: side}
+            - {id: retention, row: side}
+            - id: check
+              row: side
+              tables:
+                - name: "_monitoring (8 sensör serisinin son durumu)"
+                  cols: [seri, status]
+                  rows:
+                    - {key: c1, seri: "diğer 7 seri", status: ok, hidden: true}
+                    - {key: c2, seri: "ANK-1 nem", status: ok, hidden: true}
+            - {id: backup, row: side}
+            - {id: dlq, row: side}
+            - {id: monitor, row: side}
+            - {id: reconcile, row: side}
+          frames:
+            - phase: 2
+              who: influx
+              lit: [influx]
+              packet: {at: influx, text: "29 Eyl · aws timestream-influxdb create-db-instance --name dbws-influxdb --db-instance-type db.influx.medium --deployment-type WITH_MULTIAZ_STANDBY --bucket metrics"}
+              note: {influx: "üç bucket: 30 gün, 90 gün, 2 yıl (temsilî) · henüz nokta yok"}
+              say: "29 Eyl. Ekip InfluxDB'yi kurdu: asıl sunucu bir AZ'de, bekleyen kopya başka bir AZ'de. Ham noktalar için metrics, özetler için metrics_1m ve metrics_1h bucket'ları açıldı. Üçü de şimdilik boş."
+            - phase: 2
+              who: gateway
+              lit: [sensors, gateway, vpn, influx]
+              packet: {at: gateway, text: "30 Eyl · 4 depoda Telegraf başladı · 2 sensör × 4 depo = 8 seri"}
+              note: {sensors: "geçmiş yok: ilk ölçümle başlar", influx: "sensör: 30 Eyl'den itibaren"}
+              say: "30 Eyl. Dört depoda ağ geçitleri çalışmaya başladı. Sensörler için ilk yükleme yoktur: sensör geçmiş tutmaz, eski ölçüm hiçbir yerde kayıtlı değildir. Her seri ilk ölçümüyle başlar."
+            - phase: 2
+              who: backfill
+              lit: [aurora, dms, backfill]
+              packet: {at: backfill, text: "SELECT order_id, order_date, total FROM orders WHERE order_date >= :T - interval '30 days' AND order_date < :T"}
+              note: {dms: "T anından sonrasını yakalıyor", sensors: ""}
+              say: "1 Eki 03:00, T anı (Adım 25). DMS bu andan sonraki olayları yakalamaya başladı. İlk yükleme işi T'den önceki 30 günün siparişlerini Aurora'nın okuma kopyasından aldı. 30 gün, metrics'in saklama süresidir; daha eskisi zaten silinecekti."
+            - phase: 2
+              who: backfill
+              lit: [backfill, influx]
+              packet: {at: backfill, text: "orders,channel=web count=1i,total=… <siparişin damgası> · 5.000 satırlık gruplar"}
+              note: {dms: "", influx: "sipariş: T'den önceki 30 gün + sensör: 30 Eyl'den itibaren"}
+              say: "İş her sipariş için tüketicinin yazacağı noktanın aynısını yazdı: aynı ölçü, aynı etiket, aynı damga kuralı. Bu yüzden yeniden çalışsa da aynı noktalar üzerine düşer; çift sayım olmaz. Özet task'ları sadece son aralığa baktığı için Ekip bu 30 günün özetlerini de bir kez yazdırdı. Bugün o ham noktaların çoğu süresi dolup silindi; özetleri duruyor."
+            - phase: 3
+              who: gateway
+              lit: [sensors, gateway, vpn, metcons, influx]
+              show: {influx: [t1000, p0, h8], check: [c1, c2]}
+              fresh: {influx: [t1000, p0]}
+              note: {influx: "bu seride 121. nokta · bugün 17 sipariş noktası (kesit: 08:52'ye kadar)", gateway: "her 5 dakikada, tam dakikada"}
+              say: "31 Eki sabahı. Sensör yolu gece gündüz çalışıyor: Telegraf her 5 dakikada 8 sensörü okur; 10:00 ölçümü IST-1 sıcaklığında 21,4. Sipariş noktaları ise sipariş geldikçe yazılır; gece yarısından beri 17 sipariş oldu (tablo bu sayıyı 08:52'ye kadar gösteriyor). Özet ve durum tablolarında dolu duran satırlar önceki çalışmalardan; sırası gelince anlatılacak."
+            - phase: 3
+              who: tasks
+              lit: [tasks, influx]
+              packet: {at: tasks, text: "10:00:10 · env-1h · range(-2h) · aggregateWindow(every: 1h, fn: mean) · to(metrics_1h)"}
+              show: {influx: [h9]}
+              fresh: {influx: [h9]}
+              note: {tasks: "sonraki: 11:00:10", gateway: ""}
+              say: "10:00:10. Saatlik özet task'ı kendiliğinden çalıştı: son iki saatin ham noktalarını okudu, her saatin ortalamasını metrics_1h'e yazdı. 09:00–10:00'ın ortalaması 20,9. 08:00–09:00 da yeniden hesaplandı; aynı damgayla üzerine düştü, sonuç değişmedi."
+            - phase: 3
+              who: sensors
+              lit: [sensors, gateway, vpn, metcons, influx]
+              show: {influx: [t1005, t1010, t1015, t1020, p1, p2, m1]}
+              fresh: {influx: [t1005, t1010, t1015, t1020, p1, p2]}
+              note: {tasks: "", influx: "bugün 41 sipariş noktası (17 + 1 + 23)"}
+              say: "10:24'e kadar. Dört sıcaklık noktası daha geldi; siparişler 41 noktaya ulaştı (Adım 25'teki 41; biri İrem Kurt'un 08:53'teki siparişi, Adım 25 onu kutu kutu izler). İki yol birbirinden habersiz, aynı bucket'a yazıyor. Yalnız yazma biçimleri farklı: sensör noktaları saatin dakikasına hizalı ve saniye hassasiyetli, sipariş noktaları düzensiz ve nanosaniye hassasiyetli."
+            - phase: 3
+              who: app
+              lit: [app, aurora]
+              packet: {at: app, text: "10:25:01 · INSERT orders W1793396741 · C00001 · 10.890,26 + INSERT outbox · COMMIT"}
+              note: {influx: ""}
+              say: "10:25:01. Sen siparişi verdin (Adım 25, Ayşe Yılmaz): P0001 + P0131 × 2 = 10.890,26 TL. Uygulama siparişi ve olayını aynı iş paketinde Aurora'ya yazdı. InfluxDB'ye kendisi yazmadı."
+            - phase: 3
+              who: wal
+              lit: [aurora, wal]
+              packet: {at: wal, text: "INSERT outbox W1793396741 …"}
+              say: "Aurora iki satırı da değişiklik kaydına yazdı. COMMIT olmasaydı bu kayda girmezdi; tamamlanmayan bir sipariş hiçbir sayıya karışmaz."
+            - phase: 3
+              who: dms
+              lit: [wal, dms, kinesis]
+              packet: {at: dms, text: "olay: W1793396741 · 10890.26 · created_at (= order_date)"}
+              say: "AWS DMS outbox'a eklenen satırı gördü ve onu lm-order-events akışına bir kayıt olarak koydu."
+            - phase: 3
+              who: kinesis
+              lit: [kinesis, metcons]
+              packet: {at: kinesis, text: "kayıt · W1793396741"}
+              say: "Akışı beş tüketici birbirinden habersiz okuyor; bu sayfanın ilgilendiği Ölçü tüketicisi. Sepet, sıralama, geçmiş ve graf tüketicileri Adım 25'te."
+            - phase: 3
+              who: metcons
+              lit: [metcons, influx]
+              packet: {at: metcons, text: "orders,channel=web count=1i,total=10890.26 1793431501206000583"}
+              show: {influx: [p3]}
+              fresh: {influx: [p3]}
+              note: {influx: "bugün 42 sipariş noktası"}
+              say: "Ölçü tüketicisi siparişi tek bir nokta olarak yazdı. Damga siparişin zamanı (10:25:01.206), sonuna sipariş numarasından türeyen 583 nanosaniye eklendi. Olayın geliş zamanı değil, siparişin zamanı: akış geride kalsa da nokta doğru dakikaya düşer."
+            - phase: 3
+              who: tasks
+              lit: [tasks, influx]
+              packet: {at: tasks, text: "10:26:10 · orders-1m · range(-5m) · aggregateWindow(every: 1m, fn: sum) · to(metrics_1m)"}
+              show: {influx: [m2]}
+              fresh: {influx: [m2]}
+              note: {tasks: "her dakika"}
+              say: "10:26:10. Dakikalık özet task'ı son 5 dakikanın noktalarını topladı; 10:25–10:26 dakikasında 1 sipariş var. Operasyon ekranı bu özeti okumaz: son 24 saate kadar ham noktalardan kendisi hesaplatır. Özetler, ham noktalar silindikten sonraki aylar içindir."
+            - phase: 3
+              who: sensors
+              lit: [sensors, gateway, vpn, influx]
+              show: {influx: [t1025, t1030, t1035, t1040, t1045, t1050]}
+              fresh: {influx: [t1025, t1030, t1035, t1040, t1045, t1050]}
+              note: {tasks: "", influx: "10:50 itibarıyla bu seride 131 nokta"}
+              say: "10:25'ten 10:50'ye altı sıcaklık noktası daha aynı yoldan geldi. Şimdi bir tanesini kutu kutu izleyelim: 10:55."
+            - phase: 3
+              who: sensors
+              lit: [sensors, gateway]
+              packet: {at: sensors, text: "10:55:00 · IST-1 sıcaklık sensörü: 23.3"}
+              say: "10:55:00. Telegraf IST-1 deposunun sıcaklık ve nem sensörlerini okudu. Sensör sadece sayıyı verir; saati bilmez."
+            - phase: 3
+              who: gateway
+              lit: [gateway]
+              packet: {at: gateway, text: "warehouse_env,sensor=temperature,warehouse=IST-1 value=23.3 1793433300000000000"}
+              note: {gateway: "tamponda 2 nokta: sıcaklık + nem"}
+              say: "Telegraf ölçümü line protocol'e çevirdi ve damgayı kendi saatinden koydu: 07:55:00Z, yani 10:55. Damga saniyeye yuvarlıdır, telde nanosaniye olarak gider; sondaki 9 sıfır bu yüzden. Nokta önce tampona girdi."
+            - phase: 3
+              who: vpn
+              lit: [gateway, vpn, influx]
+              packet: {at: vpn, text: "POST /api/v2/write?org=dbws&bucket=metrics (2 satır) · şifreli tünelin içinde"}
+              say: "flush_interval dolunca Telegraf tampondaki iki satırı tek istekte gönderdi. İstek VPN tünelinden geçti; InfluxDB internete kapalı olduğu için başka bir yol yok."
+            - phase: 3
+              who: influx
+              lit: [gateway, influx]
+              packet: {at: influx, text: "204 · yazdım"}
+              show: {influx: [t1055]}
+              fresh: {influx: [t1055]}
+              note: {gateway: "tampon boş", influx: "bu seride 132 nokta"}
+              say: "InfluxDB noktayı kaybolmasın diye önce diskteki bir günlüğe ekledi, belleğe aldı ve 204 döndü; dosyalar sonra arka planda sıkıştırılır. Telegraf 204'ü görünce iki satırı tampondan sildi. metrics'e ortalama yazılmaz: InfluxDB ham noktayı saklar, ekrandaki ortalamayı sen sorunca hesaplar."
+            - phase: 4
+              who: gateway
+              lit: [gateway, vpn, influx]
+              packet: {at: gateway, text: "olsaydı: yeniden gönderim · …value=23.3 1793433300000000000 → 204"}
+              show: {influx: [tdup]}
+              fresh: {influx: [tdup]}
+              mark: {influx: {tdup: dup}}
+              note: {gateway: "olsaydı: 2 nokta tamponda kaldı", influx: "olsaydı: hâlâ 132 nokta"}
+              say: "Olsaydı (ayrı bir durum): nokta yazıldı ama 204 cevabı yolda kayboldu. Telegraf yazmanın olduğunu bilemez; iki satırı tamponda tutar ve yeniden gönderir. Aynı seri + aynı damga aynı noktadır; ikinci yazma üzerine düşer, yeni nokta oluşmaz. Üstü çizili satır bu yüzden sayılmaz."
+            - phase: 4
+              who: gateway
+              lit: [gateway, influx]
+              packet: {at: gateway, text: "olsaydı: …value=23.9 1793433300000000000"}
+              hide: {influx: [tdup]}
+              set: {influx: {t1055: {value: 23.9}}}
+              fresh: {influx: [t1055]}
+              mark: {influx: {tdup: "", t1055: fix}}
+              note: {gateway: "", influx: "olsaydı: uyarı almadan değişti, yine 132 nokta"}
+              say: "Olsaydı (ayrı bir durum): aynı damgayla başka bir değer gelseydi, yeni değer eskisinin yerine geçerdi: 23,3 gider, 23,9 kalır. Hata da uyarı da olmaz. Ekip'in bir ölçümü düzeltme yolu budur; aynı depoya ikinci bir sıcaklık sensörü aynı etiketlerle bağlansaydı ölçümlerin kaybolma yolu da budur."
+            - phase: 4
+              who: vpn
+              lit: [gateway, vpn]
+              hide: {influx: [t1025, t1030, t1035, t1040, t1045, t1050, t1055]}
+              set: {influx: {t1055: {value: 23.3}}}
+              mark: {influx: {t1055: ""}}
+              note: {vpn: "olsaydı: IST-1 tüneli 10:22–10:32 arası kopuk", gateway: "10:31: tamponda 4 nokta (2 sıcaklık + 2 nem)", influx: "10:31: son nokta 10:20 · tablo o andaki hâl"}
+              say: "Olsaydı (ayrı bir durum; tablo 10:31'deki hâli gösterir): IST-1'in tüneli 10:22–10:32 arası kopsaydı. Telegraf okumaya ve damgalamaya devam eder, noktalar tamponda bekler. 10:31'de ekrana bakan biri IST-1'in son noktasını 10:20'de görür. 15 dakika dolmadığı için deadman susar; tampon bunu kendi toparlayacak."
+            - phase: 4
+              who: gateway
+              lit: [gateway, vpn, influx, tasks]
+              packet: {at: gateway, text: "olsaydı: 10:32 · POST /api/v2/write · 4 satır · damgalar 10:25, 10:30"}
+              show: {influx: [t1025, t1030, t1035, t1040, t1045, t1050, t1055]}
+              fresh: {influx: [t1025, t1030]}
+              note: {vpn: "", gateway: "", influx: "olsaydı: 2 sıcaklık noktası geç gelir, kendi zamanına yerleşir", tasks: "11:00:10'da 10:00–11:00'ı bunlarla hesaplar"}
+              say: "Olsaydı (devamı; tablo yine bugünkü hâl): tünel 10:32'de dönünce Telegraf bekleyen dört satırı gönderir. Damgalar okuma anınındır, varış anının değil; noktalar 10:25 ve 10:30'daki yerlerine oturur, sonraki okumalar normal gelir. Hiçbir şey kaybolmaz. Saatlik özet henüz yazılmadığı için etkilenmez; yazılmış bir saate düşselerdi de task son iki saati yeniden hesapladığı için özete girerlerdi."
+            - phase: 4
+              who: check
+              lit: [check, influx]
+              packet: {at: check, text: "10:55:30 · monitor.deadman(t: şimdi − 15m) · 8 seri · 8 ok"}
+              fresh: {check: [c1, c2]}
+              note: {influx: "", tasks: ""}
+              say: "Örnek durum · 10:55:30. Deadman check 5 dakikada bir, okumadan 30 saniye sonra, 8 sensör serisine sordu: son 15 dakikada nokta yazdın mı? Hepsi yazmış; durum ok. Bu kontrol gereklidir, çünkü grafik susan bir sensörü kendiliğinden göstermez: sorgu createEmpty: false ile boş pencereleri atlar, çizgi delikten düz geçer."
+            - phase: 4
+              who: check
+              lit: [sensors, check]
+              packet: {at: check, text: "olsaydı: ANK-1 nem · son nokta 10:35 · 10:50:30'da crit → bildirim → Ekip"}
+              set: {check: {c2: {status: crit}}}
+              fresh: {check: [c2]}
+              mark: {check: {c2: fix}}
+              note: {sensors: "olsaydı: ANK-1 nem sensörü sustu", check: "1 seri sessiz: sensör. Bir deponun 2 serisi: ağ geçidi ya da tünel (TunnelState söyler)."}
+              say: "Olsaydı (ayrı bir durum): ANK-1 nem sensörünün kablosu çıksaydı. Son nokta 10:35; 10:40, 10:45 ve 10:50 okumaları gelmez, 10:50:30'daki kontrolde 15 dakika dolar, durum crit olur ve Ekip'e haber gider. Sensör bozuksa o aradaki ölçümler hiçbir yerden gelmez. Aynı deponun iki serisi birden susarsa arıza ağ geçidinde ya da tüneldedir: tünel koptuysa noktalar tampondan gelir, ağ geçidi kapandıysa gelmez."
+            - phase: 4
+              who: retention
+              lit: [retention, influx]
+              packet: {at: retention, text: "bu gece 00:30 · 30 Eyl'in shard group'u silindi · metrics_1h'te 30 Eyl özetleri duruyor"}
+              set: {check: {c2: {status: ok}}}
+              mark: {check: {c2: ""}}
+              note: {sensors: "", check: "", influx: "metrics: son 30 gün · metrics_1h: 2 yıl"}
+              say: "Örnek durum · bu gece 00:30 (31 Eki). Retention servisi noktalarının hepsi 30 günden eski olan günü buldu: 30 Eyl, sensör serilerinin ilk günü. O günün dosyaları tek seferde silindi; satır satır silme yapılmadı. Saatlik özetler ayrı bucket'ta olduğu için duruyor. En eski ham gün artık 1 Eki. (ANK-1 yeniden ok: önceki kare yaşanmadı.)"
+            - phase: 4
+              who: influx
+              lit: [gateway, metcons, influx]
+              note: {influx: "olsaydı: failover, genellikle 60–120 sn", gateway: "tampon + yeniden deneme", metcons: "bağlantı hatası: 3 dakika bekleyerek dener"}
+              say: "Olsaydı (ayrı bir durum): asıl sunucunun AZ'si arızalansaydı. AWS kendiliğinden bekleyen ikize geçer; adres değişmez. O 1–2 dakikada Telegraf tamponda bekletir; Ölçü tüketicisi bağlantı hatasını bozuk kayıttan ayırır ve grubu kendi içinde 3 dakika boyunca (temsilî) yeniden dener, yani hata kuyruğuna düşmez. Ekran hata gösterebilir. Sonra aynı damgalarla yazılır; nokta kaybolmaz."
+            - phase: 4
+              who: backup
+              lit: [backup, influx]
+              packet: {at: backup, text: "olsaydı: 09:40'ta metrics yanlışlıkla silindi · bu gecenin yedeğinden yeni instance · 03:00'e kadar geri döner"}
+              note: {influx: "olsaydı: 03:00–geri yükleme arası: sensör yok, sipariş Aurora'dan", gateway: "", metcons: "", backup: "son yedek: bu gece 03:00 (temsilî)"}
+              say: "Olsaydı (ayrı bir durum): biri metrics bucket'ını yanlışlıkla silseydi. Bekleyen ikiz bunu kurtarmaz, silme ona da gider. Ekip gecenin yedeğini yeni bir instance'a yükler. Siparişlerin eksiği Aurora'dan yazılır; sensörlerin son yedekten sonraki ölçümleri, tamponda duranlar dışında, geri gelmez. Tablolar bu olmamış gibi kalır."
+            - phase: 4
+              who: monitor
+              lit: [metcons, influx, monitor]
+              packet: {at: metcons, text: "olsaydı: orders,channel=web,order_id=W1793396741 count=1i,total=10890.26 …"}
+              note: {influx: "", backup: "", monitor: "olsaydı: SeriesCardinality 10 → her siparişte +2 → alarm: 1.000"}
+              say: "Olsaydı (ayrı bir durum): yeni bir sürüm sipariş numarasını etikete koysaydı. Etiket serinin kimliğidir; her sipariş iki yeni seri açardı (count ve total). Grafik aynı görünür, bellek sessizce büyür. CloudWatch'taki SeriesCardinality alarmı bunu yakalar: bu bucket'ta normali 10. Ekip sürümü geri alır, o etiketli noktaları siler ve aynı siparişleri Aurora'dan doğru şekliyle yeniden yazar."
+            - phase: 4
+              who: dlq
+              lit: [metcons, dlq]
+              note: {monitor: "", dlq: "olsaydı: 1 mesaj"}
+              say: "Olsaydı (ayrı bir durum): bir olayın tutarı metin olarak gelseydi. Ölçü tüketicisi 5 kez dener, bozuk kaydı ayırır ve yerini hata kuyruğuna yazar (Adım 25). Akış durmaz; o siparişin noktası eksik kalır, gece karşılaştırması da bu eksiği görür."
+            - phase: 4
+              who: monitor
+              lit: [influx, metcons, dlq, monitor]
+              packet: {at: monitor, text: "10:55 · IteratorAge 1 sn · DLQ 0 · SeriesCardinality 10 · DiskUtilization %4 · TaskExecutionFailures 0 · WriteTimeouts 0"}
+              note: {dlq: ""}
+              say: "Örnek durum · 10:55. Pano temiz. CloudWatch \"sistem sağlıklı mı?\" sorusunu cevaplar; \"ANK-1 nem sensörü sustu mu?\" sorusunu değil. O soru InfluxDB'nin içindeki deadman check'indedir. İkisi birbirinin yerini tutmaz."
+            - phase: 4
+              who: reconcile
+              lit: [aurora, reconcile, influx]
+              packet: {at: reconcile, text: "bu sabah 03:00 · 30 Eki · 1.440 dakika · Aurora = InfluxDB · fark 0"}
+              note: {reconcile: "sensörler: karşılaştırılacak kayıt yok", monitor: ""}
+              say: "Örnek durum · bu sabah 03:00. Gece işi dünün dakika başına sipariş sayısını iki tarafta karşılaştırdı: fark 0 (Adım 25). Eksik olsaydı aynı damgayla yazardı. Sensörlerde bunu yapamaz; Aurora'nın karşılığı yoktur. Sensörün emniyeti tampon ve deadman'dır."
+            - phase: 4
+              who: influx
+              lit: [influx]
+              show: {influx: [p4]}
+              fresh: {influx: [t1000, t1005, t1010, t1015, t1020, t1025, t1030, t1035, t1040, t1045, t1050, t1055]}
+              note: {reconcile: "", influx: "hazır: bugün 44 sipariş noktası · IST-1 sıcaklık 132, 8 sensör 1.056 nokta"}
+              say: "Hazır, 10:58. \"Olsaydı\" kareleri yaşanmadı. IST-1 sıcaklığında 10:00–10:55 arası 12 nokta var: t0'daki simülasyonun başladığı noktalar. Simülasyon tek depoyu ve son saati gösterir; gerçek sorgu 4 deponun 6 saatini (288 ham sıcaklık noktası) okur, sipariş grafiği de kendi sorgusuyla aynı şekilde çalışır. Ekranın okuduğu metrics'te hiçbir ortalama yazılı değil; metrics_1h'teki özetleri ekran okumaz."
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: "Önce ekranın soruları yazılır, sonra iki tür ölçümün nasıl yazılacağı, saklanacağı ve hangi yoldan geleceği seçilir. Sensörde asıl kayıt InfluxDB'dir; siparişte Aurora'dır. Bu fark, onarımın da farkıdır."
+            cards:
+              - title: "Ekranın iki sorusu, iki ayrı sorgu"
+                text: "Sıcaklık bir seviyedir: \"bu 15 dakikada ortalama kaçtı?\" Sipariş bir olaydır: \"bu 15 dakikada kaç tane oldu?\" Birincisi mean, ikincisi sum ister. Sipariş noktası bir dakikalık özet değildir (Adım 25): her sipariş bir noktadır, \"dakikada kaç\" okurken toplanır. Bu yüzden pencere büyüyünce sıcaklık çizgisi düzleşir, sipariş çizgisinin sayıları büyür (15 dakikada 3 ise saatte 12)."
+                code:
+                  - {code: "from(bucket: \"metrics\") |> range(start: -6h) |> filter(fn: (r) => r._measurement == \"warehouse_env\" and r.sensor == \"temperature\")", tag: "Uygulama → InfluxDB", say: "Birinci sorgu: son 6 saat, sıcaklık serileri (4 depo)."}
+                  - {code: "|> aggregateWindow(every: 15m, fn: mean)", tag: ["Uygulama → InfluxDB", "InfluxDB → Uygulama"], say: "Her pencerenin ortalaması."}
+                  - {code: "from(bucket: \"metrics\") |> range(start: -6h) |> filter(fn: (r) => r._measurement == \"orders\" and r._field == \"count\")", tag: "Uygulama → InfluxDB", say: "İkinci sorgu: aynı aralık, sipariş noktalarının count alanı."}
+                  - {code: "|> aggregateWindow(every: 15m, fn: sum)", tag: ["Uygulama → InfluxDB", "InfluxDB → Uygulama"], say: "Her pencerenin toplamı: kaç sipariş."}
+              - title: "Bir noktanın şekli: etiket mi, alan mı?"
+                text: "Kural: üzerine filtre koyacağın ve değer sayısı sınırlı bilgi etiket, ölçtüğün sayı alan olur. Etiketler index'lenir; \"IST-1 sıcaklığı\" sorusu önce zaman, sonra etiketle daralır ve sadece o seriyi okur. Alanlar index'lenmez; \"değeri 30'dan büyük olanlar\" aralıktaki her noktayı okur."
+                map:
+                  cols: [Parça, Sensör, Sipariş]
+                  rows:
+                    - ["Ölçü adı", "warehouse_env", "orders"]
+                    - ["Etiketler", "warehouse (4 değer), sensor (2 değer)", "channel (web)"]
+                    - ["Alanlar", "value", "count, total"]
+                    - ["Zaman damgası", "ölçümün zamanı, saniyeye yuvarlı", "siparişin zamanı + 0–999 ns"]
+                    - ["Hiç konmayan", "ham sensör numarası", "müşteri ve sipariş numarası"]
+                code:
+                  - {code: "warehouse_env,sensor=temperature,warehouse=IST-1 value=23.3 1793433300000000000", tag: "Telegraf → InfluxDB", say: "Sıcaklık noktası: ölçü, etiketler, alan, damga."}
+                  - {code: "orders,channel=web count=1i,total=10890.26 1793431501206000583", tag: "Ölçü tüketicisi → InfluxDB", say: "Sipariş noktası; 1i tam sayı 1 demek."}
+              - title: "Cardinality: neden sipariş numarası etiket olmaz?"
+                text: "Bu sistemde seri sayısı hesapla bellidir: 4 depo × 2 sensör = 8 seri, artı orders'ın count ve total alanları = 10 seri. Yeni bir depo açılınca 2 seri eklenir; yavaş ve sınırlıdır. Sipariş numarası etikete konsaydı her sipariş 2 yeni seri açardı: sayı hiç durmadan büyür ve her seri bellekte ve index'te yer tutar. Alan olarak yazılsaydı seri sayısı değişmezdi. AWS'in eşikleri: 100 binin altı çok iyi, 1 milyonun altı iyi, 10 milyonun üstü kritik (InfluxDB 3 düşünülür)."
+                map:
+                  cols: [Bilgi, Farklı değer, Nereye, Neden]
+                  rows:
+                    - ["Depo kodu", "4, yavaş büyür", "Etiket", "Grafik depo başına ayrılır."]
+                    - ["Sensör türü", "2", "Etiket", "Sıcaklık ve nem ayrı grafik."]
+                    - ["Satış kanalı", "1 (web)", "Etiket", "Yeni kanal yeni çizgi olsun."]
+                    - ["Ölçülen sıcaklık, tutar", "sınırsız", "Alan", "Toplanır, ortalaması alınır."]
+                    - ["Sipariş, müşteri numarası", "sınırsız, hep büyür", "Hiçbiri", "Asıl kayıt Aurora'da; burada \"kaç tane\" sorulur."]
+              - title: "Zaman damgası: kim koyar, hangi hassasiyette?"
+                text: "Sensör saati bilmez; damgayı ağ geçidinin Telegraf'ı koyar. round_interval = true okumayı tam dakikalara hizalar (10:55:00), precision = 1s saniyeye yuvarlar. Bu sayede hep aynı anlara düşen noktalar çok iyi sıkışır. Siparişte damga siparişin zamanıdır, nanosaniye hassasiyetindedir: iki sipariş aynı milisaniyede verilse bile iki ayrı nokta olsun diye. Yakalamadığı: ağ geçidinin saati kayarsa noktalar yanlış zamana düşer; hata dönmez. Bu yüzden ağ geçidi NTP kullanır. Bir tuzak: yazma isteği hassasiyet söylemezse InfluxDB sayıyı nanosaniye sayar; saniyeyle yazılmış damga 1970'e düşer ve sonra retention onu siler."
+                map:
+                  cols: [Yazan, Damganın kaynağı, Hassasiyet, Neden]
+                  rows:
+                    - ["Telegraf (sensör)", "ağ geçidinin saati (NTP)", "saniye", "Düzenli aralık; aynı anda tek ölçüm."]
+                    - ["Ölçü tüketicisi", "siparişin zamanı", "nanosaniye", "Aynı anda iki sipariş iki nokta olsun."]
+                    - ["İlk yükleme işi", "orders.order_date + aynı kural", "nanosaniye", "Tüketiciyle aynı nokta çıksın."]
+              - title: "Sensörden InfluxDB'ye hangi yol?"
+                text: "Üç yol düşünüldü. Karar veren soru: VPN koparsa ne olur? Sensör ölçümünün başka kopyası yok, tampon şart. Bu yüzden depoda duran ağ geçidi seçildi. Sensörler zaten Modbus konuşuyor; Telegraf'ın eklentisi onları okur. Depo sayısı artıp her cihaz MQTT konuşmaya başlarsa IoT Core kuralı yeniden değerlendirilir."
+                map:
+                  cols: [Yol, Artısı, Eksisi, Seçim]
+                  rows:
+                    - ["Telegraf + VPN", "Depoda tampon; toplu yazma; yeniden deneme; Modbus okur.", "Ağ geçidini ve tüneli işletmek gerekir.", "Evet"]
+                    - ["AWS IoT Core kuralı (InfluxDB eylemi)", "Sunucu yok; cihaz başına sertifika; kural mesajı line protocol'e çevirir ve toplu yazabilir.", "Sensör MQTT konuşmalı (AWS'in cihaz mesajlaşma yolu); bağlantı koparsa tampon cihazın işi.", "Hayır"]
+                    - ["Sensör doğrudan yazar", "Ara parça yok.", "Her sensörde anahtar; tampon ve toplu yazma yok; her nokta ayrı istek.", "Hayır"]
+              - title: "Saklama: ham → 1 dakika → 1 saat"
+                text: "Ham noktalar 30 gün kalır; eski günün tamamı tek seferde silinir. Daha uzun bakış için task'lar özet yazar. Sensör zaten 5 dakikada bir geldiği için dakikalık özeti anlamsızdır: doğrudan saatliğe gider. Saatlik ortalama 12 ham noktadan hesaplanır, başka ortalamalardan değil: eksik noktalı bir parçanın ortalaması, ortalamaların ortalamasında fazla ağırlık alır. Toplamda bu tuzak yoktur; siparişin saatlik toplamı dakikalık toplamlardan çıkar. Özetten ham veri geri gelmez: 2 yıl sonra 10:15'teki değer yoktur. Süre bucket başınadır, nokta başına değil. Ekran bugün son 24 saate kadar okur, yani hep metrics'i; metrics_1m'i saatlik sipariş task'ı ve Ekip'in son 3 ay soruları, metrics_1h'i Ekip'in aylık depo raporu okur. Süreler temsilî."
+                map:
+                  cols: [Bucket, Ne tutar, Süre, Bir gün silinince]
+                  rows:
+                    - ["metrics", "Ham: sensör 5 dakikada bir (günde 288 × 8 = 2.304), sipariş başına bir nokta", "30 gün", "Her gün tek dosya grubu (shard group)"]
+                    - ["metrics_1m", "orders: dakikalık toplam", "90 gün", "Her gün tek dosya grubu"]
+                    - ["metrics_1h", "Sensörlerin saatlik ortalaması, siparişlerin saatlik toplamı", "2 yıl", "Her hafta tek dosya grubu"]
+              - title: "Pencere boyutu grafikte neyi değiştirir?"
+                text: "Pencere veriyi değil, sorunun cevabını değiştirir. Son 6 saatte depo başına 72 ham nokta vardır. Bedeli şu: ortalama tepeleri siler. t0'daki saatte en yüksek ölçüm 24,0 ama saatin ortalaması 22,75; 1 saatlik pencerede 24,0 hiç görünmez. Bu yüzden alarm kuralları pencereli grafiğe değil, ham noktalara ya da max'a bakar. Pencerenin değeri pencerenin sonunda çizilir: 10:00–10:15'in ortalaması 10:15'te görünür. Pencereler saat başına hizalıdır; aralık tam saate denk gelmezse iki uçta yarım pencere olur: 10:58'de son 6 saat 1 saatlik pencerede 7, 15 dakikalıkta 25 nokta döner. Son pencere henüz bitmemiştir: o ana kadarki noktaların ortalamasıdır, 11:00'e kadar değişebilir. t0'daki simülasyon bu hesabı tek depo ve son saatle (12 nokta) gösterir."
+                map:
+                  cols: [Pencere, "Sıcaklık noktası (6 saat, depo başına)", Grafikte ne görülür]
+                  rows:
+                    - ["1 dakika", "72: ham kadar", "Sensör 5 dakikada bir geldiği için çoğu pencere boş ve atlanır; düzleştirme yok. Siparişte dakikalık sayı görünür; siparişsiz dakika atlanır."]
+                    - ["15 dakika", "24 (10:58'de 25)", "Ekranın varsayılanı. Kısa dalgalanma görünür, gürültü azalır."]
+                    - ["1 saat", "6 (10:58'de 7)", "Düz çizgi, gün içi eğilim. Kısa tepeler kaybolur."]
+              - title: "InfluxDB 2 mi, InfluxDB 3 mü?"
+                text: "İkisi aynı noktayı ve aynı line protocol'ü kullanır, ama AWS'e göre InfluxDB 3 mimarisi baştan tasarlanmış ayrı bir motordur. Bu sistemde karar kolay: 10 seri, pencere sorguları, Flux task'ları ve check'ler. InfluxDB 3 Flux'ı desteklemez; bu sayfadaki sorgular, task'lar ve deadman yeniden yazılmak zorunda kalırdı. Milyonlarca seri, SQL ve yıllarca ham geçmiş gerekseydi tablo tersine dönerdi."
+                map:
+                  cols: [Konu, "InfluxDB 2 (seçilen)", "InfluxDB 3"]
+                  rows:
+                    - ["Sorgu dili", "Flux, InfluxQL", "SQL, InfluxQL; Flux yok"]
+                    - ["Zamanlı işler", "Flux task ve check", "Python eklentileri (Processing Engine)"]
+                    - ["Saklama", "Sunucunun diskinde sıkıştırılmış dosyalar (TSM)", "S3'te kolon bazlı dosyalar (Parquet)"]
+                    - ["Çok seri", "1 milyon üstünde dikkat ister", "Yüksek cardinality'de daha iyi"]
+                    - ["Birim", "Tek sunucu (DB instance), istenirse Multi-AZ", "Birkaç sunuculu küme; S3'te en az 200 GB ödenir"]
+              - title: "Boyut ve Multi-AZ"
+                text: "Yük çok küçük: 10 seri, günde 2.304 sensör noktası + birkaç yüz sipariş noktası (yaklaşık 2.600; siparişin çoğu akşam gelir), saniyede 0,03 yazma. AWS'in boyutlandırma tablosunun en küçük satırı bile (100 binin altı seri, saniyede ~50.000 satır: db.influx.large) çok üstünde; bu yüzden db.influx.medium ve 20 GiB, saniyede 3.000 disk işlemi yapan (3K IOPS) storage yeter. Multi-AZ standby: asıl sunucu eu-central-1c'de, bekleyen kopya eu-central-1b'de; yazılan her şey ona anında gider, arızada AWS kendiliğinden geçer (genellikle 60–120 saniye). Standby okuma almaz. Neden? Sensör ölçümünün başka kaydı yok: disk kaybolursa son yedekten sonrası gider. Telegraf'ın tamponu birkaç dakikalık kesintiyi karşılar, disk kaybını karşılamaz; ikiz disk kaybını karşılar, yanlış silmeyi karşılamaz, onu yedek karşılar. Ayda yaklaşık 216 USD (Frankfurt, AWS fiyat listesi, 31 Eki 2026); faturanın neredeyse tamamı instance'tır, seri sayısına göre değişmez."
+          - n: 2
+            title: İlk yükleme
+            intro: "İki yolun başlangıcı farklıdır. Sensörlerin geçmişi yoktur, yüklenecek bir şey de yoktur. Siparişlerin geçmişi Aurora'dadır; son 30 günü bir kez, tüketiciyle aynı noktalarla yazılır."
+            cards:
+              - title: "Kurulum"
+                text: "Ekip instance'ı ve bucket'ları bir kez kurar. Her yazar kendi token'ını alır: ağ geçitleri, Ölçü tüketicisi, ilk yükleme ve gece işi sadece metrics'e yazabilir; AWS'teki işler token'ı Secrets Manager'dan okur. Token çalınsa okuyamaz, silemez; sadece aynı damgayla üzerine yazabilir, bu yüzden ayrıdır ve tek başına iptal edilir. Yedek de burada açılır. Fiyatı ve Multi-AZ kararı Tasarım'da."
+                code:
+                  - {code: "aws timestream-influxdb create-db-instance --name dbws-influxdb --db-instance-type db.influx.medium \\", tag: "Ekip → AWS", say: "Sunucuyu kurar."}
+                  - {code: "  --deployment-type WITH_MULTIAZ_STANDBY --allocated-storage 20 --organization dbws --bucket metrics …", tag: "Ekip → AWS", say: "Bekleyen kopya, 20 GiB, ilk bucket."}
+                  - {code: "influx bucket update --name metrics --retention 720h", tag: "Ekip → InfluxDB", say: "Ham noktalar 30 gün."}
+                  - {code: "influx bucket create --name metrics_1m --retention 2160h", tag: "Ekip → InfluxDB", say: "Dakikalık özet: 90 gün."}
+                  - {code: "influx bucket create --name metrics_1h --retention 17520h", tag: "Ekip → InfluxDB", say: "Saatlik özet: 2 yıl."}
+              - title: "Sensörler: ilk yükleme yok"
+                text: "Sensör yalnız o anki değeri bilir; eski site de depo ölçümü tutmuyordu. Seri, ağ geçidinin 30 Eyl'deki ilk okumasıyla başlar. 31 Eki 10:58'de ekran son 6 saati okuduğu için bu başlangıç görünmez. Saatlik özetler de 30 Eyl'den başlar; öncesine ait bir karşılaştırma istenirse cevap \"veri yok\"tur."
+              - title: "Siparişler: Aurora'dan 30 gün"
+                text: "Ekip işi bir kez başlatır; iş AWS'te, özel ağda çalışır. T'den önceki sipariş burada, sonraki akıştan sayılır (Adım 25). Toplu yazma 5.000 satırlık gruplarla yapılır (AWS'in boyutlandırma örneği de bu boyutu kullanır). Noktalar tüketicinin yazacağı noktaların aynısı olduğu için iş yeniden çalışabilir. Bitince Ekip Aurora'daki sayıyı InfluxDB'deki sayıyla karşılaştırır. Özet task'ları sadece son aralığa baktığı için o 30 günün özetleri bir kez, o aralıkla yazdırılır. 31 Eki'de bu ham noktalar silinmiş ya da silinmek üzeredir; geride özetler kalır."
+                code:
+                  - {code: "SELECT order_id, order_date, total FROM orders WHERE order_date >= :T - interval '30 days' AND order_date < :T;", tag: ["İlk yükleme işi → Aurora", "Aurora → İlk yükleme işi"], say: "T'den önceki 30 gün, okuma kopyasından."}
+                  - {code: "write_api.write('metrics', records=[nokta(o) for o in siparisler])   # 5.000'erlik gruplar", tag: "İlk yükleme işi → InfluxDB", say: "Tüketiciyle aynı nokta, toplu yazma."}
+          - n: 3
+            title: Sürekli besleme
+            intro: "İki yol birbirinden habersiz çalışır. Sensör yolu saat gelince okur; sipariş yolu sipariş gelince yazar. Özetleri InfluxDB kendi içinde saat gelince üretir. Ekrana giden ortalamayı ise bunların hiçbiri hesaplamaz: t0'da sorgu hesaplatır."
+            cards:
+              - title: "Telegraf'ın ayarı"
+                text: "Her ağ geçidinde aynı ayar, sadece depo kodu değişir. 2 sensör × 12 okuma = saatte 24 nokta. Tampon 10.000 nokta tuttuğu için yaklaşık 17 günlük kopmayı karşılar; dolarsa en eski noktaların üzerine yazar. Toplu yazma boyutu üst sınırdır; bu kadar küçük yükte gruplar 2 satırlıktır, ama tünel dönünce biriken noktalar 1.000'erlik gruplarla gider."
+                code:
+                  - {code: "[agent] interval = \"5m\"  round_interval = true  precision = \"1s\"", tag: "Ağ geçidinin içinde", say: "5 dakikada bir, tam dakikada, saniye hassasiyeti."}
+                  - {code: "        metric_batch_size = 1000  metric_buffer_limit = 10000  flush_interval = \"10s\"", tag: "Ağ geçidinin içinde", say: "Grup en çok 1.000 satır, tampon 10.000, 10 saniyede bir gönderir."}
+                  - {code: "[global_tags] warehouse = \"IST-1\"", tag: "Ağ geçidinin içinde", say: "Her noktaya depo etiketini ekler."}
+                  - {code: "[[inputs.modbus]] name = \"warehouse_env\"   # sensor = temperature, humidity", tag: "Sensörler → Telegraf", say: "İki sensörü okur."}
+                  - {code: "[[outputs.influxdb_v2]] urls = [\"https://…timestream-influxdb.eu-central-1.on.aws:8086\"]", tag: "Telegraf → InfluxDB", say: "Tünelden InfluxDB'nin adresine."}
+                  - {code: "  organization = \"dbws\"  bucket = \"metrics\"  token = \"$INFLUX_TOKEN\"", tag: "Telegraf → InfluxDB", say: "Sadece bu bucket'a yazma izni olan anahtar."}
+              - title: "Ölçü tüketicisi (Adım 25)"
+                text: "Sipariş yolunun kodu ve neden dakikalık toplam yazılmadığı Adım 25'te. Burada önemli olan iki satır: damgayı olaydan üretir (created_at, orders.order_date'in aynı değeridir; aynı olay, aynı nokta) ve bütün grubu tek istekte yazar."
+                code:
+                  - {code: "ts = ns(e[\"created_at\"]) + int(sha1(e[\"order_id\"]).hexdigest(), 16) % 1000", tag: "Ölçü tüketicisinin içinde", say: "Siparişin zamanı + numarasından 0–999 ns."}
+                  - {code: "write_api.write(bucket=\"metrics\", record=points)", tag: "Ölçü tüketicisi → InfluxDB", say: "Grubun bütün noktaları tek istekte."}
+              - title: "Özet task'ları"
+                text: "Task'ları InfluxDB'nin kendi zamanlayıcısı çalıştırır; dışarıdan bir program gerekmez. offset saat geldikten 10 saniye sonra başlatır; o saniyelerde yolda olan noktalar da özete girsin diye. range(-2h) son iki saati her seferinde yeniden hesaplar: bir çalışma kaçarsa sonraki yakalar, geç gelen nokta özete girer, aynı saat aynı damgayla üzerine yazılır. orders-1m aynı kalıpla her dakika son 5 dakikayı toplar; bu kısa geri bakış failover gibi kısa gecikmeleri kapsar. orders-1h, metrics_1m'den saatlik toplam çıkarır."
+                code:
+                  - {code: "option task = {name: \"env-1h\", every: 1h, offset: 10s}", tag: "InfluxDB'nin içinde", say: "Her saat, 10 saniye sonra."}
+                  - {code: "from(bucket: \"metrics\") |> range(start: -2h)", tag: "InfluxDB'nin içinde", say: "Son iki saatin ham noktaları."}
+                  - {code: "  |> filter(fn: (r) => r._measurement == \"warehouse_env\")", tag: "InfluxDB'nin içinde", say: "Sadece sensörler."}
+                  - {code: "  |> aggregateWindow(every: 1h, fn: mean)", tag: "InfluxDB'nin içinde", say: "Her saatin ortalaması."}
+                  - {code: "  |> to(bucket: \"metrics_1h\", org: \"dbws\")", tag: "InfluxDB'nin içinde", say: "Sonucu uzun süreli bucket'a yazar."}
+              - title: "Bugün: sayılar (10:58)"
+                text: "IST-1 sıcaklığında gece yarısından 10:55'e 132 nokta; 8 sensör serisinde 1.056. Siparişlerde 44 nokta: 10:24'e kadar 41 (Adım 25'teki sayı), 10:25'te senin siparişin, sonra 2 sipariş daha. Toplam 10 seri. metrics_1h'te bugünün saatlik özetleri 09:00–10:00'a kadar; 10:00–11:00 henüz yazılmadı, 11:00:10'da yazılacak."
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: "Aynı nokta iki kez gelirse, nokta geç gelirse, sensör susarsa, sunucu arızalanırsa, biri etiketi yanlış kullanırsa ne olur? Her biri için bir emniyet var. Önemli fark: sipariş eksiği her zaman Aurora'dan onarılır; sensör eksiği ancak tampondan ya da son yedekten gelir, gerisi kaybolur."
+            cards:
+              - title: "Aynı nokta iki kez gelirse"
+                text: "Ne zaman: Telegraf cevabını alamadığı grubu yeniden gönderince, Lambda bir grup olayı yeniden işleyince. Ne yapar: InfluxDB'de aynı seri + aynı damga aynı noktadır; aynı alan için yeni değer eskisinin yerine geçer. Tekrar eden gönderim bu yüzden güvenlidir, ayrı bir \"işlendi\" işareti gerekmez (sıralama tüketicisi ise puanı artırdığı için ayrı bir işaret koyar, Adım 33). Yakalamadığı: iki farklı kaynak aynı seriye aynı anda yazarsa biri sessizce kaybolur; bu yüzden depo başına sensör türü başına tek sensör var, ikinci sensör eklenirse sensor_id etiketi gerekir. Onarım: yanlış değer aynı damgayla doğrusu yazılarak düzeltilir."
+              - title: "Geç gelen nokta"
+                text: "Ne zaman: VPN ya da ağ geçidi kısa süre koptuğunda. Ne yapar: Telegraf bekletir; noktalar okuma anının damgasıyla gelir, InfluxDB onları kendi günlerinin shard group'una koyar. Bedeli küçük: o günün dosyaları yeniden sıkıştırılır. Özet task'ı son iki saati yeniden hesapladığı için 1 saate kadar geç noktalar özete girer. Yakalamadığı: 1 saatten geç noktalar özette eksik kalır. Tampon bellektedir; ağ geçidi yeniden başlarsa bekleyenler kaybolur. Onarım: bu kadar uzun kesintiyi deadman ve TunnelState alarmı Ekip'e zaten bildirmiştir; Ekip özet task'ını o aralıkla elle çalıştırır, aynı damgalar üzerine düşer. Kaybolan noktalar geri gelmez: çizgi delikten düz geçer, raporda o saat eksik görünür."
+              - title: "Sensör susarsa: deadman"
+                text: "Ne zaman: 5 dakikada bir, okumadan 30 saniye sonra. Ne yapar: 15 dakikadır (üç okuma) nokta yazmayan seriyi crit yapar, _monitoring'e yazar, bildirim kuralı Ekip'e haber verir. Eşik 5 dakikalık aralığa bağlıdır: Telegraf'ın interval'i değişirse Ekip eşiği de günceller. Neden 15? Bir iki okumanın gecikmesi kısa bir tünel kesintisidir, tampon toparlar; üçü arıza sayılır. Yakalamadığı: değeri takılı kalan sensör (hep 21,0 yazar, seri canlı görünür); hiç nokta yazmamış yeni bir sensör (deadman sadece bir süre önce nokta yazmış seriyi bilir); bir saatten uzun süredir sessiz seri (sorgu son 1 saate bakar; haber o seri için çoktan gitmiştir, check artık ona bakmaz). Onarım: Ekip depoyu arar. 1 seri sessizse sensör: aradaki ölçümler gelmez. Bir deponun 2 serisi sessizse ve TunnelState 0 ise tünel: noktalar tampondan gelir. TunnelState 1 ise ağ geçidi: tamponu gitmişse gelmez."
+                code:
+                  - {code: "from(bucket: \"metrics\") |> range(start: -1h) |> filter(fn: (r) => r._measurement == \"warehouse_env\")", tag: "InfluxDB'nin içinde", say: "Son 1 saatte nokta yazmış sensör serileri."}
+                  - {code: "  |> monitor.deadman(t: experimental.subDuration(d: 15m, from: now()))", tag: "InfluxDB'nin içinde", say: "Son 15 dakikada yazmayana dead işareti."}
+                  - {code: "  |> monitor.check(crit: (r) => r.dead, messageFn: …, data: …)", tag: "InfluxDB'nin içinde", say: "Durumu crit yapar, _monitoring'e yazar."}
+              - title: "Sunucu arızalanırsa: failover"
+                text: "Ne zaman: asıl sunucu ya da AZ arızalanınca; AWS kendiliğinden geçer, Ekip başlatamaz da. Ne yapar: standby asıl sunucu olur, adres aynı kalır. Genellikle 60–120 saniye. Bu sürede Telegraf tamponda tutar; Ölçü tüketicisi bağlantı hatasında grubu kendi içinde 3 dakika boyunca (temsilî; Lambda zaman aşımı 5 dakika) dener. 5 denemelik hata kuyruğu hakkı bozuk kayıt içindir, failover'da bitmez; bitse de gece karşılaştırması eksiği tamamlar. Yakalamadığı: yanlış yazılan ya da silinen veri standby'a da gider. Ekran o sürede hata gösterir. Onarım: Ekip failover sonrası EngineUptime ve yazma sayılarına bakar; yanlış silme için aşağıdaki yedek."
+              - title: "Veri kaybolursa: otomatik yedek"
+                text: "Ne zaman: yedek her gece çalışır; geri yüklemeyi Ekip başlatır. Ne yapar: yedek yeni bir instance'a (ya da var olana) yüklenir; ilk yedek tam kopya, sonrakiler sadece değişenlerdir. Sıklık ve 35 gün saklama temsilî (AWS 1–365 gün arası izin verir). Yakalamadığı: son yedekten sonrası. Siparişlerde Aurora'dan yeniden yazılır; sensörlerde tamponda duranlar dışında gelmez. Onarım: geri yükleme yılda bir kez denenir; sensör kaybı kabul edilemez bir iş olursa yedek sıklığı artırılır (saatlik de olabilir)."
+              - title: "Silme ve özet sırası"
+                text: "Ne zaman: retention servisi düzenli aralıklarla bakar. Ne yapar: bütün noktaları 30 günden eski olan shard group'u tek seferde siler; satır satır silmez, maliyeti nokta sayısına bağlı değildir. Sınırdaki gün bir süre daha kalabilir. Yakalamadığı: özet task'ı aylardır bozuksa retention onu beklemez, ham nokta özetlenmeden silinir. Onarım: task hatası CloudWatch'ta TaskExecutionFailures alarmı; Ekip 30 gün dolmadan özeti yeniden çalıştırır. Silinmiş ham veriden özet çıkarılamaz. Retention'ı kısaltmak geri alınamaz; yedek de 35 gün sonra gider."
+              - title: "Biri yanlış etiket eklerse: seri alarmı"
+                text: "Ne zaman: sürekli; CloudWatch'taki SeriesCardinality bucket başına seri sayısını gösterir. Alarm eşiği 1.000 (temsilî; normali 10). Ne yapar: Ekip'e haber verir. Yakalamadığı: değer sayısı az olan yanlış etiket (eşiğin altında) görünmez; yanlış tipte alan ayrı bir hatadır: aynı alan önce sayı sonra metin gelirse ikinci yazma reddedilir, tüketici yeniden dener, kayıt DLQ'ya düşer. Onarım: sürüm geri alınır; o etiketli noktalar Delete API ile silinir ve aynı siparişler ilk yükleme işinin kuralıyla Aurora'dan yeniden yazılır (o aralığın özetleri de)."
+              - title: "Sipariş eksiği: DLQ ve gece karşılaştırması (Adım 25)"
+                text: "Ne zaman: DLQ tüketici vazgeçince; karşılaştırma her gece 03:00. Ne yapar: Ekip DLQ'daki olayı düzeltip yeniden işletir; gece işi dünün dakika başına sayısını Aurora ve InfluxDB'de karşılaştırır, eksik dakikanın siparişlerini aynı damgayla yazar. Hangisi önce olursa nokta aynıdır. Fark ölçüsü panoya gider. Yakalamadığı: bugünün eksiği yarına kadar görünmez. orders-1m son 5 dakikaya baktığı için daha geç yazılan nokta dakikalık ve saatlik özete kendiliğinden girmez. Sensörler kapsamda değil: Aurora'da karşılığı yok. Onarım: gece işi nokta yazdığı dakikaların özetini de aynı işte yeniden yazar."
+                code:
+                  - {code: "SELECT date_trunc('minute', order_date), count(*) FROM orders WHERE order_date >= '2026-10-29T21:00Z' AND order_date < '2026-10-30T21:00Z' GROUP BY 1;", tag: ["Gece karşılaştırması → Aurora", "Aurora → Gece karşılaştırması"], say: "30 Eki'nin (Türkiye saati) dakika başına doğru sayısı."}
+                  - {code: "|> range(start: 2026-10-29T21:00:00Z, stop: 2026-10-30T21:00:00Z) |> aggregateWindow(every: 1m, fn: sum)", tag: ["Gece karşılaştırması → InfluxDB", "InfluxDB → Gece karşılaştırması"], say: "InfluxDB'deki dakikalık sayı."}
+              - title: "Tek pano: InfluxDB'nin sağlığı"
+                text: "Ne zaman: her an. lm-order-fanout panosunda (Adım 25) InfluxDB satırları: CPU ve bellek (%80 üstü alarm), disk (%75 üstü), SeriesCardinality, WriteTimeouts, TaskExecutionFailures. CPU, bellek ve disk eşikleri AWS'in önerileri; seri alarmı (1.000) bizim. Disk, 20 GiB'in %4'ü civarında (temsilî). TunnelState her tünel için ayrı alarm. Yakalamadığı: pano sistemin sağlığını söyler, ölçümün doğruluğunu değil: 21,0'da takılı sensör panoda yeşildir. Onarım: disk büyürse önce seri sayısı ve retention'a bakılır, sonra storage büyütülür; bellek büyürse önce cardinality."
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
