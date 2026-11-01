@@ -17284,54 +17284,1112 @@ steps:
           - [Fan-out, "Bir olayın birden fazla sisteme yayılması."]
           - [Outbox, "Siparişle aynı transaction'da yazılan \"haber verilecek olaylar\" tablosu; bir program onu okuyup dağıtır."]
           - [Uygulama, "Mağazanın arka uç programı. Her veritabanı için ayrı bir uygulama sunucusu var; tarayıcı her birine ayrı istek gönderir."]
-      prior:
-        title: Gerçek bir sistemde siparişin yayılması için hazırlık
+      t1:
+        title: Önceden ne vardı? Bir sipariş beş depoya nasıl yayılıyor, depolar bu sabahki hâllerine nasıl geldi?
         intro: >-
-          Sipariş butonuna hiç basılmadan, asıl kaydın nerede olacağı ve diğer sistemlere nasıl haber verileceği belirlenir.
-          Aşağıdaki beş adım bu hazırlığın sırasıdır.
-        text:
-          - title: Önce kimin neyi bilmesi gerektiği yazılır
-            text: >-
-              Sipariş kimleri ilgilendiriyor? Sepet (boşalsın), canlı sıralama (tutar eklensin), alışveriş geçmişi (olay),
-              operasyon ölçümü (sayaç), öneriler (BOUGHT kenarı), analiz (rapor). Her biri için "geç kalırsa ne olur?" sorulur.
-          - title: Tek bir asıl kayıt seçilir
-            text: >-
-              Sipariş ve stok tek bir ilişkisel veritabanında, tek transaction'da yazılır. Diğerleri asıl kayıt değil; kopyadır,
-              sayaçtır ya da özettir ve gerekirse asıl kayıttan yeniden kurulur.
-          - title: Haber, kesinleşmeden sonra ve kayıpsız verilir
-            text: >-
-              Siparişle aynı transaction'da bir outbox satırı yazılır; COMMIT'ten sonra bir program onu okur ve olayı bir kuyruğa
-              ya da olay yoluna (Amazon SQS, Amazon EventBridge) bırakır. Böylece sipariş geri alınırsa haber de hiç çıkmaz;
-              sipariş kesinleşirse haber kaybolmaz.
-            code: |-
-              BEGIN;
-                INSERT INTO orders …;  INSERT INTO order_items …;
-                INSERT INTO outbox (event, payload) VALUES ('OrderPlaced', '{"order_id": "W…", …}');
-              COMMIT;
-          - title: Her alıcı kendi kuyruğundan okur
-            text: >-
-              Olay her ilgili sisteme ayrı bir kuyrukla dağıtılır (EventBridge kuralları ya da SNS → SQS). Biri yavaşlasa ya da
-              dursa diğerleri etkilenmez; duran sistem kaldığı yerden devam eder.
-          - title: Alıcılar tekrarlanan olaya hazırlıklıdır
-            text: >-
-              Kuyruklar bir olayı nadiren iki kez teslim edebilir. Her alıcı olayı sipariş numarasıyla tanır ve ikinci kez
-              işlemez (idempotent): sepeti iki kez boşaltmak sorun değildir, ama tutarı sıralamaya iki kez eklemek sorundur.
-      feed:
-        title: Veri nereden geliyor?
-        writes: >-
-          Siparişin asıl kaydını uygulama Aurora'ya yazar. Diğer beş veritabanı bu siparişten türeyen bilgiyi alır.
-        reads: >-
-          Her veritabanını kendi ekranı okur: sipariş geçmişi (Aurora), sepet (DynamoDB), canlı sıralama (ElastiCache),
-          hareketlerim (Keyspaces), operasyon grafiği (InfluxDB), öneriler (Neptune), raporlar (Redshift).
-        kind: >-
-          Motorlar birbirinden kendiliğinden veri çekmez; yayılmayı olay altyapısı yapar. Motorlar arasındaki yaygın doğrudan
-          bağlantı analiz tarafındadır: ilişkisel veritabanından analiz deposuna zero-ETL (ör. Aurora → Redshift).
-        with: >-
-          Bu sayfada altı veritabanı birlikte çalışır; yedincisi (Redshift) siparişi Aurora'dan zero-ETL ile yaklaşık
-          yarım dakika içinde kendisi alır. Ödeme sayfası sepeti de DynamoDB'den okumuştu.
-        best: >-
-          Asıl kayıt tek transaction'da; yayılma COMMIT'ten sonra, outbox + kuyruk ya da olay yoluyla; her alıcı kendi
-          kuyruğundan ve idempotent okur. Yayılmayı tarayıcıya bırakmak güvenli değildir: sayfa kapanırsa yarım kalır.
+          Sen "Place the order" butonuna basmadan önce (31 Eki 10:25) mağazanın beş deposu senin siparişini bekliyor: sepetinde
+          (DynamoDB) iki satır var, canlı sıralamada (ElastiCache) Ayşe Yılmaz (C00001) 465.187,51 TL ile 2. sırada, Ayşe'nin ve
+          bu tarayıcının geçmişinde (Keyspaces) son hareketler, operasyon ölçüsünde (InfluxDB) bugünün 41 siparişi, öneri
+          grafında (Neptune) Ayşe'nin aldığı ürünler, rapor kopyasında (Redshift) bu sabahın siparişleri. Bu bölüm, bu
+          depoların o hâle nasıl geldiğini ve bir siparişin onlara nasıl ulaştığını anlatıyor: siparişin tek bir asıl kaydı
+          (Aurora), aynı pakette yazılan "sipariş verildi" satırı (outbox), onu akışa taşıyan değişiklik kaydı ve DMS, akışın
+          şeritleri (shard) ve sıra, aynı olayı birbirinden habersiz okuyan beş tüketici (her birinin kendi yeri, kendi hata
+          kuyruğu, kendi "iki kez sayma" kuralı), her deponun ilk yüklemesi, neden Uygulama'nın beş depoya kendisi yazmadığı
+          (siparişte sadece Aurora'ya yazar ve sepeti bir kez siler; sayfa açılışındaki "baktı" satırı ve sepete ekleme siparişten
+          önce gelen ayrı işlerdir),
+          müşterinin neyi hemen, neyi birkaç saniye sonra gördüğü ve hepsinin sağlığının tek bir panodan nasıl izlendiği.
+          Siparişin paketi (Adım 23), sepetin tasarımı (Adım 12), geçmiş tablosu (Adım 10), graf (Adım 11), sıralama (Adım 33)
+          ve rapor kopyası (Adım 30) kendi sayfalarında ayrıntılı; burada aynı parçalar birlikte, siparişin yayılması
+          sorusuyla görünüyor. Akışı okuyan altıncı bir iş (siparişi depo sistemine bildiren iş, Adım 23) de çalışıyor; bu
+          sayfanın depolarına yazmadığı için sadece anılıyor. Önce zincirin bileşenleri, sonra bir simülasyon, sonra beş aşama
+          (tasarım, ilk yükleme, sürekli besleme, tutarlılık ve onarım, müşteri ne görür).
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1, t0 ve saatler", "t0: senin \"Place the order\" tıklaman, 31 Eki 10:25. t-1: ondan önceki zaman. Mağaza 1 Eki'de bu sistemle açıldı. Saatler Türkiye saatidir (UTC+3); sonu Z ile biten zamanlar UTC'dir (05:53Z = 08:53). Müşteriler, saatler, sipariş, istek ve olay numaraları, sayılar ve gecikmeler temsilîdir; ürünler, fiyatları (P0031 1.884,63 TL, P0001 3.373,84 TL, P0131 3.758,21 TL) ve sıralamanın ilk sıraları canlı sistemden."]
+          - ["Ekip ve eski site", "Ekip: mağazanın sistemini kuran ve işleten mühendisler; kurulum komutlarını onlar gönderir, alarmlara onlar bakar. Eski site: mağazanın bu sistemden önceki sitesi; sipariş geçmişi (1.000 müşteri) 30 Eyl'de Aurora'ya bir kez taşındı, açık sepetleri de DynamoDB'ye (Adım 12). Bu yüzden 1 Eki'den önceki siparişler de Aurora'da var."]
+          - ["Asıl kayıt ve türeyen depo", "Asıl kayıt (source of truth): bir bilginin doğru kabul edilen tek yeri; sipariş için Aurora. Türeyen depo: bilgiyi asıl kayıttan alan ve kendi işine uygun biçimde tutan depo (sepet, sıralama, geçmiş, ölçü, graf, rapor). Türeyen depo bozulursa asıl kayıttan yeniden kurulur; tersi olmaz."]
+          - ["Transaction (iş paketi) ve COMMIT", "Birlikte olması gereken yazmaların paketi. COMMIT hepsini birden kalıcı ve herkese görünür yapar; ROLLBACK hepsini geri alır. Bir havalenin iki hesaba birden işlenmesi gibi: ya ikisi ya hiçbiri."]
+          - ["Outbox, WAL ve DMS", "Outbox: siparişle aynı pakette yazılan \"sipariş verildi\" satırı; giden mektupların konduğu kutu gibi. WAL (write-ahead log, değişiklik kaydı): Aurora'nın COMMIT edilen her değişikliği sırayla yazdığı defter. AWS DMS (Database Migration Service): bu defteri okuyup outbox'a eklenen satırları akışa koyan AWS servisi; buna CDC (change data capture, değişikliği yakalama) denir. Replication slot: Aurora'nın DMS için tuttuğu yer imi; DMS okumadıkça ilgili WAL silinmez."]
+          - ["Kinesis Data Streams, shard ve bölüm anahtarı", "Kinesis Data Streams: olayların sırayla konduğu ve bir süre (burada 24 saat) saklandığı AWS servisi; bir bant gibi, biri koyar, diğerleri kendi hızında alır. Akışın adı lm-order-events. Shard: akışın şeritlerinden biri; her şerit kendi içinde sıralıdır. Bölüm anahtarı (partition key): kaydın hangi şeride gideceğini belirleyen değer; burada sipariş numarası (order_id). Aynı anahtar hep aynı şeride gider."]
+          - ["Tüketici, Lambda ve yer (checkpoint)", "Tüketici: akıştan okuyup bir depoya yazan küçük program. AWS Lambda: bir olay gelince kısa bir kodu çalıştıran AWS servisi; sunucuyu AWS yönetir. Event source mapping (ESM): Lambda'yı akışa bağlayan ayar; her tüketicinin kendi ESM'i vardır. Yer (checkpoint): bir tüketicinin her şeritte en son başarıyla işlediği kaydın sıra numarası; bir kitap ayracı gibi. Her tüketicinin kendi ayracı vardır; biri durursa diğerlerinin ayracı yürümeye devam eder."]
+          - ["Paylaşılan okuma ve enhanced fan-out", "Paylaşılan okuma (shared throughput): bir şeridin okuma kapasitesi (saniyede 2 MB ve 5 okuma isteği) bütün tüketicilere bölünür. Enhanced fan-out (EFO): her kayıtlı tüketiciye her şeritten ayrı, saniyede 2 MB'lık kendi hattı verilir ve kayıtlar ona itilir (push); tüketiciler birbirinin kapasitesini kullanmaz. Bir akışa 20 EFO tüketicisi kaydedilebilir."]
+          - ["En az bir kez (at-least-once) ve idempotent", "Akış ve Lambda bir kaydı kaybetmez ama bazen iki kez verir. Idempotent: aynı kayıt iki kez işlense de sonuç bir kez işlenmiş gibi olur; asansör butonuna iki kez basmak gibi. Her tüketicinin bunun için kendi kuralı (anahtarı) vardır."]
+          - ["Hata kuyruğu (DLQ)", "Dead-letter queue: bir tüketicinin birkaç denemede işleyemediği kaydın yerinin (şerit ve sıra numarası) bırakıldığı Amazon SQS kuyruğu. Akış durmaz; Ekip kaydı sonra, 24 saat dolmadan akıştan yeniden okur. Her tüketicinin kendi hata kuyruğu vardır."]
+          - ["Dual write", "Uygulama'nın aynı bilgiyi birden fazla depoya kendisi, ayrı ayrı yazması. Yazmalardan biri başarısız olursa depolar birbirini tutmaz; bu yüzden bu sayfanın zinciri dual write yerine outbox ve akış kullanır."]
+          - ["Nihai tutarlılık (eventual consistency)", "Türeyen depolar asıl kayıtla aynı anda değil, kısa bir süre sonra (burada birkaç saniye) aynı bilgiye ulaşır. Bu süreye gecikme (lag) denir; her tüketicinin gecikmesi ayrı ölçülür."]
+          - ["IteratorAge ve CDCLatencyTarget", "IteratorAge: bir tüketicinin işlediği son kaydın akışa ne kadar önce girdiği; tüketici ne kadar geride, o kadar büyük. CDCLatencyTarget: DMS'in, Aurora'daki COMMIT ile kaydı akışa koyması arasındaki gecikme (saniye). OldestReplicationSlotLag: Aurora'da DMS'in henüz okumadığı WAL miktarı."]
+          - ["CloudWatch, pano ve alarm", "CloudWatch: AWS'in ölçüm ve alarm servisi. Pano (dashboard): birçok ölçünün yan yana durduğu tek ekran; burada adı lm-order-fanout. Alarm: bir ölçü koşulu sağlarsa Ekip'e haber. Maximum: pencerenin en büyük değeri. EventBridge Scheduler: işleri belli saatlerde çalıştıran AWS zamanlayıcısı."]
+          - ["Zaman serisi noktası ve line protocol", "InfluxDB'de her ölçüm bir noktadır: ölçüm adı (measurement, burada orders), etiketler (tag, burada channel=web), alanlar (field, burada count ve total) ve zaman damgası. Line protocol bu dört parçayı tek satırda yazar. Aynı ölçüm adı, aynı etiketler ve aynı zaman damgası aynı noktadır; ikinci yazma ilkinin üzerine düşer."]
+          - ["zero-ETL ve Redshift", "Amazon Redshift: raporlar için kullanılan analiz veritabanı. zero-ETL: Aurora'nın değişiklik kaydını okuyup tabloları Redshift'e kendisi kopyalayan AWS özelliği (Adım 30); araya kod girmez. aurora_live: kopyanın Redshift'teki adı."]
+          - ["Kesit, temsilî, Örnek durum ve Olsaydı", "Kesit: simülasyonda gösterilen ve t0'daki durumu oluşturan kayıtlar: Aurora'da P0001 ile P0131'in stoğu, senin sepetinin iki satırı, sıralamanın dört üyesi ve bugünün sipariş sayacı, Ayşe'nin ve bu tarayıcının dört geçmiş satırı, bugünün sipariş noktaları, Ayşe'nin graf satırı, Redshift'teki iki sipariş. İrem Kurt'un (C00717) bu sabahki siparişinin satırları \"kesitin dışında\" tablolarında. Temsilî: canlı sistemden gelmeyen, anlatım için seçilmiş değer. \"Örnek durum\" kareleri sistemin bir aksiliğe nasıl cevap verdiğini gösterir; \"Olsaydı\" kareleri yaşanmadı, her biri ayrı bir durumdur ve birbirine eklenmez."]
+          - ["Depo sözcükleri", "Partition: bir tablonun bir anahtarla bulunan bölmesi; bir dolabın tek bir çekmecesi gibi (sepette bir tarayıcının sepeti, geçmişte bir kişinin satırları). TTL (time to live): satırın ömrü; süresi dolan satırı depo kendisi siler. Düğüm ve kenar: grafta müşteri ve ürün birer düğüm, \"aldı\" ilişkisi aralarında bir kenar (BOUGHT). Valkey: ElastiCache'in bellek veritabanı motoru. Bucket: InfluxDB'de noktaların durduğu depo (burada metrics). Okuma kopyası (reader): Aurora'nın sadece okuyan ikinci sunucusu; ağır okumalar siparişleri yazan sunucuyu yormaz. Bağlantı: Uygulama ile veritabanı arasındaki açık hat. Yük devri: çöken sunucunun yerine yedeğinin geçmesi. Özet (MD5, sha1): bir metinden üretilen, hep aynı çıkan sabit uzunlukta sayı. Arşiv: mağazanın S3'te (AWS'in dosya deposu) yıllarca tuttuğu olay dosyaları (Adım 10). AWS Glue: büyük dosyaları okuyup bir yere yazan AWS servisi. CSV: virgülle ayrılmış satırlardan oluşan dosya. Bulk loader: Neptune'un dosyadan toplu yükleme aracı. Ürün adlarının sonundaki sayı ürün numarasıdır (P0031 → Alpen Kablosuz Kulaklık 31); adet değildir."]
+          - ["Kod kartlarındaki sözcükler", "SQL: INSERT INTO … VALUES satır ekle; jsonb_build_object(…) alanlardan bir JSON belgesi kur; SELECT oku; count(*) satır say; date_trunc('minute', …) zamanı dakikaya yuvarla; GROUP BY gruplara ayır; WHERE hangi satırlar; BEGIN, COMMIT paket aç, kapat. SUM(…) topla; ZADD puanı doğrudan koy (eklemez). Python: for … in … her biri için; json.loads, base64.b64decode akıştaki kaydı okunur yap; uuid5(…) aynı girdiden hep aynı kimliği üret; r.set(…, nx=True, ex=86400) anahtar yoksa yaz, 24 saat yaşasın; zincirby puanı artır; incr sayacı 1 artır; delete_item sepet satırını sil; execute(…) Keyspaces'e komut gönder; neptune.run(…) grafa openCypher sorgusu gönder; write_api.write(…) InfluxDB'ye nokta yaz; return {\"batchItemFailures\": …} Lambda'ya hangi kaydın başarısız olduğunu söyle. openCypher: MERGE varsa bul, yoksa yarat; ON CREATE SET yaratırken şunu yaz; UNWIND listeyi tek tek aç; MATCH bul. Flux: from(bucket) hangi depo; range(start: -1h) son bir saat; filter(…) hangi ölçü; aggregateWindow(every: 1m, fn: sum) her dakikayı topla. AWS komutları: aws kinesis create-stream akış kur (--shard-count şerit sayısı); register-stream-consumer EFO tüketicisi kaydet; aws lambda create-event-source-mapping tüketiciyi akışa bağla (--starting-position TRIM_HORIZON en eski bekleyen kayıttan; --maximum-retry-attempts deneme sayısı; --bisect-batch-on-function-error hatalı kayıt grubunu ikiye böl; --destination-config OnFailure vazgeçilen kaydın yeri nereye; --function-response-types ReportBatchItemFailures sadece başarısız kaydı yeniden dene); aws dms … --table-mappings hangi tablo, hangi bölüm anahtarı (partition-key-type attribute-name: bir sütunun değeri); aws cloudwatch put-metric-alarm alarm kur; put-dashboard pano kur. IF(…, a, b) koşul doğruysa a değilse b; ${order_id} satırdaki order_id değeri. # ve -- sonrası açıklama; … kısaltılmış kısım."]
+          - ["Diğer adlar", "Uygulama: mağazanın arka uç programı (EC2 sunucularında: AWS'in kiralık sanal sunucuları); ödeme isteğini o alır, siparişi Aurora'ya o yazar. POST /aurora/api/orders: ödeme sayfasının \"sipariş ver\" isteğinin adresi; Idempotency-Key: istek numarasının ödeme sağlayıcısına giden istekteki adı (Adım 23). PutRecord: akışa tek bir kayıt koyma komutu. Ödeme sağlayıcısı: kartı bankayla konuşarak onaylayan dış servis (Adım 23). request_id: her \"Place the order\" tıklamasının tek numarası (Adım 17, 23). visitor_id: siparişi veren tarayıcının kimliği (lm_visitor çerezi; senin tarayıcın 7f3a…, İrem'inki b7c2…). campaign_id: bir sipariş kalemi bir kampanyadan geldiyse kampanyanın numarası, yoksa boş (Adım 17). status processing: ödemesi onaylandı, depoda hazırlanıyor. Persona: görevin başında seçtiğin müşteri; sipariş onun adına yazılır (Ayşe Yılmaz, C00001). \"Adım 12\", \"Adım 33\" gibi adlar bu görevin (mağazadaki 37 adımın) adımlarıdır; simülasyonun sayacındaki \"Adım 1 / 28\" ise simülasyonun karesidir."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–5) çalıştığını, "Önce → Sonra"
+          sütunu bilgiyi ya da isteği kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim kodumuz"
+          etiketli parçaları mağazanın ekibi yazar. Sipariş ödeme sayfasından Uygulama'ya, RDS Proxy üzerinden Aurora'ya gider;
+          COMMIT'ten sonra Uygulama sadece sepeti boşaltır ve cevap verir. Gerisini değişiklik kaydı taşır: DMS olayı Kinesis
+          akışına koyar, beş tüketici aynı olayı ayrı ayrı alıp beş depoya yazar; aynı kayıttan zero-ETL de Redshift'e kopyalar.
+          Yanda ilk yükleme işleri, hata kuyrukları, zamanlayıcı, gece karşılaştırmaları ve tek pano. Aynı parçalar aşağıdaki
+          simülasyonda birer kutu.
+        inventory:
+          - id: page
+            name: Ödeme sayfası (tarayıcıdaki kod)
+            kind: code
+            what: sayfanın tarayıcında çalışan kodu
+            does: >-
+              "Place the order" tıklamasına bir istek numarası verir ve isteği Uygulama'ya gönderir (Adım 23). Cevap gelince
+              "sipariş verildi" yazar. Başka hiçbir depoya istek göndermez.
+            box: "Tıklamaya numara verir, tek istek gönderir, cevabı yazar."
+            phases: [1, 3, 5]
+            before: Müşteri ("Place the order" butonu)
+            after: web
+          - id: web
+            name: Uygulama (ödeme isteği)
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucularında)
+            does: >-
+              Tek pakette stoğu düşürür, ödemeyi onaylatır, siparişi, kalemlerini ve outbox satırını yazar ve COMMIT eder (Adım
+              23). COMMIT'ten sonra sepetteki satırları bir kez siler (Adım 12) ve cevabı verir. Sıralamaya, geçmişe, ölçüye ve
+              grafa kendisi dokunmaz. (Sayfa açılışlarında "baktı" satırını Keyspaces'e, sepete eklemeyi DynamoDB'ye o yazar;
+              Adım 10, 12.)
+            box: "Sipariş + outbox tek pakette; sonra sepeti bir kez siler. Başka depoya yazmaz."
+            phases: [1, 3]
+            before: [page, Ödeme sağlayıcısı (onay)]
+            after: [proxy, dynamodb, keyspaces, page]
+          - id: proxy
+            name: RDS Proxy
+            kind: aws
+            what: AWS'in bağlantı havuzu servisi
+            does: Uygulama sunucularının çok sayıda bağlantısını Aurora'ya açık tuttuğu az sayıda bağlantıya paylaştırır (Adım 23).
+            box: "Çok istemci bağlantısı → az veritabanı bağlantısı."
+            phases: [1, 3]
+            before: web
+            after: aurora
+          - id: aurora
+            name: Aurora PostgreSQL (shop)
+            kind: aws
+            what: işlemsel (sipariş) veritabanı
+            does: >-
+              Siparişin asıl kaydı: products, orders, order_items ve outbox. Beş deponun ve Redshift'in doğru değeri her zaman
+              buradan hesaplanır. Değişiklik kaydını (WAL) DMS ve zero-ETL için tutar.
+            box: "Siparişin asıl kaydı ve outbox; bütün depoların doğru değeri buradan."
+            phases: [1, 2, 3, 4, 5]
+            before: [proxy]
+            after: [wal, initial, reconcile]
+          - id: wal
+            name: Aurora'nın değişiklik kaydı (WAL)
+            kind: aws
+            what: Aurora'nın içinde, bir ayarla açılır
+            does: >-
+              COMMIT edilen her değişikliği sırayla yazar. DMS ve zero-ETL bu kaydı ayrı ayrı okur. DMS'in yer imi (replication
+              slot) okunmamış kaydı silinmekten korur.
+            box: "Her COMMIT'i sırayla yazar; DMS ve zero-ETL buradan okur."
+            phases: [1, 2, 3, 4]
+            before: aurora
+            after: [dms, zetl]
+          - id: dms
+            name: AWS DMS (CDC görevi)
+            kind: aws
+            what: AWS'in değişiklik yakalama servisi
+            does: >-
+              Değişiklik kaydından sadece outbox'a eklenen satırları okur ve her birini Kinesis akışına bir kayıt olarak koyar;
+              bölüm anahtarı siparişin numarasıdır (order_id). Adım 10, 11, 12, 23 ve 33'teki görevin aynısı.
+            box: "Outbox'a eklenen her satırı akışa koyar; anahtar: order_id."
+            phases: [1, 2, 3, 4]
+            before: wal
+            after: kinesis
+          - id: kinesis
+            name: Kinesis Data Streams (lm-order-events)
+            kind: aws
+            what: olay akışı (iki şerit, temsilî)
+            does: >-
+              Sipariş olaylarını 24 saat saklar; aynı order_id'li kayıtlar aynı şeritte, sırasıyla durur. Beş tüketicinin her
+              biri EFO ile kendi hattından okur ve kendi yerini (checkpoint) tutar.
+            box: "Olayları 24 saat, şerit içinde sırayla saklar; her tüketicinin kendi hattı ve yeri."
+            phases: [1, 2, 3, 4]
+            before: dms
+            after: [cartcons, lbcons, actcons, metcons, graphcons, "Depoya bildiren iş (Adım 23)"]
+          - id: zetl
+            name: zero-ETL entegrasyonu
+            kind: aws
+            what: Aurora → Redshift kopyalama (AWS özelliği)
+            does: >-
+              Açılışta tabloları bir kez kopyaladı; o günden beri değişiklik kaydını okuyup her değişikliği Redshift'e uygular
+              (Adım 30). Akışı ve tüketicileri kullanmaz.
+            box: "Değişiklik kaydından Redshift'e kopyalar; akıştan bağımsız."
+            phases: [2, 3, 4]
+            before: wal
+            after: redshift
+          - id: redshift
+            name: Redshift (aurora_live)
+            kind: aws
+            what: analiz (rapor) veritabanı
+            does: Aurora tablolarının salt okunur kopyası; raporlar sayfası buradan okur (Adım 30, 31).
+            box: "Siparişlerin rapor kopyası; birkaç on saniye geriden."
+            phases: [2, 3, 5]
+            before: zetl
+            after: Raporlar sayfası
+          - id: cartcons
+            name: Sepet tüketicisi (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod
+            does: >-
+              Olaydaki tarayıcı kimliği (visitor_id) ve ürünlerle sepet satırlarını DeleteItem ile ikinci kez siler (Adım 12).
+              Uygulama zaten sildiyse bir şey değişmez; silme yarım kaldıysa tamamlar.
+            box: "Sepet satırlarını ikinci kez siler; silmek idempotent."
+            phases: [1, 2, 3, 4]
+            before: kinesis
+            after: [dynamodb, dlq]
+          - id: lbcons
+            name: Sıralama tüketicisi (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod (Adım 33'teki tüketici)
+            does: >-
+              Önce processed:<order_id> işaretini SET NX ile koyar; işaret yeni konduysa müşterinin puanına sipariş tutarını
+              ekler (ZINCRBY) ve bugünün sipariş sayacını artırır (INCR).
+            box: "SET NX işareti, sonra ZINCRBY ve INCR; aynı siparişi iki kez saymaz."
+            phases: [1, 2, 3, 4]
+            before: kinesis
+            after: [cache, dlq]
+          - id: actcons
+            name: Etkinlik tüketicisi (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod (Adım 10'daki tüketici)
+            does: >-
+              Her kalem için bir purchase satırını iki partition'a yazar: müşterinin ve siparişi veren tarayıcının. event_id
+              sipariş ve ürün numarasından (uuid5), ömür siparişin zamanından sayılır; aynı olay aynı satıra düşer.
+            box: "Her kalem: müşteri ve tarayıcı partition'ına birer satır; aynı event_id."
+            phases: [1, 2, 3, 4]
+            before: kinesis
+            after: [keyspaces, dlq]
+          - id: metcons
+            name: Ölçü tüketicisi (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod
+            does: >-
+              Her sipariş için orders ölçüsüne tek bir nokta yazar (count = 1, total = tutar). Zaman damgası siparişin
+              zamanıdır ve sipariş numarasından türeyen birkaç nanosaniye eklenir; aynı olay hep aynı noktaya düşer.
+            box: "Sipariş başına bir nokta; aynı olay aynı damga, aynı nokta."
+            phases: [1, 2, 3, 4]
+            before: kinesis
+            after: [influx, dlq]
+          - id: graphcons
+            name: Graf tüketicisi (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod (Adım 11'deki tüketici)
+            does: >-
+              Her kalem için müşteriden ürüne bir BOUGHT kenarını MERGE ile yazar; kenar sipariş numarasıyla aranır, adet (qty)
+              yaratılırken yazılır. Aynı olay ikinci kenar yaratmaz.
+            box: "Her kalem: BOUGHT {order_id} kenarı MERGE ile; ikinci kenar olmaz."
+            phases: [1, 2, 3, 4]
+            before: kinesis
+            after: [neptune, dlq]
+          - id: dynamodb
+            name: DynamoDB (dbws-cart)
+            kind: aws
+            what: sepet tablosu (Adım 12)
+            does: "Sepet başına bir partition (pk = CART#<tarayıcı>), ürün başına bir satır (sk = ITEM#<ürün>): adet, ad, fiyat, 24 saatlik ömür."
+            box: "Sepet satırları; siparişten sonra silinir."
+            phases: [3, 5]
+            before: [web, cartcons]
+            after: Sepet ve ödeme sayfaları
+          - id: cache
+            name: ElastiCache (Valkey)
+            kind: aws
+            what: bellekte çalışan veritabanı (Adım 33)
+            does: "lm:leaderboard (puana göre sıralı küme), lm:orders:today (bugünün sipariş sayacı) ve processed:<order_id> işaretleri (24 saat yaşar)."
+            box: "Sıralama, bugünün sayacı, \"işlendi\" işaretleri."
+            phases: [2, 3, 4, 5]
+            before: [lbcons, initial, reconcile]
+            after: Canlı ekran (Adım 33)
+          - id: keyspaces
+            name: Keyspaces (dbws.activity_by_user)
+            kind: aws
+            what: kişi başına olay geçmişi (Adım 10)
+            does: "Kişi başına bir partition (user_id), en yeni satır başta; her satır 7 gün yaşar."
+            box: "Kişi başına geçmiş, en yenisi başta; 7 günlük ömür."
+            phases: [2, 3, 4, 5]
+            before: [web, actcons, initial, reconcile]
+            after: "\"My activity\" sayfası (Adım 27)"
+          - id: influx
+            name: Timestream for InfluxDB (metrics)
+            kind: aws
+            what: zaman serisi veritabanı (Adım 34)
+            does: >-
+              metrics bucket'ında orders ölçüsü: sipariş başına bir nokta. Ham noktalar 30 gün saklanır (temsilî); operasyon
+              ekranı dakikalık ve saatlik toplamları okurken hesaplar.
+            box: "orders ölçüsü: sipariş başına bir nokta; toplam okurken."
+            phases: [1, 2, 3, 4, 5]
+            before: [metcons, initial, reconcile]
+            after: Operasyon ekranı (Adım 34)
+          - id: neptune
+            name: Neptune (graf)
+            kind: aws
+            what: graf veritabanı (Adım 11)
+            does: "Customer ve Product düğümleri, aralarında BOUGHT kenarları (order_id, qty). Öneri sorguları burada yürür."
+            box: "Müşteri → ürün BOUGHT kenarları; öneriler burada."
+            phases: [2, 3, 4, 5]
+            before: [graphcons, initial, reconcile]
+            after: Öneriler (Adım 11, 35)
+          - id: initial
+            name: İlk yükleme işleri (dört ayrı iş)
+            kind: code
+            what: her biri bir kez çalışan program
+            does: >-
+              T anına (1 Eki 03:00) kadarki siparişleri her depoya bir kez yazar: sıralama için SUM → ZADD (Adım 33), geçmiş
+              için arşivden 7 gün (AWS Glue, Adım 10), graf için CSV → Neptune bulk loader (Adım 11), ölçü için Aurora'dan 30
+              günlük noktalar. Sepetin ve Redshift'in ilk yüklemesi yok (sepet siparişten türemez; Redshift'i zero-ETL kurar).
+            box: "T anına kadarki siparişler: dört depoya birer kez."
+            phases: [2]
+            before: aurora
+            after: [cache, keyspaces, neptune, influx]
+          - id: dlq
+            name: Hata kuyrukları (SQS DLQ, tüketici başına bir tane)
+            kind: aws
+            what: Amazon SQS kuyrukları
+            does: >-
+              Her tüketicinin kendi kuyruğu: 5 denemede işlenemeyen kaydın yeri (şerit ve sıra numarası) buraya yazılır. O
+              tüketici bir sonraki kayda geçer; diğer tüketiciler hiç etkilenmez. Ekip kaydı akıştan yeniden okur.
+            box: "Beş kuyruk; işlenemeyen kaydın yeri burada, akış durmaz."
+            phases: [2, 4]
+            before: [cartcons, lbcons, actcons, metcons, graphcons]
+            after: [monitor, Ekip (inceler, yeniden işletir)]
+          - id: scheduler
+            name: EventBridge Scheduler
+            kind: aws
+            what: AWS'in zamanlayıcı servisi
+            does: Gece karşılaştırma işlerini her gece 03:00'te çalıştırır.
+            box: "Her gece 03:00: karşılaştırma işleri."
+            phases: [2, 4]
+            before: Ekip (bir kez kurar)
+            after: reconcile
+          - id: reconcile
+            name: Gece karşılaştırma işleri (dört ayrı Lambda)
+            kind: code
+            what: her gece çalışan programlar
+            does: >-
+              Önceki günün siparişlerini Aurora'dan sayar ve depolarla karşılaştırır: sıralamada dün sipariş veren her müşterinin
+              bütün siparişlerinden toplam cirosu (farkı ZADD ile düzeltir, Adım 33), geçmişte purchase satırları (eksiği aynı event_id ile yazar, Adım 10), grafta kenarlar
+              (eksiği MERGE eder, Adım 11), ölçüde dakikalık sayılar (eksik noktayı aynı damgayla yazar). Sonuçları CloudWatch'a
+              yazar.
+            box: "Aurora ile dört depoyu karşılaştırır; eksiği aynı anahtarla yazar."
+            phases: [4]
+            before: [scheduler, aurora]
+            after: [cache, keyspaces, neptune, influx, monitor]
+          - id: monitor
+            name: CloudWatch (lm-order-fanout panosu ve alarmlar)
+            kind: aws
+            what: AWS'in izleme servisi
+            does: >-
+              Tek pano: DMS gecikmesi, beş tüketicinin gecikmesi (IteratorAge) ve hata oranı, beş hata kuyruğu, zero-ETL
+              gecikmesi ve gece karşılaştırmalarının farkları. Toplam 19 alarm.
+            box: "Tek pano: DMS, beş tüketici, beş kuyruk, zero-ETL, karşılaştırmalar."
+            phases: [1, 2, 4]
+            before: [dms, cartcons, lbcons, actcons, metcons, graphcons, dlq, reconcile]
+            after: Ekip (alarm)
+        sim_title: "Simülasyon: depolar bu sabaha nasıl geldi, bir sipariş beş depoya nasıl yayıldı?"
+        sim:
+          kind: pipeline
+          title: Ödeme sayfası → Uygulama → RDS Proxy → Aurora → WAL → DMS → Kinesis → beş tüketici → beş depo; WAL → zero-ETL → Redshift
+          caption: >-
+            Depo kutularındaki ilk tablolar kesit: t0'daki durumu oluşturan kayıtlar (senin sepetin, sıralamanın dört üyesi,
+            Ayşe'nin ve bu tarayıcının geçmişi, bugünün noktaları, Ayşe'nin graf satırı, Redshift'teki iki sipariş (bugünün 41 siparişinden ikisi)). İrem Kurt'un
+            bu sabahki siparişinin satırları "kesitin dışında" tablolarında. Önce açılıştan önceki kurulum ve T anındaki ilk
+            yüklemeler, sonra ayın özeti, sonra 31 Eki 08:53'te İrem'in siparişinin bütün kutulardan geçişi, sonra senin
+            sabahın, sonra "Örnek durum" kareleri (aynı olayın ikinci kez gelmesi, bu sabahki gece karşılaştırması) ve "Olsaydı"
+            kareleri (duran bir tüketici, işlenemeyen bir kayıt, yarım kalan bir sayım, duran DMS), en sonda müşterinin neyi ne
+            zaman gördüğü. Canlı sistemden: ürünler ve fiyatları, sıralamanın ilk sıraları. Temsilî: saatler, numaralar,
+            sayılar, gecikmeler. Son karede her şey senin tıklamandan (t0) hemen önceki hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım, 5: Müşteri ne görür}
+          rows:
+            - {id: order, title: "Siparişin yolu: ödeme sayfası → Uygulama → RDS Proxy → Aurora (asıl kayıt)", flow: true}
+            - {id: chain, title: "COMMIT'ten sonra: değişiklik kaydı → DMS → akış (şerit: order_id)", flow: true}
+            - {id: cons, title: "Beş bağımsız tüketici: her biri kendi hattı, kendi yeri, kendi hata kuyruğu"}
+            - {id: stores, title: "Beş türeyen depo (tüketicilerle aynı sırada)"}
+            - {id: report, title: "Aynı değişiklik kaydından rapor kopyası: zero-ETL → Redshift", flow: true}
+            - {id: helpers, title: "Yandaki işler: ilk yüklemeler, hata kuyrukları, zamanlayıcı, gece karşılaştırmaları, tek pano", side: true}
+          summary: >-
+            Açılıştan önce outbox, akış (iki şerit), beş EFO tüketicisi, beş hata kuyruğu ve tek pano kuruldu; T anında DMS
+            yakalamaya başladı, dört ilk yükleme işi T'ye kadarki siparişleri yazdı, zero-ETL tabloları kopyaladı. Sonra her
+            sipariş aynı yoldan geçti: Uygulama sadece Aurora'ya yazdı ve sepeti bir kez sildi; İrem'in siparişi bir saniye
+            içinde beş tüketiciye ayrı ayrı ulaştı, Redshift'e yaklaşık 20 saniyede. İkinci kez gelen olay hiçbir depoda ikinci kez
+            sayılmadı; gece karşılaştırmaları farkı 0 buldu; pano yeşil. Son durum: sepetinde 2 satır, Ayşe 465.187,51 ile 2.
+            sırada, bugün 41 sipariş; t0 buradan başlar.
+          boxes:
+            - id: page
+              row: order
+            - id: web
+              row: order
+            - id: proxy
+              row: order
+            - id: aurora
+              row: order
+              tables:
+                - name: "products (kesit: t0'da sepetinde olacak ürünler)"
+                  cols: [product_id, stock]
+                  rows:
+                    - {key: P0001, product_id: "P0001 Alpen Kablosuz Kulaklık 1", stock: "128", hidden: true}
+                    - {key: P0131, product_id: "P0131 Kapadokya Mekanik Klavye 131", stock: "184", hidden: true}
+                - name: "kesitin dışında: İrem'in siparişi (orders + outbox)"
+                  cols: [order_id, customer_id, total]
+                  money: [total]
+                  rows:
+                    - {key: o1, order_id: W1793391207, customer_id: C00717, total: 1884.63, hidden: true}
+                    - {key: e1, order_id: "outbox: W1793391207", customer_id: C00717, total: "order_placed", hidden: true}
+            - id: wal
+              row: chain
+            - id: dms
+              row: chain
+            - id: kinesis
+              row: chain
+              tables:
+                - name: "kayıtlar (kesitin dışında: İrem'in olayı)"
+                  cols: [kayıt, şerit]
+                  rows:
+                    - {key: k1, kayıt: "W1793391207 · order_placed", şerit: "shard-1", hidden: true}
+                - name: "tüketicilerin yeri (checkpoint)"
+                  cols: [tüketici, son işlenen]
+                  rows:
+                    - {key: c1, tüketici: sepet, son işlenen: "—", hidden: true}
+                    - {key: c2, tüketici: sıralama, son işlenen: "—", hidden: true}
+                    - {key: c3, tüketici: etkinlik, son işlenen: "—", hidden: true}
+                    - {key: c4, tüketici: ölçü, son işlenen: "—", hidden: true}
+                    - {key: c5, tüketici: graf, son işlenen: "—", hidden: true}
+            - id: cartcons
+              row: cons
+            - id: lbcons
+              row: cons
+            - id: actcons
+              row: cons
+            - id: metcons
+              row: cons
+            - id: graphcons
+              row: cons
+            - id: dynamodb
+              row: stores
+              tables:
+                - name: "dbws-cart (kesit: senin sepetin · CART#… / ITEM#… · unit_price: birim fiyat)"
+                  cols: [pk · sk, qty, unit_price]
+                  money: [unit_price]
+                  rows:
+                    - {key: s1, pk · sk: "7f3a… / P0131", qty: 2, unit_price: 3758.21, hidden: true}
+                    - {key: s2, pk · sk: "7f3a… / P0001", qty: 1, unit_price: 3373.84, hidden: true}
+                - name: "kesitin dışında: İrem'in sepeti"
+                  cols: [pk · sk, qty, unit_price]
+                  money: [unit_price]
+                  rows:
+                    - {key: x1, pk · sk: "b7c2… / P0031", qty: 1, unit_price: 1884.63, hidden: true}
+            - id: cache
+              row: stores
+              tables:
+                - name: "lm:leaderboard (kesit)"
+                  cols: [üye, ad, puan]
+                  money: [puan]
+                  sort: [puan, desc]
+                  rows:
+                    - {üye: C00002, ad: Mert Doğan, puan: 1168114.91, hidden: true}
+                    - {üye: C00001, ad: Ayşe Yılmaz, puan: 465187.51, hidden: true}
+                    - {üye: C00163, ad: Seda Yılmaz, puan: 195806.03, hidden: true}
+                    - {üye: C00717, ad: İrem Kurt, puan: 195359.79, hidden: true}
+                - name: "diğer anahtarlar"
+                  cols: [anahtar, değer]
+                  rows:
+                    - {key: t1, anahtar: "lm:orders:today", değer: "—", hidden: true}
+                    - {key: t2, anahtar: "processed:W…1207", değer: "1", hidden: true}
+            - id: keyspaces
+              row: stores
+              tables:
+                - name: "activity_by_user (kesit)"
+                  cols: [user_id, event_time, olay · ürün]
+                  rows:
+                    - {key: v2, user_id: "7f3a… (sen)", event_time: "31 Eki 09:58", olay · ürün: "view P0001", hidden: true}
+                    - {key: v1, user_id: "7f3a… (sen)", event_time: "31 Eki 09:50", olay · ürün: "view P0131", hidden: true}
+                    - {key: a1, user_id: "C00001", event_time: "30 Eki 15:13", olay · ürün: "search P0084", hidden: true}
+                    - {key: a2, user_id: "C00001", event_time: "30 Eki 06:34", olay · ürün: "purchase P0147", hidden: true}
+                - name: "kesitin dışında: İrem'in satın alma satırları"
+                  cols: [user_id, event_time, olay · ürün]
+                  rows:
+                    - {key: i1, user_id: "C00717", event_time: "31 Eki 08:53", olay · ürün: "purchase P0031", hidden: true}
+                    - {key: i2, user_id: "b7c2…", event_time: "31 Eki 08:53", olay · ürün: "purchase P0031", hidden: true}
+            - id: influx
+              row: stores
+              tables:
+                - name: "orders,channel=web (kesit: bugünün noktaları)"
+                  cols: [zaman, nokta, count]
+                  rows:
+                    - {key: p0, zaman: "00:00–08:52", nokta: "17 nokta", count: "17", hidden: true}
+                    - {key: p1, zaman: "08:53:27.412", nokta: "İrem (W…1207)", count: "1", hidden: true}
+                    - {key: p2, zaman: "08:54–10:24", nokta: "23 nokta", count: "23", hidden: true}
+            - id: neptune
+              row: stores
+              tables:
+                - name: "BOUGHT kenarları (kesit: Ayşe)"
+                  cols: [müşteri, aldıkları]
+                  rows:
+                    - {key: n1, müşteri: "C00001 Ayşe Yılmaz", aldıkları: "Kablosuz Kulaklık, Hava Temizleyici, Toros Bulut Mimarisi, Toros Spor Çantası, Deri Ceket", hidden: true}
+                - name: "kesitin dışında: İrem'in kenarı"
+                  cols: [müşteri, aldıkları]
+                  rows:
+                    - {key: n2, müşteri: "C00717 İrem Kurt", aldıkları: "→ P0031 · order_id W1793391207 · qty 1", hidden: true}
+            - id: zetl
+              row: report
+            - id: redshift
+              row: report
+              tables:
+                - name: "aurora_live.public.orders (kesit: bugünün 41 siparişinden ikisi)"
+                  cols: [order_id, customer_id, total]
+                  money: [total]
+                  rows:
+                    - {key: r1, order_id: W1793390012, customer_id: C00002, total: 1299.90, hidden: true}
+                    - {key: r2, order_id: W1793391207, customer_id: C00717, total: 1884.63, hidden: true}
+            - id: initial
+              row: helpers
+              tables:
+                - name: "T anına kadarki siparişler"
+                  cols: [depo, yazılan]
+                  rows:
+                    - {key: b1, depo: sıralama, yazılan: "—", hidden: true}
+                    - {key: b2, depo: geçmiş, yazılan: "—", hidden: true}
+                    - {key: b3, depo: graf, yazılan: "—", hidden: true}
+                    - {key: b4, depo: ölçü, yazılan: "—", hidden: true}
+            - id: dlq
+              row: helpers
+              tables:
+                - name: "bekleyen (lm-…-dlq, beş kuyruk)"
+                  cols: [kuyruk, mesaj]
+                  rows:
+                    - {key: d1, kuyruk: "sepet · sıralama · etkinlik", mesaj: "0 · 0 · 0", hidden: true}
+                    - {key: d2, kuyruk: "ölçü", mesaj: "0", hidden: true}
+                    - {key: d3, kuyruk: "graf", mesaj: "0", hidden: true}
+            - id: scheduler
+              row: helpers
+            - id: reconcile
+              row: helpers
+              tables:
+                - name: "son çalışma"
+                  cols: [iş, sonuç]
+                  rows:
+                    - {key: q1, iş: sıralama, sonuç: "—", hidden: true}
+                    - {key: q2, iş: geçmiş, sonuç: "—", hidden: true}
+                    - {key: q3, iş: graf, sonuç: "—", hidden: true}
+                    - {key: q4, iş: ölçü, sonuç: "—", hidden: true}
+            - id: monitor
+              row: helpers
+              tables:
+                - name: "lm-order-fanout panosu (gecikme, kuyruk, alarm)"
+                  cols: [ölçü, değer]
+                  rows:
+                    - {key: m1, ölçü: "DMS", değer: "—", hidden: true}
+                    - {key: g1, ölçü: "sepet tüketicisi", değer: "—", hidden: true}
+                    - {key: g2, ölçü: "sıralama tüketicisi", değer: "—", hidden: true}
+                    - {key: g3, ölçü: "etkinlik tüketicisi", değer: "—", hidden: true}
+                    - {key: g4, ölçü: "ölçü tüketicisi", değer: "—", hidden: true}
+                    - {key: g5, ölçü: "graf tüketicisi", değer: "—", hidden: true}
+                    - {key: m4, ölçü: "hata kuyrukları", değer: "—", hidden: true}
+                    - {key: m5, ölçü: "zero-ETL", değer: "—", hidden: true}
+                    - {key: m6, ölçü: "alarmlar", değer: "—", hidden: true}
+          frames:
+            - phase: 2
+              who: aurora
+              lit: [aurora]
+              packet: {at: aurora, text: "28 Eyl · CREATE TABLE orders (… visitor_id, request_id UNIQUE, status, total) · order_items (… qty, unit_price, campaign_id) · outbox (event_id, order_id, type, payload jsonb, created_at)"}
+              note: {aurora: "tablolar kuruldu · outbox boş"}
+              say: >-
+                28 Eyl, açılıştan üç gün önce. Ekip Aurora'da sipariş tablolarını ve outbox'ı kurdu (Adım 23). outbox'ın her satırı
+                bir olay: hangi sipariş, ne oldu (order_placed), tüketicilerin ihtiyaç duyduğu her şey tek bir JSON belgesinde
+                (payload). Beş depo da bu belgeden beslenecek; hiçbiri Aurora'ya ayrıca soru sormayacak. 30 Eyl'de eski sitenin sipariş
+                geçmişi (1.000 müşteri) bu tablolara bir kez taşındı; mağaza 1 Eki'de bu sistemle açıldı.
+            - phase: 2
+              who: kinesis
+              lit: [kinesis, dlq, scheduler, monitor]
+              packet: {at: kinesis, text: "29 Eyl · aws kinesis create-stream lm-order-events --shard-count 2 · register-stream-consumer × 5 (cart, leaderboard, activity, metrics, graph) · SQS DLQ × 5 · put-dashboard lm-order-fanout · put-metric-alarm …"}
+              show: {kinesis: [c1, c2, c3, c4, c5], dlq: [d1, d2, d3], monitor: [m1, g1, g2, g3, g4, g5, m4, m5, m6]}
+              note: {aurora: "", kinesis: "2 şerit · 5 EFO tüketicisi · henüz kayıt yok", dlq: "5 kuyruk, hepsi boş", scheduler: "her gece 03:00", monitor: "pano ve alarmlar hazır · henüz ölçü yok"}
+              say: >-
+                29 Eyl. Ekip olay akışını iki şeritle kurdu ve beş tüketiciyi ayrı ayrı EFO tüketicisi olarak kaydetti: her
+                biri her şeritten kendi hattıyla okuyacak. Her tüketiciye kendi hata kuyruğu verildi; zamanlayıcı gece
+                karşılaştırmaları için 03:00'e kuruldu. Tek pano ve alarmlar ilk siparişten önce hazır.
+            - phase: 2
+              who: dms
+              lit: [wal, dms, kinesis, cartcons, lbcons, actcons, metcons, graphcons]
+              packet: {at: dms, text: "1 Eki 03:00 = T · DMS CDC görevi başladı: --cdc-start-time T · sadece outbox · bölüm anahtarı ${order_id} · 5 ESM: --starting-position TRIM_HORIZON"}
+              note: {kinesis: "T'den sonraki her olay buraya", dlq: "", scheduler: "", monitor: "", dms: "T anından sonrasını yakalıyor"}
+              say: >-
+                1 Eki 03:00, açılış gecesi. Bu ana T diyelim. DMS görevi T anından itibaren outbox'a eklenen her satırı yakalamaya
+                başladı; kayıtların bölüm anahtarı siparişin numarası. Beş tüketicinin her biri akışa kendi ayarıyla
+                (ESM) bağlandı ve akıştaki en eski kayıttan okumaya hazır. T'den sonraki her sipariş bu yoldan gelecek.
+            - phase: 2
+              who: initial
+              lit: [aurora, initial, cache, keyspaces, influx, neptune]
+              packet: {at: initial, text: "T'ye kadarki siparişler (okuma kopyasından) · sıralama: SUM → ZADD · geçmiş: arşivden son 7 gün → USING TTL · graf: CSV → bulk loader · ölçü: son 30 gün, sipariş başına bir nokta"}
+              show: {initial: [b1, b2, b3, b4]}
+              set: {initial: {b1: {yazılan: "1.000 müşterinin toplamı"}, b2: {yazılan: "7 günün olayları"}, b3: {yazılan: "düğümler ve kenarlar"}, b4: {yazılan: "30 günün noktaları"}}}
+              fresh: {initial: [b1, b2, b3, b4]}
+              note: {dms: "", kinesis: "", initial: "her iş sadece T'den öncesini yazar", cache: "T'deki sıralama", keyspaces: "T'den önceki 7 gün", influx: "T'den önceki 30 gün", neptune: "T'deki graf"}
+              say: >-
+                Aynı gece dört ilk yükleme işi T anına kadarki siparişleri dört depoya bir kez yazdı (Adım 33, 10, 11 ve bu sayfa).
+                Hepsi Aurora'nın okuma kopyasından okudu; siparişleri yazan sunucu yorulmadı. T'den önceki sipariş ilk yüklemede,
+                sonraki akışta sayılır: ne boşluk ne çakışma. Sepete ilk yükleme gerekmez; sepet siparişten türemez (Adım 12).
+            - phase: 2
+              who: zetl
+              lit: [aurora, wal, zetl, redshift]
+              packet: {at: zetl, text: "zero-ETL: orders, order_items, products, customers → aurora_live (ilk kopya) · sonra değişiklik kaydından sürekli"}
+              note: {initial: "", cache: "", keyspaces: "", influx: "", neptune: "", zetl: "ilk kopya bitti → değişiklikleri izliyor", redshift: "4 tablo kopyalandı"}
+              say: >-
+                Redshift'in kopyasını zero-ETL kendisi kurdu: önce dört tabloyu bir kez kopyaladı, sonra değişiklik kaydını
+                okumaya geçti (Adım 30). Bu yol akışı ve tüketicileri hiç kullanmaz; aynı defterin ikinci okuyucusu.
+            - phase: 3
+              who: kinesis
+              lit: [page, web, proxy, aurora, wal, dms, kinesis, cartcons, lbcons, actcons, metcons, graphcons, cache, keyspaces, influx, neptune, zetl, redshift]
+              packet: {at: kinesis, text: "1 Eki – 31 Eki 08:52 · her sipariş: Aurora COMMIT → WAL → DMS → lm-order-events → 5 tüketici · bugün 08:52'ye kadar 17 sipariş"}
+              show: {aurora: [P0001, P0131], cache: [C00002, C00001, C00163, C00717, t1], keyspaces: [a1, a2], influx: [p0], neptune: [n1], redshift: [r1], dynamodb: [x1]}
+              set: {cache: {t1: {değer: "17"}}, kinesis: {c1: {son işlenen: "08:52'nin olayı"}, c2: {son işlenen: "08:52'nin olayı"}, c3: {son işlenen: "08:52'nin olayı"}, c4: {son işlenen: "08:52'nin olayı"}, c5: {son işlenen: "08:52'nin olayı"}}}
+              fresh: {aurora: [P0001, P0131], cache: [C00002, C00001, C00163, C00717, t1], keyspaces: [a1, a2], influx: [p0], neptune: [n1], redshift: [r1]}
+              note: {zetl: "", redshift: "Mert'in 08:40'taki siparişi kopyada", kinesis: "beş yer de aynı kayıtta", cache: "İrem 4. satırda (Seda'nın arkasında)", aurora: "stoklar: P0001 128, P0131 184", dynamodb: "İrem'in sepeti (08:45'ten beri)"}
+              say: >-
+                1 Eki'den bu sabaha, özet. Her sipariş aynı yoldan geçti ve beş depoya kendi tüketicisiyle ulaştı. 31 Eki 08:52'de
+                bugünün sayacı 17; Ayşe 465.187,51 ile 2. sırada; İrem Kurt (C00717) 195.359,79 ile Seda Yılmaz'ın arkasında.
+                Keyspaces'teki Ayşe satırları ve Neptune'daki kenarları bu siparişlerden geldi. Mert Doğan'ın 08:40'taki siparişi Redshift'e de kopyalandı. İrem'in sepetinde
+                08:45'ten beri bir kulaklık var.
+            - phase: 3
+              who: page
+              lit: [page, web]
+              packet: {at: page, text: "08:53:27 · İrem (C00717) · tarayıcı b7c2… · istek numarası r-3f9a… · POST /aurora/api/orders · Idempotency-Key: r-3f9a… · P0031 × 1"}
+              note: {aurora: "", cache: "", kinesis: "", redshift: "", dynamodb: "", page: "buton kapalı: cevap bekleniyor"}
+              say: >-
+                31 Eki 08:53:27. İrem sepetindeki kulaklıkla (P0031 Alpen Kablosuz Kulaklık 31, 1.884,63 TL) "Place the order"
+                butonuna bastı. Ödeme sayfası tıklamaya bir numara verdi ve tek bir isteği Uygulama'ya gönderdi. Başka hiçbir
+                depoya istek gitmiyor.
+            - phase: 3
+              who: web
+              lit: [web, proxy, aurora]
+              packet: {at: aurora, text: "BEGIN · UPDATE products … P0031 AND stock >= 1 → UPDATE 1 (1 satır değişti) · authorize 1.884,63 → onay · INSERT orders ('W1793391207', 'C00717', 'b7c2…', 'processing', 1884.63, 'r-3f9a…') · order_items (P0031, 1, 1884.63, campaign_id NULL) · outbox (order_placed, payload) · COMMIT"}
+              show: {aurora: [o1, e1]}
+              fresh: {aurora: [o1, e1]}
+              note: {page: "", web: "tek paket · COMMIT tamam", aurora: "sipariş ve olayı birlikte kalıcı"}
+              say: >-
+                Uygulama Adım 23'teki paketi açtı: stoğu düşürdü, ödemeyi onaylattı, siparişi, kalemini (kampanyasız) ve outbox
+                satırını yazdı, COMMIT etti. Olay ancak sipariş varsa var: paket geri alınsaydı outbox satırı da hiç olmazdı.
+            - phase: 3
+              who: web
+              lit: [web, dynamodb, page]
+              packet: {at: web, text: "COMMIT'ten sonra · delete_item(CART#b7c2… / ITEM#P0031) → silindi · → {\"order_id\": \"W1793391207\", \"result\": \"committed\"}"}
+              hide: {dynamodb: [x1]}
+              note: {web: "sepeti bir kez sildi, cevap verdi", aurora: "", dynamodb: "İrem'in sepeti boş", page: "\"Sipariş verildi\" · 0,5 sn (temsilî)"}
+              say: >-
+                COMMIT'ten sonra Uygulama iki şey yaptı ve işini bitirdi: sepetteki satırı bir kez sildi (Adım 12; müşteri boş
+                sepeti hemen görsün) ve cevabı sayfaya gönderdi. Sıralamaya, geçmişe, ölçüye, grafa ve rapora hiç dokunmadı.
+            - phase: 3
+              who: dms
+              lit: [aurora, wal, dms, kinesis]
+              packet: {at: dms, text: "WAL: COMMIT · DMS: outbox satırı → PutRecord(lm-order-events, PartitionKey 'W1793391207') → shard-1 · {order_id, customer_id C00717, visitor_id b7c2…, created_at 2026-10-31T05:53:27.412Z, total 1884.63, items [{P0031, qty 1, 1884.63, campaign_id null}], name, city}"}
+              show: {kinesis: [k1]}
+              fresh: {kinesis: [k1]}
+              note: {web: "", dynamodb: "", page: "", dms: "CDCLatencyTarget ≈ 1 sn", kinesis: "kayıt shard-1'de, sırasında"}
+              say: >-
+                COMMIT değişiklik kaydına girdi. DMS outbox'a eklenen satırı aldı ve akışa koydu; bölüm anahtarı sipariş numarası
+                olduğu için Kinesis kaydı numaranın özetine (MD5) göre shard-1'e yazdı. Bu siparişin ileride gelecek her olayı
+                (ör. iptal) da aynı şeride, arkasına gelir. Zaman 05:53Z, yani 08:53 Türkiye saati.
+            - phase: 3
+              who: kinesis
+              lit: [kinesis, cartcons, lbcons, actcons, metcons, graphcons]
+              packet: {at: kinesis, text: "EFO: aynı kayıt beş hatta aynı anda itildi (push) · her hat şerit başına 2 MB/sn · beş tüketici birbirini beklemez"}
+              note: {aurora: "", dms: "", kinesis: "bir kayıt, beş kopya değil: beş okuyucu"}
+              say: >-
+                Akış kaydı tek bir kez sakladı ve beş tüketiciye kendi hatlarından aynı anda verdi. Her tüketici kendi hızında
+                çalışır; biri yavaşlasa diğerleri etkilenmez. Kayıt 24 saat akışta kalır.
+            - phase: 3
+              who: cartcons
+              lit: [kinesis, cartcons, dynamodb]
+              packet: {at: cartcons, text: "for item in e['items']: delete_item(pk 'CART#b7c2…', sk 'ITEM#P0031') → satır zaten yoktu · yer: W1793391207"}
+              set: {kinesis: {c1: {son işlenen: W1793391207}}}
+              fresh: {kinesis: [c1]}
+              note: {kinesis: "", cartcons: "silinecek bir şey kalmamıştı", dynamodb: "değişmedi"}
+              say: >-
+                Sepet tüketicisi olaydaki tarayıcı kimliğiyle aynı satırı ikinci kez sildi; Uygulama zaten silmişti, hiçbir şey
+                değişmedi. Bu ikinci yol Uygulama'nın silmesi yarım kalırsa sepeti temizler (Adım 12). Yeri bu kayda ilerledi.
+            - phase: 3
+              who: lbcons
+              lit: [kinesis, lbcons, cache]
+              packet: {at: lbcons, text: "SET processed:W1793391207 1 NX EX 86400 → OK · ZINCRBY lm:leaderboard 1884.63 C00717 → 197244.42 · INCR lm:orders:today → 18"}
+              show: {cache: [t2]}
+              set: {cache: {C00717: {puan: 197244.42}, t1: {değer: "18"}}, kinesis: {c2: {son işlenen: W1793391207}}}
+              fresh: {cache: [C00717, t1, t2], kinesis: [c2]}
+              note: {cartcons: "", dynamodb: "", lbcons: "işaret yeni → puan ve sayaç", cache: "İrem Seda'yı geçti"}
+              say: >-
+                Sıralama tüketicisi önce işareti koydu (anahtar yoksa yaz: OK, ilk kez), sonra İrem'in puanına 1.884,63 ekledi:
+                197.244,42, Seda'nın önüne geçti. Bugünün sayacı 18. İşaret 24 saat yaşar (Adım 33).
+            - phase: 3
+              who: actcons
+              lit: [kinesis, actcons, keyspaces]
+              packet: {at: actcons, text: "eid = uuid5(NS, 'W1793391207/P0031') → 7b94… · ttl = 604800 − 1 · INSERT … (C00717, 08:53:27, 7b94…, 'purchase', 'P0031') USING TTL 604799 · aynısı b7c2… için"}
+              show: {keyspaces: [i1, i2]}
+              set: {kinesis: {c3: {son işlenen: W1793391207}}}
+              fresh: {keyspaces: [i1, i2], kinesis: [c3]}
+              note: {lbcons: "", cache: "", actcons: "iki partition, aynı event_id", keyspaces: "İrem ve tarayıcısı: purchase"}
+              say: >-
+                Etkinlik tüketicisi kalem için bir kimlik üretti (sipariş ve ürün numarasından: hep aynı) ve satırı iki
+                partition'a yazdı: İrem'in ve tarayıcısının (Adım 10). Satırın ömrü siparişin zamanından sayılır: 7 gün eksi 1 saniye (olay siparişten yaklaşık 1 saniye sonra geldi).
+            - phase: 3
+              who: metcons
+              lit: [kinesis, metcons, influx]
+              packet: {at: metcons, text: "orders,channel=web count=1i,total=1884.63 1793426007412000417   # damga: siparişin zamanı (ns) + order_id'den 417 ns"}
+              show: {influx: [p1]}
+              set: {kinesis: {c4: {son işlenen: W1793391207}}}
+              fresh: {influx: [p1], kinesis: [c4]}
+              note: {actcons: "", keyspaces: "", metcons: "bir sipariş = bir nokta", influx: "bugün 18 nokta"}
+              say: >-
+                Ölçü tüketicisi siparişi tek bir nokta olarak yazdı: ölçü orders, etiket channel=web, alanlar count = 1 ve total.
+                Zaman damgası siparişin zamanı; sonuna sipariş numarasından türeyen birkaç nanosaniye eklendi, böylece aynı anda
+                verilen iki sipariş bile iki ayrı nokta olur. Dakikalık toplamı operasyon ekranı okurken hesaplar (Adım 34).
+            - phase: 3
+              who: graphcons
+              lit: [kinesis, graphcons, neptune]
+              packet: {at: graphcons, text: "MERGE (c:Customer {`~id`: 'C00717'}) … UNWIND items … MATCH (p:Product {`~id`: 'P0031'}) MERGE (c)-[b:BOUGHT {order_id: 'W1793391207'}]->(p) ON CREATE SET b.qty = 1"}
+              show: {neptune: [n2]}
+              set: {kinesis: {c5: {son işlenen: W1793391207}}}
+              fresh: {neptune: [n2], kinesis: [c5]}
+              note: {metcons: "", influx: "", graphcons: "kenar yoktu → yaratıldı", neptune: "İrem → P0031", kinesis: "beş yer de W1793391207'de"}
+              say: >-
+                Graf tüketicisi İrem'den ürüne bir BOUGHT kenarı yazdı; kenar sipariş numarasıyla arandı, bulunmadı, yaratıldı ve
+                adedi yazıldı (Adım 11). Beş tüketicinin beşi de bu kaydı 1–2 saniye içinde işledi (temsilî).
+            - phase: 3
+              who: zetl
+              lit: [wal, zetl, redshift]
+              packet: {at: zetl, text: "08:53:47 · zero-ETL: orders + order_items değişikliği → aurora_live · gecikme ≈ 20 sn (temsilî)"}
+              show: {redshift: [r2]}
+              fresh: {redshift: [r2]}
+              note: {graphcons: "", neptune: "", kinesis: "", zetl: "≈ 20 sn sonra", redshift: "İrem'in siparişi kopyada"}
+              say: >-
+                Yaklaşık 20 saniye sonra zero-ETL aynı COMMIT'i değişiklik kaydından okuyup Redshift'e uyguladı; raporlar
+                sayfası İrem'in siparişini artık sayıyor (Adım 30). Bu yol akıştan bağımsız; akış dursa da çalışır.
+            - phase: 3
+              who: web
+              lit: [page, web, proxy, aurora, wal, dms, kinesis, cartcons, lbcons, actcons, metcons, graphcons, dynamodb, cache, keyspaces, influx, neptune]
+              packet: {at: web, text: "08:54–10:24 · 23 sipariş daha, aynı yol · 7f3a…: view P0131 (09:50), sepete P0131 × 2 (09:52), view P0001 (09:58), sepete P0001 × 1 (10:00) · 10:20 senin denemen: ROLLBACK (Adım 23) → akışa bir şey gitmedi"}
+              show: {dynamodb: [s1, s2], keyspaces: [v1, v2], influx: [p2]}
+              set: {cache: {t1: {değer: "41"}}, kinesis: {c1: {son işlenen: "10:24'ün olayı"}, c2: {son işlenen: "10:24'ün olayı"}, c3: {son işlenen: "10:24'ün olayı"}, c4: {son işlenen: "10:24'ün olayı"}, c5: {son işlenen: "10:24'ün olayı"}}}
+              fresh: {dynamodb: [s1, s2], keyspaces: [v1, v2], influx: [p2], cache: [t1]}
+              note: {zetl: "", redshift: "", web: "baktı ve sepete ekle satırlarını Uygulama yazdı", dynamodb: "senin sepetin: 2 satır", keyspaces: "bu tarayıcının iki bakma satırı", influx: "bugün 41 nokta", cache: "bugün 41 sipariş", kinesis: "10:20'deki ROLLBACK akışa hiç girmedi"}
+              say: >-
+                08:54–10:24. 23 sipariş daha aynı yoldan geçti: sayaç 41, bugünün nokta sayısı 17 + 1 + 23 = 41. Sen bu tarayıcıdan
+                P0131'e ve P0001'e baktın (Uygulama Keyspaces'e, tarayıcının partition'ına yazdı; sayfa açılışları tarayıcıya, satın
+                almalar hem müşteriye hem tarayıcıya yazılır, Adım 10) ve ikisini sepete ekledin (Uygulama DynamoDB'ye yazdı,
+                Adım 12). 10:20'deki denemen ROLLBACK ile bitti (Adım 23): değişiklik kaydına bir şey girmedi, hiçbir tüketici bir şey
+                almadı; P0001'in stoğu 128, P0131'inki 184 kaldı.
+            - phase: 4
+              who: actcons
+              lit: [kinesis, actcons, keyspaces]
+              packet: {at: actcons, text: "08:53:31 · etkinlik tüketicisinin kayıt grubu zaman aşımına uğradı → Lambda aynı grubu yalnız bu tüketiciye yeniden verdi · eid = 7b94… (aynı) · INSERT … → aynı satırın üzerine"}
+              mark: {keyspaces: {i1: dup, i2: dup}}
+              note: {page: "", web: "", proxy: "", aurora: "", wal: "", dms: "", cartcons: "", lbcons: "", metcons: "", graphcons: "", dynamodb: "", cache: "", influx: "", neptune: "", actcons: "aynı kimlik → yeni satır yok", keyspaces: "08:53'e dönüş: hâlâ iki satır · tablolar 10:24'ün gerçek hâlini gösteriyor", kinesis: "diğer dört tüketicinin yeri hiç durmadı"}
+              say: >-
+                Örnek durum (08:53'e geri dönüyoruz): etkinlik tüketicisi Keyspaces'e iki satırı yazdı ama cevabı zamanında
+                alamadı. Lambda bu tüketicinin yerini ilerletmedi ve aynı kayıt grubunu yalnız ona yeniden verdi. Tüketici aynı kimliği
+                üretti; satırlar aynı yere düştü, geçmişte üçüncü bir satır olmadı. Diğer dört tüketici bundan hiç etkilenmedi.
+            - phase: 4
+              who: lbcons
+              lit: [kinesis, lbcons, cache]
+              packet: {at: lbcons, text: "aynı kayıt sıralama tüketicisine ikinci kez · SET processed:W1793391207 1 NX → (boş) · ZINCRBY yok · INCR yok"}
+              mark: {keyspaces: {i1: "", i2: ""}, cache: {t2: dup}}
+              note: {actcons: "", keyspaces: "", kinesis: "", lbcons: "işaret zaten var → hiçbir şey", cache: "İrem 197.244,42 kaldı"}
+              say: >-
+                Örnek durum (ayrı bir an): aynı kayıt sıralama tüketicisine de ikinci kez geldi. İşaret zaten vardı; tüketici
+                puanı ve sayacı artırmadı. Beş tüketicinin her birinin kendi "iki kez sayma" kuralı var: silme (sepet), işaret
+                (sıralama), sabit kimlik (geçmiş), sabit damga (ölçü), sipariş numarasıyla MERGE (graf).
+            - phase: 4
+              who: graphcons
+              lit: [kinesis, graphcons, neptune, monitor]
+              packet: {at: graphcons, text: "olsaydı: 09:30 · Neptune yazma sunucusu yük devrinde · graf tüketicisi hata → aynı kayıt grubunu yeniden dener · yeri 09:30'da duruyor · 4 dk sonra Neptune döndü → birikenleri saniyeler içinde işledi"}
+              set: {kinesis: {c5: {son işlenen: "olsaydı: 09:30'da takılı"}}, monitor: {g5: {değer: "olsaydı: 240 sn"}, m6: {değer: "olsaydı: lm-graph-gecikme ALARM"}}}
+              mark: {cache: {t2: ""}, kinesis: {c5: fix}, monitor: {g5: fix, m6: fix}}
+              note: {lbcons: "", cache: "", graphcons: "olsaydı: Neptune'a yazamıyor, deniyor", neptune: "olsaydı: 4 dk yazılamadı", kinesis: "olsaydı: diğer dört yer yürümeye devam etti", monitor: "olsaydı: IteratorAge(graf) > 60 sn → ALARM"}
+              say: >-
+                Olsaydı: 09:30'da Neptune 4 dakika yazılamasaydı. Graf tüketicisi aynı kayıt grubunu yeniden dener, yeri ilerlemez;
+                kayıtlar akışta bekler, kaybolmaz. Diğer dört tüketici hiç etkilenmez: sepet, sıralama, geçmiş ve ölçü güncel kalır.
+                Gecikmesi 60 saniyeyi geçince alarm Ekip'e haber verir. Neptune dönünce tüketici birikenleri işler; yeniden denenen
+                kenarlar MERGE sayesinde bir kez oluşur. Müşteri 4 dakika boyunca biraz eski öneri görür.
+            - phase: 4
+              who: metcons
+              lit: [kinesis, metcons, dlq, monitor]
+              packet: {at: metcons, text: "olsaydı: 09:40 · W1793393350'nin kaydı bozuk (total metin olarak geldi) · 5 deneme · kayıt grubunu ikiye böl → bozuk kayıt ayrıldı · lm-metrics-dlq ← {shard-0, sıra no …} · yer bir sonraki kayda geçti"}
+              set: {kinesis: {c5: {son işlenen: "10:24'ün olayı"}}, monitor: {g5: {değer: "—"}, m4: {değer: "olsaydı: 1 (ölçü)"}, m6: {değer: "olsaydı: lm-metrics-dlq ALARM"}}, dlq: {d2: {mesaj: "olsaydı: 1"}}}
+              mark: {kinesis: {c5: ""}, monitor: {g5: "", m4: fix, m6: fix}, dlq: {d2: fix}}
+              note: {graphcons: "", neptune: "", kinesis: "", metcons: "olsaydı: bir kayıt işlenemedi, geçti", dlq: "olsaydı: kaydın yeri burada", monitor: "olsaydı: hata kuyruğunda 1 mesaj → ALARM"}
+              say: >-
+                Olsaydı (ayrı bir durum): yeni bir sürümün hatası yüzünden bir kaydın tutarı metin olarak gelseydi. Ölçü tüketicisi
+                5 kez dener, kayıt grubunu ikiye bölerek bozuk kaydı ayırır ve onun yerini (şerit ve sıra numarası) kendi hata kuyruğuna
+                yazar; sonra bir sonraki kayda geçer. Diğer tüketiciler aynı kaydı sorunsuz işler. Ekip hatayı düzeltir ve kaydı 24
+                saat dolmadan akıştan yeniden okutur; nokta aynı damgayla yazılır.
+            - phase: 4
+              who: lbcons
+              lit: [kinesis, lbcons, cache, reconcile]
+              packet: {at: lbcons, text: "olsaydı: SET processed:W1793391207 NX → OK · Lambda tam o an çöktü (ZINCRBY gitmedi) · yeniden deneme: SET NX → (boş) → atla · İrem 195.359,79'da kaldı · ertesi gece 03:00 karşılaştırması: İrem'in bütün siparişlerinin toplamı (Aurora) 197.244,42 ≠ bellek → ZADD 197244.42"}
+              set: {cache: {C00717: {puan: 195359.79}}, dlq: {d2: {mesaj: "0"}}, monitor: {m4: {değer: "—"}, m6: {değer: "—"}}}
+              mark: {dlq: {d2: ""}, monitor: {m4: "", m6: ""}, cache: {C00717: fix}}
+              note: {metcons: "", dlq: "", monitor: "", kinesis: "", lbcons: "olsaydı: işaret kondu, puan eklenmedi", cache: "olsaydı: İrem bir gün 1.884,63 eksik", reconcile: "olsaydı: farkı bulur, doğru toplamı yazar"}
+              say: >-
+                Olsaydı (ayrı bir durum): sıralama tüketicisi işareti koyduktan hemen sonra, puanı eklemeden çökseydi. Yeniden
+                denemede işaret "zaten sayıldı" der ve tüketici atlar: İrem'in puanı 1.884,63 eksik kalır. Bunu gece karşılaştırması
+                yakalar (ertesi gece 03:00): İrem'in Aurora'daki bütün siparişlerinin toplamını bellektekiyle karşılaştırır ve doğru değeri ZADD ile üzerine yazar (eklemez; Adım 33).
+            - phase: 4
+              who: dms
+              lit: [aurora, wal, dms, kinesis, monitor]
+              packet: {at: dms, text: "olsaydı: 10:00–10:10 DMS görevi durdu · Aurora COMMIT'ler devam · replication slot WAL'ı tutuyor (OldestReplicationSlotLag ↑) · CDCLatencyTarget > 60 sn → ALARM · DMS kaldığı yerden devam → 10 dakikanın olayları sırayla akışa"}
+              set: {cache: {C00717: {puan: 197244.42}}, monitor: {m1: {değer: "olsaydı: 600 sn"}, m6: {değer: "olsaydı: lm-dms-gecikme ALARM"}}}
+              mark: {cache: {C00717: ""}, monitor: {m1: fix, m6: fix}}
+              note: {lbcons: "", cache: "", reconcile: "", aurora: "olsaydı: siparişler yazılmaya devam etti", wal: "olsaydı: okunmamış kayıt silinmedi", dms: "olsaydı: 10 dk durdu, yerinden devam", kinesis: "olsaydı: 10 dk yeni kayıt gelmedi", monitor: "olsaydı: DMS gecikmesi alarmı"}
+              say: >-
+                Olsaydı (ayrı bir durum): DMS görevi 10 dakika dursaydı. Siparişler yine kesinleşir; müşteri siparişini ve boş
+                sepetini hemen görür, çünkü onlar Aurora'dan ve Uygulama'dan gelir. Sıralama, geçmiş, ölçü ve graf 10 dakika geride
+                kalır. Aurora okunmamış değişiklik kaydını DMS'in yer imi yüzünden silmez; DMS kaldığı yerden devam eder ve
+                olaylar sırasıyla gelir. Yer imi çok uzun beklerse Aurora'nın diski dolar; bu yüzden onun da alarmı var.
+            - phase: 4
+              who: reconcile
+              lit: [scheduler, reconcile, aurora, cache, keyspaces, influx, neptune, monitor]
+              packet: {at: reconcile, text: "Örnek durum · bu sabah 03:00 · 30 Eki'nin siparişleri · sıralama: dün sipariş veren 312 müşterinin toplam cirosu, fark 0 · geçmiş: 398 kalem × 2 = 796 purchase satırı, eksik 0 · graf: 398 kenar, eksik 0 · ölçü: 1.440 dakika, fark 0"}
+              show: {reconcile: [q1, q2, q3, q4]}
+              set: {reconcile: {q1: {sonuç: "fark 0"}, q2: {sonuç: "eksik 0"}, q3: {sonuç: "eksik 0"}, q4: {sonuç: "fark 0"}}, monitor: {m1: {değer: "—"}, m6: {değer: "—"}}}
+              mark: {monitor: {m1: "", m6: ""}}
+              fresh: {reconcile: [q1, q2, q3, q4]}
+              note: {aurora: "", wal: "", dms: "", kinesis: "", scheduler: "03:00", reconcile: "dört iş, dört karşılaştırma: hepsi eşit · diğer tablolar 10:24'ün gerçek hâlini gösteriyor", monitor: "dört fark ölçüsü 0"}
+              say: >-
+                Örnek durum (bu sabah 03:00'e geri dönüyoruz). Zamanlayıcı dört karşılaştırma işini çalıştırdı; her biri 30 Eki'nin
+                siparişlerini Aurora'dan saydı ve kendi deposuyla karşılaştırdı. 30 Eki'de 312 müşteri 398 kalem aldı (temsilî):
+                sıralamada bu 312 müşterinin bütün siparişlerinden toplam cirosu, geçmişte 398 × 2 = 796 satır (müşteri ve
+                tarayıcı), grafta 398 kenar, ölçüde 1.440 dakikanın sayısı. Fark 0; düzeltilecek bir
+                şey yok.
+            - phase: 4
+              who: monitor
+              lit: [monitor, dms, cartcons, lbcons, actcons, metcons, graphcons, dlq, zetl]
+              packet: {at: monitor, text: "10:24 · lm-order-fanout · DMS 1 sn · IteratorAge: sepet 1 · sıralama 1 · etkinlik 1 · ölçü 1 · graf 2 sn · hata oranı: son 5 dk'da 2 çağrı, hata 0 (20 çağrının altında oran hesaplanmaz) · DLQ 0/0/0/0/0 · zero-ETL 18 sn · 19 alarm OK"}
+              set: {monitor: {m1: {değer: "1 sn"}, g1: {değer: "1 sn"}, g2: {değer: "1 sn"}, g3: {değer: "1 sn"}, g4: {değer: "1 sn"}, g5: {değer: "2 sn"}, m4: {değer: "0 (beşi de)"}, m5: {değer: "18 sn"}, m6: {değer: "19 alarm OK"}}}
+              fresh: {monitor: [m1, g1, g2, g3, g4, g5, m4, m5, m6]}
+              note: {scheduler: "", reconcile: "", aurora: "", cache: "", keyspaces: "", influx: "", neptune: "", monitor: "tek ekranda zincirin bütün sağlığı", zetl: "18 sn geride"}
+              say: >-
+                10:24, gerçek pano. Ekip zincirin sağlığını tek ekranda görüyor: DMS 1 saniye geride, beş tüketici 1–2 saniye,
+                hata kuyruklarının beşi boş, Redshift 18 saniye geride. Satırların arkasında 19 alarm var (tüketici başına üç, artı dört); hepsi OK. Bir
+                tüketici geride kalırsa hangisi olduğu ve hangi ekranın eskidiği buradan okunur.
+            - phase: 5
+              who: page
+              lit: [page, aurora, dynamodb, cache, keyspaces, influx, neptune, redshift]
+              packet: {at: page, text: "İrem'in gördükleri · 0,5 sn: \"Sipariş verildi\", Orders sayfası (Aurora), sepet boş (Uygulama'nın silmesi) · ≈ 1–2 sn: sıralama, My activity, operasyon ekranı, öneriler · ≈ 20 sn: raporlar (Redshift)"}
+              note: {monitor: "", dms: "", zetl: "", page: "hemen: sipariş ve boş sepet", aurora: "hemen (asıl kayıt)", dynamodb: "hemen (Uygulama sildi)", cache: "≈ 1 sn sonra", keyspaces: "≈ 1 sn sonra", influx: "≈ 1 sn sonra", neptune: "≈ 2 sn sonra", redshift: "≈ 20 sn sonra"}
+              say: >-
+                İrem'in gözünden. Asıl kayda bağlı olan her şeyi hemen gördü: "Sipariş verildi", siparişin Orders sayfasında
+                (Aurora'dan okunur) ve boş sepet (Uygulama silmişti). Türeyen depolar birkaç saniye geriden geldi: sıralama, geçmiş,
+                operasyon ekranı ve öneriler yaklaşık 1–2 saniyede, raporlar yaklaşık 20 saniyede (temsilî). Hiçbir ekran ona yanlış
+                bir şey göstermedi; bazıları bir an eski gösterdi.
+            - phase: 5
+              who: aurora
+              lit: [page, aurora, dynamodb, cache, keyspaces, influx, neptune, redshift]
+              mark: {keyspaces: {i1: "", i2: ""}, cache: {t2: "", C00717: ""}, kinesis: {c5: ""}, dlq: {d2: ""}, monitor: {m1: "", g5: "", m4: "", m6: ""}}
+              note: {page: "", aurora: "P0001 128 · P0131 184", dynamodb: "senin sepetin: P0131 × 2, P0001 × 1", cache: "Ayşe 465.187,51 · bugün 41", keyspaces: "Ayşe ve bu tarayıcı: 4 satır", influx: "bugün 41 nokta", neptune: "Ayşe: 5 ürün", redshift: "bugünün 41 siparişi (kesitte ikisi)"}
+              say: >-
+                Hazır. "Olsaydı" kareleri yaşanmadı. 10:25, senin tıklamandan hemen önce: Aurora'da P0001'in stoğu 128, P0131'in
+                184; sepetinde P0131 × 2 ve P0001 × 1 (toplam 10.890,26 TL); Ayşe 465.187,51 ile 2. sırada, bugünün sayacı 41;
+                Ayşe'nin ve bu tarayıcının geçmişi, bugünün 41 noktası, Ayşe'nin graf satırı ve Redshift'teki kopya (bugünün 41 siparişi; kesitte ikisi) yerinde.
+                t0'da senin siparişin bu durumdan başlıyor.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Önce sorular: siparişi kimler bilmeli, her biri ne zaman ve hangi kuralla? Sonra yol: neden Uygulama beş depoya
+              kendisi yazmaz, olayın içinde ne var, akış nasıl bölünür ve sıra nerede korunur, beş tüketici aynı akışı nasıl
+              birbirini yormadan okur, her birinin yeri ve hata kuyruğu, yeni ölçü tüketicisinin tasarımı, tek pano. Kural baştan:
+              asıl kayıt tektir (Aurora); geri kalan her depo ondan türer ve gerekirse ondan yeniden kurulur.
+            cards:
+              - title: "Siparişi kimler bilmeli? Bir olay, beş tüketici"
+                text: >-
+                  Bir sipariş altı yeri ilgilendirir. Her biri için üç soru sorulur: ne değişir, kim yazar, aynı olay iki kez
+                  gelirse ne olur? Beşini kendi tüketicisi akıştan yazar; Redshift'i zero-ETL kopyalar. Her tüketicinin
+                  idempotency anahtarı farklıdır, çünkü her deponun "aynı şey" tanımı farklıdır.
+                map:
+                  cols: [Depo, Ne değişir, Kim yazar, İkinci kez gelirse]
+                  rows:
+                    - ["DynamoDB (sepet)", "Satırlar silinir", "Uygulama, sonra Sepet tüketicisi", "Silinmiş satırı silmek: değişiklik yok."]
+                    - ["ElastiCache (sıralama)", "Puan + tutar, sayaç + 1", "Sıralama tüketicisi", "processed:<order_id> işareti: atla."]
+                    - ["Keyspaces (geçmiş)", "Kalem başına iki satır", "Etkinlik tüketicisi", "uuid5(order_id/ürün): aynı satır."]
+                    - ["InfluxDB (ölçü)", "Bir nokta", "Ölçü tüketicisi", "Aynı damga: aynı nokta."]
+                    - ["Neptune (graf)", "Kalem başına bir kenar", "Graf tüketicisi", "MERGE {order_id}: aynı kenar."]
+                    - ["Redshift (rapor)", "Sipariş satırları", "zero-ETL (kod yok)", "Kopya, değişiklik kaydının sırasıyla."]
+              - title: "Neden Uygulama beş depoya kendisi yazmıyor? (dual write)"
+                text: >-
+                  En kısa yol, Uygulama'nın COMMIT'ten sonra beş depoya sırayla yazması gibi görünür. Dört sorunu var. Biri
+                  başarısız olursa ya da Uygulama arada çökerse depolar birbirini tutmaz ve kimse eksiği bilmez. En yavaş depo
+                  ödemeyi yavaşlatır; bir depo durursa ödeme de takılır. Yeniden deneme aynı tutarı sıralamaya iki kez ekleyebilir.
+                  Yeni bir depo eklemek ödeme kodunu değiştirmeyi gerektirir. Outbox ile Uygulama tek bir yere, tek pakette yazar;
+                  olay ancak sipariş kesinleşirse vardır ve kaybolmaz. Tek istisna sepetin ilk silmesi: müşteri boş sepeti hemen
+                  görsün diye Uygulama satırları bir kez siler; o silme kaybolsa bile Sepet tüketicisi tamamlar (Adım 12).
+                map:
+                  cols: [Yol, Artısı, Bedeli]
+                  rows:
+                    - ["Uygulama hepsine yazar", "Hepsi aynı anda güncel (her şey yolundaysa).", "Yarım kalırsa tutarsız; ödeme en yavaş depo kadar yavaş; her yeni depo ödeme koduna girer."]
+                    - ["Outbox + akış (seçilen)", "Tek yazma, tek paket; depolar bağımsız; yeni tüketici kod değiştirmeden eklenir.", "Depolar 1–2 saniye geriden gelir; akış, tüketiciler ve izleme işletilmeli."]
+              - title: "Olayın içinde ne var? Tüketicilerin ihtiyacı tek pakette"
+                text: >-
+                  Her tüketici işini sadece olaydan yapabilmeli; Aurora'ya ek soru sormak siparişleri yazan sunucuyu yorar ve
+                  olayın anını değil o anki değeri okur. Bu yüzden outbox satırı herkesin ihtiyacını taşır: sepet için tarayıcı
+                  kimliği, sıralama için müşteri ve tutar, geçmiş ve graf için kalemler, ölçü için zaman, graf için müşterinin adı
+                  ve şehri. campaign_id kalemde durur (Adım 17); kampanya raporu da aynı olayla beslenebilir.
+                code:
+                  - {code: "INSERT INTO outbox (event_id, order_id, type, payload, created_at) VALUES (gen_random_uuid(), %s, 'order_placed',", tag: Uygulama → Aurora, say: "Siparişle aynı pakette, bir satır."}
+                  - {code: "  jsonb_build_object('order_id', …, 'customer_id', …, 'visitor_id', …, 'total', …, 'created_at', now(),", tag: Uygulama → Aurora, say: "Kim, hangi tarayıcı, ne kadar, ne zaman."}
+                  - {code: "    'items', [{product_id, qty, unit_price, campaign_id}, …], 'name', …, 'city', …), now());", tag: Uygulama → Aurora, say: "Kalemler ve müşterinin adı, şehri."}
+              - title: "Akış: şerit, bölüm anahtarı ve sıra"
+                text: >-
+                  Akış şeritlere (shard) bölünür; her şerit saniyede 1 MB ya da 1.000 kayıt yazma taşır, bu mağazaya iki şerit
+                  fazlasıyla yeter (temsilî). Kinesis kaydın bölüm anahtarının özetine (MD5) bakıp şeridi seçer; aynı anahtar
+                  hep aynı şeride gider ve şerit kendi içinde sıralıdır. Anahtar sipariş numarasıdır: bir siparişin olayları
+                  (verildi, sonra iptal) hep aynı sırayla okunur. Farklı siparişler arasında sıra gerekmez: puan eklemek, satır
+                  yazmak, kenar yaratmak hangi sırayla yapılırsa yapılsın sonuç aynıdır. Müşteri numarası anahtar olsaydı çok
+                  sipariş veren bir müşteri tek şeridi ısıtırdı.
+                code:
+                  - {code: "aws kinesis create-stream --stream-name lm-order-events --shard-count 2", tag: Ekip → Kinesis, say: "İki şerit; saklama 24 saat (varsayılan)."}
+                  - {code: "aws dms create-replication-task --migration-type cdc … --table-mappings '{… \"table-name\": \"outbox\" …,", tag: Ekip → DMS, say: "Sadece outbox, sadece değişiklikler."}
+                  - {code: "  \"partition-key-type\": \"attribute-name\", … \"value\": \"${order_id}\" …}'", tag: Ekip → DMS, say: "Bölüm anahtarı: sipariş numarası."}
+              - title: "Beş tüketici aynı akışı nasıl okur? Paylaşılan okuma ya da enhanced fan-out"
+                text: >-
+                  Paylaşılan okumada bir şeridin okuma kapasitesi (saniyede 2 MB ve 5 okuma isteği) bütün tüketicilere bölünür.
+                  Lambda her şeride saniyede bir kez sorar; beş tüketici beş istek demektir, yani tam sınırda; altıncı tüketici
+                  (depoya bildiren iş) sınırı aşar ve hepsi kısılıp gecikir. Enhanced fan-out (EFO) ile her tüketici AWS'e ayrı kaydedilir ve her
+                  şeritten kendi 2 MB'lık hattını alır; kayıtlar ona itilir, sormasına gerek kalmaz. Bedeli: EFO tüketicisi ve
+                  okunan veri için ayrı ücret. Bir akışa 20 EFO tüketicisi kaydedilebilir; altıncı (depoya bildiren iş) ve
+                  ileride gelecek yenileri için yer var.
+                map:
+                  cols: [Yol, Okuma, Bu mağazada]
+                  rows:
+                    - ["Paylaşılan okuma", "Şerit başına 2 MB/sn ve 5 istek/sn, herkese bölünür.", "Beş tüketiciyle sınırda; biri diğerini yavaşlatır."]
+                    - ["Enhanced fan-out (seçilen)", "Her tüketiciye şerit başına kendi 2 MB/sn'si, itilerek.", "Tüketiciler birbirinden bağımsız; ek ücret."]
+                code:
+                  - {code: "aws kinesis register-stream-consumer --stream-arn <lm-order-events> --consumer-name lm-graph", tag: Ekip → Kinesis, say: "Graf tüketicisine kendi hattı (beşi için ayrı ayrı)."}
+                  - {code: "aws lambda create-event-source-mapping --function-name lm-graph --event-source-arn <lm-graph tüketici ARN'i> …", tag: Ekip → Lambda, say: "Lambda bu hattan okur."}
+              - title: "Her tüketicinin kendi yeri ve kendi hata kuyruğu"
+                text: >-
+                  Her tüketicinin her şeritte kendi yeri (checkpoint) vardır; Lambda bir kayıt grubunu (batch) ancak tamamı başarılı olunca o
+                  yeri ilerletir. Başarısız olursa yeniden dener; ama sonsuza kadar değil: 5 denemeden sonra grubu ikiye bölerek
+                  bozuk kaydı ayırır, onun yerini (kaydın kendisini değil) o tüketicinin hata kuyruğuna yazar ve devam eder. Bir
+                  tüketicinin takılması o tüketicinin o şeridini durdurur; diğer tüketiciler ve diğer şerit yürümeye devam eder.
+                code:
+                  - {code: "  --starting-position TRIM_HORIZON --batch-size 100", tag: Ekip → Lambda, say: "En eski bekleyen kayıttan, 100'lük gruplar."}
+                  - {code: "  --maximum-retry-attempts 5 --bisect-batch-on-function-error", tag: Ekip → Lambda, say: "5 deneme; hatalı grubu böl, bozuk kaydı bul."}
+                  - {code: "  --function-response-types ReportBatchItemFailures", tag: Ekip → Lambda, say: "Sadece başarısız kayıttan yeniden başla."}
+                  - {code: "  --destination-config '{\"OnFailure\": {\"Destination\": \"<lm-graph-dlq>\"}}'", tag: Ekip → Lambda, say: "Vazgeçilen kaydın yeri bu tüketicinin kuyruğuna."}
+              - title: "Ölçü tüketicisi: sipariş başına bir nokta mı, dakikalık toplam mı?"
+                text: >-
+                  Operasyon ekranı "dakikada kaç sipariş?" sorar (Adım 34). İki yol var. Dakikalık toplam yazmak az nokta demektir,
+                  ama bir dakikanın siparişleri farklı kayıt gruplarında ve iki şeritte gelir: tüketici "bu dakika şu ana kadar kaç?"
+                  diye okuyup üzerine eklemek zorunda kalır ve aynı olay ikinci kez gelirse sayı bir fazla olur. Sipariş başına
+                  bir nokta yazmak bunu ortadan kaldırır: nokta, ölçü adı + etiketler + zaman damgasıyla tanınır; aynı olay
+                  ikinci kez gelirse aynı noktanın üzerine düşer. Damga siparişin zamanıdır (olayın gelişi değil) ve sonuna sipariş
+                  numarasından türeyen birkaç nanosaniye eklenir; aynı anda verilen iki sipariş iki nokta olur. Dakikalık toplamı
+                  okuyan sorgu hesaplar. Günde birkaç yüz nokta InfluxDB için çok küçük bir yüktür. Müşteri numarası etikete
+                  konmaz: sınırsız farklı değer (cardinality) seriyi şişirir.
+                map:
+                  cols: [Yol, İkinci kez gelirse, Seçim]
+                  rows:
+                    - ["Dakikalık toplam", "Oku-ekle-yaz: sayı bir fazla olur; iki şerit aynı dakikaya yazar.", "Hayır"]
+                    - ["Sipariş başına bir nokta", "Aynı damga, aynı nokta: değişiklik yok.", "Evet"]
+                code:
+                  - {code: "orders,channel=web count=1i,total=1884.63 1793426007412000417", tag: Ölçü tüketicisi → InfluxDB, say: "Ölçü, etiket, iki alan, damga (ns)."}
+                  - {code: "|> filter(fn: (r) => r._measurement == \"orders\" and r._field == \"count\") |> aggregateWindow(every: 1m, fn: sum)", tag: [Uygulama → InfluxDB, InfluxDB → Uygulama], say: "Dakikalık sayı okurken toplanır."}
+              - title: "İzleme: tek pano, her satıra bir alarm"
+                text: >-
+                  Beş tüketici beş ayrı yerde durur; biri geride kalınca hangisi olduğu tek bakışta görülmeli. lm-order-fanout
+                  panosunda her tüketicinin bir satırı var: gecikmesi (IteratorAge, Maximum), hata oranı ve hata kuyruğu. Üstte
+                  DMS'in gecikmesi ve Aurora'daki okunmamış kayıt, altta zero-ETL gecikmesi ve gece karşılaştırmalarının farkları.
+                  Alarmlar: tüketici başına gecikme (60 saniyeyi 5 dakikanın 3'ünde geçerse), hata oranı (5 dakikada en az 20
+                  çağrıyla, %5'ten büyükse; az çağrıda tek hata %100 görünmesin) ve hata kuyruğu (1 mesaj bile); DMS gecikmesi,
+                  okunmamış kayıt, zero-ETL gecikmesi ve karşılaştırma farkı için birer alarm: 5 × 3 + 4 = 19 (değerler temsilî).
+                code:
+                  - {code: "IteratorAge (AWS/Lambda, FunctionName=lm-graph) Maximum > 60000   # ms · 5 dk'nın 3'ü", tag: CloudWatch'ın içinde, say: "Graf tüketicisi bir dakikadan fazla geride."}
+                  - {code: "IF(Invocations >= 20, 100 * Errors / Invocations, 0) > 5   # 5 dk", tag: CloudWatch'ın içinde, say: "Hata oranı; az çağrıda alarm çalmaz."}
+                  - {code: "ApproximateNumberOfMessagesVisible (lm-graph-dlq) >= 1", tag: CloudWatch'ın içinde, say: "Bir kayıt bile işlenemediyse."}
+                  - {code: "CDCLatencyTarget (DMS) > 60 · OldestReplicationSlotLag (Aurora) > 10 GB", tag: CloudWatch'ın içinde, say: "DMS geride ya da Aurora'nın diski dolmaya başladı."}
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              Akış ancak açıldığı andan sonraki siparişleri taşır. Daha önceki siparişler her depoya bir kez, kendi ilk yükleme
+              işiyle yazılır. Hepsi aynı çizgide buluşur: T anı. T'den önceki sipariş ilk yüklemede, sonraki akışta sayılır.
+            cards:
+              - title: "T anı: akış ve ilk yüklemeler aynı çizgide"
+                text: >-
+                  Önce DMS görevi T anından itibaren yakalamaya başlar ve tüketiciler akışın en eski kaydından okumaya hazırlanır.
+                  Sonra her ilk yükleme işi Aurora'nın okuma kopyasından sadece T'den önceki siparişleri okur. Böylece hiçbir
+                  sipariş ne iki kez ne de hiç sayılmaz. Bir iş yarıda kalırsa baştan çalıştırmak güvenlidir: hepsi aynı anahtarla
+                  (ZADD koyar, sabit event_id, sabit kenar, sabit damga) yazar.
+                map:
+                  cols: [Depo, İlk yükleme, Ayrıntı]
+                  rows:
+                    - ["ElastiCache (sıralama)", "SUM(total) müşteri başına → ZADD", "Adım 33"]
+                    - ["Keyspaces (geçmiş)", "Arşivden son 7 gün, kalan ömrüyle (AWS Glue)", "Adım 10"]
+                    - ["Neptune (graf)", "Aurora → CSV (S3) → bulk loader", "Adım 11"]
+                    - ["InfluxDB (ölçü)", "Son 30 günün siparişleri → sipariş başına bir nokta", "Aşağıda"]
+                    - ["DynamoDB (sepet)", "Yok: sepet siparişten türemez", "Adım 12"]
+                    - ["Redshift (rapor)", "zero-ETL'in kendi ilk kopyası", "Adım 30"]
+              - title: "Ölçünün ilk yüklemesi"
+                text: >-
+                  İş T'den önceki 30 günün siparişlerini okur ve her biri için tüketicinin yazacağı noktanın aynısını yazar: aynı
+                  ölçü, aynı etiket, aynı damga kuralı. Bu yüzden iş yeniden çalışsa ya da bir sipariş hem ilk yüklemede hem
+                  akışta görünse bile tek nokta olur. 30 gün, bucket'ın ham nokta saklama süresidir (temsilî); daha eskisi zaten
+                  silinecekti.
+                code:
+                  - {code: "SELECT order_id, created_at, total FROM orders WHERE created_at >= :T - interval '30 days' AND created_at < :T;", tag: [İlk yükleme işi → Aurora, Aurora → İlk yükleme işi], say: "T'den önceki 30 gün, okuma kopyasından."}
+                  - {code: "write_api.write('metrics', records=[nokta(o) for o in siparisler])   # 5.000'erlik gruplar", tag: İlk yükleme işi → InfluxDB, say: "Tüketiciyle aynı nokta, toplu yazma."}
+              - title: "Sepet ve rapor kopyası neden ayrı?"
+                text: >-
+                  Sepet siparişten türemez; siparişten önce vardır. Satırlarını Uygulama sepete eklemede yazar; açılış gecesi eski
+                  sitenin açık sepetleri bir kez taşındı (Adım 12). Sipariş sepete sadece "sil" der. Redshift'in kopyasını
+                  zero-ETL kendisi kurar: önce tabloları bir kez kopyalar, sonra değişiklik kaydını izler (Adım 30). İkisi de akışın
+                  T anına bağlı değildir.
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              Açılıştan sonra her sipariş aynı yoldan gider: Uygulama Aurora'ya yazar ve sepeti bir kez siler; değişiklik kaydı,
+              DMS ve akış olayı taşır; beş tüketici beş depoya ayrı ayrı yazar; zero-ETL rapor kopyasını günceller. 31 Eki 10:24'te
+              bugünün 41 siparişi beş deponun hepsinde.
+            cards:
+              - title: "Bir sipariş, baştan sona (08:53, İrem)"
+                text: >-
+                  Ödeme isteğinden cevaba yaklaşık yarım saniye, cevaptan beş deponun hepsine 1–2 saniye daha, Redshift'e
+                  yaklaşık 20 saniye (temsilî). Uygulama'nın işi COMMIT, sepetin ilk silmesi ve cevapla biter.
+                code:
+                  - {code: "BEGIN; … INSERT orders ('W1793391207', …), order_items (…), outbox ('order_placed', …); COMMIT;", tag: Uygulama → RDS Proxy → Aurora, say: "Sipariş ve olay birlikte (Adım 23)."}
+                  - {code: "delete_item(Key={'pk': 'CART#b7c2…', 'sk': 'ITEM#P0031'})", tag: Uygulama → DynamoDB, say: "Sepet hemen boş (Adım 12)."}
+                  - {code: "→ {\"order_id\": \"W1793391207\", \"result\": \"committed\"}", tag: Uygulama → Tarayıcı, say: "Sayfa: sipariş verildi."}
+                  - {code: "WAL → DMS → PutRecord(lm-order-events, PartitionKey='W1793391207')   # shard-1", tag: [Aurora → DMS, DMS → Kinesis], say: "Olay akışta, siparişin şeridinde."}
+                  - {code: "EFO → lm-cart · lm-leaderboard · lm-activity · lm-metrics · lm-graph", tag: Kinesis → beş tüketici, say: "Aynı kayıt, beş ayrı hat."}
+              - title: "Beş tüketici, beş kısa iş"
+                text: >-
+                  Beşi de aynı kaydı okur ve aynı biçimde başlar (kaydı okunur yapar); sonra her biri tek bir şey yapar. Hiçbiri
+                  diğerini bilmez ve hiçbiri Aurora'ya soru sormaz.
+                map:
+                  cols: [Tüketici, Yaptığı, Anahtar]
+                  rows:
+                    - ["Sepet tüketicisi", "delete_item(CART#<visitor_id>, ITEM#<ürün>) her kalem için", "Silmek idempotent."]
+                    - ["Sıralama tüketicisi", "SET processed:<order_id> NX → ZINCRBY tutar · INCR lm:orders:today", "İşaret (24 saat)."]
+                    - ["Etkinlik tüketicisi", "INSERT purchase × 2 partition (müşteri, tarayıcı) USING TTL", "uuid5(order_id/ürün)."]
+                    - ["Ölçü tüketicisi", "orders,channel=web count=1i,total=… <damga>", "Damga: zaman + order_id."]
+                    - ["Graf tüketicisi", "MERGE (c)-[:BOUGHT {order_id}]->(p) ON CREATE SET qty", "order_id'li kenar."]
+              - title: "Ölçü tüketicisinin kodu"
+                text: >-
+                  Tüketici kayıtları gruplar hâlinde alır; bir gruptaki bütün noktaları InfluxDB'ye tek istekte yazar. Yazma
+                  başarısız olursa Lambda'ya grubun ilk kaydını başarısız diye bildirir; Lambda o kayıttan yeniden dener, aynı
+                  noktalar yeniden yazılır, sayı değişmez.
+                code:
+                  - {code: "for rec in event[\"Records\"]: e = json.loads(base64.b64decode(rec[\"kinesis\"][\"data\"]))[\"data\"]", tag: Kinesis → Ölçü tüketicisi, say: "Akıştan bir grup olay."}
+                  - {code: "  ts = ns(e[\"created_at\"]) + int(sha1(e[\"order_id\"]).hexdigest(), 16) % 1000", tag: Ölçü tüketicisinin içinde, say: "Siparişin zamanı + numarasından 0–999 ns."}
+                  - {code: "  points.append(f'orders,channel=web count=1i,total={e[\"total\"]} {ts}')", tag: Ölçü tüketicisinin içinde, say: "Sipariş başına bir nokta."}
+                  - {code: "write_api.write(bucket=\"metrics\", record=points)", tag: Ölçü tüketicisi → InfluxDB, say: "Grubun bütün noktaları tek istekte."}
+                  - {code: "except Exception: return {\"batchItemFailures\": [{\"itemIdentifier\": ilk_kaydin_sira_nosu}]}", tag: Ölçü tüketicisi → Lambda, say: "Bu kayıttan yeniden dene."}
+              - title: "Gün boyunca: sayılar"
+                text: >-
+                  31 Eki 10:24'e kadar 41 sipariş: lm:orders:today 41, InfluxDB'de bugün 41 nokta (17 + 1 + 23), beş tüketicinin
+                  yeri 10:24'ün olayında. 10:20'deki reddedilen deneme (Adım 23) hiçbir sayıya girmedi; COMMIT olmayan paket
+                  değişiklik kaydına girmez. Bu tarayıcının "baktı" satırlarını ve sepet satırlarını Uygulama doğrudan yazdı;
+                  onlar bir siparişten değil, sayfa açılışlarından ve sepete eklemelerden gelir (Adım 10, 12).
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              Aynı olay iki kez gelirse, bir tüketici durursa, bir kayıt hiç işlenemezse, bir tüketici işini yarım bırakırsa ya da
+              DMS durursa ne olur? İlk ikisi "Örnek durum" (aynı olay iki kez), sonraki dördü "Olsaydı", sonra bu sabahki gece
+              karşılaştırması ve 10:24'teki gerçek pano. Her biri için zincirde bir kural ya da bir parça (emniyet) var; ne zaman
+              çalıştığı, neyi yakalamadığı ve onarımı aşağıda.
+            cards:
+              - title: "Aynı olay iki kez gelirse"
+                text: >-
+                  Ne zaman: her kayıtta, her tüketicide ayrı; Lambda bir kayıt grubunu yeniden verdiğinde o tüketicinin anahtarı ikinci
+                  yazmayı etkisiz kılar (tablo yukarıda, t-1 · 1). Yakalamadığı: anahtarı bozan bir kod sürümü (ör. kimliği
+                  rastgele üreten bir etkinlik tüketicisi) iki satır yazar; sıralama işaretinin 24 saatlik ömründen sonra gelen
+                  bir kopya ikinci kez sayılır (akış kaydı 24 saat sakladığı için olmaz). Onarım: gece karşılaştırması fazlayı
+                  görür ve raporlar; Ekip sürümü düzeltip fazla satırları siler.
+              - title: "Bir tüketici durursa ya da yavaşlarsa"
+                text: >-
+                  Ne zaman: hemen; o tüketicinin yeri ilerlemez, kayıtlar akışta bekler, diğer dört tüketici etkilenmez. Gecikmesi
+                  60 saniyeyi 5 dakikanın 3'ünde geçerse alarm çalar. Yakalamadığı: 24 saatten uzun durursa akış eski kayıtları
+                  siler ve o tüketici onları hiç görmez. Onarım: 24 saat dolmadan düzelt; dolarsa gece karşılaştırması eksikleri
+                  Aurora'dan aynı anahtarla yazar, depo bozulduysa ilk yükleme baştan yapılır. Daha uzun bir tampon gerekirse akışın
+                  saklama süresi 365 güne kadar uzatılabilir (ek ücretle); o zaman sıralama işaretinin ömrü de en az o kadar
+                  uzatılır, yoksa geç gelen bir kopya ikinci kez sayılır.
+              - title: "Bir kayıt hiç işlenemezse (hata kuyruğu)"
+                text: >-
+                  Ne zaman: 5 denemeden sonra; Lambda grubu ikiye bölerek bozuk kaydı ayırır, yerini o tüketicinin hata kuyruğuna
+                  yazar ve devam eder. Alarm bir mesajda bile çalar. Yakalamadığı: kuyrukta kaydın kendisi değil sadece yeri
+                  vardır; Ekip 24 saat içinde davranmazsa kayıt akıştan silinir. Onarım: Ekip kodu düzeltir, yeri kullanarak kaydı
+                  akıştan okuyup tüketiciye yeniden verir; anahtar sayesinde iki kez sayılmaz. 24 saat geçtiyse gece
+                  karşılaştırması eksiği Aurora'dan yazar.
+                code:
+                  - {code: "{\"KinesisBatchInfo\": {\"shardId\": \"shardId-000000000000\", \"startSequenceNumber\": \"4962…\", \"batchSize\": 1}}", tag: Lambda → lm-metrics-dlq, say: "Kuyruktaki mesaj: kaydın yeri."}
+                  - {code: "aws kinesis get-shard-iterator --shard-iterator-type AT_SEQUENCE_NUMBER --starting-sequence-number 4962… ", tag: [Ekip → Kinesis, Kinesis → Ekip], say: "Kaydı akıştan yeniden okur."}
+              - title: "Tüketici işini yarım bırakırsa (işaret kondu, puan eklenmedi)"
+                text: >-
+                  Ne zaman: sıralama tüketicisi işareti koyup puanı eklemeden çökerse yeniden deneme işareti görür ve atlar; puan
+                  eksik kalır. Bu, iki ayrı komutun bedelidir. Yakalamadığı: canlı ekran ertesi gece 03:00'e kadar eksik puan gösterir.
+                  Onarım: gece karşılaştırması Aurora'daki toplamı yazar (ZADD, Adım 33). Diğer dört tüketicide bu açık yok:
+                  silme, sabit kimlikli satır, sabit damgalı nokta ve MERGE tek adımda ve tekrarlanabilir.
+              - title: "DMS durursa"
+                text: >-
+                  Ne zaman: siparişler etkilenmez; Aurora yazar, müşteri siparişini ve boş sepetini görür. Sıralama, geçmiş, ölçü ve graf DMS durduğu
+                  sürece geride kalır (sepeti Uygulama zaten boşaltmıştır). Aurora okunmamış değişiklik kaydını silmez; DMS kaldığı yerden devam eder ve olaylar
+                  sırayla gelir. Yakalamadığı: DMS çok uzun durursa saklanan kayıt Aurora'nın diskini doldurur. Onarım: DMS
+                  gecikmesi ve okunmamış kayıt (OldestReplicationSlotLag) için ayrı alarmlar; Ekip görevi yeniden başlatır. Görev
+                  baştan kurulmak zorunda kalırsa yeni T anından önceki olaylar gece karşılaştırmasıyla tamamlanır.
+              - title: "Her gece: depolar asıl kaydı tutuyor mu?"
+                text: >-
+                  Ne zaman: her gece 03:00, önceki gün (Türkiye saatiyle 00:00–24:00) için. Dört iş Aurora'dan sayar ve kendi
+                  deposuyla karşılaştırır; sıralama işi dün sipariş veren müşterilerin bütün siparişlerinden toplamı alır, diğerleri
+                  dünün kalemlerini ve dakikalarını. Eksiği aynı anahtarla yazar, böylece düzeltme de idempotenttir. Yakalamadığı:
+                  gün içindeki bir eksik ertesi gece 03:00'e kadar görünür kalır; Aurora'nın kendisindeki bir hata (yanlış tutar) her
+                  depoya aynen yayılır. Onarım: fark ölçüsü 0 değilse alarm; Aurora'daki hata Aurora'da düzeltilir (yeni bir olay
+                  olarak) ve depolar onu da akıştan alır.
+                code:
+                  - {code: "SELECT date_trunc('minute', created_at), count(*) FROM orders WHERE created_at >= '2026-10-29T21:00Z' AND created_at < '2026-10-30T21:00Z' GROUP BY 1;", tag: [Gece karşılaştırması → Aurora, Aurora → Gece karşılaştırması], say: "Ölçü işi: 30 Eki'nin (Türkiye saati) dakika başına doğru sayısı."}
+                  - {code: "|> range(start: 2026-10-29T21:00:00Z, stop: 2026-10-30T21:00:00Z) |> aggregateWindow(every: 1m, fn: sum)", tag: [Gece karşılaştırması → InfluxDB, InfluxDB → Gece karşılaştırması], say: "InfluxDB'deki dakikalık sayı (30 Eki, Türkiye saati)."}
+                  - {code: "eksik dakikanın siparişleri → write_api.write(nokta(o))   # aynı damga", tag: Gece karşılaştırması → InfluxDB, say: "Eksik nokta yazılır; varsa üzerine düşer."}
+              - title: "Tek pano: zincirin bütün sağlığı"
+                text: >-
+                  Ne zaman: her an; Ekip ve nöbetçi aynı ekrana bakar. Bir satır kırmızıysa hangi tüketicinin geride olduğu ve
+                  hangi ekranın eskidiği bellidir: graf geride ise öneriler, sıralama geride ise canlı ekran. Yakalamadığı: pano
+                  "zamanında işlendi mi?" sorusunu cevaplar, "doğru işlendi mi?" sorusunu değil. Onarım: doğruluğu gece
+                  karşılaştırmaları ölçer; fark ölçüleri de aynı panoda.
+          - n: 5
+            title: Müşteri ne görür?
+            intro: >-
+              Asıl kayıt hemen, türeyen depolar birkaç saniye sonra. Müşterinin hemen görmesi gereken her şey asıl kayıttan
+              (Aurora) ya da Uygulama'nın kendi işinden gelir; gerisi kısa bir gecikmeyle gelir ve bu gecikme ölçülür.
+            cards:
+              - title: "Hemen ve birkaç saniye sonra"
+                text: >-
+                  Müşteri için önemli olan iki şey hemen olmalı: siparişin verildiği ve sepetin boşaldığı. İkisi de akışı
+                  beklemez. Canlı sıralama, geçmiş, operasyon ekranı ve öneriler için birkaç saniye fark edilmez; raporlar için
+                  yarım dakika bile sorun değildir. Sayılar İrem'in siparişi için, temsilî.
+                map:
+                  cols: [Ekran, Nereden okur, Ne zaman]
+                  rows:
+                    - ["\"Sipariş verildi\" ve Orders", "Aurora (asıl kayıt)", "Hemen (0,5 sn)"]
+                    - ["Sepet", "DynamoDB; Uygulama sildi", "Hemen"]
+                    - ["Canlı sıralama", "ElastiCache", "≈ 1 sn"]
+                    - ["My activity", "Keyspaces", "≈ 1 sn"]
+                    - ["Operasyon ekranı", "InfluxDB", "≈ 1 sn"]
+                    - ["Öneriler", "Neptune", "≈ 2 sn"]
+                    - ["Raporlar", "Redshift", "≈ 20 sn"]
+              - title: "Kendi siparişini hemen görmek"
+                text: >-
+                  Bir müşteri siparişini verdikten hemen sonra "Orders" sayfasını açarsa siparişini görmeli; görmezse ikinci kez
+                  sipariş verebilir. Bu yüzden siparişin kendisini gösteren her ekran asıl kayıttan, Aurora'dan okur (Adım 26).
+                  Türeyen depolardan okuyan ekranlar "birkaç saniye geriden" diye tasarlanır: canlı sıralama zaten birkaç saniyede
+                  bir yenilenir, öneriler bir sonraki sayfada değişir. Hiçbir ekran yanlış bilgi göstermez; bazıları bir an eski
+                  gösterir.
+              - title: "Gecikmenin parçaları"
+                text: >-
+                  Bir türeyen deponun gecikmesi üç parçanın toplamıdır: DMS'in olayı akışa koyması (CDCLatencyTarget, ≈ 1 sn),
+                  akışın kaydı tüketiciye itmesi (EFO ile bir saniyenin altında) ve tüketicinin kendi işi (bir yazma, onlarca
+                  milisaniye). Panodaki IteratorAge ikinci ve üçüncü parçayı, DMS gecikmesi birinciyi gösterir. Biri büyürse
+                  sorunun nerede olduğu buradan anlaşılır: DMS mi geride, akış mı, tek bir tüketici mi?
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
