@@ -11400,49 +11400,666 @@ steps:
           - [Sonunda tutarlı okuma, "Herhangi bir kopyadan okur; çok yeni bir yazmayı kaçırabilir. 4 KB'a kadar 0,5 RRU."]
           - [Availability Zone, "Bir AWS bölgesindeki birbirinden ayrı veri merkezleri. Kopyalar farklı AZ'lerde durur."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde okuma tutarlılığı için hazırlık
+      t1:
+        title: Önceden ne vardı? Sepetin üç kopyası nasıl doldu, hangi ekran hangi kopyadan okuyor?
         intro: >-
-          Sepet sayfası hiç açılmadan, her ekranın hangi okuma türünü kullanacağı belirlenir. Aşağıdaki beş adım bu hazırlığın
-          sırasıdır.
-        text:
-          - title: Önce her ekranın ihtiyacı yazılır
-            text: >-
-              Her okuma için şu sorulur: "bir saniye önceki bir yazmayı kaçırmak sorun olur mu?". Sepet listesi ve başlıktaki
-              sayaç için olmaz; ödeme özeti ve stok kontrolü için olur.
-            code: |-
-              Sepet sayfası  → ConsistentRead = false   (ucuz)
-              Ödeme özeti    → ConsistentRead = true    (kesin)
-          - title: Okuma türü her istekte seçilir
-            text: >-
-              Tutarlılık tablo ayarı değil, isteğin parametresidir. Aynı tablo, aynı item farklı ekranlarda farklı türle
-              okunabilir. Varsayılan sonunda tutarlıdır; güçlü okuma açıkça istenir.
-            code: |-
-              table.query(KeyConditionExpression=Key("pk").eq(pk), ConsistentRead=True)
-          - title: Maliyet hesaplanır
-            text: >-
-              Güçlü okuma, sonunda tutarlı okumanın iki katı birim harcar (4 KB başına 1 ve 0,5 RRU). Çok okunan ekranlarda
-              sonunda tutarlı okumak okuma faturasını yarıya indirir.
-          - title: İndeks ve bölgeler arası kopya sınırları bilinir
-            text: >-
-              Global secondary index'ler ve başka bölgelere kopyalanan tablolar (global tables) güçlü tutarlı okumayı her durumda
-              sunmaz. Kesin okuma gereken sorular ana tabloya, yazmanın yapıldığı bölgeye sorulur.
-          - title: Kendi yazdığını görmek ayrıca düşünülür
-            text: >-
-              "Ekledim ama listede yok" hissi kullanıcıyı şaşırtır. Bu yüzden yazmanın hemen arkasından gelen okuma (ekledikten
-              sonra sepeti göstermek) güçlü yapılır; sonraki sayfa açılışları sonunda tutarlı olabilir.
-      feed:
-        title: Veri nereden geliyor?
-        writes: Uygulama. Ürün sayfasındaki "sepete ekle", sepet sayfasındaki silme ve adet değiştirme.
-        reads: Uygulama. Sepet sayfası, başlıktaki sepet sayacı ve ödeme adımı (her biri farklı tutarlılıkla).
-        kind: >-
-          Uygulama orkestrasyonu. Kopyalama DynamoDB'nin kendi içindedir: kopyaları kendisi tutar, uygulama bunu görmez.
-        with: >-
-          Sepet sayfasındaki ürün adları ve fiyatlar sepet item'larının içinde kopya olarak durur (katalogdan, DocumentDB);
-          ödemede sipariş ilişkisel veritabanına (Aurora) yazılır.
-        best: >-
-          Okuma türü ekran ekran seçilir: kesinlik gereken yerde güçlü, gerisinde sonunda tutarlı. Böylece hem doğruluk hem
-          maliyet korunur.
+          Sepet sayfasını açmadan önce dbws-cart tablosunda senin sepetinin (CART#7f3a…) iki satırı var: Kablosuz Kulaklık'tan 1
+          adet (Adım 12'de eklediğin) ve Mekanik Klavye'den 2 adet (bu sabah 09:52'de iki sekmeden eklediğin; temsilî geçmiş, Adım 12 ve 14'teki gibi).
+          Tablonun nasıl kurulduğunu ve satırların nasıl geldiğini Adım 12, adet kuralını Adım 14 anlattı. Bu bölüm başka bir
+          şeyi anlatıyor: DynamoDB bu iki satırı üç ayrı veri merkezinde üç kopya olarak tutuyor. Bir yazma kopyalara nasıl ve
+          hangi sırayla gider; okuma hangi kopyaya sorar ve neden yarı fiyatına okuyan okuma çok yeni bir yazmayı kaçırabilir;
+          mağazanın hangi ekranı hangi okuma türünü kullanır ve bu karar nerede yazılıdır; farkın parası nasıl ölçülür ve
+          bütçelenir; DAX ve başka bölgelerdeki kopyalar neden seçilmedi; bir şey bozulursa ne olur. Adım 12 ve 14'teki diğer
+          parçalar (değişiklik akışı, terk edilen sepet arşivi, AppConfig'teki kural) ve her sayfada oturumunu tutan ElastiCache çalışmaya devam ediyor; sepeti ekrana
+          getirmek için okumadıkları için burada yoklar. Önce zincirin bileşenleri, sonra bir simülasyon, sonra dört aşama
+          (tasarım, ilk yükleme, sürekli besleme, tutarlılık ve onarım).
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1, T anı ve şimdi", "t-1: sayfanın açılmasından (t0) önceki zaman. T anı: yeni sitenin ve sepet tablosunun yayına girdiği an; 30 Eki 20:00 (temsilî, Adım 12'deki gibi). Bu bölümde \"şimdi\" (t0) 31 Eki 10:02 (temsilî): Adım 14'teki reddedilen eklemeden bir dakika sonra. Saatler Türkiye saatidir."]
+          - ["Ekip", "Mağazanın sistemini kuran ve işleten mühendisler. Kodu yayına onlar çıkarır, alarmlara ve bütçeye onlar bakar."]
+          - ["Partition ve kopya", "Partition: tablonun parçalarından biri; DynamoDB satırları pk'ye göre parçalara dağıtır (Adım 12). Senin sepetinin bütün satırları aynı partition'da. DynamoDB her partition'ı üç kopya hâlinde tutar; aynı defterin üç ayrı şubede duran üç nüshası gibi. Başka bir sepet (ör. c41e…) başka bir partition'da, kendi üç kopyasıyla durabilir."]
+          - ["Availability Zone (AZ)", "Bir AWS bölgesinin (burada Frankfurt, eu-central-1) içindeki birbirinden ayrı veri merkezleri; ayrı binalar, ayrı elektrik. Üç kopya üç ayrı AZ'dedir; bir bina giderse diğer ikisi kalır. Bu bölümde AZ-a, AZ-b, AZ-c diye anıyoruz (temsilî adlar)."]
+          - ["Ana kopya (lider) ve 2/3", "Üç kopyadan biri ana kopyadır. Yazma önce ona gelir; ana kopya yazar ve diğer ikisine gönderir. Kopyalardan en az ikisi yazmayı kaydedince Uygulama'ya \"tamam\" denir; üçüncü kopya onu biraz sonra alır. Bu ayrıntılar (ana kopya, 2/3) AWS'in DynamoDB'nin iç tasarımını anlattığı 2022 tarihli makaleye dayanır; kullanıcı rehberi sadece \"üç AZ'ye yazılır, genellikle bir saniye içinde her yerdedir\" der. Hangi AZ'deki kopyanın ana olduğunu DynamoDB seçer ve değiştirebilir; burada AZ-a (temsilî)."]
+          - ["İstek yönlendirici (request router)", "DynamoDB'nin giriş kapısı: isteği alır, imzayı (IAM) kontrol eder, satırın hangi partition'da olduğunu bulur ve isteği o partition'ın bir kopyasına gönderir. Yazmayı ve güçlü okumayı ana kopyaya, sonunda tutarlı okumayı herhangi bir kopyaya. AWS'in işlettiği parçadır; Uygulama onu görmez."]
+          - ["Güçlü tutarlı okuma (ConsistentRead=True)", "\"Bu okumadan önce tamamlanmış bütün yazmaları gör\" isteği. Ana kopyaya sorulur. 4 KB'a kadar 1 okuma birimi (RRU)."]
+          - ["Sonunda tutarlı okuma (ConsistentRead=False)", "Eventually consistent: herhangi bir kopyaya sorulur. 4 KB'a kadar 0,5 RRU. Kopya çok yeni bir yazmayı henüz almadıysa bir önceki değeri verir; AWS'e göre bütün kopyalar genellikle bir saniye içinde aynı olur. Varsayılan budur: komutta ConsistentRead yazmazsa okuma sonunda tutarlıdır."]
+          - ["RRU, WRU, Query ve fiyat", "RRU (read request unit): on-demand tabloda (kapasite ayarlanmayan, kullandığın kadar ödediğin tablo) okuma başına ödenen birim. WRU: yazma birimi; 1 KB'a kadar bir satırı yazmak 1 WRU. Query bir sepetin bütün satırlarını okur; DynamoDB satırların boyutunu toplar, 4 KB'ın katına yuvarlar. Senin sepetin 1 KB'ın altında: güçlü 1, sonunda tutarlı 0,5 RRU; boş bir sepet de en az bu kadar harcar. Frankfurt'ta 1 milyon RRU 0,1525 dolar (AWS fiyat listesi). Bir partition saniyede en fazla 3.000 güçlü ya da 6.000 sonunda tutarlı (4 KB'a kadar) okuma alır."]
+          - ["Kendi yazdığını görmek ve lm_cart_w", "Müşteri bir şey ekleyip hemen sepete bakınca eklediğini görmeli (read-your-writes). Uygulama sepete her yazdığında tarayıcıya lm_cart_w adlı küçük bir çerez koyar; çerezin ömrü 5 saniyedir, sonra tarayıcı onu kendisi siler. Çerez istekle geldiği sürece (son yazmadan sonraki 5 saniye) sepet okumaları güçlü yapılır. Çerez tarayıcıyla geldiği için hangi sunucu cevap verirse versin bunu bilir; sunucuların saatini karşılaştırmak gerekmez. Başka bir cihazdan yapılan yazmayı bu tarayıcının çerezi bilmez. Ad ve 5 saniye temsilî."]
+          - ["Okuma türü tablosu (OKUMA_TURU)", "Uygulama'nın kodunda duran kısa bir liste: her ekranın adı ve okuma türü (güçlü mü, sonunda tutarlı mı). Sepeti okuyan her ekran aynı fonksiyondan (sepet_oku) geçer; fonksiyon türü bu listeden alır. Lokantadaki \"hangi masa hangi garsonun\" listesi gibi: karar bir kez yazılır, herkes ona bakar."]
+          - ["ReturnConsumedCapacity ve ConsumedCapacity", "ReturnConsumedCapacity='TOTAL': komuta eklenen \"bu istek kaç birim harcadı, cevapta söyle\" isteği. Cevaptaki ConsumedCapacity alanı bu sayıyı taşır (ör. 0.5). Varsayılanı NONE: söylemez."]
+          - ["CloudWatch, ölçü ve alarm", "CloudWatch: AWS'in ölçüm ve alarm servisi. ConsumedReadCapacityUnits: DynamoDB'nin tablo başına saydığı harcanan okuma birimi (Sum: toplam). OkumaBirimi, Okuma ve GucluOkuma: Uygulama'nın kendi yazdığı üç sayaç (adlar temsilî): harcanan birim, okuma sayısı ve bunların güçlü olanları; her biri ekranın adıyla (Ekran). Oran = pay / payda: 1 saatte GucluOkuma / Okuma. Sessiz bir saatte (ör. 20 okumada 5 güçlü) oran boşuna yükselmesin diye alarm sadece en az 10.000 okumalı saatlere bakar."]
+          - ["AWS Budgets", "Aylık harcama için bir sınır koyan ve sınıra yaklaşınca e-posta gönderen AWS servisi. Bütçe bir harcama türüne daraltılabilir: burada EUC1-ReadRequestUnits, yani Frankfurt'taki DynamoDB okuma birimleri. Tahmin (forecast): ayın sonunda ne kadar olacağının AWS hesabı."]
+          - ["DAX", "DynamoDB Accelerator: DynamoDB'nin önüne konan, okunan satırları bellekte tutan ayrı bir küme (cluster); saatlik ücretli sunuculardan (düğüm) oluşur. Sonunda tutarlı okumaları önbellekten cevaplar; güçlü okumaları DynamoDB'ye geçirir ve önbelleğe koymaz. Query sonuçlarını ayrı bir önbellekte tutar; bir yazma bu önbelleği silmez, sonuç kendi süresi (varsayılan 5 dakika) dolana kadar eski kalır."]
+          - ["Global table, MREC ve MRSC", "Global table: aynı tablonun başka AWS bölgelerinde de kopyası olması. Varsayılan mod MREC'te (multi-Region eventual consistency) bir bölgedeki yazma diğerine genellikle bir saniye içinde gider; diğer bölgede okuyan onu kaçırabilir. MRSC (multi-Region strong consistency) adlı ayrı bir mod her bölgede güçlü okuma sunar; ama tam üç bölge ister, sadece boş bir tablodan kurulur ve iş paketlerini (TransactWriteItems: ya hepsi ya hiçbiri yapılan yazma paketi) desteklemez. Sepet bir iş paketi kullanır: şifresiz gezen ziyaretçi giriş yapınca tarayıcının sepeti müşterinin sepetine tek paketle taşınır (girişte sepet birleştirme, Adım 12)."]
+          - ["GSI", "Global secondary index: tablonun başka bir alana göre dizilmiş ikinci kopyası (Adım 12). GSI'dan okuma her zaman sonunda tutarlıdır; güçlü okuma istenemez. dbws-cart'ta GSI yok."]
+          - ["Aurora, ödeme ve sipariş zinciri", "Aurora PostgreSQL: siparişlerin durduğu ilişkisel veritabanı (Adım 22–25). Ödemede Uygulama sepeti okur, siparişi Aurora'ya yazar, sonra sepet satırlarını siler (Adım 12). Sipariş zinciri: siparişle birlikte yazılan \"sipariş verildi\" satırının (outbox) bir olay akışına (Kinesis) taşındığı ve sepet tüketicisinin aynı satırları bir kez daha sildiği yol (Adım 12). Uygulama'nın silmesi yarıda kalırsa (ör. sunucu o an kapanırsa) sepet böylece yine boşalır; zaten silinmiş satırı yeniden silmek zararsızdır."]
+          - ["Kesit, temsilî, Örnek durum ve Olsaydı", "Kesit: simülasyonda gösterilen satırlar; burada senin partition'ının üç kopyasında t0'daki 2 satır (ve aşamalar sırasında silinen Akıllı Saat satırı). Tabloda binlerce sepet var. Temsilî: canlı sistemden gelmeyen, anlatım için seçilmiş değer. \"Örnek durum\" diye başlayan kareler bu zincirde yaşanan bir durum; \"Olsaydı\" diye başlayanlar yaşanmadı, yaşansaydı ne olacağını gösteriyor. Her \"Olsaydı\" ayrı bir durumdur, birbirine eklenmez."]
+          - ["Kod kartlarındaki sözcükler", "query(…): bir sepetin bütün satırlarını oku. Key('pk').eq(pk): \"pk'si bu sepet olan\". ConsistentRead: okuma türü. resp['ConsumedCapacity']['CapacityUnits']: cevaptaki harcanan birim. OKUMA_TURU = {…}: okuma türü tablosu; True güçlü, False sonunda tutarlı. def sepet_oku(ekran): sepeti okuyan tek fonksiyon. or: \"ya da\". resp.set_cookie(…, max_age=5): çerezi koy, 5 saniye geçerli. 'lm_cart_w' in request.cookies: \"istekle bu çerez geldi mi?\". ConditionExpression: yazmanın koşulu (Adım 14). sayfalar(…): uzun bir okumanın bütün sayfalarını sırayla getiren yardımcı; rapor(…): ekibe rapor yazan yardımcı (adlar temsilî). file://oran.json: alarmın formülünü taşıyan dosya. IF(Okuma >= 10000, …, 0): okuma 10.000'den azsa 0 say (alarm çalmaz). --evaluation-periods 1: tek bir 1 saatlik pencere yeter. assert: \"şu doğru olmalı\" diyen test satırı; yanlışsa yayın durur. metrics.add(ad, sayı, Ekran=…): Uygulama'nın sayacına ekle (yardımcı adı temsilî). put-metric-alarm: alarm kur. aws budgets create-budget: bütçe kur. scan(Select='COUNT'): bütün tabloyu sayarak oku. update_item, delete_item: satırı güncelle, sil. INSERT, COMMIT: Aurora'da sipariş yazmak ve kalıcı yapmak. \\ satırın devam ettiği yer."]
+          - ["Diğer adlar", "Uygulama: mağazanın arka uç programı (EC2 sunucusunda); tarayıcıdan gelen isteği alır, veritabanına komutu o gönderir. IAM: AWS'in kimlik ve izin servisi; her istek Uygulama'nın kimliğiyle imzalanır. TTL, değişiklik akışı, sürekli yedek: tablonun Adım 12'de açılan üç ayarı (satırın ömrü, değişikliklerin kaydı, son 35 günün yedeği). EC2: AWS'in kiralık sanal sunucusu. boto3: AWS'in Python kütüphanesi; Uygulama DynamoDB'ye onunla konuşur ve cevap gelmezse isteği kendisi bir kez daha gönderebilir. Sepet taşıma işi: T anında eski sitenin açık sepetlerini bir kez yazan program (AWS Lambda, Adım 12). \"Adım 12\", \"Adım 14\" gibi adlar bu görevin (mağazadaki 37 adımın) adımlarıdır; simülasyonun sayacındaki \"Adım 1 / 22\" ise simülasyonun karesidir."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra"
+          sütunu isteği kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim kodumuz" etiketli
+          parçaları mağazanın ekibi yazar. Okuma türünü seçen Uygulama'dır (kodundaki okuma türü tablosuyla); hangi kopyaya
+          sorulacağını DynamoDB'nin istek yönlendiricisi seçer. Üç kopya aynı satırları üç AZ'de tutar. Taşıma işi ve ödeme
+          sepeti okuyan iki iş daha; CloudWatch ve AWS Budgets harcanan birimi ölçer. Aynı parçalar aşağıdaki simülasyonda birer
+          kutu: üst sırada okuyan ve yazan Uygulama ile istek yönlendirici, altında üç kopya, sonra taşıma ve ödeme, en altta
+          ölçüm ve bütçe.
+        inventory:
+          - id: web
+            name: Uygulama (mağaza sayfaları)
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucusunda)
+            does: >-
+              Sepeti okuyan her ekran (başlıktaki sepet sayacı, sepet sayfası, ödeme) sepet_oku fonksiyonundan geçer; fonksiyon
+              okuma türünü kodundaki okuma türü tablosundan alır, müşteri son 5 saniyede sepete yazdıysa (lm_cart_w çerezi istekle geldiyse)
+              güçlü okur. Query'yi ReturnConsumedCapacity ile gönderir ve harcanan birimi ekranın adıyla CloudWatch'a yazar. Sepete
+              her yazmada lm_cart_w çerezini yeniler.
+            box: "Okuma türünü ekrana göre seçer; harcanan birimi ölçer."
+            phases: [1, 2, 3, 4]
+            before: Tarayıcı (her sayfa, sepet, ödeme)
+            after: [router, aurora, monitor]
+          - id: router
+            name: "DynamoDB (dbws-cart): istek yönlendirici"
+            kind: aws
+            what: DynamoDB'nin giriş kapısı, on-demand tablo
+            does: >-
+              İsteği alır, satırın partition'ını bulur. Yazmayı ve güçlü okumayı o partition'ın ana kopyasına, sonunda tutarlı
+              okumayı herhangi bir kopyasına gönderir. Harcanan birimi cevaba koyar (istenirse) ve tablo başına
+              ConsumedReadCapacityUnits olarak sayar.
+            box: "Yazma ve güçlü okuma → ana kopya; sonunda tutarlı → herhangi biri."
+            phases: [1, 2, 3, 4]
+            before: [web, migrate]
+            after: [k1, k2, k3, monitor]
+          - id: k1
+            name: Kopya 1 · ana (AZ-a)
+            kind: aws
+            what: partition'ın ana kopyası (DynamoDB işletir)
+            does: >-
+              Yazmayı ilk alan ve diğer iki kopyaya gönderen kopya. Kendisiyle birlikte iki kopya yazmayı kaydedince "tamam" der.
+              Güçlü okumalar buradan cevaplanır; en son yazmayı her zaman bilir.
+            box: "Yazmayı ilk alır, diğerlerine yayar; güçlü okuma burada."
+            phases: [1, 2, 3, 4]
+            before: router
+            after: [k2, k3]
+          - id: k2
+            name: Kopya 2 (AZ-b)
+            kind: aws
+            what: partition'ın ikinci kopyası
+            does: >-
+              Ana kopyadan gelen yazmayı kaydeder; çoğu zaman "tamam"ı mümkün kılan ikinci kopya odur. Sonunda tutarlı okumalara
+              cevap verebilir.
+            box: "Yazmayı ana kopyadan alır; sonunda tutarlı okumaya cevap verir."
+            phases: [1, 2, 3, 4]
+            before: k1
+            after: router
+          - id: k3
+            name: Kopya 3 (AZ-c)
+            kind: aws
+            what: partition'ın üçüncü kopyası
+            does: >-
+              Aynı yazmayı biraz sonra alır (genellikle milisaniyeler; AWS'e göre bütün kopyalar genellikle bir saniye içinde
+              aynı). Arada sonunda tutarlı bir okuma ona denk gelirse bir önceki değeri verir.
+            box: "Yazmayı biraz sonra alır; arada eski değeri verebilir."
+            phases: [1, 2, 3, 4]
+            before: k1
+            after: router
+          - id: migrate
+            name: Sepet taşıma işi
+            kind: code
+            what: bir kez çalışan program (AWS Lambda, Adım 12)
+            does: >-
+              T anında eski sitenin açık sepetlerini tabloya yazdı (Adım 12). Sonra yazdıklarını güçlü okumayla saydı: sayım
+              sonunda tutarlı olsaydı son yazdığı satırları kaçırıp yanlış alarm verebilirdi.
+            box: "Eski sepetleri yazdı; sayımı güçlü okumayla yaptı."
+            phases: [2]
+            before: S3 (taşıma klasörü)
+            after: router
+          - id: aurora
+            name: Aurora PostgreSQL (shop)
+            kind: aws
+            what: sipariş veritabanı
+            does: >-
+              Ödemede sipariş burada, sepetin güçlü okunmuş hâliyle yazılır (Adım 22–25). Sepetten bir adet eksik okunsaydı
+              sipariş de eksik yazılırdı.
+            box: "Sipariş, sepetin güçlü okunmuş hâliyle yazılır."
+            phases: [3, 4]
+            before: web
+            after: "Sipariş zinciri (Adım 12): sepeti ikinci kez boşaltır"
+          - id: monitor
+            name: CloudWatch (ölçüler ve alarm)
+            kind: aws
+            what: AWS'in izleme servisi
+            does: >-
+              Uygulama'nın üç sayacını (OkumaBirimi, Okuma, GucluOkuma; ekran ekran) ve DynamoDB'nin
+              ConsumedReadCapacityUnits ölçüsünü toplar. Alarm: 1 saatte güçlü okumaların bütün okumalara oranı %20'yi geçerse
+              (en az 10.000 okumada). İki toplamın tutması beklenir; fark başka bir okuyan demektir.
+            box: "Birim ekran ekran; güçlü oranı 1 saatte, eşik %20."
+            phases: [1, 2, 3, 4]
+            before: [web, router]
+            after: Ekip (alarm)
+          - id: budgets
+            name: AWS Budgets (dynamodb-okuma)
+            kind: aws
+            what: AWS'in bütçe servisi
+            does: >-
+              Frankfurt'taki DynamoDB okuma birimlerinin (EUC1-ReadRequestUnits) aylık harcamasını izler; ay sonu tahmini
+              bütçenin %80'ini geçerse ekibe e-posta gönderir. Faturadan beslenir; günde birkaç kez güncellenir.
+            box: "Aylık okuma bütçesi; tahmin %80'i geçerse haber."
+            phases: [1, 2, 3, 4]
+            before: "AWS faturası (okuma birimleri)"
+            after: Ekip (e-posta)
+        sim_title: "Simülasyon: sepetin üç kopyası nasıl doldu, her ekran hangi kopyadan okudu?"
+        sim:
+          kind: pipeline
+          title: Uygulama (okuma türü tablosu) → istek yönlendirici → ana kopya → diğer iki kopya; ödemede Aurora; birim → CloudWatch ve Budgets
+          caption: >-
+            Üç kopya kutusundaki tablolar kesit: senin partition'ının (CART#7f3a…) üç kopyasında t0'daki 2 satır; ödediğin
+            Akıllı Saat satırı da bir süre görünüyor. Tabloda binlerce sepet ve onların kendi kopyaları var. Ürün adları t0'daki
+            gibi kısaltılmış. Önce okuma türü tablosunun, ölçünün ve bütçenin yayına çıkması ve eski sepetlerin taşınması, sonra
+            sepetine yapılan yazmalar ve okumalar, bir ödeme ve ölçüm, en sonda tutarlılık ve onarım oynuyor. 4. aşamada
+            "Örnek durum" diye başlayan kare bu zincirde yaşanan bir durum; "Olsaydı" diye başlayanlar yaşanmadı, her biri ayrı
+            bir durum. Canlı sistemden: birim bedelleri (sepetin güçlü okuması 1, sonunda tutarlı okuması 0,5 RRU) ve birim fiyatı
+            (1 milyon RRU 0,1525 dolar). Temsilî: saatler, AZ adları, hangi kopyanın ana olduğu, gecikmeler, sayılar, oranlar ve
+            bütçe. Son karede üç kopya, sepet sayfasını açacağın andaki (t0) hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım}
+          rows:
+            - {id: ask, title: "Okuyan ve yazan: Uygulama okuma türünü seçer, istek yönlendirici kopyayı", flow: true}
+            - {id: copies, title: "Senin partition'ının üç kopyası (üç AZ); yazma önce ana kopyaya gelir"}
+            - {id: jobs, title: "Sepeti okuyan iki iş daha: T anındaki taşıma ve ödeme"}
+            - {id: helpers, title: "Yandaki iş: harcanan birimin ölçüsü, alarm ve bütçe", side: true}
+          summary: >-
+            DynamoDB senin sepetini üç AZ'de üç kopya olarak tuttu. Her yazma önce ana kopyaya geldi, iki kopya kaydedince
+            "tamam" dendi, üçüncü kopya biraz sonra aldı. Okuma türünü Uygulama ekran ekran seçti: sayaç ve sepet sayfası
+            sonunda tutarlı (0,5 RRU, herhangi bir kopya), kendi yazmandan sonraki 5 saniye ve ödeme güçlü (1 RRU, ana kopya).
+            Karar kodda tek bir tabloda yazılı ve testle korunuyor. Harcanan birim istek istek ölçüldü, tablonun ölçüsüyle
+            karşılaştırıldı ve aylık bütçeyle izlendi. DAX ve başka bölgelerdeki kopyalar sepet için seçilmedi. Son durum: üç
+            kopyada aynı 2 satır; t0 buradan başlar (simülasyonu bunun üstüne varsayılan bir yazma ekler).
+          boxes:
+            - id: web
+              row: ask
+            - id: router
+              row: ask
+            - id: k1
+              row: copies
+              tables:
+                - name: "CART#7f3a… (kesit)"
+                  cols: ["sk · name", qty]
+                  rows:
+                    - {key: t1, "sk · name": "ITEM#P0001 Kablosuz Kulaklık", qty: 1, hidden: true}
+                    - {key: s0, "sk · name": "ITEM#P0021 Akıllı Saat", qty: 1, hidden: true}
+                    - {key: s1, "sk · name": "ITEM#P0131 Mekanik Klavye", qty: 2, hidden: true}
+            - id: k2
+              row: copies
+              tables:
+                - name: "CART#7f3a… (kesit)"
+                  cols: ["sk · name", qty]
+                  rows:
+                    - {key: t1, "sk · name": "ITEM#P0001 Kablosuz Kulaklık", qty: 1, hidden: true}
+                    - {key: s0, "sk · name": "ITEM#P0021 Akıllı Saat", qty: 1, hidden: true}
+                    - {key: s1, "sk · name": "ITEM#P0131 Mekanik Klavye", qty: 2, hidden: true}
+            - id: k3
+              row: copies
+              tables:
+                - name: "CART#7f3a… (kesit)"
+                  cols: ["sk · name", qty]
+                  rows:
+                    - {key: t1, "sk · name": "ITEM#P0001 Kablosuz Kulaklık", qty: 1, hidden: true}
+                    - {key: s0, "sk · name": "ITEM#P0021 Akıllı Saat", qty: 1, hidden: true}
+                    - {key: s1, "sk · name": "ITEM#P0131 Mekanik Klavye", qty: 2, hidden: true}
+            - id: migrate
+              row: jobs
+            - id: aurora
+              row: jobs
+              tables:
+                - name: "siparişler (kesit)"
+                  cols: [sipariş, ürün]
+                  rows:
+                    - {key: o1, sipariş: "O004812 · C00007", ürün: "P0021 × 1", hidden: true}
+            - id: monitor
+              row: helpers
+            - id: budgets
+              row: helpers
+          frames:
+            - phase: 2
+              who: web
+              lit: [web]
+              packet: {at: web, text: "OKUMA_TURU = {sayac: False, sepet: False, odeme: True} · test: OKUMA_TURU['odeme'] is True ✓ · yayın"}
+              note: {web: "okuma türü tablosu kodun içinde · test geçti"}
+              say: >-
+                30 Eki 17:00 (temsilî). Ekip Uygulama'nın yeni sürümünü yayına çıkardı. Sürümün içinde okuma türü tablosu var:
+                başlıktaki sayaç ve sepet sayfası sonunda tutarlı, ödeme güçlü. Yayından önce bir test tablodaki ödeme satırının
+                güçlü olduğunu kontrol etti; test geçmeseydi sürüm yayına çıkmazdı.
+            - phase: 2
+              who: monitor
+              lit: [monitor, budgets]
+              packet: {at: monitor, text: "put-metric-alarm sepet-guclu-orani · IF(Okuma >= 10000, 100 × GucluOkuma / Okuma, 0) · 1 saat · eşik %20 · create-budget dynamodb-okuma · 60 USD/ay · tahmin %80"}
+              note: {web: "", monitor: "alarm hazır · henüz okuma yok", budgets: "bütçe 60 USD/ay (temsilî) · henüz harcama yok"}
+              say: >-
+                Ekip ölçüyü ilk günden önce kurdu. CloudWatch alarmı: 1 saatte güçlü okumalar bütün sepet okumalarının %20'sini
+                geçerse (en az 10.000 okumada). AWS Budgets'ta okuma birimleri için aylık 60 dolarlık bir bütçe: ay sonu tahmini
+                %80'i (48 dolar) geçerse ekibe e-posta.
+            - phase: 2
+              who: router
+              lit: [router, k1, k2, k3]
+              note: {monitor: "", budgets: "", router: "dbws-cart · on-demand · kopya ayarı yok", k1: "boş", k2: "boş", k3: "boş"}
+              say: >-
+                Tablo kuruldu (Adım 12). Kurulum komutunda kopya sayısı ya da AZ yazmaz: DynamoDB her partition'ı kendiliğinden
+                üç AZ'de üç kopya olarak tutar. Senin sepetin henüz yok; kopyalar boş.
+            - phase: 2
+              who: migrate
+              lit: [migrate, router]
+              packet: {at: router, text: "T anı · put_item × 1.180 (Adım 12) · sonra scan(Select='COUNT', ConsistentRead=True) → 1.180 · beklenen 1.180 ✓"}
+              note: {router: "", k1: "", k2: "", k3: "", migrate: "yazılan 1.180 satır (başka sepetler) · güçlü sayım 1.180"}
+              say: >-
+                T anı: 30 Eki 20:00. Taşıma işi eski sitenin açık sepetlerini yazdı (Adım 12). Bu satırlar başka sepetlerin, başka
+                partition'ların; senin partition'ın hâlâ boş. İş bittiğinde yazdıklarını saydı, güçlü okumayla: sonunda tutarlı
+                bir sayım son saniyede yazılanları henüz almamış bir kopyaya denk gelip az sayabilir ve boş yere alarm verdirirdi.
+            - phase: 3
+              who: k1
+              lit: [web, router, k1, k2]
+              packet: {at: k1, text: "31 Eki 09:40 · update_item(CART#7f3a… / ITEM#P0021, ADD qty 1 …) → ana kopya yazar → kopya 2 aldı → 2/3 → \"tamam\" · 1 WRU"}
+              show: {k1: [s0], k2: [s0]}
+              fresh: {k1: [s0], k2: [s0]}
+              note: {migrate: "", web: "lm_cart_w çerezi · 09:40:05'e kadar", k3: "henüz almadı"}
+              say: >-
+                31 Eki 09:40. Akıllı Saat'i sepete ekledin. İstek yönlendirici yazmayı ana kopyaya (AZ-a) gönderdi. Ana kopya
+                yazdı ve satırı diğer iki kopyaya yolladı. AZ-b'deki kopya kaydedince iki kopyada var oldu ve Uygulama'ya
+                "tamam" dendi. AZ-c'deki kopya henüz almadı. Uygulama tarayıcına 5 saniyelik lm_cart_w çerezini koydu.
+            - phase: 3
+              who: k3
+              lit: [k1, k3]
+              show: {k3: [s0]}
+              fresh: {k3: [s0]}
+              note: {k3: "birkaç milisaniye sonra aldı", web: ""}
+              say: >-
+                Birkaç milisaniye sonra AZ-c'deki kopya da satırı aldı. Artık üç kopya aynı. AWS bunun genellikle bir saniye
+                içinde olduğunu söyler; çoğu zaman çok daha kısa sürer.
+            - phase: 3
+              who: web
+              lit: [web, router, k1, monitor]
+              packet: {at: router, text: "09:40:00,4 · sepet_oku('sepet') · lm_cart_w geldi → ConsistentRead=True → ana kopya · 1 satır · ConsumedCapacity 1.0"}
+              mark: {k1: {s0: fix}}
+              note: {k3: "", web: "kendi yazmandan 0,4 sn sonra → güçlü", monitor: "Ekran=sepet · Okuma +1 · GucluOkuma +1 · OkumaBirimi +1"}
+              say: >-
+                Ekledikten hemen sonra sepet sayfası açıldı. Okuma türü tablosu sepet sayfası için "sonunda tutarlı" der, ama
+                istekle lm_cart_w çerezi geldi: son yazman 0,4 saniye önceydi. sepet_oku güçlü okudu; istek ana
+                kopyaya gitti ve Akıllı Saat kesin göründü. Harcanan 1 RRU, ekranın adıyla CloudWatch'a yazıldı.
+            - phase: 3
+              who: router
+              lit: [web, router, k3, monitor]
+              packet: {at: router, text: "09:45 · sepet_oku('sayac') · çerez yok (süresi doldu) → ConsistentRead=False → herhangi bir kopya: AZ-c · 1 satır · 0.5"}
+              mark: {k1: {s0: ""}, k3: {s0: fix}}
+              note: {web: "sayaç: 1", monitor: "Ekran=sayac · Okuma +1 · OkumaBirimi +0,5"}
+              say: >-
+                09:45. Başka sayfalarda geziyordun; her sayfanın başlığındaki sepet sayacı sepeti okudu. Son yazman 5 dakika
+                önceydi, çerezin süresi dolmuştu; tablo "sayaç: sonunda tutarlı" diyor. İstek yönlendirici bu kez AZ-c'deki kopyayı seçti; o kopya çoktan
+                aynıydı. Sayaç 1 gösterdi, okuma 0,5 RRU harcadı.
+            - phase: 3
+              who: web
+              lit: [web, router, k1, aurora]
+              packet: {at: aurora, text: "09:50 · sepet_oku('odeme') → ConsistentRead=True → ana kopya · P0021 × 1 → BEGIN · INSERT orders, order_items … · COMMIT → O004812"}
+              show: {aurora: [o1]}
+              fresh: {aurora: [o1]}
+              mark: {k3: {s0: ""}, k1: {s0: fix}}
+              note: {web: "", monitor: "", aurora: "sipariş, güçlü okunan sepetle"}
+              say: >-
+                09:50. Ödemeye geçtin. Ödeme ekranı için tablo "güçlü" der: sipariş sepetin en son hâliyle yazılmalı. Uygulama
+                sepeti ana kopyadan okudu ve siparişi Aurora'ya yazdı (O004812). Ödeme sayfası, sepet sayfası yarı fiyatına okusa
+                da her zaman güçlü okur.
+            - phase: 3
+              who: k1
+              lit: [web, router, k1, k2]
+              packet: {at: k1, text: "COMMIT'ten sonra · delete_item(CART#7f3a… / ITEM#P0021) → ana kopya siler → kopya 2 → \"tamam\" · lm_cart_w yeniden"}
+              hide: {k1: [s0], k2: [s0]}
+              mark: {k1: {s0: ""}}
+              note: {aurora: "", k3: "Akıllı Saat hâlâ burada · birkaç ms", web: "lm_cart_w çerezi yeniden · 5 sn"}
+              say: >-
+                Sipariş kesinleşince Uygulama ödenen satırı sepetten sildi (Adım 12). Silme de bir yazmadır: önce ana kopya,
+                sonra AZ-b, sonra "tamam". AZ-c'deki kopyada satır birkaç milisaniye daha duruyor. Uygulama 5 saniyelik lm_cart_w
+                çerezini yeniden koydu.
+            - phase: 3
+              who: web
+              lit: [web, router, k1, k3]
+              packet: {at: router, text: "09:50:01,2 · sipariş onay sayfası · sepet_oku('sayac') · lm_cart_w geldi → ConsistentRead=True → ana kopya · 0 satır"}
+              hide: {k3: [s0]}
+              note: {k3: "silmeyi aldı", web: "sayaç: 0 (güçlü, kendi yazman)"}
+              say: >-
+                Sipariş onay sayfası açıldı; başlıktaki sayaç sepeti okudu. Son yazman 0,2 saniye önceydi, çerez istekle geldi; sayaç güçlü okudu ve
+                0 gösterdi. Sonunda tutarlı okusaydı istek AZ-c'ye denk gelebilir ve ödediğin saati hâlâ sepette gösterebilirdi.
+                Hemen ardından AZ-c de silmeyi aldı.
+            - phase: 3
+              who: k1
+              lit: [web, router, k1, k2, k3]
+              packet: {at: k1, text: "09:52 · iki sekmeden aynı anda ADD 1 (Adım 14) → ana kopya sırayla: qty 1, qty 2 → kopya 2 → \"tamam\" · kopya 3: qty 1"}
+              show: {k1: [s1], k2: [s1], k3: [s1]}
+              fresh: {k1: [s1], k2: [s1], k3: [s1]}
+              set: {k3: {s1: {qty: 1}}}
+              mark: {k3: {s1: fix}}
+              note: {web: "", k3: "ikinci eklemeyi henüz almadı: qty 1"}
+              say: >-
+                09:52. Mekanik Klavye'yi iki sekmeden aynı anda ekledin. Ana kopya iki komutu sırayla işledi (Adım 14): adet önce
+                1, sonra 2. AZ-b ikisini de aldı. Bu anı yakalıyoruz: AZ-c ilk eklemeyi almış, ikincisini henüz almamış; orada
+                adet hâlâ 1.
+            - phase: 3
+              who: k1
+              lit: [web, router, k1, k2, k3]
+              packet: {at: k1, text: "10:00 · update_item(CART#7f3a… / ITEM#P0001, ADD qty 1 …) (Adım 12) → ana kopya → kopya 2 → \"tamam\" → kopya 3"}
+              show: {k1: [t1], k2: [t1], k3: [t1]}
+              fresh: {k1: [t1], k2: [t1], k3: [t1]}
+              set: {k3: {s1: {qty: 2}}}
+              mark: {k3: {s1: ""}}
+              note: {k3: "Klavye 2 · Kulaklık 1 · üç kopya aynı"}
+              say: >-
+                AZ-c birkaç milisaniye sonra ikinci eklemeyi de aldı; Klavye üç kopyada 2. 10:00'da Adım 12'de Kablosuz Kulaklık'ı
+                ekledin; aynı yol: ana kopya, AZ-b, "tamam", AZ-c. 10:01'deki 5 adetlik deneme (Adım 14) reddedildi: koşul
+                tutmadı, hiçbir kopyaya bir şey yazılmadı.
+            - phase: 3
+              who: monitor
+              lit: [web, router, monitor]
+              note: {k3: "", monitor: "09:00–10:00 (yoğun saat) · Okuma 1.200.000 · GucluOkuma 96.000 (%8, eşik %20) · OkumaBirimi 648.000 · tablo ConsumedReadCapacityUnits 648.000 ✓ (temsilî)"}
+              say: >-
+                CloudWatch saati topladı (sabah, yoğun bir saat): bütün ziyaretçilerin sepetlerinde 1.200.000 sepet okuması (binlerce ziyaretçi, her sayfanın başlığındaki sayaç her açılışta okur), bunların 96.000'i güçlü (%8; eşik %20).
+                Harcanan: 1.104.000 × 0,5 + 96.000 × 1 = 648.000 RRU. Hepsi güçlü olsaydı 1.200.000 RRU olurdu. DynamoDB'nin
+                kendi ölçüsü ConsumedReadCapacityUnits da 648.000: tabloyu Uygulama'dan başka okuyan yok.
+            - phase: 3
+              who: budgets
+              lit: [budgets]
+              note: {monitor: "", budgets: "T anından beri (14 saat) · okuma 0,90 USD · günlük ~1,5 USD · 30 günlük tahmin ~45 USD · bütçe 60 USD (%75) (temsilî)"}
+              say: >-
+                AWS Budgets T anından beri (14 saat) okuma birimlerine 0,90 dolar harcandığını gördü. 1 milyon RRU 0,1525 dolar:
+                yoğun bir saatte 648.000 RRU yaklaşık 0,10 dolar (hepsi güçlü olsaydı 0,18); gece saatleri çok daha ucuz, gün
+                ortalaması 1,5 dolar civarı. Ekim bugün bitiyor; tam bir 30 günlük ayın (Kasım) tahmini yaklaşık 45 dolar: 60 dolarlık bütçenin %75'i, %80 eşiğinin altında. Budgets bu eşiği Kasım başladıktan sonra her gün o ayın tahminiyle kontrol eder.
+            - phase: 4
+              who: web
+              lit: [web, router, k3]
+              packet: {at: router, text: "örnek durum · 09:52:00,05 · ikinci ekleme \"tamam\" aldı, AZ-c henüz almadı · ilk sekmede sayaç · lm_cart_w geldi → ConsistentRead=True → ana kopya · Klavye 2"}
+              set: {k3: {s1: {qty: 1}}}
+              mark: {k3: {s1: fix}}
+              note: {budgets: "", k3: "örnek: Klavye 1 (ikinci eklemeyi henüz almadı)", web: "çerez aynı tarayıcıda → güçlü → 2"}
+              say: >-
+                Örnek durum: 09:52'de ikinci sekmedeki ekleme "tamam" aldıktan hemen sonra, AZ-c onu henüz almamışken, ilk sekme bir sayfa açtı. lm_cart_w çerezi tarayıcının
+                bütün sekmelerinde aynı olduğu için sayaç güçlü okudu ve 2 gösterdi. Çerez olmasaydı istek AZ-c'ye denk gelip 1
+                gösterebilirdi; bir sonraki sayfada 2 olurdu.
+            - phase: 4
+              who: web
+              lit: [web, router, k3, aurora]
+              packet: {at: web, text: "olsaydı: OKUMA_TURU['odeme'] = False · test: assert OKUMA_TURU['odeme'] is True ✗ → yayın durur"}
+              note: {web: "olsaydı: ödeme sonunda tutarlı · test yayını durdurur", k3: "olsaydı: AZ-c'den Klavye 1 → sipariş 1 adet"}
+              say: >-
+                Olsaydı: biri tasarruf için ödemeyi de sonunda tutarlı yapsaydı. Ödeme, ekleme biter bitmez AZ-c'ye denk gelirse
+                Klavye'yi 1 adet okur ve sipariş 1 adetle yazılırdı. Yayından önceki test bu değişikliği yakalar ve sürüm yayına
+                çıkmaz.
+            - phase: 4
+              who: monitor
+              lit: [web, router, monitor, budgets]
+              packet: {at: monitor, text: "olsaydı: bütün ekranlar True · 1 saat: GucluOkuma / Okuma = %100 > %20 → ALARM · OkumaBirimi 648.000 → 1.200.000"}
+              set: {k3: {s1: {qty: 2}}}
+              mark: {k3: {s1: ""}}
+              note: {k3: "", web: "olsaydı: her okuma güçlü", monitor: "olsaydı: %100 · ALARM", budgets: "olsaydı: tahmin ~80 USD > 48 · e-posta"}
+              say: >-
+                Olsaydı: biri her ekranı güçlü yapsaydı. Sepet doğru görünmeye devam ederdi; tek fark para: saatte 648.000 yerine
+                1.200.000 RRU. En geç 1 saat içinde güçlü oranı alarmı çalar (%100 > %20); Kasım'da AWS Budgets'ın ay sonu tahmini birkaç gün
+                içinde 45 dolardan 80 dolar civarına çıkar ve %80 eşiğini (48) geçer. Ekip kodu önceki sürüme döndürür.
+            - phase: 4
+              who: router
+              lit: [router, k1, k2, k3]
+              mark: {k1: {t1: fix, s1: fix}}
+              note: {monitor: "", budgets: "", web: "", k1: "olsaydı: AZ-a erişilemez", k2: "olsaydı: yeni ana kopya", k3: "okumaya devam"}
+              say: >-
+                Olsaydı: AZ-a'daki bina bir süre erişilemez olsaydı. Diğer iki kopya aynı satırları tutuyor. AWS'in yayımladığı
+                tasarıma göre DynamoDB kalan kopyalardan birini (burada AZ-b) yeni ana kopya yapar; o arada güçlü okumalar ve
+                yazmalar kısa bir süre hata alabilir ve boto3 onları yeniden dener. Sonunda tutarlı okumalar diğer kopyalardan
+                cevaplanmaya devam eder. Yerine yeni bir üçüncü kopyayı DynamoDB kendisi kurar; ekibin işi yok.
+            - phase: 4
+              who: web
+              lit: [web, router]
+              packet: {at: web, text: "olsaydı, DAX ile: 10:00 query → önbellek · 10:00:30 ADD qty 1 → DynamoDB · 10:00:40 query → önbellekten eski sepet (5 dk dolmadan)"}
+              mark: {k1: {t1: "", s1: ""}}
+              note: {k1: "", k2: "", k3: "", web: "olsaydı: DAX · eski sepet en fazla 5 dk"}
+              say: >-
+                Olsaydı: tekrar eden okumalar için DAX konsaydı. Sonunda tutarlı Query'nin sonucu DAX'ın önbelleğinde kalır; sepete
+                yeni bir ekleme bu sonucu silmez, sayaç 5 dakikaya kadar eski sepeti gösterebilir. Güçlü okumalar (ödeme, kendi
+                yazmandan sonrası) DAX'tan geçmeden DynamoDB'ye gider; onlarda kazanç yok. Her ziyaretçi kendi küçük sepetini
+                birkaç kez okuduğu için önbellek az işe yarar, üç düğümlük küme ise saat saat ücretlidir. Bu yüzden sepet için
+                DAX yok.
+            - phase: 4
+              who: router
+              lit: [router, k1, k2, k3]
+              packet: {at: router, text: "olsaydı: global table · eu-west-1'de kopya (MREC) · Frankfurt'taki yazma oraya genellikle < 1 sn · orada okuma = sonunda tutarlı"}
+              note: {web: "", router: "olsaydı: başka bölgede okuma yeni yazmayı kaçırabilir"}
+              say: >-
+                Olsaydı: sepet başka bir bölgede de (ör. İrlanda) kopyalansaydı. Varsayılan modda (MREC) Frankfurt'taki bir
+                ekleme oraya genellikle bir saniye içinde gider; İrlanda'da okuyan, ConsistentRead=True dese bile Frankfurt'taki
+                son yazmayı göremeyebilir. Her bölgede güçlü okuma sunan MRSC modu üç bölge ister, boş bir tablodan kurulur ve
+                girişteki sepet birleştirmenin kullandığı iş paketlerini desteklemez. Bu yüzden sepet tek bölgede.
+            - phase: 4
+              who: router
+              lit: [web, router, k1, k2, k3]
+              note: {router: "", k1: "senin sepetin: 2 satır", k2: "aynı 2 satır", k3: "aynı 2 satır"}
+              say: >-
+                Hazır. "Olsaydı" karelerindeki değişiklikler, AZ kesintisi, DAX ve başka bölge yaşanmadı. 10:02'de senin
+                partition'ının üç kopyası aynı: Kablosuz Kulaklık 1, Mekanik Klavye 2. Ana kopya AZ-a'da. t0'da sepet sayfası
+                aynı sepeti iki türle okuyacak: önce güçlü, sonra sonunda tutarlı. t0'daki simülasyon buna bir "ya şöyle olsaydı"
+                ekliyor: bir an önce Kulaklık'ın adedini 2 yapan bir yazma (ör. başka bir cihazından; o yüzden bu tarayıcının
+                lm_cart_w çerezi yok) ve AZ-c'nin onu henüz almadığı an. Gerçek denemende sepet bir süredir değişmedi.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Önce DynamoDB'nin bir satırı nasıl sakladığı ve okuduğu bilinir; tabloya bunun için bir ayar eklenmez. Sonra her
+              ekran için tek soru sorulur: "bir saniye önceki bir yazmayı kaçırmak sorun olur mu?". Cevaplar kodda bir tabloya
+              yazılır, fark ölçülür ve bütçelenir; seçilmeyen yollar (DAX, başka bölgeler, index) da burada elenir.
+            cards:
+              - title: "Bir satır, üç kopya, bir ana kopya"
+                text: >-
+                  DynamoDB satırları pk'ye göre partition'lara dağıtır; her partition'ı bir bölgenin üç ayrı AZ'sinde üç kopya
+                  olarak tutar. AWS'in yayımladığı tasarıma göre kopyalardan biri ana kopyadır: yazma ona gelir, o yazar ve
+                  diğerlerine gönderir; iki kopya kaydedince "tamam" denir, üçüncü kopya biraz sonra alır. AWS'e göre bütün
+                  kopyalar genellikle bir saniye içinde aynıdır; kesin bir süre söylenmez. Bunu ekip kurmaz, ayarlamaz: tablonun
+                  kurulum komutunda kopya ya da AZ yazmaz.
+                code:
+                  - {code: "update_item(CART#7f3a… / ITEM#P0001, …)", tag: Uygulama → DynamoDB, say: "Yazma, istek yönlendiriciye gider."}
+                  - {code: "→ ana kopya (AZ-a) yazar → kopya 2 (AZ-b) aldı", tag: DynamoDB'nin içinde, say: "İki kopyada var: Uygulama'ya \"tamam\"."}
+                  - {code: "→ kopya 3 (AZ-c) biraz sonra", tag: DynamoDB'nin içinde, say: "Arada AZ-c'de eski değer durur."}
+              - title: "İki okuma türü: kime sorulur, ne ödenir?"
+                text: >-
+                  Güçlü okuma ana kopyaya sorulur; okumadan önce "tamam" almış her yazmayı görür. Sonunda tutarlı okuma herhangi
+                  bir kopyaya sorulur; yarı fiyatınadır ama denk geldiği kopya çok yeni bir yazmayı henüz almamış olabilir. Tür
+                  tablonun ayarı değil, her isteğin parametresidir: aynı satır bir ekranda güçlü, ötekinde sonunda tutarlı
+                  okunabilir. Komutta yazmazsa okuma sonunda tutarlıdır. Bedel: 4 KB'a kadar 1 ve 0,5 RRU; senin sepetin 1 KB'ın
+                  altında. Yarı birim yarı kapasite demektir: bir partition saniyede 3.000 güçlü ya da 6.000 sonunda tutarlı okuma
+                  alır.
+                code:
+                  - {code: "table.query(KeyConditionExpression=Key('pk').eq(pk), ConsistentRead=True)", tag: [Uygulama → DynamoDB, DynamoDB → Uygulama], say: "Ana kopya; 1 RRU (canlı sistemde: 1.0)."}
+                  - {code: "table.query(KeyConditionExpression=Key('pk').eq(pk), ConsistentRead=False)", tag: [Uygulama → DynamoDB, DynamoDB → Uygulama], say: "Herhangi bir kopya; 0,5 RRU (canlı sistemde: 0.5)."}
+              - title: "Ekran ekran: bir saniyelik eski sepet sorun olur mu?"
+                text: >-
+                  Her ekran için bu soru sorulur. Başlıktaki sayaç her sayfada okunur, mağazanın en çok yapılan okumasıdır; bir
+                  saniyelik eski bir sayı zararsızdır, sonraki sayfa düzeltir. Sepet sayfasında satırlar çoğu zaman dakikalardır
+                  değişmemiştir. Ama müşteri bir şey ekleyip hemen sepete bakınca eklediğini görmeli; ödemede sipariş en son
+                  adetle yazılmalı. Bu ikisi güçlüdür.
+                map:
+                  cols: [Ekran, Okuma türü, Neden]
+                  rows:
+                    - ["sayac (başlıktaki sepet sayacı, her sayfada)", "False · 0,5 RRU", "En çok okunan. Bir saniyelik eski sayı zararsız; sonraki sayfa düzeltir."]
+                    - ["sepet (sepet sayfası)", "False · 0,5 RRU", "Satırlar genellikle dakikalardır değişmemiş."]
+                    - ["kendi yazmandan sonraki 5 sn (sayac, sepet)", "True · 1 RRU", "\"Ekledim ama yok\" olmasın. Pencereyi lm_cart_w çerezi söyler."]
+                    - ["odeme (ödeme özeti)", "True · 1 RRU", "Sipariş en son adetle yazılmalı."]
+                    - ["taşıma işinin sayımı (T anında bir kez)", "True", "Son saniyede yazdıklarını da saymalı."]
+              - title: "Karar kodda tek bir tabloda yazılır"
+                text: >-
+                  Okuma türü her ekranın kendi satırında yazılsaydı, yeni bir ekran ConsistentRead'i unutur ve varsayılanla
+                  (sonunda tutarlı) okurdu. Bu yüzden sepeti okuyan her ekran aynı fonksiyondan geçer; fonksiyon türü tablodan
+                  alır, kendi yazmandan sonraki 5 saniyede güçlüye çevirir. 5 saniye, kopyaların genellikle aynı olduğu bir
+                  saniyenin bilerek birkaç katıdır. Bir test ödemenin güçlü okuduğunu her yayından önce kontrol eder.
+                code:
+                  - {code: "OKUMA_TURU = {'sayac': False, 'sepet': False, 'odeme': True}", tag: Uygulamanın içinde, say: "Ekran → okuma türü; True güçlü."}
+                  - {code: "def sepet_oku(ekran): guclu = OKUMA_TURU[ekran] or 'lm_cart_w' in request.cookies", tag: Uygulamanın içinde, say: "Tablodan al; kendi yazmandan sonraki 5 saniyedeysen güçlü."}
+                  - {code: "  resp = table().query(…, ConsistentRead=guclu, ReturnConsumedCapacity='TOTAL')", tag: [Uygulama → DynamoDB, DynamoDB → Uygulama], say: "Tek okuma yolu; bedel cevapta."}
+                  - {code: "assert OKUMA_TURU['odeme'] is True", tag: Uygulamanın içinde, say: "Yayın öncesi test: ödeme hep güçlü."}
+              - title: "Fark ölçülür: istek istek ve tablo tablo"
+                text: >-
+                  Her Query ReturnConsumedCapacity ile gönderilir; cevap harcanan birimi söyler (0.5 ya da 1.0). Uygulama bunu ve
+                  okumanın güçlü olup olmadığını ekranın adıyla kendi sayaçlarına yazar: hangi ekran ne harcıyor görülür.
+                  DynamoDB'nin kendi ölçüsü ConsumedReadCapacityUnits tablonun bütün okumalarını sayar; ikisinin saatlik toplamı
+                  tutmalıdır. Alarm bir orana bakar: 1 saatte GucluOkuma / Okuma. Payda olmadan "96.000 güçlü okuma" çok mu az mı
+                  bilinmez; sessiz saatte oran oynamasın diye alarm en az 10.000 okuma ister.
+                code:
+                  - {code: "birim = resp['ConsumedCapacity']['CapacityUnits']", tag: DynamoDB → Uygulama, say: "Bu okumanın bedeli: 0.5 ya da 1.0."}
+                  - {code: "metrics.add('OkumaBirimi', birim, Ekran=ekran); metrics.add('Okuma', 1, Ekran=ekran)", tag: Uygulama → CloudWatch, say: "Birim ve okuma sayısı, ekran ekran."}
+                  - {code: "metrics.add('GucluOkuma', 1 if guclu else 0, Ekran=ekran)", tag: Uygulama → CloudWatch, say: "Oranın payı."}
+                  - {code: "oran = IF(Okuma >= 10000, 100 * GucluOkuma / Okuma, 0)   # 1 saatlik toplamlar", tag: CloudWatch'ın içinde, say: "Alarmın baktığı sayı; eşik %20, sessiz saatte 0."}
+              - title: "Bütçe: okuma birimlerine ayrı bir sınır"
+                text: >-
+                  Fatura sonunda tutarlı okumayı ayrı bir satır olarak göstermez; her ikisi de okuma birimidir (yarım ya da tam).
+                  Bu yüzden bütçe birime konur: AWS Budgets'ta EUC1-ReadRequestUnits harcama türüne aylık 60 dolar (temsilî). Ay
+                  sonu tahmini %80'i geçerse ekibe e-posta gider. Bütçe faturadan beslendiği için saatler gecikir; hızlı uyarı
+                  CloudWatch alarmının, aylık toplam bütçenin işidir.
+                code:
+                  - {code: "aws budgets create-budget --budget BudgetName=dynamodb-okuma,BudgetType=COST,TimeUnit=MONTHLY,\\", tag: Ekip → AWS Budgets, say: "Aylık bir maliyet bütçesi…"}
+                  - {code: "  BudgetLimit={Amount=60,Unit=USD},CostFilters={UsageType=[EUC1-ReadRequestUnits]} …", tag: AWS Budgets'ın içinde, say: "…sadece Frankfurt'taki okuma birimleri için."}
+                  - {code: "  --notifications-with-subscribers NotificationType=FORECASTED,Threshold=80 …", tag: AWS Budgets'ın içinde, say: "Tahmin %80'i geçerse e-posta."}
+              - title: "Seçilmeyen yol: DAX"
+                text: >-
+                  DAX, DynamoDB'nin önüne konan bir önbellektir; aynı satırı çok kez okuyan işlerde (ör. çok okunan bir ürün)
+                  okumayı DynamoDB'ye hiç göndermez. Sepette üç sebeple seçilmez. Güçlü okumalar (ödeme, kendi yazmandan sonrası)
+                  DAX'tan geçip DynamoDB'ye gider; önbelleğe konmaz. Query sonuçları ayrı bir önbellekte durur ve bir ekleme onları
+                  silmez: sayaç süresi (varsayılan 5 dakika) dolana kadar eski sepeti gösterebilir. Her ziyaretçi kendi küçük
+                  sepetini birkaç kez okur; önbellek az işe yarar. Üretimde en az üç düğüm önerilir ve her düğüm saatlik
+                  ücretlidir; sonunda tutarlı okuma ise ek bir parça ve ek bir ücret istemeden okuma birimini yarıya indirir.
+              - title: "Seçilmeyen yol: başka bölgede kopya ve index"
+                text: >-
+                  Global table'da (varsayılan MREC modu) başka bölgedeki kopya Frankfurt'taki yazmayı genellikle bir saniye
+                  içinde alır; orada güçlü okuma bile Frankfurt'taki son yazmayı göremeyebilir. MRSC modu her bölgede güçlü okuma
+                  sunar ama tam üç bölge ister, sadece boş bir tablodan kurulur ve iş paketlerini desteklemez; girişteki sepet
+                  birleştirme iş paketi kullanır (Adım 12). Mağazanın müşterileri tek ülkede; sepet tek bölgede kalır. GSI'dan
+                  okuma her zaman sonunda tutarlıdır; sepetin bütün soruları pk ile sorulduğu için GSI zaten yok (Adım 12).
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              Yeni site yayına girmeden önce okuma türü tablosu yayında, ölçü ve bütçe kurulu olmalı; ilk günün okumaları da
+              ölçülsün. Sıra: Uygulama'nın sürümü (tablo ve testiyle), sonra alarm ve bütçe, sonra tablo (kopyalarını DynamoDB
+              kendisi kurar), en sonda T anında taşıma ve onun güçlü sayımı.
+            cards:
+              - title: "Okuma türü tablosu yayından önce, testle"
+                text: >-
+                  Ekip Uygulama'nın sürümünü T'den önce yayına çıkarır. Sürümün içinde okuma türü tablosu ve sepet_oku
+                  fonksiyonu var. Yayın hattındaki test ödemenin güçlü okuduğunu kontrol eder; test geçmezse sürüm yayına
+                  çıkmaz.
+                code:
+                  - {code: "assert OKUMA_TURU['odeme'] is True and OKUMA_TURU['sayac'] is False", tag: Uygulamanın içinde, say: "Tablodaki iki önemli satır testle korunur."}
+              - title: "Ölçü ve bütçe ilk günden önce"
+                text: >-
+                  Alarm güçlü okumaların oranına bakar ve çalarsa ekibe haber verir. Bütçe yayının ilk saatinden sayar; ilk günün
+                  okumaları da ölçülür.
+                code:
+                  - {code: "aws cloudwatch put-metric-alarm --alarm-name sepet-guclu-orani --metrics file://oran.json \\", tag: Ekip → CloudWatch, say: "Formül dosyada: en az 10.000 okumada 100 × GucluOkuma / Okuma, 1 saat."}
+                  - {code: "  --comparison-operator GreaterThanThreshold --threshold 20 --evaluation-periods 1", tag: CloudWatch'ın içinde, say: "%20'yi geçerse alarm."}
+              - title: "Tablo kurulurken kopyalar kendiliğinden"
+                text: >-
+                  Tablo Adım 12'deki komutla kurulur (on-demand, pk ve sk, TTL, değişiklik akışı, sürekli yedek). Komutta kopya
+                  sayısı ya da AZ yoktur: DynamoDB her yeni partition'ı üç AZ'de üç kopyayla açar. Tablonun açıklamasında da
+                  kopyalar görünmez; ekibin göreceği bir şey yoktur.
+              - title: "Taşıma işi yazdıklarını güçlü sayar"
+                text: >-
+                  T anında taşıma işi eski sitenin açık sepetlerini yazar (Adım 12). Bitince yazdıklarını sayar ve dosyadaki
+                  sayıyla karşılaştırır. Sayım güçlüdür: sonunda tutarlı bir sayım son saniyede yazılanları henüz almamış
+                  kopyalara denk gelip az sayabilir ve boş yere "eksik taşındı" alarmı verdirebilirdi. Tablonun hepsini tarayan
+                  bu okuma bir kez çalışır; bedeli küçüktür.
+                code:
+                  - {code: "n = sum(p['Count'] for p in sayfalar(table().scan, Select='COUNT', ConsistentRead=True))", tag: [Taşıma işi → DynamoDB, DynamoDB → Taşıma işi], say: "Bütün tabloyu güçlü say."}
+                  - {code: "if n != len(satirlar): rapor('eksik', n, len(satirlar))", tag: Taşıma işinin içinde, say: "Tutmazsa ekibe rapor."}
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              T anından sonra her yazma ana kopyaya gelir ve diğer iki kopyaya yayılır; Uygulama her yazmada lm_cart_w çerezini
+              yeniler. Her okumada ekran okuma türünü tablodan alır; kendi yazmandan hemen sonraysa güçlü okur. Ödemede sepet
+              güçlü okunur ve sipariş Aurora'ya yazılır. Her okumanın bedeli ölçülür; CloudWatch saat saat, Budgets ay ay bakar.
+            cards:
+              - title: "Her yazma: ana kopya, iki kopyada \"tamam\", üçüncüsü az sonra"
+                text: >-
+                  Ekleme, silme ya da adet değişikliği ana kopyaya gider; iki kopya kaydedince Uygulama "tamam" cevabını alır.
+                  Uygulama aynı cevapla tarayıcıya 5 saniyelik lm_cart_w çerezini yazar. Yazmanın kendisi değişmez; Adım 12
+                  ve 14'teki komut aynıdır.
+                code:
+                  - {code: "table().update_item(Key=…, UpdateExpression='ADD qty :q SET …', ConditionExpression=…)", tag: Uygulama → DynamoDB, say: "Yazma (Adım 12, 14)."}
+                  - {code: "resp.set_cookie('lm_cart_w', '1', max_age=5)", tag: Uygulama → Tarayıcı, say: "Tarayıcı çerezi 5 saniye sonra kendisi siler."}
+              - title: "Her okuma: ekran → tablo → ConsistentRead"
+                text: >-
+                  Sayaç her sayfada, sepet sayfası açılışta sepet_oku'yu çağırır. Fonksiyon tablodan türü alır, lm_cart_w çerezi istekle
+                  geldiyse (son 5 saniyede yazdın) güçlüye çevirir ve Query'yi gönderir. Sonunda tutarlı okumada hangi kopyanın
+                  okunacağını istek yönlendirici seçer; Uygulama bunu bilmez ve seçemez.
+                code:
+                  - {code: "yeni_yazdi = 'lm_cart_w' in request.cookies", tag: Tarayıcı → Uygulama, say: "Çerez sadece son yazmadan sonraki 5 saniye gelir."}
+                  - {code: "guclu = OKUMA_TURU['sayac'] or yeni_yazdi", tag: Uygulamanın içinde, say: "Sayaç: normalde sonunda tutarlı."}
+                  - {code: "table().query(KeyConditionExpression=Key('pk').eq(pk), ConsistentRead=guclu, …)", tag: [Uygulama → DynamoDB, DynamoDB → Uygulama], say: "Kopyayı DynamoDB seçer."}
+              - title: "Ödeme: güçlü oku, siparişi yaz, sepeti boşalt"
+                text: >-
+                  Ödeme ekranı sepeti güçlü okur; sipariş bu okumanın satırlarıyla Aurora'ya yazılır. COMMIT'ten sonra Uygulama
+                  ödenen satırları siler (bu da bir yazma; lm_cart_w yenilenir); sipariş zinciri onları ikinci kez siler (Adım
+                  12). Sipariş onay sayfasındaki sayaç böylece güçlü okur ve 0 gösterir.
+                code:
+                  - {code: "sepet = sepet_oku('odeme')", tag: [Uygulama → DynamoDB, DynamoDB → Uygulama], say: "Ana kopyadan, en son hâl."}
+                  - {code: "BEGIN; INSERT INTO orders …; INSERT INTO order_items …; COMMIT;", tag: Uygulama → Aurora, say: "Sipariş bu satırlarla."}
+                  - {code: "for i in sepet: table().delete_item(Key={'pk': pk, 'sk': 'ITEM#' + i['pid']})", tag: Uygulama → DynamoDB, say: "Ödenen satırlar sepetten çıkar."}
+              - title: "Her saat ve her ay: bedel ölçülür"
+                text: >-
+                  CloudWatch Uygulama'nın sayaçlarını saat saat toplar ve tablonun ConsumedReadCapacityUnits ölçüsüyle
+                  karşılaştırır. Örnek saat (temsilî): 1.200.000 okuma, 96.000'i güçlü (%8): 1.104.000 × 0,5 + 96.000 × 1 =
+                  648.000 RRU, yaklaşık 0,10 dolar; hepsi güçlü olsaydı 1.200.000 RRU, 0,18 dolar. Tablo ölçüsü de 648.000: başka
+                  okuyan yok. Fark çıksaydı sepet_oku'dan geçmeyen bir okuyan (yeni bir ekran, bir rapor) var demekti.
+                code:
+                  - {code: "SUM(OkumaBirimi) = 648.000   ·   SUM(ConsumedReadCapacityUnits) = 648.000", tag: CloudWatch'ın içinde, say: "Uygulama'nın sayacı ile tablonun ölçüsü tutuyor."}
+                  - {code: "100 * 96.000 / 1.200.000 = %8   (eşik %20)", tag: CloudWatch'ın içinde, say: "Güçlü okuma oranı; alarm yok."}
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              Bir okuma çok yeni bir yazmayı kaçırırsa, biri okuma türünü yanlış değiştirirse, bedel birden artarsa, bir AZ
+              giderse ne olur? Ve seçilmeyen yollar seçilseydi? Her biri için zincirde bir parça var; her parçanın ne zaman
+              çalıştığı, neyi yakalamadığı ve onarımı aşağıda.
+            cards:
+              - title: "Sonunda tutarlı bir okuma eski sepeti gösterirse"
+                text: >-
+                  Sayaç ya da sepet sayfası, bir yazmadan milisaniyeler sonra henüz onu almamış kopyaya denk gelebilir. Kendi
+                  yazmanda lm_cart_w çerezi bunu önler: tarayıcının bütün sekmeleri çerezi paylaşır. Ne zaman: her okumada.
+                  Yakalamadığı: başka bir cihazdan yapılan yazma (çerez o cihazda) ve 5 saniyeden uzun süren nadir bir gecikme;
+                  sayaç bir sayfa boyunca eski sayıyı gösterir. Onarım: gerekmez; sonraki okuma doğru sayıyı gösterir, ödeme
+                  zaten güçlü okur.
+              - title: "Biri ödemeyi sonunda tutarlı yaparsa"
+                text: >-
+                  Sipariş, bir an önceki adetle yazılabilirdi. Ne zaman yakalanır: yayından önceki test, tablodaki ödeme satırını
+                  kontrol eder ve sürümü durdurur. Yakalamadığı: sepet_oku'yu kullanmadan doğrudan query çağıran yeni bir kod;
+                  ConsistentRead yazmazsa okuma sonunda tutarlıdır. Onarım: kod incelemesinde "sepeti sadece sepet_oku okur"
+                  kuralı; CloudWatch'ta Uygulama'nın sayacı ile tablonun ölçüsü arasındaki fark böyle bir okuyanı gösterir.
+              - title: "Bedel birden artarsa"
+                text: >-
+                  Biri her ekranı güçlü yaparsa sepet doğru görünür; fark sadece faturada (saatte 648.000 yerine 1.200.000 RRU).
+                  Ne zaman: güçlü oranı alarmı en geç 1 saatte (%20 eşiği); Budgets tahmini günler içinde. Yakalamadığı: eşiğin
+                  altında kalan yavaş artışlar ve okuma sayısının kendisinin artması (ör. sayacı saniyede bir yenileyen bir
+                  sayfa): oran aynı kalır. Onarım: ekip ekran ekran OkumaBirimi'ne bakar, sorumlu sürümü geri alır; Budgets ay
+                  sonu tahminiyle toplamı yakalar.
+              - title: "Bir AZ giderse"
+                text: >-
+                  Diğer iki kopya aynı satırları tutar. AWS'in yayımladığı tasarıma göre DynamoDB kalan kopyalardan birini yeni
+                  ana kopya yapar ve eksik kopyayı başka bir yerde yeniden kurar. Ne zaman: kendiliğinden, kısa sürede.
+                  Yakalamadığı: geçiş sırasında güçlü okumalar ve yazmalar kısa bir süre hata alabilir; boto3 onları yeniden
+                  dener. Onarım: ekibin işi yok; CloudWatch'taki hata sayısı (SystemErrors) bir süre yükselip iner. Bölgenin
+                  tamamı giderse tablo o bölgede kalır; geri yükleme sürekli yedekle (PITR, Adım 12) başka bir planın işidir.
+              - title: "DAX konsaydı"
+                text: >-
+                  Sonunda tutarlı Query sonuçları önbellekte kalırdı. Ne zaman bozulur: her eklemeden sonra; önbellekteki sonuç
+                  silinmez. Yakalamadığı: sayaç ve sepet sayfası 5 dakikaya kadar eski sepeti gösterir; güçlü okumalar (ödeme)
+                  DAX'tan geçmediği için doğru kalır ama onlar da hızlanmaz. Onarım: sepet için DAX kullanılmaz; ürün gibi
+                  sık okunup az değişen veride düşünülür.
+              - title: "Sepet başka bölgede de olsaydı"
+                text: >-
+                  Varsayılan global table modunda (MREC) diğer bölgedeki okuma, Frankfurt'taki son yazmayı genellikle bir saniye
+                  sonra görür; orada ConsistentRead=True de bunu değiştirmez. Ne zaman: her bölgeler arası okumada.
+                  Yakalamadığı: aynı sepete iki bölgeden aynı anda yazılırsa son yazan kazanır; diğeri sessizce kaybolur. Onarım:
+                  sepet tek bölgede; her bölgede güçlü okuma gerekseydi MRSC düşünülürdü, ama o iş paketlerini desteklemez ve
+                  boş bir tablodan kurulur.
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
