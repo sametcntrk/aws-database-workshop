@@ -23413,52 +23413,1409 @@ steps:
           - [GroupAggregate, "Sıralı satırları gruplayıp toplamları hesaplamak."]
           - [Index Scan, "Index'le sadece gereken satırlara gitmek; az satır gerektiğinde ucuz."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde rapor sorguları için hazırlık
-        intro: >-
-          Rapor sayfası hiç açılmadan, işlemsel veritabanında hangi raporların çalışacağı ve nasıl izleneceği belirlenir. Aşağıdaki
-          beş adım bu hazırlığın sırasıdır.
-        text:
-          - title: Önce raporun sorusu ve büyüklüğü yazılır
-            text: >-
-              "Segmente göre sipariş ve ciro" bütün siparişleri okur. Birkaç bin sipariş için işlemsel veritabanında birkaç on
-              milisaniye sürer; yıllar ve milyonlarca satır için analiz deposuna gider.
-          - title: Planlayıcıya doğru istatistik verilir
-            text: >-
-              Planlayıcı tabloların büyüklüğünü ve değer dağılımını istatistiklerden bilir. ANALYZE (ve otomatik autovacuum) bu
-              istatistikleri günceller; eski istatistik yanlış plan demektir.
-            code: |-
-              ANALYZE orders;  ANALYZE order_items;
-          - title: Plan yayından önce okunur
-            text: >-
-              Yeni ya da değişen rapor sorgusu EXPLAIN ANALYZE ile çalıştırılır. Büyük tablolarda beklenmedik Seq Scan, tahmin
-              edilen ile gerçek satır sayısının çok farklı olması ya da diske taşan sıralama (Sort Method: external) uyarı
-              işaretidir.
-            code: |-
-              EXPLAIN (ANALYZE, BUFFERS) SELECT c.segment, … GROUP BY c.segment ORDER BY revenue DESC;
-          - title: Yavaş sorgular sürekli izlenir
-            text: >-
-              pg_stat_statements eklentisi her sorgunun kaç kez çalıştığını ve toplam süresini tutar; Aurora'da Performance
-              Insights hangi sorgunun veritabanını meşgul ettiğini gösterir.
-            code: |-
-              SELECT query, calls, mean_exec_time FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 10;
-          - title: Ağır raporlar ayrılır
-            text: >-
-              Raporlar okuma ucuna (reader) gönderilir; büyüdüklerinde zero-ETL ile analiz deposuna taşınır. İşlemsel veritabanının
-              yazma ucu siparişlere kalır.
-      feed:
-        title: Veri nereden geliyor?
-        writes: Uygulama, ödeme adımında (sipariş ve kalemler); müşteri bilgisi kayıt sırasında.
-        reads: Sipariş raporu ekranı (operasyon ekibi) ve siparişlerim sayfası.
-        kind: >-
-          Uygulama orkestrasyonu. Aurora siparişin asıl kaydıdır; değişikliklerini zero-ETL ile analiz deposuna (Redshift)
-          kendisi aktarır.
-        with: >-
-          Aynı sorunun büyük veri üzerindeki hâli Redshift'te çalışır (Adım 29–31); bu rapor işlemsel veritabanındaki güncel veriyi
-          anında okur.
-        best: >-
-          Küçük ve anlık operasyon raporları işlemsel veritabanının okuma ucunda, büyük ve tarihsel raporlar analiz deposunda
-          çalışır. Her iki tarafta da plan okunur ve yavaş sorgular izlenir.
+      t1:
+        title: Önceden ne vardı? Rapor neden Aurora'da ve planı nasıl okunuyor?
+        intro: 'Sen plan kutusunu işaretlemeden önce (31 Eki 10:40, saat temsilî) Aurora''da 5.009 sipariş ve 12.521 kalem duruyor, planlayıcının bu tablolar hakkında güncel bir özeti var ve raporun planı onaylı olarak kayıtlı. Bu bölüm şunları anlatıyor: bir rapor neden işlemsel veritabanında çalışır ve ne zaman Redshift''e gider (aynı soru, ölçülmüş süre ve okunan satırla), plan nasıl okunur, istatistik planı nasıl belirler, yazma sunucusu rapordan nasıl korunur, plan sürüm yükseltmesinde nasıl sabit kalır ve yavaşlayan bir rapor nasıl fark edilip onarılır. Siparişin paketi (Adım 23), olaya dönüşmesi (Adım 25), listesi (Adım 26) ve Redshift''e kopyası (Adım 29, 30) çalışmaya devam ediyor; bu sayfanın sorusu olmadıkları için sadece anılıyorlar. Önce bileşenler, sonra bir simülasyon, sonra dört aşama.'
+        terms_title: Bu bölümün terimleri
+        terms:
+        - - t-1, t0 ve saatler
+          - 't0: rapor sayfasındaki plan kutusunu işaretlemen, 31 Eki 10:40 (saat temsilî). t-1: ondan önceki zaman. Mağaza 1 Eki''de bu sistemle açıldı. Saatler Türkiye saatidir.'
+        - - Ekip ve operasyon ekibi
+          - 'Ekip: mağazanın sistemini kuran ve işleten mühendisler. Operasyon ekibi: siparişlerin günlük akışına bakan çalışanlar; bu raporu onlar açar.'
+        - - Segment
+          - 'Müşterinin grubu: bireysel, kurumsal, premium. customers tablosunda bir sütun; rapor sonucu bu yüzden 3 satır.'
+        - - Yazma sunucusu, okuma sunucusu, uç
+          - 'Yazma sunucusu (writer): siparişleri yazan sunucu. Okuma sunucusu (reader): aynı depolamayı okuyan, sadece okuyabilen ikinci sunucu; son değişikliği onlarca milisaniye geriden görür. Uç (endpoint): bağlanılan adres.'
+        - - RDS Proxy
+          - Uygulama ile Aurora arasında bağlantıları paylaştıran AWS servisi, santral gibi (Adım 23). shop-proxy yazma sunucusuna, shop-proxy-ro okuma sunucusuna gider.
+        - - zero-ETL, aurora_live, sales
+          - 'zero-ETL: Aurora''yı Redshift''e kendiliğinden kopyalayan AWS servisi (Adım 30). aurora_live: Redshift''teki kopya. sales: kapanmış günlerin Redshift''teki tek geniş tablosu (Adım 29). Redshift: çok satırı toplamak için kurulmuş analiz deposu.'
+        - - Planlayıcı ve plan
+          - 'SQL ne istediğini söyler, nasıl yapılacağını söylemez. Planlayıcı Aurora''nın yol seçen parçasıdır, harita uygulaması gibi. Plan seçtiği yoldur: adım adım, içten dışa.'
+        - - EXPLAIN, ANALYZE seçeneği, BUFFERS
+          - 'EXPLAIN: planı göster, sorguyu çalıştırma. EXPLAIN ANALYZE: sorguyu gerçekten çalıştır, her adımın gerçek satırını ve süresini de yaz. BUFFERS: kaç veri sayfası okunduğunu da yaz.'
+        - - Plan sözcükleri
+          - 'Seq Scan: tabloyu baştan sona okumak. Hash: bir tabloyu bellekte arama sözlüğüne koymak. Hash Join: öteki tablonun her satırını o sözlükte aramak. Sort: sıralamak. GroupAggregate: sıralı satırları gruplayıp toplamak. Nested Loop: her satır için ayrı bir arama. Merge Join: iki sıralı listeyi yan yana yürütmek.'
+        - - Plan satırındaki sayılar
+          - 'cost: planlayıcının tahmini pahalılığı (birimsiz). rows: tahmini satır; actual rows: gerçek satır. actual time: milisaniye. Memory, Disk: sıralamanın bellekte mi diskte mi yapıldığı. quicksort: bellekte; external merge: belleğe sığmadı, diskte. shared hit: sayfa bellekte bulundu; read: depolamadan okundu.'
+        - - İstatistik (pg_statistic), ANALYZE ve autovacuum
+          - 'İstatistik: tablonun özeti (kaç satır, hangi değer ne sıklıkta), bir kitabın arka kapak bilgisi gibi. ANALYZE: bu özeti örnek satırlardan yeniden çıkaran komut. EXPLAIN ANALYZE ile adı aynıdır ama işi farklıdır: o sorguyu çalıştırır, özeti yenilemez. autovacuum: bu işi eşik aşılınca kendiliğinden yapan Aurora süreci. Eski bir özet yanlış tahmin, yanlış tahmin yanlış plan demektir.'
+        - - Index
+          - 'Kitabın sonundaki dizin gibi: belirli satırlara doğrudan gider. Az satır için ucuz, neredeyse bütün tablo için pahalıdır.'
+        - - Rol, statement_timeout, CONNECTION LIMIT
+          - 'Rol: Aurora''daki kullanıcı. statement_timeout: bir sorgunun en uzun çalışma süresi; aşılınca sorgu kesilir (hata kodu 57014). CONNECTION LIMIT: bu kullanıcının aynı anda açabileceği en fazla bağlantı.'
+        - - Query Plan Management (QPM)
+          - 'Aurora PostgreSQL''e özgü plan defteri (apg_plan_mgmt eklentisi). Approved: onaylı, kullanılır. Unapproved: bulundu, onay bekliyor. Aurora clone: aynı verinin dakikalar içinde açılan ayrı bir kopyası; denemeler onda yapılır.'
+        - - Materialized view ve REFRESH
+          - Sorgunun sonucunu tablo gibi saklayan nesne, bir kez çıkarılmış rapor çıktısı gibi. REFRESH onu yeniden hesaplar; aradaki sürede sonuç eskidir.
+        - - İzleme sözcükleri
+          - 'Database Insights: veritabanı yükünü gösteren CloudWatch ekranı. DBLoad: aynı anda çalışan ortalama oturum sayısı. Top SQL: bu yükün sorgulara bölünmesi. p95: isteklerin %95''inin bu sürenin altında kaldığı süre. Yavaş sorgu kaydı: 500 ms''yi geçen sorguların yazıldığı kayıt.'
+        - - Kod kartlarındaki sözcükler
+          - 'SELECT: oku. JOIN: tabloları anahtarla birleştir. GROUP BY: grupla. count(DISTINCT …): her değeri bir kez say. BEGIN / COMMIT: iş paketini başlat ve kalıcı yap. CREATE ROLE: kullanıcı aç. GRANT: yetki ver. n: istek sayısı. IF(n >= 5, …, 0): 5 istekten azsa alarm hesabı yapma.'
+        - - Kesit, temsilî, Örnek durum ve Olsaydı
+          - 'Kesit: tablonun gösterilen küçük parçası. Temsilî: canlı sistemden gelmeyen, anlatım için seçilmiş değer. Canlı: 1 Kas''ta gerçek sistemden okunan değer (plan, satır sayıları, süreler). Olsaydı kareleri yaşanmadı; her biri ayrı bir durumdur, sonraki karelerde geri alınır. Örnek durum: yaşanmış bir aksilik; bu sayfada son kartta bir tane var.'
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra" sütunu işi kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim kodumuz" etiketli parçayı Ekip yazar ya da ayarlar. Aynı parçalar aşağıdaki simülasyonda birer kutu. Mağazanın her sayfasındaki oturum bilgisi (ElastiCache, Adım 21) bu rapora veri vermez; onun zinciri Adım 21'de.
+        inventory:
+        - id: pages
+          name: Sipariş raporu ekranı (tarayıcıdaki kod)
+          kind: code
+          what: operasyon ekibinin /admin/orders sayfası
+          does: Sayfa açılınca raporu ister (GET /aurora/api/report). Plan kutusu işaretlenince aynı isteği explain=on ile yeniler. Gelen rakamları grafiğe, planı kutuya yazar.
+          box: Raporu ister, grafikleri ve planı çizer.
+          before: Operasyon ekibi
+          after: web
+          phases:
+          - 1
+          - 3
+        - id: web
+          name: Uygulama (ödeme ve rapor istekleri)
+          kind: code
+          what: mağazanın arka uç programı (EC2 sunucularında)
+          does: 'Ödemede siparişi, kalemlerini ve olayını tek pakette yazar (Adım 23, 25). Rapor isteğinde üç SQL gönderir: segment raporu, istenirse planı, saatlik özet. Raporun süresini ve hatalarını kendi ölçüsü olarak yazar.'
+          box: 'Ödeme: siparişi yazar. Rapor: rapor rolüyle üç SQL.'
+          before: pages
+          after:
+          - proxy
+          - aurora
+          phases:
+          - 1
+          - 3
+          - 4
+        - id: proxy
+          name: RDS Proxy (shop-proxy)
+          kind: aws
+          what: veritabanı bağlantılarını paylaştıran AWS servisi
+          does: 'Ödemenin çok sayıdaki kısa bağlantısını az sayıda veritabanı bağlantısına paylaştırır (Adım 23). Rapor bugün ondan geçmez: seyrek çalışır, kendi kısa bağlantısını açar. İkinci ucu shop-proxy-ro, rapor okuma sunucusuna taşınırsa kullanılacak yoldur.'
+          box: 'Ödeme bağlantıları buradan. shop-proxy-ro: raporun yedek yolu.'
+          before: web
+          after: aurora
+          phases:
+          - 3
+          - 4
+        - id: aurora
+          name: Aurora PostgreSQL (shop, yazma sunucusu)
+          kind: aws
+          what: siparişin asıl kaydı
+          does: orders, order_items, customers tablolarını tutar; raporu burada çalıştırır. Rapor üç tabloyu baştan sona okur, bellekte birleştirir ve sıralar.
+          box: Asıl kayıt. Bugünkü rapor burada çalışır.
+          before: web
+          after:
+          - autovac
+          - planner
+          - zetl
+          phases:
+          - 1
+          - 2
+          - 3
+          - 4
+        - id: autovac
+          name: ANALYZE ve autovacuum
+          kind: aws
+          what: Aurora'nın istatistik işi
+          does: Tablolardan örnek okuyup istatistiği yeniler. Taşıma işi bir kez elle ister; sonra autovacuum değişen satırları sayar, eşik aşılınca kendisi çalıştırır.
+          box: Tablolar değiştikçe istatistiği yeniler.
+          before: aurora
+          after: planner
+          phases:
+          - 2
+          - 3
+          - 4
+        - id: planner
+          name: Planlayıcı ve istatistikler
+          kind: aws
+          what: Aurora'nın içinde; pg_statistic
+          does: 'SQL''de "nasıl" yazmaz. Planlayıcı istatistiğe bakıp yolları karşılaştırır, en ucuz bulduğunu seçer: Seq Scan, Hash Join, Sort, GroupAggregate.'
+          box: İstatistiğe bakıp en ucuz yolu seçer.
+          before: autovac
+          after: qpm
+          phases:
+          - 1
+          - 2
+          - 3
+          - 4
+        - id: qpm
+          name: Query Plan Management (apg_plan_mgmt)
+          kind: aws
+          what: Aurora PostgreSQL'in plan kayıt defteri
+          does: Seçilen sorguların onaylı planını saklar. Planlayıcı başka bir plan bulursa onu beklemeye alır, onaylı planı kullanır. Ekip iki planı ölçüp karar verir.
+          box: Onaylı planı tutar; yenisi onay bekler.
+          before: planner
+          after: Rapor sorgusu (t0)
+          phases:
+          - 1
+          - 2
+          - 4
+        - id: role
+          name: Rapor rolü (rapor)
+          kind: code
+          what: Ekibin Aurora'da açtığı ayrı kullanıcı
+          does: Rapor isteklerinin kullandığı kullanıcı. Üç tabloyu sadece okur; sorgu başına 15 saniye, en fazla 5 bağlantı. Şifresi Secrets Manager'dadır.
+          box: 'Raporun sınırları: süre, bağlantı, salt okuma.'
+          before: web
+          after: aurora
+          phases:
+          - 1
+          - 4
+        - id: reader
+          name: Aurora okuma sunucusu (reader)
+          kind: aws
+          what: aynı depolamayı okuyan ikinci sunucu
+          does: 'Plan denemeleri burada yapılır: aynı veri, aynı istatistik. Rapor yavaşlarsa ilk taşınacağı yer. Yazma sunucusu düşerse onun yerine geçer (Adım 23).'
+          box: Plan denemelerinin yeri; raporun 2. basamağı.
+          before: aurora
+          after: Plan denemesi, yedek
+          phases:
+          - 1
+          - 2
+          - 4
+        - id: zetl
+          name: zero-ETL (Adım 30)
+          kind: aws
+          what: AWS'in kopyalama servisi
+          does: Aurora'nın her değişikliğini yaklaşık 30 saniyede aurora_live'a taşır. Bu sayfanın zinciri değildir; rapor taşınacaksa veri hazır olsun diye burada.
+          box: Aurora'yı ~30 sn geriden kopyalar.
+          before: aurora
+          after: redshift
+          phases:
+          - 2
+          - 3
+          - 4
+        - id: redshift
+          name: Redshift (aurora_live ve sales)
+          kind: aws
+          what: analiz deposu (Adım 29, 30)
+          does: 'Çok satırı az sütunla okumak için kurulmuş depo. aurora_live: Aurora tablolarının kopyası. sales: kapanmış günlerin tek geniş tablosu. Raporun 3. basamağı.'
+          box: Raporun 3. basamağı. Bugün aynı şekil soruda Aurora'dan yavaş.
+          before: zetl
+          after: Rapor ekranları (Adım 29–31)
+          phases:
+          - 1
+          - 2
+          - 3
+          - 4
+        - id: migrate
+          name: Geçmiş taşıma işi (Adım 26)
+          kind: code
+          what: 30 Eyl'de bir kez çalışan iş
+          does: Eski sitenin geçmişini S3'ten Aurora'ya yazdı, en sonda ANALYZE çalıştırdı. Planlayıcı gerçek boyutları böyle öğrendi.
+          box: Geçmişi bir kez yazar; sonunda ANALYZE.
+          before: S3 (lm-migration)
+          after: aurora
+          phases:
+          - 2
+        - id: monitor
+          name: CloudWatch (Database Insights, yavaş sorgu kaydı, alarmlar)
+          kind: aws
+          what: Adım 26'daki pano ve 2 rapor alarmı
+          does: DBLoad ve Top SQL raporun yükteki payını gösterir. 500 ms'yi geçen sorgu kayda düşer. Rapor süresi ve iptal oranı için birer alarm.
+          box: Raporun süresi, payı ve iptalleri.
+          before:
+          - web
+          - aurora
+          after: Ekip (taşıma kararı)
+          phases:
+          - 1
+          - 3
+          - 4
+        sim_title: 'Simülasyon: rapor bu hâle nasıl geldi?'
+        sim:
+          kind: pipeline
+          title: Sipariş → Aurora → istatistik → plan; yanında sınırlar, okuma sunucusu ve Redshift
+          caption: 'Aurora kutusundaki tablo boyları bütün tablonun sayılarıdır; orders ve order_items kesittir (son üç sipariş ve senin siparişinin kalemleri). Plan tablosundaki satır sayıları t0''daki planın ölçüldüğü andandır: bu tablolar her siparişle büyür, 1 Kas''ta canlıda 12.527 kalem ve 5.014 sipariş (iptalsiz 4.747) vardı. Canlı: planın adımları, tahminler, satır sayıları, süre ölçümleri. Temsilî: saatler, 30 Eyl sayıları, rol ve alarm değerleri, pano sayıları, büyümüş tablonun süreleri. Önce kararlar, sonra 30 Eyl''deki taşıma ve planın ilk okunuşu, sonra bugüne kadar akan siparişler ve ölçüm, sonra Olsaydı kareleri. Son karede her şey t0''ın başladığı hâlde.'
+          tick_ms: 3000
+          phases:
+            1: Tasarım
+            2: İlk yükleme
+            3: Sürekli besleme
+            4: Tutarlılık ve onarım
+          rows:
+          - id: order
+            title: 'Siparişin ve raporun yolu: ekran → Uygulama → (ödeme için RDS Proxy) → Aurora'
+            flow: true
+          - id: brain
+            title: 'Aurora''nın içi: istatistik → planlayıcı → onaylı plan'
+            flow: true
+          - id: guard
+            title: Raporun sınırları ve ilk taşınacağı sunucu
+          - id: copy
+            title: 'Merdivenin üstü: Aurora → zero-ETL → Redshift'
+            flow: true
+          - id: side
+            title: 'Yandaki işler: bir kez çalışan taşıma ve izleme'
+            side: true
+          summary: 'Rapor kendi tablosunu tutmaz: siparişler yazılır, autovacuum özetini yeniler, planlayıcı yolu seçer, QPM onaylı planı korur. Bugün 25 ms ile Aurora''da çalışır; rol onu sınırlar, pano izler, büyüyünce önce okuma sunucusuna sonra Redshift''e gider. Son durum t0''daki planın başladığı durum: 12.521 kalem, 4.742 iptalsiz sipariş, 1.000 müşteri, 3 segment.'
+          boxes:
+          - id: pages
+            row: order
+          - id: web
+            row: order
+          - id: proxy
+            row: order
+          - id: aurora
+            row: order
+            tables:
+            - name: tablo boyları (bütün tablo, kesit değil)
+              cols:
+              - tablo
+              - satır
+              - not
+              rows:
+              - key: items
+                tablo: order_items
+                satır: '0'
+                not: kalemler
+              - key: orders
+                tablo: orders
+                satır: '0'
+                not: başlıklar
+              - key: cust
+                tablo: customers
+                satır: '0'
+                not: müşteriler
+            - name: 'orders (kesit: son üç sipariş; ikisi Ayşe''nin, biri Mert''in)'
+              cols:
+              - order_id · customer_id
+              - order_date
+              - status · total
+              rows:
+              - key: o1
+                order_id · customer_id: W1793380550 · C00001
+                order_date: 30 Eki 22:10
+                status · total: processing · 951,92
+                hidden: true
+              - key: o2
+                order_id · customer_id: W1793390012 · C00002
+                order_date: 31 Eki 08:40
+                status · total: processing · 1.299,90
+                hidden: true
+              - key: o3
+                order_id · customer_id: W1793396741 · C00001
+                order_date: 31 Eki 10:25
+                status · total: processing · 10.890,26
+                hidden: true
+            - name: 'order_items (kesit: W1793396741''in iki kalemi)'
+              cols:
+              - order_id · ürün
+              - qty × unit_price
+              rows:
+              - key: i1
+                order_id · ürün: W1793396741 · P0001
+                qty × unit_price: 1 × 3.373,84
+                hidden: true
+              - key: i2
+                order_id · ürün: W1793396741 · P0131
+                qty × unit_price: 2 × 3.758,21
+                hidden: true
+          - id: autovac
+            row: brain
+            tables:
+            - name: son ANALYZE (temsilî tarihler)
+              cols:
+              - tablo
+              - son ANALYZE
+              - eşik
+              rows:
+              - key: a_orders
+                tablo: orders
+                son ANALYZE: 30 Eyl 23:40
+                eşik: 240 değişiklik
+                hidden: true
+              - key: a_items
+                tablo: order_items
+                son ANALYZE: 30 Eyl 23:40
+                eşik: 525 değişiklik
+                hidden: true
+          - id: planner
+            row: brain
+            tables:
+            - name: istatistiğin tahmini ve gerçek satır
+              cols:
+              - tablo
+              - tahmin
+              - gerçek
+              rows:
+              - key: s_items
+                tablo: order_items
+                tahmin: '9.500'
+                gerçek: '9.500'
+                hidden: true
+              - key: s_orders
+                tablo: orders (iptalsiz)
+                tahmin: '3.533'
+                gerçek: '3.533'
+                hidden: true
+              - key: s_cust
+                tablo: customers
+                tahmin: '1.000'
+                gerçek: '1.000'
+                hidden: true
+            - name: raporun planı (t0'da oynayacak; 10 adım)
+              cols:
+              - adım (çalışma sırası)
+              - rows
+              rows:
+              - key: seq_items
+                adım (çalışma sırası): Seq Scan order_items
+                rows: '0'
+                hidden: true
+              - key: seq_orders
+                adım (çalışma sırası): Seq Scan orders
+                rows: '0'
+                hidden: true
+              - key: hash_orders
+                adım (çalışma sırası): Hash
+                rows: '0'
+                hidden: true
+              - key: hj1
+                adım (çalışma sırası): Hash Join
+                rows: '0'
+                hidden: true
+              - key: seq_cust
+                adım (çalışma sırası): Seq Scan customers
+                rows: '0'
+                hidden: true
+              - key: hash_cust
+                adım (çalışma sırası): Hash
+                rows: '0'
+                hidden: true
+              - key: hj2
+                adım (çalışma sırası): Hash Join
+                rows: '0'
+                hidden: true
+              - key: sort1
+                adım (çalışma sırası): Sort
+                rows: '0'
+                hidden: true
+              - key: agg
+                adım (çalışma sırası): GroupAggregate
+                rows: '0'
+                hidden: true
+              - key: sort2
+                adım (çalışma sırası): Sort
+                rows: '0'
+                hidden: true
+          - id: qpm
+            row: brain
+            tables:
+            - name: 'apg_plan_mgmt.dba_plans (kesit: rapor)'
+              cols:
+              - plan
+              - status
+              rows:
+              - key: q1
+                plan: Hash Join + Sort + GroupAggregate
+                status: Approved
+                hidden: true
+              - key: q2
+                plan: Merge Join + Sort (temsilî)
+                status: Unapproved
+                hidden: true
+          - id: role
+            row: guard
+            tables:
+            - name: 'rol: rapor (değerler temsilî)'
+              cols:
+              - ayar
+              - değer
+              rows:
+              - key: r1
+                ayar: statement_timeout
+                değer: 15 sn
+                hidden: true
+              - key: r2
+                ayar: CONNECTION LIMIT
+                değer: '5'
+                hidden: true
+              - key: r3
+                ayar: yetki
+                değer: 'SELECT: 3 tablo; salt okuma'
+                hidden: true
+          - id: reader
+            row: guard
+            tables:
+            - name: okuma sunucusu (temsilî)
+              cols:
+              - ölçü
+              - değer
+              rows:
+              - key: rd_lag
+                ölçü: gecikme
+                değer: 18 ms
+                hidden: true
+              - key: rd_use
+                ölçü: rapor burada mı?
+                değer: hayır
+                hidden: true
+          - id: zetl
+            row: copy
+          - id: redshift
+            row: copy
+            tables:
+            - name: aynı şekil soru, canlı ölçüm (1 Kas)
+              cols:
+              - nerede · soru
+              - süre
+              - okunan
+              rows:
+              - key: c1
+                nerede · soru: Aurora · segment
+                süre: 25–35 ms
+                okunan: 18.541 satır, 3 tablo
+                hidden: true
+              - key: c2
+                nerede · soru: sales · şehir
+                süre: 41–49 ms
+                okunan: 11.878 satır, 8 sütundan 4'ü
+                hidden: true
+              - key: c3
+                nerede · soru: aurora_live · şehir
+                süre: 98 ms (ilk 808)
+                okunan: 4 tablo, JOIN
+                hidden: true
+          - id: migrate
+            row: side
+          - id: monitor
+            row: side
+            tables:
+            - name: 'pano: rapor, son 1 saat (temsilî)'
+              cols:
+              - ölçü
+              - değer
+              rows:
+              - key: m_n
+                ölçü: rapor isteği
+                değer: '0'
+                hidden: true
+              - key: m_p95
+                ölçü: p95
+                değer: '-'
+                hidden: true
+              - key: m_share
+                ölçü: DBLoad'daki payı
+                değer: '-'
+                hidden: true
+              - key: m_cancel
+                ölçü: iptal / istek
+                değer: '-'
+                hidden: true
+              - key: m_alarm
+                ölçü: 2 rapor alarmı
+                değer: '-'
+                hidden: true
+          frames:
+          - phase: 1
+            who: pages
+            lit:
+            - pages
+            - web
+            - aurora
+            note:
+              pages: 'soru: segmente göre sipariş ve ciro'
+            say: '28 Eyl, açılıştan üç gün önce. Operasyon ekibi bir ekran istedi: "Hangi müşteri grubu (segment) kaç sipariş verdi, ne kadar ciro yaptı?" Siparişler Aurora''ya yazılacak; tablolar henüz boş. Soru bütün siparişleri okur, üç tabloyu birleştirir. Normalde böyle sorular Redshift''e gider. Bu sorunun nerede çalışacağını ekip şimdi kararlaştırıyor.'
+          - phase: 1
+            who: web
+            lit:
+            - web
+            - aurora
+            - reader
+            - redshift
+            note:
+              web: 'basamak 1: yazma sunucusu'
+              reader: basamak 2 (p95 > 2 sn)
+              redshift: basamak 3 (p95 > 10 sn)
+            say: 'Karar bir merdiven. Başlangıçta yazma sunucusu: tablo küçük olacak, rapor saatte birkaç kez açılacak, az önceki sipariş de görünsün isteniyor. Rapor yavaşlayınca okuma sunucusu, daha da büyüyünce Redshift. Her basamağın panodan okunan bir eşiği var (temsilî); eşikler t-1 · 1''deki kartta. Karar bir kez alınıp unutulmaz, her gün panodan izlenir.'
+          - phase: 1
+            who: role
+            lit:
+            - role
+            - aurora
+            - web
+            show:
+              role:
+              - r1
+              - r2
+              - r3
+            fresh:
+              role:
+              - r1
+              - r2
+              - r3
+            packet:
+              at: role
+              text: CREATE ROLE rapor LOGIN CONNECTION LIMIT 5 · ALTER ROLE rapor SET statement_timeout = '15s'
+            note:
+              pages: ''
+              web: ''
+              reader: ''
+              redshift: ''
+            say: 'Rapor yazma sunucusunda çalışacaksa siparişlere zarar veremeyecek şekilde sınırlanmalı. Ekip Aurora''da ayrı bir kullanıcı (rol) açtı: rapor. Bir sorgusu en fazla 15 saniye çalışır, aynı anda en fazla 5 bağlantı açar, üç tabloyu sadece okur. Bu ayarlar rolün üstünde durur, Uygulama''nın unutması mümkün değildir.'
+          - phase: 1
+            who: qpm
+            lit:
+            - qpm
+            - planner
+            - aurora
+            packet:
+              at: qpm
+              text: rds.enable_plan_management = 1 · apg_plan_mgmt.capture_plan_baselines = off · apg_plan_mgmt.use_plan_baselines = true
+            say: 'Ekip kümenin ayar dosyasında Query Plan Management''ı (QPM) açtı ve yazma sunucusunu yeniden başlattı. QPM iyi bilinen bir planı kayıtlı tutar: planlayıcı sonradan başka bir plan bulsa da, ekip onaylamadan kullanılmaz. Otomatik yakalama kapalı; ekip sadece seçtiği sorguları kaydedecek: bu rapor ve Siparişlerim sayfasının sorgusu (Adım 26).'
+          - phase: 1
+            who: monitor
+            lit:
+            - monitor
+            - web
+            show:
+              monitor:
+              - m_n
+              - m_p95
+              - m_share
+              - m_cancel
+              - m_alarm
+            packet:
+              at: monitor
+              text: 'IF(n >= 5, p95(rapor_ms), 0) > 2000 · IF(n >= 5, 100 * iptal / n, 0) > 5 · pencere: 1 saat'
+            say: 'İzleme ilk siparişten önce hazır (Adım 26''daki pano). Bu rapor için iki alarm eklendi: rapor süresi ve rapor iptal oranı. Rapor seyrek açıldığı için pencere 1 saat, en az 5 istek şartı var; tek bir yavaş rapor gece kimseyi uyandırmasın diye.'
+          - phase: 2
+            who: migrate
+            lit:
+            - migrate
+            - aurora
+            set:
+              aurora:
+                items:
+                  satır: '9.500'
+                  not: 634'ü iptal siparişlerin
+                orders:
+                  satır: '3.800'
+                  not: 3.533 + 267 iptal
+                cust:
+                  satır: '1.000'
+                  not: 3 segment
+            fresh:
+              aurora:
+              - items
+              - orders
+              - cust
+            note:
+              migrate: 'dosyalar: S3, lm-migration (Adım 26)'
+            say: '30 Eyl 23:10. Geçmiş taşıma işi (Adım 26) eski sitenin geçmişini Aurora''ya yazdı: 1.000 müşteri, 3.800 sipariş, 9.500 kalem (sipariş ve kalem sayısı temsilî). Siparişlerin 267''si eski sitede iptal edilmişti; rapor onları saymayacak. Tablolar artık dolu, ama planlayıcı bu satırlarda hangi değerlerin olduğunu henüz bilmiyor.'
+          - phase: 2
+            who: autovac
+            lit:
+            - autovac
+            - migrate
+            - planner
+            show:
+              autovac:
+              - a_orders
+              - a_items
+              planner:
+              - s_items
+              - s_orders
+              - s_cust
+            fresh:
+              planner:
+              - s_items
+              - s_orders
+              - s_cust
+            packet:
+              at: autovac
+              text: ANALYZE customers, orders, order_items;
+            note:
+              migrate: ''
+            say: 'Taşıma işinin son komutu ANALYZE. Aurora her tablodan örnek satırlar okuyup bir özet çıkardı: kaç satır, kaç farklı segment, status''ta hangi değer ne sıklıkta. Bu özet istatistiktir; planlayıcı satırları okumaz, özete ve tablonun boyutuna bakar. 3.800 sipariş içinde iptalin 267 olduğunu buradan bilir, sayıp bakmaz.'
+          - phase: 2
+            who: reader
+            lit:
+            - reader
+            - planner
+            show:
+              planner:
+              - seq_items
+              - seq_orders
+              - hash_orders
+              - hj1
+              - seq_cust
+              - hash_cust
+              - hj2
+              - sort1
+              - agg
+              - sort2
+              reader:
+              - rd_lag
+              - rd_use
+            set:
+              planner:
+                seq_items:
+                  rows: '9.500'
+                seq_orders:
+                  rows: '3.533'
+                hash_orders:
+                  rows: '3.533'
+                hj1:
+                  rows: '8.866'
+                seq_cust:
+                  rows: '1.000'
+                hash_cust:
+                  rows: '1.000'
+                hj2:
+                  rows: '8.866'
+                sort1:
+                  rows: '8.866'
+                agg:
+                  rows: '3'
+                sort2:
+                  rows: '3'
+            fresh:
+              planner:
+              - seq_items
+              - seq_orders
+              - hash_orders
+              - hj1
+              - seq_cust
+              - hash_cust
+              - hj2
+              - sort1
+              - agg
+              - sort2
+            packet:
+              at: reader
+              text: EXPLAIN (ANALYZE, BUFFERS) SELECT c.segment, … GROUP BY c.segment ORDER BY revenue DESC;
+            note:
+              reader: plan burada denenir; rapor henüz yazma sunucusunda
+            say: 'Açılıştan önce plan okunur. Ekip raporu okuma sunucusunda EXPLAIN (ANALYZE, BUFFERS) ile çalıştırdı: yazma sunucusunun işine karışılmaz, plan aynı çıkar, çünkü okuma sunucusu aynı veriyi ve aynı istatistiği görür. Üç tablo baştan sona okunuyor (Seq Scan). Bu bir hata değil: rapor zaten neredeyse bütün satırları istiyor; index''le tek tek gitmek daha pahalıya gelirdi.'
+          - phase: 2
+            who: qpm
+            lit:
+            - qpm
+            - aurora
+            - planner
+            show:
+              qpm:
+              - q1
+            fresh:
+              qpm:
+              - q1
+            packet:
+              at: qpm
+              text: SET apg_plan_mgmt.capture_plan_baselines = manual · EXPLAIN (hashes true) SELECT c.segment, … · … = off
+            note:
+              reader: ''
+            say: 'Ekip bu planı QPM''e kaydetti. Tek oturum için yakalamayı açtı, sorgunun EXPLAIN''ini yazma sunucusunda çalıştırdı ve yakalamayı kapattı. Plan onaylandı (Approved): bundan sonra planlayıcı bu sorgu için başka bir yol bulsa da bunu kullanır. Koruma sorgunun metnine bağlıdır: metin değişirse yeni, kayıtsız bir sorgu sayılır.'
+          - phase: 2
+            who: zetl
+            lit:
+            - zetl
+            - aurora
+            - redshift
+            note:
+              zetl: ilk kopya, sonra ~30 sn geriden
+              redshift: aurora_live ve sales hazır; ölçüm tablosu aşağıda dolacak
+            say: 'Merdivenin üst basamağındaki veri de baştan hazır. zero-ETL Aurora tablolarının ilk kopyasını Redshift''te aurora_live''a koydu (Adım 30); yükleme işi geçmişi sales tablosuna yükledi (Adım 29). Rapor bir gün taşınacaksa veri için bir şey yapmak gerekmez: aynı tablolar orada hazır.'
+          - phase: 3
+            who: web
+            lit:
+            - web
+            - proxy
+            - aurora
+            show:
+              aurora:
+              - o1
+              - o2
+              - o3
+              - i1
+              - i2
+            fresh:
+              aurora:
+              - o3
+              - i1
+              - i2
+            set:
+              aurora:
+                items:
+                  satır: '12.521'
+                  not: 634'ü iptal siparişlerin
+                orders:
+                  satır: '5.009'
+                  not: 4.742 + 267 iptal
+                cust:
+                  satır: '1.000'
+                  not: 3 segment
+              planner:
+                s_items:
+                  gerçek: '12.521'
+                s_orders:
+                  gerçek: '4.742'
+            packet:
+              at: proxy
+              text: BEGIN; INSERT INTO orders … request_id …; INSERT INTO order_items …; INSERT INTO outbox …; COMMIT;
+            note:
+              zetl: ''
+              redshift: ''
+            say: '1 Eki''den bu sabaha. Her sipariş ödemede RDS Proxy (shop-proxy) üzerinden yazma sunucusuna yazıldı: 30 Eki 22:10 Ayşe (C00001), 31 Eki 08:40 Mert (C00002), 10:25 sen, yani yine Ayşe: W1793396741, P0001 + P0131 × 2 = 10.890,26 TL, status processing. Bir ayda 1.209 sipariş, 3.021 kalem eklendi; bu ayda iptal yok, 267 iptalin hepsi eski siteden. Planlayıcı kutusundaki "gerçek" sütunu büyüdü, tahmin henüz eski. Rapor için ayrıca hiçbir şey yazılmadı: rapor bu tablolardan okunur, kendi tablosu yoktur.'
+          - phase: 3
+            who: autovac
+            lit:
+            - autovac
+            - aurora
+            - planner
+            set:
+              autovac:
+                a_orders:
+                  son ANALYZE: 29 Eki 19:40
+                  eşik: 300 değişiklik
+                a_items:
+                  son ANALYZE: 26 Eki 02:15
+                  eşik: 676 değişiklik
+              planner:
+                s_items:
+                  tahmin: '12.512'
+                  gerçek: '12.521'
+                s_orders:
+                  tahmin: '4.745'
+                  gerçek: '4.742'
+                s_cust:
+                  tahmin: '1.000'
+                  gerçek: '1.000'
+                seq_items:
+                  rows: '12.521'
+                seq_orders:
+                  rows: '4.742'
+                hash_orders:
+                  rows: '4.742'
+                hj1:
+                  rows: '11.887'
+                seq_cust:
+                  rows: '1.000'
+                hash_cust:
+                  rows: '1.000'
+                hj2:
+                  rows: '11.887'
+                sort1:
+                  rows: '11.887'
+                agg:
+                  rows: '3'
+                sort2:
+                  rows: '3'
+            fresh:
+              planner:
+              - s_items
+              - s_orders
+              autovac:
+              - a_orders
+              - a_items
+            note:
+              planner: 'aynı plan: sadece satır sayıları büyüdü'
+            say: 'Sipariş yazıldıkça tablolar büyür, istatistik eskir. autovacuum Aurora''nın kendi işidir: değişen satır sayısını izler ve eşik aşılınca ANALYZE''ı kendisi çalıştırır. orders için eşik 50 + 5.009''un %5''i = yaklaşık 300 değişiklik. Günde 39 sipariş ve aynı siparişlerin status değişiklikleriyle yaklaşık 4 günde bir (temsilî). order_items''ta eşik daha büyük: yaklaşık 7 günde bir. Son çalışma orders''ta 29 Eki, order_items''ta 26 Eki. Yine de bugün tahmin ile gerçek arasındaki fark sadece 9 kalem: planlayıcı özetteki yoğunluğu tablonun o anki boyutuyla çarpar, bu yüzden yeni satırları da hesaba katar. Tahmin bir kestirimdir; gerçeğin biraz altında ya da üstünde çıkabilir.'
+          - phase: 3
+            who: zetl
+            lit:
+            - zetl
+            - aurora
+            - redshift
+            note:
+              zetl: ~30 sn geriden
+              redshift: 'aurora_live: 30 sn · sales: dün gece'
+              planner: ''
+            say: Aynı siparişler yaklaşık 30 saniye sonra aurora_live'da (Adım 30). Kapanan gün gece sales'e girer (Adım 29). Redshift'teki kopyaların bu raporda bugün işi yok; merdivenin üst basamağı olarak bekliyorlar ve az sonra ölçülecekler.
+          - phase: 3
+            who: redshift
+            lit:
+            - redshift
+            - aurora
+            - web
+            show:
+              redshift:
+              - c1
+              - c2
+              - c3
+            fresh:
+              redshift:
+              - c1
+              - c2
+              - c3
+            note:
+              zetl: ''
+              redshift: ''
+            say: 'Karar ölçüyle sınanır. Buradaki sayılar t0''dan bir gün sonra, 1 Kas''ta canlı sistemde ölçüldü; tablolar o gün birkaç sipariş büyüktü. Aynı şekil soru (bütün satırlar, bir müşteri özelliğine göre grupla, topla) üç yerde çalıştı. Aurora daha hızlı: 25–35 ms. Redshift''in sales''i 41–49 ms, aurora_live 98 ms, ilk çalıştırmada 808 ms. Redshift''in gücü bu boyutta görünmez; çok satırda çıkar. Bu yüzden rapor bugün Aurora''da. Redshift''in ekranı şehre göre sorduğu için soru "aynı şekil"; sales''te segment sütunu yok. Bu rapor henüz taşınmadığı için kendi metniyle Redshift''te çalışmıyor; taşıma kararı günü o da ölçülür.'
+          - phase: 3
+            who: pages
+            lit:
+            - pages
+            - web
+            - aurora
+            - monitor
+            set:
+              monitor:
+                m_p95:
+                  değer: 34 ms
+                m_n:
+                  değer: '6'
+                m_share:
+                  değer: '%0,05'
+                m_cancel:
+                  değer: 0 / 6
+                m_alarm:
+                  değer: OK
+            packet:
+              at: web
+              text: rapor kullanıcısı → dbws-aurora.cluster-… :5432 (yazma adresi, TLS)
+            fresh:
+              monitor:
+              - m_p95
+              - m_n
+              - m_share
+              - m_cancel
+              - m_alarm
+            say: '31 Eki, 10:40''tan önceki saat (temsilî). Operasyon ekibi raporu 6 kez açtı. Her açılışta Uygulama rapor rolüyle yazma sunucusuna kısa bir bağlantı açtı; sorgu en kötü 34 ms sürdü. 6 × 25 ms: saatte 0,15 saniyelik iş. Veritabanının yükündeki payı %0,05: Top SQL''de ilk sıralarda bile görünmüyor. Eşikler uzakta; rapor yerinde kalıyor.'
+          - phase: 4
+            who: planner
+            lit:
+            - planner
+            - autovac
+            - aurora
+            set:
+              autovac:
+                a_orders:
+                  son ANALYZE: 30 Eyl 23:40
+              planner:
+                s_orders:
+                  tahmin: 1 (son 7 gün)
+                  gerçek: '270'
+            mark:
+              autovac:
+                a_orders: fix
+            packet:
+              at: planner
+              text: 'Nested Loop (rows=1) (actual rows=270 loops=1) → Seq Scan on orders · Filter: order_date >= now() - ''7 days'''
+            note:
+              planner: tahmin 1 · gerçek 270 (olsaydı)
+            say: 'Olsaydı (ayrı bir durum): autovacuum orders tablosunda 30 Eyl''den beri hiç çalışmasaydı ve rapora "son 7 gün" süzgeci eklenseydi. Süzgeç sorgunun metnini değiştirir; bu yeni metin QPM''de kayıtlı değildir, onaylı plan onu korumaz. İstatistiğe göre 30 Eyl''den sonra sipariş yok; planlayıcı 1 satır bekler (rows=1). Gerçekte yaklaşık 270 sipariş gelir. 1 satır için en ucuz yol Nested Loop, yani her sipariş için ayrı bir arama: 270 tur. Süreyi bu boyutta az uzatır, tablo büyüdükçe çok uzatır. İşaret: tahmin 1, gerçek 270.'
+          - phase: 4
+            who: autovac
+            lit:
+            - autovac
+            - planner
+            set:
+              autovac:
+                a_orders:
+                  son ANALYZE: 29 Eki 19:40
+              planner:
+                s_orders:
+                  tahmin: '4.745'
+                  gerçek: '4.742'
+            mark:
+              autovac:
+                a_orders: ''
+            packet:
+              at: autovac
+              text: SELECT relname, last_autoanalyze FROM pg_stat_user_tables; ANALYZE orders;
+            note:
+              planner: ''
+            say: 'Onarım: ekip tablonun en son ne zaman özetlendiğine bakar (pg_stat_user_tables''taki last_autoanalyze), autovacuum''un neden atladığını kayıtlarından araştırır, ANALYZE''ı elle çalıştırır. ANALYZE sadece yazma sunucusunda çalışır; okuma sunucusu aynı istatistiği görür. Plan bir sonraki sorguda kendiliğinden Hash Join''e döner. İstatistik 29 Eki''deki hâline döndü.'
+          - phase: 4
+            who: role
+            lit:
+            - role
+            - web
+            - aurora
+            - monitor
+            set:
+              monitor:
+                m_cancel:
+                  değer: 6 / 6
+                m_alarm:
+                  değer: süre ve iptal alarmı
+                m_p95:
+                  değer: 15 sn (kesilen)
+                m_share:
+                  değer: '%24'
+            packet:
+              at: role
+              text: 'ERROR: canceling statement due to statement timeout (57014)'
+            say: 'Olsaydı (ayrı bir durum): rapor koduna yanlışlıkla JOIN şartı olmayan bir sorgu girseydi; her sipariş her kalemle eşleşir, sorgu dakikalarca çalışırdı. statement_timeout 15. saniyede sorguyu keser (hata 57014), yük dengeleyicinin (ALB) 120 saniyelik sınırına gelmeden cevap döner. Ekran hata gösterir, ödeme sorguları çalışmaya devam eder. 6 istekten 6''sı kesilir: oran %100, en az 5 istek şartı tutar, iptal alarmı çalar. Kesilen sorguların 15 saniyesi süre ölçüsüne de girer; süre alarmı da çalar. 6 × 15 sn saatte 0,025 oturum eder, rapor payı %24''e çıkar: ekip kodu geri alana kadar bu iş yazma sunucusunu yorar.'
+          - phase: 4
+            who: monitor
+            lit:
+            - monitor
+            - aurora
+            - planner
+            set:
+              aurora:
+                items:
+                  satır: 2.504.200
+                  not: 200 kat (olsaydı)
+                orders:
+                  satır: 1.001.800
+                  not: 200 kat (olsaydı)
+              planner:
+                seq_items:
+                  rows: 2.504.200
+                seq_orders:
+                  rows: '948.400'
+                hash_orders:
+                  rows: '948.400'
+                hj1:
+                  rows: 2.377.400
+                seq_cust:
+                  rows: '1.000'
+                hash_cust:
+                  rows: '1.000'
+                hj2:
+                  rows: 2.377.400
+                sort1:
+                  rows: 2.377.400
+                agg:
+                  rows: '3'
+                sort2:
+                  rows: '3'
+                s_items:
+                  tahmin: 2.504.000
+                  gerçek: 2.504.200
+                s_orders:
+                  tahmin: '948.000'
+                  gerçek: '948.400'
+              monitor:
+                m_p95:
+                  değer: 8 sn
+                m_share:
+                  değer: '%14'
+                m_cancel:
+                  değer: 0 / 6
+                m_alarm:
+                  değer: süre alarmı
+              autovac:
+                a_orders:
+                  eşik: 50.140 değişiklik
+                a_items:
+                  eşik: 125.260 değişiklik
+            fresh:
+              planner:
+              - sort1
+            packet:
+              at: planner
+              text: 'Sort Method: external merge  Disk: ~200 MB (bugün: quicksort  Memory: 1035 kB)'
+            note:
+              monitor: p95 8 sn · pay 0,013 / 0,093 oturum
+            say: 'Olsaydı (ayrı bir durum): sipariş ve kalem tabloları 200 kat büyüseydi (1 milyon sipariş). Plan aynı kalır, satır sayıları büyür. Sıralama artık belleğe sığmaz, diske taşar (external merge); rapor 8 saniye sürer (hesap, ölçüm değil: 25 ms × 200 = 5 sn, diske taşan sıralama üstüne yaklaşık 3 sn ekler). Sıralamanın bellek payı (work_mem) sınırlıdır: bugünkü 1 MB sığar, 200 MB sığmaz. p95 > 2 sn: süre alarmı çalar. Yavaş sorgu kaydına 500 ms''yi geçen satırlar düşer. Top SQL''de pay %14''e çıkar. 15 saniyelik sınıra henüz gelinmedi, ödeme de yavaşlamadı; ama alarm taşınma zamanının geldiğini söylüyor.'
+          - phase: 4
+            who: reader
+            lit:
+            - reader
+            - proxy
+            - web
+            - monitor
+            set:
+              reader:
+                rd_use:
+                  değer: evet (olsaydı)
+            packet:
+              at: proxy
+              text: 'shop-proxy-ro (READ_ONLY) → okuma sunucusu · rol: rapor'
+            note:
+              monitor: ''
+              reader: yazma sunucusu rapordan kurtuldu
+            say: 'Aynı "Olsaydı": Onarım 1, okuma sunucusu. Ekip raporun adresini shop-proxy-ro''ya çevirir; kod değişmez, ayar değişir. Plan aynıdır, süre aynıdır, ama sipariş yazan sunucu artık bu işi yapmaz. Süre alarmının eşiği de bu basamağın üst sınırına, 10 saniyeye çekilir. Gecikme 18 ms: rapor için önemsiz. Bedeli: okuma sunucusu yazma sunucusu düşünce onun yerine geçer (Adım 23); o an rapor yine siparişlerle aynı sunucudadır.'
+          - phase: 4
+            who: aurora
+            lit:
+            - aurora
+            - planner
+            - web
+            packet:
+              at: aurora
+              text: CREATE MATERIALIZED VIEW rapor_segment AS SELECT … · REFRESH MATERIALIZED VIEW CONCURRENTLY rapor_segment;
+            note:
+              reader: ''
+            say: 'Aynı "Olsaydı": Onarım 2, hazır sonuç. Index burada yardım etmez: rapor bütün satırları istiyor, index az satır için hızlıdır (sadece "son 7 gün" gibi bir süzgeç olsaydı order_date index''i işe yarardı). Materialized view sonucu tablo gibi saklar: rapor 3 satır okur, 1 ms sürer. Ama sonuç eskir ve her REFRESH aynı 8 saniyeyi yazma sunucusunda harcar. Birçok kişinin sık baktığı ama dakikalarca eski olabilen bir ekran için uygun.'
+          - phase: 4
+            who: redshift
+            lit:
+            - redshift
+            - zetl
+            - web
+            set:
+              reader:
+                rd_use:
+                  değer: hayır
+            packet:
+              at: redshift
+              text: SELECT c.segment, count(DISTINCT o.order_id), … FROM aurora_live.public.orders o JOIN … GROUP BY 1
+            say: 'Aynı "Olsaydı": Onarım 3, Redshift. p95 10 saniyeyi geçer ya da rapor yıllara yayılırsa üst basamağa çıkılır. Sorgu neredeyse aynı metinle aurora_live''dan okunur; zero-ETL veriyi zaten taşıyor, taşıma kodu yazılmaz. Süre milyon siparişte birkaç saniye olur, çünkü sadece gereken sütunlar okunur ve iş dilimlere bölünür (temsilî). Bedeli yaklaşık 30 saniye: az önceki sipariş raporda hemen görünmez.'
+          - phase: 4
+            who: qpm
+            lit:
+            - qpm
+            - aurora
+            - planner
+            - autovac
+            show:
+              qpm:
+              - q2
+            fresh:
+              qpm:
+              - q2
+            set:
+              aurora:
+                items:
+                  satır: '12.521'
+                  not: 634'ü iptal siparişlerin
+                orders:
+                  satır: '5.009'
+                  not: 4.742 + 267 iptal
+                cust:
+                  satır: '1.000'
+                  not: 3 segment
+              planner:
+                seq_items:
+                  rows: '12.521'
+                seq_orders:
+                  rows: '4.742'
+                hash_orders:
+                  rows: '4.742'
+                hj1:
+                  rows: '11.887'
+                seq_cust:
+                  rows: '1.000'
+                hash_cust:
+                  rows: '1.000'
+                hj2:
+                  rows: '11.887'
+                sort1:
+                  rows: '11.887'
+                agg:
+                  rows: '3'
+                sort2:
+                  rows: '3'
+                s_items:
+                  tahmin: '12.512'
+                  gerçek: '12.521'
+                s_orders:
+                  tahmin: '4.745'
+                  gerçek: '4.742'
+              monitor:
+                m_p95:
+                  değer: 34 ms
+                m_n:
+                  değer: '6'
+                m_share:
+                  değer: '%0,05'
+                m_cancel:
+                  değer: 0 / 6
+                m_alarm:
+                  değer: OK
+              autovac:
+                a_orders:
+                  eşik: 300 değişiklik
+                a_items:
+                  eşik: 676 değişiklik
+            packet:
+              at: qpm
+              text: SELECT apg_plan_mgmt.evolve_plan_baselines(sql_hash, plan_hash, 1.1, 'approve') …
+            note:
+              qpm: yeni plan beklemede
+            say: 'Olsaydı (ayrı bir durum, bugünkü boyutlar): Aurora PostgreSQL 17.9''dan bir üst ana sürüme geçilseydi. Ekip önce kümenin bir kopyasında (Aurora clone) dener. Sürümden sonra istatistikler yeniden kurulur: ANALYZE. Yeni planlayıcı aynı rapor için başka bir plan bulsaydı (Merge Join, temsilî), QPM bunu Unapproved kaydeder, Approved planı çalıştırmaya devam ederdi. Rapor sürüm günü sürpriz yapmaz. Ekip iki planı ölçer, yenisi daha iyiyse onaylar.'
+          - phase: 4
+            who: aurora
+            lit:
+            - aurora
+            - autovac
+            - planner
+            - qpm
+            - role
+            - monitor
+            hide:
+              qpm:
+              - q2
+            note:
+              qpm: ''
+            say: 'Hazır. "Olsaydı" kareleri yaşanmadı; tablolar o karelerden önceki hâline döndü. Her şey 31 Eki 10:40''taki hâlinde (saat temsilî): 12.521 kalem, 5.009 sipariş (267''si iptal), 1.000 müşteri. Plan 10 adım: t0''daki simülasyon bu sayılarla başlıyor. Sıra sende: kutuyu işaretlediğinde uygulama aynı sorguyu bir kez de EXPLAIN ANALYZE ile gönderecek.'
+        phases:
+        - n: 1
+          title: Tasarım
+          intro: 'Önce sorunun yeri: bir rapor neden işlemsel veritabanında çalışır, ne zaman Redshift''e gider? Sonra bir planın nasıl okunduğu, planlayıcının bilgisini nereden aldığı, raporun yazma sunucusuna zarar veremeyecek şekilde nasıl sınırlandığı, planın nasıl sabit tutulduğu ve yavaşlamanın nasıl fark edildiği.'
+          cards:
+          - title: 'Aynı şekil soru, üç yer: ölçüm'
+            text:
+            - 'Genel kural: çok satır toplayan rapor analiz deposuna gider (Adım 29, 30). Adım 26''daki "raporlar Redshift''ten okunur" cümlesi bu kuraldır. Bu rapor bilinçli bir istisnadır: küçük bir operasyon raporu, az önceki siparişi de görmek ister ve bugün Aurora''da daha hızlıdır. Kural körü körüne uygulanmaz, ölçülür.'
+            - 'Aşağıdaki süreler 1 Kas''ta canlı sistemde Uygulama''nın ölçümüdür, her istekte biraz değişir. Redshift ekranı şehre göre sorar, Aurora raporu segmente göre; ikisi de aynı şekildedir: bütün satırları oku, bir müşteri özelliğine göre grupla, topla. aurora_live''daki ilk çalıştırmanın 808 ms sürmesinin olası sebebi, Redshift''in yeni sorguyu çalıştırmadan önce derlemesidir (makine koduna çevirmesi).'
+            map:
+              cols:
+              - ''
+              - Aurora, yazma sunucusu
+              - Redshift · sales
+              - Redshift · aurora_live
+              rows:
+              - - Süre (canlı)
+                - 25–35 ms
+                - 41–49 ms
+                - '98 ms (ilk: 808 ms)'
+              - - Okunan
+                - 18.541 satır, 3 tablo; satırlar bütün olarak okunur
+                - 11.878 satır; 8 sütundan 4'ü
+                - yaklaşık 18.700 satır, 4 tablo; sadece gereken sütunlar
+              - - Ne kadar güncel
+                - Şu an
+                - Dün gece kapanan gün
+                - Yaklaşık 30 saniye geride
+              - - 1 milyon siparişte (hesap)
+                - Yaklaşık 8 saniye; sıralama diske taşar
+                - Birkaç saniye (temsilî)
+                - Birkaç saniye (temsilî)
+              - - Siparişlere etkisi
+                - 'Aynı sunucu: büyüyünce yarışır'
+                - Yok
+                - Yok
+          - title: 'Merdiven: rapor nerede çalışır?'
+            text: 'Karar üç basamak. Eşikler temsilî, ölçüler gerçek panodan okunur. Okuma sunucusu bugün boşta beklemez: plan denemeleri ve uzun okumalar orada çalışır, yazma sunucusu düşerse onun yerine geçer. Bu yüzden 25 ms''lik bir rapor bugün oraya taşınmadı; taşımak bir adres değişikliğidir, gerektiği gün yapılır.'
+            map:
+              cols:
+              - Basamak
+              - Ne zaman
+              - Kazanç
+              - Bedel
+              rows:
+              - - 1. Yazma sunucusu (bugün)
+                - 'p95 < 2 sn ve DBLoad payı < %5. Bugün: 34 ms ve %0,05.'
+                - Az önceki sipariş dahil, ek parça yok.
+                - Rapor siparişlerle aynı sunucuda; rol sınırlar.
+              - - 2. Okuma sunucusu (shop-proxy-ro)
+                - p95 > 2 sn ya da pay > %5.
+                - Sipariş yazan sunucu rahatlar; aynı SQL.
+                - Birkaç on ms geriden. Yazma sunucusu düşünce onun yerine bu geçer.
+              - - 3. Redshift (aurora_live)
+                - p95 > 10 sn, 15 sn sınırı yakın ya da çok yıllık sorular.
+                - Depo bu iş için kurulu; Aurora hiç yorulmaz.
+                - Yaklaşık 30 sn geriden; ayrı fatura.
+          - title: Plan nasıl okunur?
+            text:
+            - EXPLAIN ANALYZE'ın çıktısı bir ağaçtır. En içteki satırlar önce çalışır; sonuçlar yukarı akar. Aşağıdaki satırlar 1 Kas'ta canlı plandan kısaltıldı; t0'da aynı planı adım adım oynatacaksın.
+            - 'Üç şeye bakılır. Bir: tahmin ile gerçek yakın mı (rows=12512, actual rows=12527)? İki: en çok zaman nerede? actual time iki sayı verir: ilk satırın ve son satırın hazır olduğu milisaniye; cost''taki iki sayı da başlangıç ve toplam tahminidir. Süreler içten dışa birikir; burada en büyük sıçrama iç Sort''ta, 6 ms''den 20 ms''ye. Sıralama count(DISTINCT o.order_id) için var: aynı siparişi iki kez saymamak için satırların sıralı gelmesi gerekir. Üç: taşan bir şey var mı? Sort Method quicksort ve Batches: 1 demek her şey belleğe sığdı. En altta iki süre yazar: yol seçmek 0,4 ms (Planning Time), çalıştırmak 25 ms (Execution Time).'
+            - 'BUFFERS kaç veri sayfası (8 kB''lık blok) okunduğunu söyler. Aurora''da read, depolamaya giden okumadır; hit bellekte bulunandır. Bu rapor yaklaşık 163 sayfa, yani 1,3 MB okur (temsilî: mağazanın gönderdiği plan BUFFERS istemiyor; sayı tabloların boyutundan hesaplandı). Rapor saatte 6 kez açıldığı için bunlar çoğunlukla bellekte durur.'
+            code_title: Canlı plandan, içten dışa
+            code:
+            - code: Seq Scan on order_items oi (cost=0.00..221.12 rows=12512) (actual rows=12527)
+              tag: Aurora'nın içinde
+              say: Bütün kalemler. Tahmin ve gerçek çok yakın.
+            - code: 'Seq Scan on orders o (rows=4745) (actual rows=4747)  Rows Removed by Filter: 267'
+              tag: Aurora'nın içinde
+              say: İptal edilen 267 sipariş okunup atıldı. Bu ölçümde 4.747; sipariş geldikçe büyür.
+            - code: 'Hash (actual rows=4747)  Buckets: 8192  Batches: 1  Memory Usage: 320kB'
+              tag: Aurora'nın içinde
+              say: 'Siparişler bellekte sözlük oldu. Batches: 1, diske taşmadı.'
+            - code: Hash Join (actual time=1.228..6.364 rows=11893)
+              tag: Aurora'nın içinde
+              say: Kalemler sözlükte arandı, müşteri eklendi. 6 ms'de bitti.
+            - code: 'Sort (actual time=19.660..20.173 rows=11893)  Sort Method: quicksort  Memory: 1035kB'
+              tag: Aurora'nın içinde
+              say: En büyük iş. Yaklaşık 1 MB, bellekte.
+            - code: 'GroupAggregate (actual rows=3)  Group Key: c.segment'
+              tag: Aurora'nın içinde
+              say: Sıralı satırlardan 3 segmentin toplamı.
+          - title: Planlayıcı neye bakar? İstatistik
+            text:
+            - 'Planlayıcı tabloları okuyup karar vermez; özetine bakar. orders''ta iptalin ne kadar sık olduğunu, kaç satır kalacağını özetten bilir ve belleğe hangi tablonun konacağını buna göre seçer. Özet yanlışsa seçim de yanlış olur, sorgu yine çalışır ve yine doğru sonuç verir: sadece yavaş.'
+            - autovacuum eşiği iki ayardan gelir. Ekibin parametre grubunda autovacuum_analyze_threshold = 50, autovacuum_analyze_scale_factor = 0,05. orders için 50 + 0,05 × 5.009 ≈ 300, order_items için 50 + 0,05 × 12.521 ≈ 676 değişiklik. Tablo büyüdükçe eşik de büyür; 100 milyon satırda 5 milyon değişiklik beklenir. Bu yüzden çok büyük tablolarda oran tablo başına düşürülür.
+            code:
+            - code: autovacuum_analyze_threshold = 50 · autovacuum_analyze_scale_factor = 0.05
+              tag: Ekip → Aurora
+              say: Kümenin ayar dosyasında (temsilî değerler).
+            - code: SELECT relname, last_autoanalyze FROM pg_stat_user_tables;
+              tag:
+              - Ekip → Aurora
+              - Aurora → Ekip
+              say: İstatistik en son ne zaman yenilendi?
+            - code: ALTER TABLE orders SET (autovacuum_analyze_scale_factor = 0.01);
+              tag: Ekip → Aurora
+              say: Büyük tabloda oranı küçültür; bugün gerekmiyor.
+          - title: 'Yazma sunucusunu korumak: ayrı rol'
+            text:
+            - 'Rapor siparişlerle aynı sunucudaysa üç sınır gerekir: süre, bağlantı, yetki. Süre sınırı 15 saniye: bugünkü 25 ms''nin çok üstünde, yük dengeleyicinin (ALB) 120 saniyelik sınırının çok altında. Bağlantı sınırı 5: operasyon ekibi aynı anda birkaç kez açar, bir hata bütün bağlantıları tüketemez. Yetki salt okuma: EXPLAIN ANALYZE sorguyu gerçekten çalıştırır; bu kullanıcı salt okunur olduğu için yanlış bir komut veriyi değiştiremez.'
+            - 'Ayarlar rolün üstündedir, Uygulama her bağlantıda SET göndermez. Bunun bir sebebi daha var: RDS Proxy''den geçen bir bağlantıda SET göndermek bağlantıyı o oturuma kilitler (pinning) ve paylaşımı bitirir. Rapor okuma sunucusuna shop-proxy-ro üzerinden taşındığında bu sorun yaşanmaz: ayar veritabanı tarafındadır.'
+            code:
+            - code: CREATE ROLE rapor LOGIN CONNECTION LIMIT 5;
+              tag: Ekip → Aurora
+              say: Rapor kullanıcısı; aynı anda en fazla 5 bağlantı.
+            - code: ALTER ROLE rapor SET statement_timeout = '15s';
+              tag: Ekip → Aurora
+              say: 15 saniyeyi geçen sorgu kesilir.
+            - code: ALTER ROLE rapor SET default_transaction_read_only = on;
+              tag: Ekip → Aurora
+              say: Bu kullanıcının işlemleri salt okunur başlar.
+            - code: GRANT SELECT ON orders, order_items, customers TO rapor;
+              tag: Ekip → Aurora
+              say: Sadece raporun tablolarını okur. Ödeme yetkisi yok.
+          - title: 'Planı sabit tutmak: QPM'
+            text:
+            - 'Planlayıcı yeniden düşünebilir: istatistik değişince, sürüm yükseltilince, bir ayar değişince. Çoğu zaman daha iyi bulur, bazen kötü bulur (plan gerilemesi). QPM bu değişikliği ekibin kararına bağlar. Her sorguyu yakalamak yerine sadece iki sorgu kaydedildi: bu rapor ve Siparişlerim sayfasının sorgusu (Adım 26).'
+            - 'Bu raporda sürpriz riski düşüktür: üç tabloyu tam okumaktan başka iyi bir yol yoktur. QPM burada süreyi kısaltmak için değil, sürüm gününde sürprizi önlemek için durur. AWS belgesi QPM için 2 vCPU''dan büyük sunucu önerir; Serverless v2''de (kapasitesi yüke göre değişen Aurora) alt sınır buna göre seçilir.'
+            code:
+            - code: rds.enable_plan_management = 1
+              tag: Ekip → Aurora
+              say: Küme ayarı; yeniden başlatma ister.
+            - code: CREATE EXTENSION apg_plan_mgmt;
+              tag: Ekip → Aurora
+              say: Eklenti, yazma sunucusunda bir kez.
+            - code: apg_plan_mgmt.use_plan_baselines = true
+              tag: Aurora'nın içinde
+              say: Planlayıcı önce onaylı plana bakar.
+          - title: Yavaşlama nasıl fark edilir?
+            text: 'Pano Adım 26''daki panodur; Adım 26''nın 4 alarmına rapor için 2 alarm eklendi. Oran alarmı az istekte yanıltır: rapor seyrek açılır (saatte yaklaşık 6), bu yüzden pencere 1 saat ve en az 5 istek. Yakalamadığı: rapor bir saatte 5''ten az açılırsa alarm hesaplanmaz; o saatlerin kesintileri Uygulama''nın hata kaydında görünür. Rapor payı alarm değil, panoda bir sayıdır, ekip okur: Top SQL raporun satırını, DBLoad bütün yükü verir; rapor payı = raporun yükü / DBLoad. Eşikler temsilî.'
+            map:
+              cols:
+              - Ne
+              - Formül
+              - Ne anlatır?
+              rows:
+              - - Rapor süresi (alarm)
+                - IF(n >= 5, p95(rapor_ms), 0) > 2000 · 1 saat
+                - Merdivende bir üst basamağın zamanı.
+              - - Rapor iptal oranı (alarm)
+                - IF(n >= 5, 100 * iptal / n, 0) > 5 · 1 saat
+                - 15 saniye sınırına çarpan rapor var.
+              - - Rapor payı (pano)
+                - 100 × raporun yükü / DBLoad. Bugün 0,00004 / 0,08 = %0,05
+                - '%5''i geçerse rapor siparişlerle yarışmaya başladı.'
+              - - Yavaş sorgu kaydı (Adım 26)
+                - 500 ms'yi geçen her sorgu
+                - Hangi sorgu ve ne kadar; alarmı Adım 26'da.
+        - n: 2
+          title: İlk yükleme
+          intro: Geçmiş 30 Eyl gecesi Aurora'ya taşındı. Hemen ardından ANALYZE, sonra raporun planı gerçek boyutlarla okundu ve QPM'e kaydedildi. Redshift'teki kopyalar da aynı günlerde doldu.
+          cards:
+          - title: 'Taşımanın son komutu: ANALYZE'
+            text: Taşıma işi (Adım 26) satırları yazdıktan sonra istatistiği hemen yeniler; autovacuum'u beklemez. Bekleseydi açılışın ilk raporları eski özetle planlanırdı. ANALYZE sadece yazma sunucusunda çalışır; sonucu aynı depolamada olduğu için okuma sunucusu da görür.
+            code:
+            - code: ANALYZE customers, orders, order_items;
+              tag: Taşıma işi → Aurora
+              say: Planlayıcı yeni boyutları öğrenir.
+          - title: Plan açılıştan önce okunur
+            text: 'Plan denemeleri okuma sunucusundadır (Adım 26). 30 Eyl''de plan bugünküyle aynıydı, sadece sayılar küçüktü: 9.500 kalem, 3.533 sipariş, birleşince 8.866 satır (temsilî). 634 kalem iptal siparişlerindendir. Bakılan: tahminler gerçeğe yakın mı, sıralama bellekte mi, süre eşiğin altında mı?'
+            code:
+            - code: EXPLAIN (ANALYZE, BUFFERS) SELECT c.segment, count(DISTINCT o.order_id), … GROUP BY c.segment ORDER BY revenue DESC;
+              tag:
+              - Ekip → okuma sunucusu
+              - okuma sunucusu → Ekip
+              say: Sorguyu çalıştırır; planı, gerçek satırları ve okunan sayfaları verir.
+          - title: Plan QPM'e kaydedilir
+            text: Yakalama sadece o oturumda açılır, plan kaydedilir, yakalama kapanır. Kayıt yazma sunucusunda yapılır. Plan Approved olur; bundan sonra bu sorgu için kullanılacak yol budur.
+            code:
+            - code: SET apg_plan_mgmt.capture_plan_baselines = manual;
+              tag: Ekip → Aurora
+              say: Bu oturumda yakalama açık.
+            - code: EXPLAIN (hashes true) SELECT c.segment, …;
+              tag:
+              - Ekip → Aurora
+              - Aurora → Ekip
+              say: Plan kaydedilir, numarası yazılır.
+            - code: SET apg_plan_mgmt.capture_plan_baselines = off;
+              tag: Ekip → Aurora
+              say: Yakalama kapanır.
+            - code: SELECT status, plan_outline FROM apg_plan_mgmt.dba_plans;
+              tag:
+              - Ekip → Aurora
+              - Aurora → Ekip
+              say: Kayıtlı planlar ve onay hâlleri.
+        - n: 3
+          title: Sürekli besleme
+          intro: Rapor kendi tablosunu tutmaz; sipariş yazıldıkça aynı tablolardan okur. Sipariş yazılır, autovacuum istatistiği yeniler, zero-ETL kopyalar, operasyon ekibi raporu açar, pano süreyi ve payı yazar.
+          cards:
+          - title: Rapor için ayrı bir yazma yok
+            text: 'Ödeme Adım 23''teki paketi yazar: orders (order_date, request_id, status processing), order_items, outbox. Rapor bunların hiçbirini beklemez; her açılışta o anki satırları sayar. Bu yüzden az önceki sipariş raporda hemen görünür: W1793396741 yazıldığı an raporda.'
+            code:
+            - code: INSERT INTO orders (order_id, customer_id, visitor_id, request_id, order_date, status, total) VALUES ('W1793396741', 'C00001', …, 'processing', 10890.26);
+              tag: Uygulama → RDS Proxy → Aurora
+              say: Sipariş başlığı.
+            - code: INSERT INTO order_items VALUES ('W1793396741', 'P0001', 1, 3373.84), ('W1793396741', 'P0131', 2, 3758.21);
+              tag: Uygulama → RDS Proxy → Aurora
+              say: 'İki kalem: 3.373,84 + 2 × 3.758,21.'
+            - code: INSERT INTO outbox (…); COMMIT;
+              tag: Uygulama → RDS Proxy → Aurora
+              say: Olay da aynı pakette (Adım 25). Raporla ilgisi yok.
+          - title: Rapor açılınca
+            text:
+            - Uygulama rapor rolüyle kümenin yazma adresine kısa bir bağlantı açar. Rapor seyrek çalıştığı için bağlantı paylaşımına (RDS Proxy) gerek duyulmadı; ödeme ise oradan geçer. t0'daki paket kartında bu adresi göreceksin.
+            - 'Plan kutusu operasyon ekibinin aracıdır. İşaretlenince sorgu ikinci kez, EXPLAIN ANALYZE ile çalışır: aynı iş iki kez yapılır. 25 ms''lik raporda sorun değil. 8 saniyelik bir raporda sunucu aynı işi 16 saniye yapardı; 15 saniyelik sınır her sorguyu ayrı saydığı için bunu durdurmaz. Bu yüzden kutu sadece plana bakılacağı zaman işaretlenir.'
+            code:
+            - code: GET /aurora/api/report?explain=on
+              tag: Tarayıcı → Uygulama
+              say: Plan da istenir.
+            - code: 'SELECT c.segment, count(DISTINCT o.order_id), sum(oi.qty * oi.unit_price), … '
+              tag:
+              - Uygulama → Aurora
+              - Aurora → Uygulama
+              say: 'Raporun kendisi: 3 satır.'
+            - code: EXPLAIN ANALYZE SELECT c.segment, …
+              tag:
+              - Uygulama → Aurora
+              - Aurora → Uygulama
+              say: Aynı sorgu yeniden çalışır; bu kez planıyla.
+            - code: SELECT date_trunc('hour', order_date), count(*), sum(total) FROM orders WHERE visitor_id IS NOT NULL …
+              tag:
+              - Uygulama → Aurora
+              - Aurora → Uygulama
+              say: Mağazadan verilen siparişlerin saatlik özeti; eski site siparişlerinde visitor_id boş.
+          - title: Pano ne der?
+            text: '31 Eki, 10:40''tan önceki saat (temsilî): 6 rapor isteği, p95 34 ms, 0 iptal, pay %0,05, 2 alarm OK. Süreler t0''daki planla aynı düzeyde: canlı ölçümde 24,5–34,7 ms. Saatlik özet 1,2–1,8 ms. Tablo ayda yaklaşık 1.200 sipariş büyüyor; bu hızla 2 saniyelik eşiğe yıllar var, yine de karar panodan izleniyor.'
+        - n: 4
+          title: Tutarlılık ve onarım
+          intro: 'İstatistik eskirse, rapor durmazsa, okuma sunucusu raporu taşıyamazsa, tablo büyür ve rapor yavaşlarsa, sürüm değişirse ne olur? Hepsi Olsaydı: yaşanmadı. Her biri için bir emniyet var; ne zaman çalıştığı, neyi yakalamadığı ve onarımı aşağıda. Son kart planın hiç göremediği bir şeyi anlatıyor.'
+          cards:
+          - title: İstatistik eskirse
+            text: 'Ne zaman: ANALYZE uzun süre çalışmazsa ya da bir toplu yazma eşikten sonra henüz işlenmediyse. Tarih süzgeci en hassas olanıdır: özet son ANALYZE''dan sonraki tarihleri bilmez ve order_date''te index yok. Emniyet: autovacuum ve toplu işlerin son komutu olan ANALYZE. Yakalamadığı: autovacuum''un çalışıp özetin yine kaba kalması (çok çarpık bir değer dağılımı). Onarım: plandaki tahmin ve gerçek karşılaştırılır (1''e karşı 270), ANALYZE elle çalıştırılır; gerekirse sütunun örnek sayısı artırılır.'
+            code:
+            - code: Nested Loop (rows=1) (actual rows=270 loops=1)
+              tag: Aurora'nın içinde
+              say: 'Olsaydı: 1 satır bekledi, 270 geldi; her biri ayrı arama.'
+            - code: ANALYZE orders;
+              tag: Ekip → Aurora
+              say: Özet yenilenir; bir sonraki sorgu Hash Join seçer.
+          - title: Rapor durmazsa
+            text: 'Ne zaman: sorgu çalışırken, 15. saniyede. statement_timeout kesintiyi Aurora''nın içinde yapar; Uygulama çökse de sorgu durur. Bağlantı sınırı 5: altıncı bağlantı reddedilir, ödeme bağlantıları etkilenmez. Yakalamadığı: 15 saniyenin altında kalıp sık çalışan sorgu; onu p95 alarmı ve DBLoad payı yakalar. Onarım: iptal alarmı çalınca ekip kayıtlardan hangi sorgu olduğuna bakar ve kodu geri alır.'
+            code:
+            - code: 'ERROR: canceling statement due to statement timeout   (57014)'
+              tag: Aurora → Uygulama
+              say: Sorgu kesildi; Uygulama ekrana hata döner.
+          - title: Okuma sunucusu tam bir duvar değildir
+            text: 'Rapor okuma sunucusuna taşınınca bile iki bağ kalır. Bir: uzun bir sorgu, yazma sunucusundaki autovacuum''un eski satır sürümlerini (güncellenen satırın eski hâlini) temizlemesini geciktirebilir (AWS belgesi). Saatlerce süren bir rapor sipariş tablolarını şişirebilir. Bu yüzden statement_timeout okuma sunucusunda da geçerlidir: rol aynıdır. İki: yazma sunucusundan gelen bir değişiklik çalışan sorguyla çakışırsa, okuma sunucusu belirli bir süre bekler (bekleme ayarı max_standby_streaming_delay, AWS''e göre 1–30 sn) ve sorguyu keser. Ne zaman: süresi bu beklemeyi aşan sorgularda; bu yüzden ekip ayarı raporun süresinden uzun tutar (8 sn''lik rapor için 30 sn). Yakalamadığı: yazma sunucusu düşünce tek okuma sunucusu onun yerine geçer, rapor yine siparişlerle aynı sunucudadır. Onarım: rapor düzenli olarak bu sınırlara dayanıyorsa bir üst basamak, Redshift. Yalnızca rapor için ayrı bir okuma sunucusu da mümkündür; yük devrinde en son seçilecek şekilde ayarlanır (öncelik sırası 2 ya da üstü).'
+          - title: 'Rapor yavaşladıysa: üç onarım'
+            text: 'Sıra: önce neden okunur, sonra en ucuz çözüm. Süre alarmı çalar; Top SQL hangi sorgu olduğunu, EXPLAIN (ANALYZE, BUFFERS) neresi olduğunu söyler. Plan aynıysa ve satırlar büyüdüyse sorun plan değil, boyuttur. Yakalamadığı: eşiklerin altında kalan yavaş artış; bu yüzden plan her sürümden önce yeniden okunur.'
+            map:
+              cols:
+              - Onarım
+              - Ne zaman işe yarar?
+              - Bu raporda
+              - Bedeli
+              rows:
+              - - Index (CREATE INDEX CONCURRENTLY)
+                - Az satır okunuyorsa.
+                - 'Yaramaz: bütün satırlar okunuyor. "Son 7 gün" süzgeci eklenirse order_date index''i yarar.'
+                - Her siparişte bir index daha güncellenir.
+              - - Materialized view + REFRESH
+                - Sık bakılıyor, biraz eski olabilir.
+                - 3 satır okunur, yaklaşık 1 ms. REFRESH CONCURRENTLY için tekil bir index gerekir.
+                - Sonuç eskir; REFRESH yazma sunucusunda aynı işi yapar.
+              - - Okuma sunucusu, sonra Redshift
+                - İş büyük ama soru aynı.
+                - 'Merdiven: 2 sn, sonra 10 sn. SQL değişmez ya da az değişir.'
+                - Birkaç on ms, sonra yaklaşık 30 sn geriden.
+          - title: Sürüm yükselirse
+            text: 'Ne zaman: her ana sürüm geçişinde, önce Aurora clone''da. Geçişten sonra ANALYZE çalıştırılır: AWS, ana sürüm geçişinden sonra istatistiğin yenilenmesini önerir. Emniyet: QPM onaylı planı çalıştırır, yeni planı Unapproved tutar. Yakalamadığı: onaylı plan yeni veride kötüleşmişse QPM onu da korur; bu yüzden yeni planlar düzenli ölçülür. Kayıtlı olmayan sorgular korunmaz. Onarım: önce kayıtlı planların numaraları yeni sürüme göre güncellenir, sonra iki plan ölçülür, yenisi %10''dan iyiyse onaylanır.'
+            code:
+            - code: SELECT apg_plan_mgmt.validate_plans('update_plan_hash');
+              tag: Ekip → Aurora
+              say: Kayıtlı planların numaraları yeni sürüme göre güncellenir.
+            - code: SELECT apg_plan_mgmt.evolve_plan_baselines(sql_hash, plan_hash, 1.1, 'approve') FROM apg_plan_mgmt.dba_plans WHERE status = 'Unapproved';
+              tag:
+              - Ekip → Aurora
+              - Aurora → Ekip
+              say: 'Bekleyen planı onaylıyla karşılaştırır; 1,1: en az %10 iyiyse onaylar.'
+            - code: SELECT apg_plan_mgmt.reload();
+              tag: Ekip → Aurora
+              say: Sunucuların bellekteki plan listesini yeniler.
+          - title: 'Planın göstermediği: rakam doğru mu?'
+            text: 'Örnek durum. Plan bir sorgunun ne kadar hızlı çalıştığını söyler, doğru olup olmadığını söylemez. Bu raporda canlı bir örnek var: avg(o.total) JOIN''den sonra hesaplanır, yani iki kalemli bir sipariş ortalamaya iki kez girer. 1 Kas''ta premium için avg_order 15.571,57 TL; ciro bölü sipariş ise 21.905.868,57 / 1.688 = 12.977,41 TL. Çok kalemli siparişler ortalamayı yukarı çeker. Sipariş sayısı ve ciro doğrudur. Emniyet: raporun rakamları Redshift mutabakatı (Adım 29) gibi başka bir defterle karşılaştırılır. Yakalamadığı: mutabakat ciroya bakar, ortalamaya bakmaz. Onarım: ortalama siparişler üzerinden, JOIN''den önce hesaplanır.'
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
