@@ -28564,13 +28564,19 @@ steps:
         - - Metadata ve nesne etiketi (tag)
           - İkisi de dosyanın yanındaki küçük bilgilerdir. Metadata (product-id, uploaded-by) yüklenirken yazılır, sonra değişmez. Etiket (kontrol=red) sonradan eklenebilir; dosyaya dokunmadan hâlini yazmaya yarar.
         - - Önceden imzalı yükleme adresi (presigned PUT)
-          - 'Tek bir anahtara, tek bir işlem (PUT: yaz) için ve belli bir süre geçerli adres. Taşıyan herkes süre bitene kadar kullanabilir: kimlik sorulmayan bir bilet gibi. İmzayı ve sınırlarını Adım 36 anlatıyor; orada aynı yöntem indirme (GET) için.'
+          - 'Tek bir anahtara, tek tür işlem (PUT: yaz) için ve belli bir süre geçerli adres. Taşıyan herkes süre bitene kadar kullanabilir: kimlik sorulmayan bir bilet gibi. İmzayı ve sınırlarını Adım 36 anlatıyor; orada aynı yöntem indirme (GET) için.'
         - - CORS ve ön soru (preflight)
           - 'Tarayıcı, sayfanın kendi adresinden başka bir adrese dosya göndermeden önce oraya "senin kurallarına göre bu sayfadan yazabilir miyim?" diye sorar. Bu soru ön sorudur (OPTIONS). CORS, kovanın buna verdiği cevabın kuralıdır. Tarayıcıya yöneliktir: kimlik yerine geçmez, izin vermez.'
-        - - Oturum
-          - 'Satıcının giriş yaptığını gösteren kayıt: ElastiCache''te lm:session:<ziyaretçi>. Adım 21 anlatıyor. Ziyaretçi kimliği, tarayıcıdaki çerezden gelen numaradır.'
-        - - IAM rolü
-          - Bir programa verilen yetki kartı. Uygulama'nınki dbws-app-s3 (Adım 36). Her işin kendi dar rolü vardır.
+        - - Uygulama ve ALB
+          - 'Uygulama: mağazanın arka uç programı (EC2 sunucusunda); isteği alır, cevabı hazırlar. ALB: isteği sunuculara dağıtan yük dengeleyici.'
+        - - Oturum ve ziyaretçi kimliği
+          - 'Oturum: satıcının giriş yaptığını gösteren kayıt; ElastiCache''te lm:session:<ziyaretçi>. Adım 21 anlatıyor. Ziyaretçi kimliği: tarayıcıdaki çerezden gelen numara. Satıcının hesabı bu numarayla kayıtlıdır; metadata''daki uploaded-by budur.'
+        - - IAM rolü ve geçici kimlik
+          - 'Rol: bir programa verilen yetki kartı. Uygulama''nınki dbws-app-s3 (Adım 36). Her işin kendi dar rolü vardır. Geçici kimlik: role verilen, kendiliğinden yenilenen anahtarlar.'
+        - - SSE-S3 ve Block Public Access
+          - 'SSE-S3: anahtarını S3''ün yönettiği diskte şifreleme. Block Public Access: kovayı herkese açmayı engelleyen dört ayarlı ana şalter (Adım 36).'
+        - - İçe aktarma işi, dağıtım hattı ve gece denetimi
+          - 'İçe aktarma işi: eski sistemin ürün ve fotoğraflarını getiren Lambda (Adım 9). Dağıtım hattı: yeni kodu test edip yayına çıkaran otomatik yol. Gece denetimi: bileşenlerdeki "Index ve plan kontrolü" işi; adı Adım 9''daki asıl görevinden gelir, her gece çalışır.'
         - - Malware Protection for S3 (GuardDuty)
           - 'AWS''in virüs tarama özelliği. Kovaya yeni dosya gelince okur, tarar, sonucu dosyaya GuardDutyMalwareScanStatus etiketi olarak yazar ve EventBridge''e bildirir. NO_THREATS_FOUND: tehdit bulunmadı. THREATS_FOUND: tehdit bulundu. UNSUPPORTED, ACCESS_DENIED, FAILED: taranamadı.'
         - - EventBridge ve Lambda
@@ -28584,7 +28590,7 @@ steps:
         - - CloudWatch ve alarm
           - 'CloudWatch: AWS''in ölçüm ve alarm servisi. Alarm: bir sayı eşiği aşınca ekibe mesaj gönderen kural.'
         - - Kod kartlarındaki sözcükler
-          - '200: oldu. 403: reddedildi. OPTIONS: ön soru. PUT: yaz. HEAD: sadece bilgilerini oku. SignatureDoesNotMatch: imza tutmuyor. ContentType: dosya türü. ExpiresIn: saniye cinsinden süre. Prefix: önek. Days: gün.'
+          - '200: oldu. 403: reddedildi. OPTIONS: ön soru. PUT: yaz. HEAD: sadece bilgilerini oku. SignatureDoesNotMatch: imza tutmuyor. ContentType: dosya türü. ExpiresIn: saniye cinsinden süre. Prefix: önek. Days: gün. curl: tarayıcı olmadan istek gönderen komut. Çok parçalı yükleme (multipart): büyük dosyayı parça parça gönderme. content-length-range: imzalı POST''ta dosya boyutu aralığı.'
         - - Kesit, temsilî, Örnek durum ve Olsaydı
           - 'Kesit: simülasyonda gösterilen kayıtlar. Temsilî: canlı sistemden gelmeyen, anlatım için seçilmiş değer. Örnek durum: bu zincirde yaşanmış bir durum. Olsaydı: yaşanmadı; her biri ayrı bir durumdur, sonraki karede geri alınır.'
         - - Rehber adımları
@@ -28620,8 +28626,8 @@ steps:
           name: Katalog yönetim servisi
           kind: code
           what: arka ofis programı (Adım 9)
-          does: '"Bu ürün bu satıcının mı?" sorusuna cevap verir; bilgi kataloğun iç kaydındadır (shop.product_supplier). Yükleme kontrol işine ürünün adını ve kategorisini verir.'
-          box: Ürün bu satıcının mı? Ürünün adı ve kategorisi ne?
+          does: '"Bu ürün bu satıcının mı?" sorusuna cevap verir; bilgi kataloğun iç kaydındadır (shop.product_supplier). Satıcı orada ziyaretçi kimliğiyle kayıtlıdır. Yükleme kontrol işine ürünün adını, kategorisini ve satıcının adını verir.'
+          box: Ürün bu satıcının mı? Adı, kategorisi, satıcının adı ne?
           phases:
           - 3
           - 4
@@ -28646,6 +28652,19 @@ steps:
           - sess
           - admin
           - role
+          - panel
+        - id: lister
+          name: Satıcının listesi (Uygulama)
+          kind: code
+          what: Uygulama'nın liste bölümü
+          does: 'Paneldeki listeyi doldurur: sadece satıcının kendi önekini okur, her dosyanın kontrol etiketini sorar. Etiket yoksa "bekliyor" yazar. Kabul, red ve sebep buradan satıcıya gider.'
+          box: Satıcının kendi öneki; etiket yoksa "bekliyor", varsa kabul ya da red.
+          phases:
+          - 3
+          - 4
+          before: panel
+          after:
+          - images
           - panel
         - id: role
           name: Uygulama'nın IAM rolü (dbws-app-s3)
@@ -28722,7 +28741,7 @@ steps:
           name: Altyapı şablonu (CloudFormation)
           kind: aws
           what: kod deposundaki şablon ve onu uygulayan AWS servisi (Adım 36)
-          does: Kovayı, CORS kuralını, temizlik kurallarını, taramayı, olay kuralını ve rolleri tek şablondan kurar. Elle yapılan değişikliği drift olarak gösterir.
+          does: Kovayı, CORS kuralını, temizlik kurallarını, taramayı, olay kuralını, yükleme kontrol işini, alarmları ve rolleri tek şablondan kurar. Elle yapılan değişikliği drift olarak gösterir.
           box: Hepsini şablondan kurar; elle değişikliği drift diye gösterir.
           phases:
           - 1
@@ -28736,11 +28755,13 @@ steps:
           - role
           - gd
           - eb
+          - upcheck
+          - monitor
         - id: gd
           name: Virüs taraması (Malware Protection for S3)
           kind: aws
           what: GuardDuty'nin S3 özelliği, sadece uploads/ için
-          does: 'uploads/ altına gelen her dosyayı tarar, sonucu dosyaya etiket olarak yazar, EventBridge''e bildirir. products/''ı taramaz: oraya yalnızca kontrol edilmiş dosya gelir.'
+          does: 'uploads/ altına gelen her dosyayı tarar, sonucu dosyaya etiket olarak yazar, EventBridge''e bildirir. products/''ı taramaz: satıcının dosyası oraya kontrolden geçip gelir; içe aktarma işinin ve katalog ekibinin dosyalarına görsel kontrol işi bakar.'
           box: uploads/ taranır; sonuç etikete ve olaya yazılır.
           phases:
           - 2
@@ -28768,12 +28789,14 @@ steps:
           name: Yükleme kontrol işi (Lambda)
           kind: code
           what: AWS Lambda'da çalışan kod
-          does: 'uploads/''dan vitrine geçişin tek kapısı. Önce boyuta bakar, sonra dosyanın kendisini okur: gerçekten resim mi, en az 480×480 mi, ürün hâlâ bu satıcının mı? Geçerse 480×480 JPEG yapar, products/<ürün no>.jpg olarak yazar. Geçmezse dosyaya sebebiyle red etiketi koyar. Dosya her iki durumda 30 gün kanıt olarak kalır.'
+          does: 'uploads/''dan vitrine geçişin tek yolu. Önce boyuta bakar, sonra dosyanın kendisini okur: gerçekten resim mi, en az 480×480 mi, ürün hâlâ bu satıcının mı? Geçerse 480×480 JPEG yapar, products/<ürün no>.jpg olarak yazar. Geçmezse dosyaya sebebiyle red etiketi koyar. Dosya her iki durumda 30 gün kanıt olarak kalır.'
           box: Dosyanın içine bakar; geçerse 480×480 JPEG yapıp products/'a yazar, geçmezse red etiketi.
           phases:
+          - 2
           - 3
           - 4
           before:
+          - iac
           - eb
           - images
           - admin
@@ -28814,6 +28837,7 @@ steps:
           - 3
           - 4
           before:
+          - iac
           - eb
           - upcheck
           - imgcheck
@@ -28836,7 +28860,7 @@ steps:
         sim:
           kind: pipeline
           title: Panel → imza → kova → tarama → kontrol → vitrin
-          caption: 'Kova kutusunda üç tablo var: t0''daki 2 yükleme (kesit), t0''daki 2 fotoğraf (kesit; katalogda 200) ve hikâyedeki ürün P0042 (kesitin dışında). Önce kurallar kuruluyor, sonra tek bir fotoğraf bütün yolu geçiyor, en sonda t0''daki dosyaların hikâyesi ve aksilikler oynuyor. "Örnek durum" diye başlayan kareler bu zincirde yaşanmış durumlar; "Olsaydı" diye başlayanlar yaşanmadı, yaşansaydı ne olacağını gösteriyor. Canlı sistemden: t0''daki anahtarlar ve boyutlar, yüklenme zamanları, görsel kovasının sürüm tutma ayarı, eski sürüm kuralı, 4 Block Public Access ayarı. Temsilî: P0042''nin bütün değerleri, sürüm adları, kontrol etiketleri ve red sebepleri, satıcıların sayıları, eşikler ve 30 gün. Son karede kova, sen butona basmadan önceki (t0) hâlde.'
+          caption: 'Kova kutusunda üç tablo var: t0''daki 2 yükleme (kesit), t0''daki 2 fotoğraf (kesit; katalogda 200) ve bu akıştaki ürün P0042 (kesitin dışında). Önce kurallar kuruluyor, sonra tek bir fotoğraf bütün yolu geçiyor, en sonda t0''daki dosyaların başına gelenler ve aksilikler oynuyor. 1. aşama (Tasarım) simülasyonda yok; kararlar aşağıdaki kartlarda. "Örnek durum" diye başlayan kareler bu zincirde yaşanmış durumlar; "Olsaydı" diye başlayanlar yaşanmadı, yaşansaydı ne olacağını gösteriyor. Canlı sistemden: t0''daki anahtarlar ve boyutlar, yüklenme zamanları, görsel kovasının sürüm tutma ayarı, eski sürüm kuralı, 4 Block Public Access ayarı. Temsilî: P0042''nin bütün değerleri, sürüm adları, kontrol etiketleri ve red sebepleri, satıcıların sayıları, eşikler ve 30 gün. Son karede kova, sen butona basmadan önceki (t0) hâlde.'
           tick_ms: 2800
           phases:
             2: İlk yükleme
@@ -28862,6 +28886,8 @@ steps:
             row: writers
           - id: signer
             row: writers
+          - id: lister
+            row: writers
           - id: role
             row: writers
           - id: images
@@ -28869,48 +28895,51 @@ steps:
             tables:
             - name: 'uploads/ (kesit: t0''daki 2 yükleme)'
               cols:
+              - boyut
               - anahtar
-              - boyut · sürüm
               - hâl
               rows:
               - key: u1
+                boyut: 157 B
                 anahtar: uploads/​004c5a92…/​1793140631-​up.png
-                boyut · sürüm: 157 B · u8Pq2Z…
                 hâl: bekliyor
                 hidden: true
               - key: u2
+                boyut: 27 KB
                 anahtar: uploads/​06876b05…/​1793301649-​images__1_.jpg
-                boyut · sürüm: 27 KB · kT02mF…
                 hâl: bekliyor
                 hidden: true
             - name: 'products/ (kesit: t0''daki 2 fotoğraf; katalogda 200)'
               cols:
+              - boyut
               - anahtar
-              - boyut · sürüm
+              - sürüm
               rows:
               - key: p1
+                boyut: 48 KB
                 anahtar: products/​P0001.jpg
-                boyut · sürüm: 48 KB · 3HL4kq…
+                sürüm: 3HL4kq…
                 hidden: true
               - key: p2
+                boyut: 40 KB
                 anahtar: products/​P0002.jpg
-                boyut · sürüm: 40 KB · Qx91Ab…
+                sürüm: Qx91Ab…
                 hidden: true
-            - name: 'kesitin dışında: bu hikâyedeki ürün (P0042, tüm değerler temsilî)'
+            - name: 'kesitin dışında: bu akıştaki ürün (P0042, değerler temsilî)'
               cols:
+              - boyut
               - anahtar
-              - boyut · sürüm
               - hâl
               rows:
               - key: u0
+                boyut: 1,4 MB
                 anahtar: uploads/​a91c07e2…/​1793100000-​su-​isitici.jpg
-                boyut · sürüm: 1,4 MB · v1
                 hâl: bekliyor
                 hidden: true
               - key: p42
+                boyut: 38 KB
                 anahtar: products/​P0042.jpg
-                boyut · sürüm: 38 KB · v1
-                hâl: vitrinde
+                hâl: vitrinde · v1
                 hidden: true
           - id: guard
             row: stores
@@ -28945,14 +28974,16 @@ steps:
             - role
             - gd
             - eb
+            - upcheck
+            - monitor
             - images
             packet:
               at: iac
-              text: 'aws cloudformation deploy → CORS: PUT · kural: uploads-30-gun · tarama: uploads/ · olay kuralı: tarama sonucu'
+              text: 'aws cloudformation deploy → CORS: PUT · kural: uploads-30-gun · tarama: uploads/ · olay kuralı · yükleme kontrol işi · alarmlar'
             note:
               iac: kurulum tamam
               cors: PUT · sadece mağazanın adresi
-            say: 'Kovanın ve kapısının kurulumunu Adım 36 anlattı. Yükleme için aynı şablona dört şey eklendi: tarayıcıdan PUT''a izin veren CORS kuralı, uploads/ için 30 günlük temizlik kuralı, uploads/ taraması ve tarama sonucunu ileten olay kuralı. Kova bu sırada hiç açılmadı.'
+            say: 'Kovanın ve kapısının kurulumunu Adım 36 anlattı. Yükleme için aynı şablona altı şey eklendi: tarayıcıdan PUT''a izin veren CORS kuralı, uploads/ için 30 günlük temizlik kuralı, uploads/ taraması, tarama sonucunu ileten olay kuralı, yükleme kontrol işi ve alarmlar. Kova bu sırada hiç açılmadı.'
           - phase: 2
             who: images
             lit:
@@ -28980,14 +29011,15 @@ steps:
             - images
             - guard
             - gd
+            - upcheck
             - monitor
             packet:
               at: indexjob
-              text: 'PUT uploads/deneme.txt (imzasız) → 403 AccessDenied · tarama etiketi: NO_THREATS_FOUND ✓'
+              text: 'PUT uploads/deneme.txt (imzasız) → 403 AccessDenied · tarama etiketi: NO_THREATS_FOUND ✓ · geçersiz dosya → kontrol=red ✓'
             note:
               images: ''
               monitor: alarmlar açık
-            say: Satıcılara açılmadan önce kapı denendi. Gece denetimi imzasız bir PUT gönderdi; S3 403 döndü. Örnek bir dosyanın taranıp etiket aldığı da görüldü, sonra alarmlar açıldı. Panelin formu bundan sonra satıcılara açıldı.
+            say: Satıcılara açılmadan önce kapı denendi. Gece denetimi imzasız bir PUT gönderdi; S3 403 döndü. Bir deneme dosyası taranıp etiket aldı, geçersiz bir deneme dosyasını kontrol işi reddetti; ikisi de sonra silindi, bu yüzden uploads/ hâlâ boş. Panelin formu bundan sonra satıcılara açıldı.
           - phase: 3
             who: panel
             lit:
@@ -29091,7 +29123,7 @@ steps:
             note:
               gd: ''
               admin: ''
-            say: 'Olay kuralı sonucu yükleme kontrol işine iletti. İş önce S3''ten boyutu sordu, sonra dosyanın baytlarını okudu. Metadata''daki türe değil, dosyanın kendisine baktı: JPEG, 1600×1600. Katalog yönetim servisi P0042''nin hâlâ bu satıcının olduğunu söyledi, ürünün adını ve kategorisini verdi. Dört kontrol de geçti.'
+            say: 'Olay kuralı sonucu yükleme kontrol işine iletti. Tarama temizdi. İş S3''ten boyutu ve metadata''yı sordu: ürün P0042, yükleyen a91c07e2…. Sonra dosyanın baytlarını okudu; yazan türe değil, dosyanın kendisine baktı: JPEG, 1600×1600. Katalog yönetim servisi P0042''nin hâlâ bu satıcının olduğunu söyledi, ürünün adını, kategorisini ve satıcının adını verdi. Kalan dört kontrol de geçti.'
           - phase: 3
             who: upcheck
             lit:
@@ -29100,19 +29132,20 @@ steps:
             - monitor
             packet:
               at: upcheck
-              text: 'put_object(Key: "products/P0042.jpg", ContentType: "image/jpeg", Metadata: { name, category, author, license, source: satıcı }) · etiket: kontrol=kabul'
+              text: 'put_object(Key: "products/P0042.jpg", ContentType: "image/jpeg", Metadata: { name, category, author, license, source: satıcı, source-key: uploads/a91c07e2…/1793100000-su-isitici.jpg }) · etiket: kontrol=kabul'
             set:
               images:
                 u0:
                   hâl: kabul
                 p42:
-                  boyut · sürüm: 44 KB · v2
+                  boyut: 44 KB
+                  hâl: vitrinde · v2
             fresh:
               images:
               - p42
             note:
-              upcheck: geçen 1 · red 0
-              monitor: 'red oranı: son 1 saatte 14 yüklemede 0 (n<20, alarm hesaplanmaz)'
+              upcheck: 'bu dosya: geçti'
+              monitor: 'red oranı: son 1 saatte 14 yüklemede 0 (20''den az yükleme: oran hesaplanmaz)'
             say: 'İş fotoğrafı 480×480 JPEG yaptı ve vitrine yazdı. Dosyanın tek yolu bu: satıcıya products/ için adres verilmez. Eski fotoğraf silinmedi, sürüm oldu. Satıcının dosyası uploads/''da "kabul" etiketiyle 30 gün kanıt olarak kalır.'
           - phase: 3
             who: imgcheck
@@ -29126,7 +29159,7 @@ steps:
             note:
               upcheck: ''
               imgcheck: kontrol edilen 1 · geri alınan 0
-            say: 'products/''a yeni dosya gelince görsel kontrol işi başladı: Adım 9 ve 36''daki aynı dört kontrol. Bu ikinci kontrol, yükleme kontrol işinin kendi hatasını yakalar; katalog ekibinin yüklemelerine de aynı kontrol uygulanır. Dört kontrol geçti. Olaylar ayrı önekte olduğu için iş kendi çıktısıyla yeniden başlamaz.'
+            say: 'products/''a yeni dosya gelince görsel kontrol işi başladı: Adım 9 ve 36''daki aynı dört kontrol. Bu ikinci kontrol, yükleme kontrol işinin kendi hatasını yakalar; katalog ekibinin yüklemelerine de aynı kontrol uygulanır. Dört kontrol geçti. Tetikler ayrı: yükleme kontrol işi tarama sonucuyla, bu iş products/ olayıyla başlar; yükleme kontrol işi kendi yazısıyla yeniden başlamaz.'
           - phase: 3
             who: imgproxy
             lit:
@@ -29145,12 +29178,14 @@ steps:
             - images
             note:
               imgproxy: ''
+              monitor: ''
               lifecycle: v1 silindi
-            say: Bir gün sonra temizlik kuralı P0042'nin eski sürümünü (v1) sildi. Yanlış ürünün fotoğrafını geri almak için bir gün süre vardı. Bu sadece vitrindeki eski sürümdür; satıcının dosyası uploads/'da durmaya devam eder.
+            say: Bir gün sonra, 28 Eki öğleden sonra, temizlik kuralı P0042'nin eski sürümünü (v1) sildi. Yanlış ürünün fotoğrafını geri almak için bir gün süre vardı; daha geç fark edilseydi eski sürüm kalmazdı, doğru fotoğraf yeniden yüklenirdi. Bu sadece vitrindeki eski sürümdür; satıcının dosyası uploads/'da durmaya devam eder.
           - phase: 4
             who: upcheck
             lit:
             - panel
+            - lister
             - images
             - gd
             - upcheck
@@ -29171,9 +29206,9 @@ steps:
             note:
               lifecycle: ''
               images: vitrin değişmedi
-              upcheck: geçen 0 · red 1
-              monitor: 1 saatte 3 yüklemede 1 red (n<20, alarm hesaplanmaz)
-            say: 'Örnek durum, 28 Eki 01:37: bir satıcı up.png yükledi, 157 bayt. Tarama temiz. Kontrol işi dosyayı açtı: görüntü 480×480''den küçük (temsilî sebep). Vitrine bir şey yazılmadı. Dosya kaldı ve red etiketi aldı; panel satıcıya sebebini gösterir. t0''daki listede görünen dosya bu.'
+              upcheck: 'bu dosya: red'
+              monitor: '1 saatte 3 yüklemede 1 red (20''den az yükleme: oran hesaplanmaz)'
+            say: 'Örnek durum, aynı günün gecesi, 28 Eki 01:37: bir satıcı up.png yükledi, 157 bayt. Tarama temiz. Kontrol işi dosyayı açtı: görüntü 480×480''den küçük (temsilî sebep). Vitrine bir şey yazılmadı. Dosya kaldı ve red etiketi aldı; panel satıcıya sebebini gösterir. t0''daki listede görünen dosya bu.'
           - phase: 4
             who: upcheck
             lit:
@@ -29242,7 +29277,7 @@ steps:
               gd: ''
               images: 'olsaydı: 3 GB, reddedildi'
               monitor: 'olsaydı: günlük bayt 3 GB < 5 GB'
-            say: 'Olsaydı: adres 15 dakika içinde sızsaydı ve biri 3 GB''lık bir dosya gönderseydi. PUT adresi boyutu sınırlamaz; formdaki 2 MB sınırı da tarayıcıda. S3 kabul ederdi. Kontrol işi önce boyutu sorduğu için dosyayı hiç okumadan reddederdi. Günlük bayt alarmı (5 GB, temsilî) ikinci denemede çalardı. Taşıyan yalnızca bu tek anahtara yazabilirdi; products/''a ve başka dosyaya dokunamazdı. Dosya 30 gün sonra giderdi.'
+            say: 'Olsaydı: adres 15 dakika içinde sızsaydı ve biri 3 GB''lık bir dosya gönderseydi. PUT adresi boyutu sınırlamaz; formdaki 2 MB sınırı da tarayıcıda. S3 kabul ederdi. Tarama yine çalışırdı; bedeli taranan GB kadar ücrettir. Kontrol işi önce boyutu sorduğu için dosyayı hiç okumadan reddederdi. Günlük bayt alarmı (5 GB, temsilî) ikinci denemede çalardı. Taşıyan yalnızca bu tek anahtara yazabilirdi; products/''a doğrudan dokunamazdı. Geçerli bir fotoğraf gönderseydi kontrolden geçerdi: bunu 4. aşamadaki kart anlatıyor. Dosya 30 gün sonra temizlenirdi.'
           - phase: 4
             who: indexjob
             lit:
@@ -29270,7 +29305,7 @@ steps:
               upcheck: ''
               monitor: ''
               panel: form bekliyor
-            say: 'Hazır. Olsaydı karelerindeki hiçbir şey yaşanmadı; kova bugünkü hâlinde. uploads/ altında t0''daki iki bekleyen dosya, products/ altında P0001 (48 KB) ve P0002 (40 KB) var. Kapı kapalı, CORS kuralı yerinde, form bekliyor. t0''daki simülasyon burada başlıyor: sen dosyanı seçip "Upload"a basacaksın.'
+            say: 'Hazır. Olsaydı karelerindeki hiçbir şey yaşanmadı; kova bugünkü hâlinde. uploads/ altında t0''daki iki reddedilmiş dosya, products/ altında P0001 (48 KB) ve P0002 (40 KB) var. Kova kapalı, CORS kuralı yerinde, form bekliyor. t0''daki simülasyon burada başlıyor: sen dosyanı seçip "Upload"a basacaksın.'
         phases:
         - n: 1
           title: Tasarım
@@ -29294,7 +29329,7 @@ steps:
                 - uploads/<ziyaretçi>/<zaman>-<ad>
                 - products/<ürün no>.jpg
               - - Ne kadar kalır
-                - 30 gün (temsilî)
+                - 30 gün + 1 gün temizlik (temsilî)
                 - Ürün yaşadıkça
           - title: Dosya neden Uygulama'dan geçmiyor?
             text: Bir istekte dosya taşımak sunucunun belleğini ve bağlantısını yükleme bitene kadar meşgul eder. Fotoğraflar 2 MB'a kadar. Kampanya öncesi satıcılar aynı anda yüklerse alışveriş yapan müşterilerle aynı sunucuları paylaşırlar. Adresle yüklemede Uygulama sadece imzalar, bayt doğrudan kovaya gider.
@@ -29323,7 +29358,7 @@ steps:
               tag: Uygulamanın içinde
               say: Anahtarı satıcının yazdığı bir yoldan değil, oturumdan kurar.
           - title: Adres neyi kapsıyor?
-            text: 'İmza yöntemi Adım 36''daki ile aynı; işlem burada PUT. İmzaya dosya türü ve metadata da girer. Tarayıcı aynı başlıkları göndermek zorundadır; biri değişirse S3''ün hesabı tutmaz ve 403 döner. Böylece satıcı metadata''daki ürün numarasını sonradan değiştiremez. Adres 15 dakikalıktır: fotoğraf seçip göndermeye yeter. Süre içinde birden fazla kez kullanılabilir; her kullanım aynı anahtara yeni bir sürüm yazar.'
+            text: 'İmza yöntemi Adım 36''daki ile aynı; işlem burada PUT. İmzaya dosya türü ve metadata da girer. Tarayıcı aynı başlıkları göndermek zorundadır; biri değişirse S3''ün hesabı tutmaz ve 403 döner. Böylece satıcı metadata''daki ürün numarasını sonradan değiştiremez. Adres 15 dakikalıktır: fotoğraf seçip göndermeye yeter. Süre içinde birden fazla kez kullanılabilir; her kullanım aynı anahtara yeni bir sürüm yazar, önceki hâl eski sürüm olur ve 1 gün sonra silinir.'
             code:
             - code: 'url = s3.generate_presigned_url("put_object", Params={"Bucket": …, "Key": key, "ContentType": tur, "Metadata": meta}, ExpiresIn=900)'
               tag: Uygulamanın içinde
@@ -29332,7 +29367,7 @@ steps:
               tag: Tarayıcı → S3
               say: Başlıklar imzadakiyle aynı olmalı; dosya doğrudan kovaya gider.
           - title: Neyi sınırlayamıyor?
-            text: 'Adres dosyanın içini ve boyutunu kontrol etmez. S3 tek PUT''ta 5 GB''a kadar kabul eder. Tür başlığı da sadece bir sözdür: adı değiştirilmiş bir dosya "image/jpeg" diye gelebilir. Ekip bunu bilerek kabul etti, çünkü asıl kapı dosya yazıldıktan sonra çalışan kontrol işidir ve müşteri o zamana kadar dosyayı görmez. Boyutu daha baştan kesmek istenirse S3''ün imzalı POST yöntemi vardır.'
+            text: 'Adres dosyanın içini ve boyutunu kontrol etmez. S3 tek PUT''ta 5 GB''a kadar kabul eder. Tür başlığı da sadece bir sözdür: adı değiştirilmiş bir dosya "image/jpeg" diye gelebilir. Ekip bunu bilerek kabul etti, çünkü vitrinin kapısı dosya yazıldıktan sonra çalışan kontrol işidir ve müşteri o zamana kadar dosyayı görmez. Boyutu daha baştan kesmek istenirse S3''ün imzalı POST yöntemi vardır.'
             map:
               cols:
               - Yöntem
@@ -29346,7 +29381,7 @@ steps:
                 - content-length-range ile S3 reddeder
                 - Büyük dosya kötüye kullanımı görülürse geçilecek yol (bekleyen karar)
           - title: 'CORS: tarayıcının ön sorusu'
-            text: 'Mağaza ve kova farklı adresler. Tarayıcı, başka bir adrese bu başlıklarla yazmadan önce OPTIONS ile sorar. Kural olmazsa imza doğru olsa bile tarayıcı dosyayı göndermez. Dikkat: CORS güvenlik kapısı değildir. Sadece tarayıcılar uyar; adresi olmayan biri CORS sayesinde yazamaz, adresi olan biri de CORS olmadan curl ile yazabilir. Asıl kapı imzadır.'
+            text: 'Mağaza ve kova farklı adresler. Tarayıcı, başka bir adrese bu başlıklarla yazmadan önce OPTIONS ile sorar. Kural olmazsa imza doğru olsa bile tarayıcı dosyayı göndermez. Dikkat: CORS güvenlik kapısı değildir. Sadece tarayıcılar uyar; adresi olmayan biri CORS sayesinde yazamaz, adresi olan biri de CORS olmadan curl ile yazabilir. Yazmanın kapısı imzadır.'
             code:
             - code: 'CORSRules: [{ AllowedOrigins: ["https://<mağazanın adresi>"], AllowedMethods: ["PUT"], AllowedHeaders: ["content-type", "x-amz-meta-*"], MaxAgeSeconds: 3000 }]'
               tag: Şablon → S3
@@ -29391,7 +29426,7 @@ steps:
               tag: Ekip → CloudFormation
               say: Hepsi tek şablondan kurulur.
           - title: Açılış öncesi deneme
-            text: 'Üç deneme yapılır: imzasız PUT 403 almalı, deneme dosyası etiket almalı, kontrol işi geçersiz bir dosyayı reddetmeli. Bunlardan biri tutmazsa form açılmaz. Gece denetimi ilk denemeyi her gece tekrar eder.'
+            text: 'Üç deneme yapılır: imzasız PUT 403 almalı, deneme dosyası etiket almalı, kontrol işi geçersiz bir dosyayı reddetmeli. Deneme dosyaları sonra silinir. Bunlardan biri tutmazsa form açılmaz. Gece denetimi ilk denemeyi her gece tekrar eder.'
             code:
             - code: PUT uploads/deneme.txt (imzasız) → 403 AccessDenied
               tag: Gece denetimi → S3
@@ -29406,7 +29441,7 @@ steps:
             - code: oturum = lm:session:<ziyaretçi>
               tag: Uygulama → ElastiCache
               say: Satıcı giriş yapmış mı?
-            - code: sahip_mi(urun, oturum.satici)
+            - code: sahip_mi(urun, oturum.ziyaretci)
               tag: Uygulama → Katalog yönetim servisi
               say: Ürün bu satıcının mı?
             - code: url = s3.generate_presigned_url("put_object", …, ExpiresIn=900)
@@ -29422,7 +29457,7 @@ steps:
               tag: Şablon → EventBridge
               say: Olay kuralı sadece tarama sonuçlarını yakalar.
           - title: 'Yükleme kontrol işi: dosyanın kendisine bakar'
-            text: 'Sıra önemlidir. Önce boyut sorulur; büyük dosya hiç okunmaz, iş belleğini doldurmaz. Sonra baytlar açılır: tür başlığına değil, dosyanın gerçek biçimine bakılır. Sahip yeniden sorulur, çünkü adres alındıktan sonra ürün başka satıcıya geçmiş olabilir. Son olarak fotoğraf yeniden üretilir: 480×480 JPEG. Yeniden üretmek dosyanın içine gizlenmiş fazlalıkları da atar. Olaylar sırasız gelebilir: iş anahtardaki zamana bakar, vitrindeki fotoğraf daha yeni bir yüklemeden geldiyse eskisini yazmaz.'
+            text: 'Sıra önemlidir. Önce boyut sorulur; büyük dosya hiç okunmaz, iş belleğini doldurmaz. Sonra baytlar açılır: tür başlığına değil, dosyanın gerçek biçimine bakılır. Sahip yeniden sorulur, çünkü adres alındıktan sonra ürün başka satıcıya geçmiş olabilir. Son olarak fotoğraf yeniden üretilir: 480×480 JPEG. Yeniden üretmek dosyanın içine gizlenmiş fazlalıkları da atar. Olaylar sırasız gelebilir: vitrindeki fotoğrafın metadata''sında geldiği dosya yazar (source-key). İş iki anahtardaki zamanı karşılaştırır; vitrindeki daha yeni bir yüklemeden geldiyse eskisini yazmaz.'
             map:
               cols:
               - Kontrol
@@ -29452,11 +29487,11 @@ steps:
               tag: Kontrol işi → S3
               say: Bekleyen dosyaya hâli yazılır.
           - title: Vitrine geçince
-            text: Vitrin yazısı görsel kontrol işini başlatır (Adım 9). Bu iş sadece products/ olayını dinler. Yükleme kontrol işi tarama sonucuyla başlar. İkisinin tetiği ayrı olduğu için iş kendi çıktısıyla döngüye girmez. Metadata'daki name, category, author ve license, Adım 36'da satıcı panelinin listesinde gördüğün etiketlerdir; source satıcıdan gelen fotoğrafta "satıcı" olur. Görsel adresi yeni fotoğrafı hemen verir, tarayıcılar eskisini en çok 5 dakika daha gösterebilir.
+            text: 'Vitrin yazısı görsel kontrol işini başlatır (Adım 9). Bu iş sadece products/ olayını dinler. Yükleme kontrol işi tarama sonucuyla başlar. İkisinin tetiği ayrı olduğu için yükleme kontrol işi kendi yazısıyla döngüye girmez. Görsel kontrol işi önceki sürümü geri getirirse bu da yeni bir yazıdır, kontrol onu da okur: önceki sürüm kuralları zaten geçtiği için orada durur. O zaman satıcının dosyası "kabul" etiketli kalır ama vitrinde eski fotoğraf görünür; alarm gider, ekip satıcıya döner. Metadata''daki name ve category kataloğun kaydından, author satıcının adından gelir; license satıcının mağazayla yaptığı sözleşmeyi yazar, source "satıcı" olur. Adım 36''da satıcı panelinin listesinde gördüğün bilgiler bunlardır. Görsel adresi yeni fotoğrafı hemen verir, tarayıcılar eskisini en çok 5 dakika daha gösterebilir.'
           - title: Satıcı ne görür?
-            text: 'Panel yüklemeden sonra kendi önekini listeler: uploads/<kendi kimliği>/. Başka satıcının dosyasını görmez. Her dosyanın yanında kontrol etiketi yazar: bekliyor, kabul ya da sebebiyle red. Yanında metadata: product-id ve uploaded-by.'
+            text: 'Panel yüklemeden sonra kendi önekini listeler: uploads/<kendi kimliği>/. Başka satıcının dosyasını görmez. Her dosyanın yanında hâli yazar: etiket yoksa bekliyor, varsa kabul ya da sebebiyle red. Yanında metadata: product-id ve uploaded-by.'
             code:
-            - code: s3.list_objects_v2(Bucket=b, Prefix=f"uploads/{oturum.ziyaretci}/", MaxKeys=12)
+            - code: s3.list_objects_v2(Bucket=b, Prefix=f"uploads/{oturum.ziyaretci}/")
               tag: Uygulama → S3
               say: Sadece satıcının kendi öneki.
             - code: s3.get_object_tagging(Bucket=b, Key=k)
@@ -29475,7 +29510,7 @@ steps:
               - Ekip ne yapar
               rows:
               - - Red oranı
-                - 'Son 1 saat: IF(n >= 20, red / n) > %50'
+                - 'Son 1 saatte en az 20 yüklemenin yarısından fazlası red: IF(n >= 20, red / n) > %50'
                 - Panel ya da kontrol işinde hata var mı diye bakar
               - - Tehdit
                 - THREATS_FOUND sayısı ≥ 1, anında
@@ -29496,7 +29531,7 @@ steps:
           - title: Sızan adres ve büyük dosya
             text: 'Ne zaman: adres 15 dakika içinde başkasının eline geçerse. Taşıyan sadece o tek anahtara yazar. Ne yapar: boyut kontrolü okumadan reddeder, bayt alarmı bakar, kural 30 gün sonra temizler. Yakalamadığı: sızan adresle geçerli başka bir fotoğraf yüklenirse kontroller geçer ve vitrine gider; uploaded-by adresi alan satıcıyı gösterir, taşıyanı değil. Bu yüzden Uygulama adresi kayıtlarına yazmaz, satıcı da paylaşmamalıdır. Onarım: önceki sürüm geri getirilir. Tek bir adresi iptal eden düğme yoktur (Adım 36).'
           - title: Bitmeyen iş
-            text: 'Ne zaman: kontrol işi hata alırsa. Lambda iki kez daha dener, sonra olay hata kuyruğuna gider. Gece sayımı aynı dosyayı ikinci kez yakalar. Ne yapar: alarm verir; eski fotoğraf yayında kalır. Yakalamadığı: gece sayımı 1 saatten yeni dosyalara bakmaz, hata kuyruğu da saatlerce boş kalabilir; bu yüzden satıcının gördüğü "bekliyor" bir süre uzayabilir. Onarım: ekip sebebi giderip olayları yeniden gönderir; iş tekrar gelen olaya dayanıklı olduğu için güvenlidir.'
+            text: 'Ne zaman: kontrol işi hata alırsa. Lambda iki kez daha dener, sonra olay hata kuyruğuna gider. Gece sayımı aynı dosyayı ikinci kez yakalar. Ne yapar: alarm verir; eski fotoğraf yayında kalır. Yakalamadığı: tarama olayı hiç gelmezse hata kuyruğu boş kalır; bunu ancak gece sayımı görür ve o da 1 saatten yeni dosyalara bakmaz. Bu yüzden satıcının gördüğü "bekliyor" bir gece sürebilir. Onarım: ekip sebebi giderip olayları yeniden gönderir; iş tekrar gelen olaya dayanıklı olduğu için güvenlidir.'
           - title: Elle değişen ayarlar
             text: 'Ne zaman: gece denetiminde. Biri konsoldan CORS kuralını silerse paneldeki yüklemeler durur; tarayıcı isteği daha çıkmadan keser, sunucu kayıtlarında hata görünmez. Ne yapar: şablonla gerçek ayarları karşılaştırır, drift varsa alarm verir. Yakalamadığı: gündüz yapılan değişikliği gece fark eder; o sırada satıcılar panelde hata görür. Onarım: şablon yeniden uygulanır.'
       scenario:
