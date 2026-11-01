@@ -10509,62 +10509,653 @@ steps:
           - ["pk + sk (anahtar)", "Item'ı bulmanın adresi. pk sepetin (CART#…), sk sepetteki ürün (ITEM#P0001)."]
           - [WRU, "Write request unit: DynamoDB'de yazma başına ödenen birim. Reddedilen koşullu yazma da 1 WRU harcar."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde sepet tablosu için hazırlık
+      t1:
+        title: Önceden ne vardı? "En fazla 5" kuralı nerede yaşıyor, yazmaya nasıl giriyor?
         intro: >-
-          "Sepete ekle" butonuna hiç basılmadan, sepet tablosu sayfaların sorularına ve sepet kurallarına göre kurulur.
-          Aşağıdaki beş adım bu hazırlığın sırasıdır.
-        text:
-          - title: Önce sayfaların soruları yazılır
-            text: >-
-              DynamoDB'de tasarım erişim kalıplarından başlar. Sepetin üç işi var: sepeti getir, ürünü ekle ya da artır,
-              ürünü çıkar. Her biri tek bir anahtar işlemi olmalı; tabloyu tarayan (Scan) bir sayfa olmamalı.
-            code: |-
-              Query       pk = CART#<ziyaretçi>                  → bütün sepet
-              UpdateItem  pk = CART#<ziyaretçi>, sk = ITEM#<ürün>  → tek ürün
-          - title: Anahtar ve TTL tabloda tanımlanır
-            text: >-
-              pk sepeti, sk ürünü gösterir. Trafik tahmin edilemediği için kapasite modu on-demand seçilir. TTL açılır:
-              expires_at zamanı geçen item'ları DynamoDB ücretsiz siler; silme birkaç gün gecikebilir, bu yüzden okurken
-              expires_at ayrıca kontrol edilir.
-            code: |-
-              aws dynamodb create-table --table-name dbws-cart --billing-mode PAY_PER_REQUEST \
-                --attribute-definitions AttributeName=pk,AttributeType=S AttributeName=sk,AttributeType=S \
-                --key-schema AttributeName=pk,KeyType=HASH AttributeName=sk,KeyType=RANGE
-              aws dynamodb update-time-to-live --table-name dbws-cart \
-                --time-to-live-specification Enabled=true,AttributeName=expires_at
-          - title: Kural yazmanın içine konur
-            text: >-
-              "Bir üründen en fazla 5 adet" için önce okuyup sonra yazılmaz; kural yazmaya ConditionExpression olarak eklenir
-              ve DynamoDB kontrolle yazmayı tek adımda yapar. Adet ADD ile artırılır: iki sekme aynı anda eklese de biri
-              kaybolmaz. Birden fazla item birlikte değişecekse TransactWriteItems kullanılır.
-            code: |-
-              UpdateExpression    = "ADD qty :q ..."
-              ConditionExpression = "attribute_not_exists(qty) OR qty <= :max"
-          - title: Fiyat kopyalanır, ödemede doğrulanır
-            text: >-
-              Sepet sayfası hızlı çizilsin diye item'a ürünün adı ve o anki fiyatı kopya olarak yazılır. Ama ödeme anında
-              fiyat ve stok asıl kayıttan (katalog ve sipariş veritabanı) yeniden okunur ve sipariş transaction içinde yazılır;
-              sepetteki kopya fiyat tek başına doğru kabul edilmez.
-          - title: Ret de bir sonuçtur ve ölçülür
-            text: >-
-              Koşulu tutmayan yazma beklenen bir cevaptır (ConditionalCheckFailedException); uygulama onu yakalayıp anlaşılır
-              bir mesaj gösterir. Ret de kapasite harcar; CloudWatch'ta ConditionalCheckFailedRequests ile izlenir.
-      feed:
-        title: Veri nereden geliyor?
-        writes: Uygulama. Ürün sayfasındaki "sepete ekle", sepet sayfasındaki silme ve adet değiştirme.
-        reads: Uygulama. Sepet sayfası, başlıktaki sepet sayacı ve ödeme adımı.
-        kind: >-
-          Uygulama orkestrasyonu. DynamoDB başka bir veritabanından kendiliğinden veri çekmez. Ama kendi değişikliklerini
-          dışarı verebilir: DynamoDB Streams açıksa her yazma, 24 saat boyunca okunabilen bir değişiklik kaydı olur.
-        with: >-
-          Sepet tek başına çalışmaz. Ürünün adı ve fiyatı katalogdan (DocumentDB) gelir ve item'a kopya olarak yazılır.
-          Ödeme anında sipariş ilişkisel veritabanına (Aurora) tek bir transaction ile yazılır ve stok orada düşer; sepet
-          ondan sonra boşaltılır. Sepet sayfasındaki görseller nesne deposundan (S3) gelir.
-        best: >-
-          Sipariş verilince sepet, siparişin asıl kaydına (ilişkisel veritabanı) dönüşür ve sepet boşaltılır. "Sepetini
-          unuttun" hatırlatması ya da analiz gibi işler için DynamoDB Streams'i bir AWS Lambda fonksiyonu okur; uygulama
-          bu işleri sayfanın isteğine eklemez, böylece sayfa yavaşlamaz.
+          "Add to cart"a basmadan önce iki şey zaten hazır. Birincisi sepet tablosu dbws-cart: senin sepetinde Kablosuz
+          Kulaklık'tan 1 adet (Adım 12'de eklediğin) ve bu sabah eklenmiş Mekanik Klavye'den 2 adet var (temsilî geçmiş, Adım
+          12'deki gibi); başka ziyaretçilerin sepetlerinde başka satırlar. Tablonun nasıl kurulduğunu ve satırların nasıl
+          geldiğini Adım 12 anlattı. İkincisi kural: "bir üründen en fazla 5 adet". Bu bölüm kuralın gerçek bir sistemdeki
+          yolunu anlatıyor: kural kimin, nerede, hangi sürümle durur; ürüne ya da kampanyaya göre nasıl değişir; her eklemede nasıl
+          sayıya çevrilip yazmanın içine konur; neden Uygulama'da "önce oku, sonra karşılaştır" yapılmaz; ret gelince ne olur, nasıl
+          sayılır ve alarm verir; kural değişince tablodaki satırlara ne olur; ve koşulun neyi korumadığı. Önce zincirin
+          bileşenleri, sonra bir simülasyon, sonra dört aşama (tasarım, ilk yükleme, sürekli besleme, tutarlılık ve onarım).
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1, T anı ve şimdi", "t-1: sayfanın açılmasından (t0) önceki zaman. T anı: yeni sitenin ve sepet tablosunun yayına girdiği an; 30 Eki 20:00 (temsilî, Adım 12'deki gibi). Bu bölümde \"şimdi\" (t0) 31 Eki 10:01 (temsilî): Adım 12'deki eklemenden bir dakika sonra."]
+          - ["Ekip ve Ticaret ekibi", "Ekip: mağazanın sistemini kuran ve işleten mühendisler; kurulum komutlarını onlar gönderir, alarmlara onlar bakar. Ticaret ekibi: satıştan ve kampanyalardan sorumlu iş ekibi; sepet kuralının sahibi onlardır. Kuralı mühendis değil, onlar değiştirir."]
+          - ["İş kuralı ve sınır (limit)", "İş kuralı: mağazanın verdiği bir karar; burada \"bir sepette bir üründen en fazla 5 adet\". Sınır: bu kuralın sayısı (5). Sayı ürüne göre (ör. ucuz bir üründe 10) ya da kampanyaya göre (ör. indirimli üründe müşteri başına 2) değişebilir. Kural bir sayı olduğu için kodun içine değil, ayrı bir yapılandırmaya yazılır; dükkânın kapısındaki \"her üründen en fazla 5\" levhası gibi: levha değişir, raflar yeniden dizilmez."]
+          - ["AWS AppConfig, ortam ve yapılandırma profili", "AppConfig: uygulamaların ayarlarını tutan ve sunuculara dağıtan AWS servisi. Yapılandırma profili: bir ayar dosyası; burada sepet-kurallari. Ortam (environment): ayarın dağıtıldığı yer; burada canli (canlı sistem). Bu bölümdeki adlar (magaza, canli, sepet-kurallari) okunur adlardır; gerçek komutlar AppConfig'in verdiği kimlik numaralarını ister."]
+          - ["Sürüm, doğrulayıcı (JSON Schema)", "Sürüm (hosted configuration version): ayar dosyasının numaralı bir hâli; eski sürümler silinmez, hangi gün hangi kuralın geçerli olduğu görülür. Kaydedilen sürüm kendiliğinden yayına çıkmaz. Doğrulayıcı (validator): sürüm dağıtılmaya başlarken onu kontrol eden kural listesi. JSON Schema: \"bu alan 1 ile 20 arasında bir tam sayı olmalı\" gibi kuralları yazan bir biçim. Uymayan sürüm kayıtlı kalır ama hiçbir sunucuya dağıtılamaz. JSON: bu ayar dosyasının yazım biçimi ({ \"ad\": değer })."]
+          - ["Dağıtım stratejisi, bekleme süresi ve geri alma", "Dağıtım (deployment): bir sürümün sunuculara gönderilmesi. Dağıtım stratejisi: hızı; AppConfig.Linear20PercentEvery6Minutes her 6 dakikada sunucuların %20'sine verir, 30 dakikada hepsine. Bekleme süresi (bake time): dağıtım bittikten sonra AppConfig'in alarmları izlediği süre (bu stratejide 30 dakika). Geri alma (rollback): dağıtım ya da bekleme sırasında bağlı bir alarm çalarsa AppConfig önceki sürüme kendisi döner."]
+          - ["AppConfig Agent ve yerel kopya", "AppConfig Agent: her EC2 sunucusunda çalışan, AWS'in yazdığı küçük bir program. Kuralı AppConfig'ten alır, belleğinde tutar (önbellek) ve 45 saniyede bir \"yeni sürüm var mı?\" diye sorar (yoklama, poll). Uygulama kuralı ondan, sunucunun kendi içindeki bir adresten (localhost:2772) okur; istek sunucudan dışarı çıkmaz. AppConfig'e ulaşılamazsa Agent son bildiği sürümü vermeye devam eder. Uygulama aynı anda birden çok EC2 sunucusunda çalışır (ör. 10; yük artınca sayısı artar, temsilî); her sunucuda bir Agent vardır ve yeni açılan sunucu onu açılış komutlarıyla kendiliğinden kurar. \"Sunucuların %20'si\" 10 sunucuda 2 sunucu demektir."]
+          - ["Tablo, item, pk ve sk", "dbws-cart'ta her item (kayıt) bir sepet satırı: bir sepetteki bir ürün. pk (partition key): sepetin kimliği (CART#7f3a…). sk (sort key): ürün (ITEM#P0001). pk + sk birlikte satırın adresidir. Satırdaki alanlar: qty (adet), name (ad), unit_price (fiyat), expires_at (silinme zamanı). Ayrıntısı Adım 12'de."]
+          - ["UpdateItem, ADD ve atomik", "UpdateItem: tek bir satırı adresiyle güncelleyen komut; satır yoksa oluşturur. ADD qty :q: adede :q ekle, satır yoksa :q ile başlat. Atomik: bölünmez; komutun yarısı olmaz, araya başka bir yazma giremez. DynamoDB aynı satıra gelen komutları sırayla işler: birinin kontrolü ve yazması bitmeden ötekine başlamaz."]
+          - ["ConditionExpression (koşul) ve ret", "Koşul: yazmanın yanına konan \"sadece şu doğruysa yaz\" cümlesi; kapıdaki görevli gibi. DynamoDB koşulu satırın o anki değerine bakarak kontrol eder ve yazmayla aynı adımda yapar. attribute_not_exists(qty): satırda adet hiç yoksa (ürün sepette yoksa). qty <= :max: adet :max'ı geçmiyorsa. Koşul tutmazsa hiçbir şey yazılmaz ve ConditionalCheckFailed​Exception (\"koşul tutmadı\") döner. Ret de en az 1 yazma birimi (WRU) harcar."]
+          - ["ReturnValuesOnCondition​CheckFailure = ALL_OLD", "Komuta eklenen bir istek: \"koşul tutmazsa satırın o anki hâlini de cevaba koy\". Böylece Uygulama sepetinde kaç adet olduğunu ayrıca okumadan öğrenir. Varsayılanı NONE: ret cevabı satırı içermez."]
+          - ["Önce oku, sonra yaz (yarış)", "Seçilmeyen yol: Uygulama önce satırı okur, kuralı kendisi karşılaştırır, sonra yazar. İki istek aynı anda gelirse ikisi de aynı eski değeri okur, ikisi de \"uygun\" der ve ikisi de yazar. Buna yarış (race condition) denir: iki müşterinin aynı anda son boş sandalyeye oturması gibi."]
+          - ["CloudWatch, ölçü ve alarm", "CloudWatch: AWS'in ölçüm ve alarm servisi. ConditionalCheckFailed​Requests: DynamoDB'nin tablo başına saydığı, koşulu tutmayan yazmalar (dakikalık). SepeteEkle ve LimitReddi: Uygulama'nın kendi yazdığı iki sayaç (adlar temsilî): ekleme denemesi ve limit reddi. Oran = pay / payda: 5 dakikada LimitReddi / SepeteEkle. Payda olmadan \"41 ret\" çok mu az mı bilinmez. Metric math: alarmın iki ölçüden hesaplanan bir sayıya (orana) bakması."]
+          - ["Aurora, iş paketi ve FOR UPDATE", "Aurora PostgreSQL: siparişlerin ve stoğun asıl kaydının durduğu ilişkisel veritabanı (Adım 22–25). İş paketi (transaction): BEGIN ile COMMIT arasındaki yazmalar; ya hepsi olur ya hiçbiri. ROLLBACK: paketi iptal et. SELECT … FOR UPDATE: bir satırı paket bitene kadar kilitlemek; aynı müşterinin iki ödemesi aynı anda sayılamaz."]
+          - ["Kesit, temsilî, Örnek durum ve Olsaydı", "Kesit: simülasyonda gösterilen satırlar; burada t0'daki 6 satır (ve aşamalar sırasında silinen 1 satır). Temsilî: canlı sistemden gelmeyen, anlatım için seçilmiş değer. \"Olsaydı\" diye başlayan kareler yaşanmayan ama yaşansaydı ne olacağını gösteren durumlar; her biri ayrı bir \"ya şöyle olsaydı\", birbirine eklenmez. Bu karelerdeki sürüm 2, 3, 4 her biri sürüm 1'den sonra gelecek ayrı bir sürümdür; numaralar sadece onları ayırt etmek için."]
+          - ["Ziyaretçi, sepet ve müşteri", "Sepet tarayıcıya bağlıdır (CART#7f3a…, lm_visitor çerezi); şifresiz gezen ziyaretçinin sepeti müşteriyi bilmez. Sipariş ödemede, lm_persona çerezindeki müşteri adına yazılır (ör. C00007, Adım 12). Bu yüzden \"müşteri başına\" bir sınır sepete eklerken değil, ödemede kontrol edilebilir. c41e… ve 09bd… başka ziyaretçiler: c41e…'in sepeti T anında eski siteden taşındı, 09bd… sepetini T'den sonra yeni sitede doldurdu."]
+          - ["Kod kartlarındaki sözcükler", "aws appconfig create-hosted-configuration-version: ayar dosyasının yeni sürümünü kaydet. start-deployment: bir sürümü sunuculara dağıt; --deployment-strategy-id hızı seçer. update-environment --monitors: ortama alarm bağla. GET http://localhost:2772/…: kuralı sunucudaki Agent'tan iste. GetLatestConfiguration: Agent'ın AppConfig'e sorduğu \"son sürüm\" isteği. update_item: satırı güncelle; :q, :max, :n, :p, :e komuta ayrıca verilen değerlerin yer tutucuları (eklenen adet, izin verilen en büyük adet, ad, fiyat, silinme zamanı); #n: name alanının takma adı, çünkü name DynamoDB'nin ayrılmış sözcüklerinden biri. except …: ret cevabını yakala. e.response['Item']: ret cevabındaki satır. get(pid, varsayılan): ürüne özel değer, yoksa varsayılan. min(…): en küçüğü. for … in …: listedeki her biri için. if … : return: şart doğruysa burada dur. put-metric-alarm: alarm kur. fileb://…: dosyayı olduğu gibi gönder. sudo yum install, systemctl start: sunucuya program kur ve başlat. IAM rolü: AWS'te bir servise verilen izin kimliği; AlarmArn, AlarmRoleArn: alarmın ve o rolün AWS'teki tam adı. Linear20PercentEvery6Minutes: \"6 dakikada bir %20\" anlamına gelen hazır dağıtım hızının adı. f'… {x} …': içine değer yerleştirilen metin. ['qty']['N']: ret cevabında adet, türüyle birlikte gelir (N: sayı). pid: ürün no (P0105). agent_oku, sinir, aktif_kampanyalar, hata, rapor, metrics.add: Uygulama'nın ve taşıma işinin kendi kısa yardımcıları (adlar temsilî). BEGIN, COMMIT, ROLLBACK: Aurora'da iş paketi. SELECT sum(qty): adetleri topla; coalesce(x, 0): hiç yoksa 0; JOIN: iki tabloyu (siparişler ve kalemleri) birleştir; INSERT: satır ekle; %s: komuta ayrıca verilen değerin yer tutucusu."]
+          - ["Diğer adlar ve görev adımları", "Uygulama: mağazanın arka uç programı (EC2 sunucusunda); tarayıcıdan gelen isteği alır, veritabanına komutu o gönderir. EC2: AWS'in kiralık sanal sunucusu. On-demand: kapasite ayarlanmayan, kullandığın kadar ödediğin tablo (Adım 12). Lambda: bir olay gelince kısa bir kodu çalıştıran AWS servisi. S3 (taşıma klasörü): eski sitenin sepetlerini T anında bıraktığı dosya deposu (Adım 12). Katalog yönetim servisi: arka ofis programı (Adım 1, 9, 12); burada ayrıca kural ekranının arka ucu. \"Adım 12\", \"Adım 22\" gibi adlar bu görevin (mağazadaki 37 adımın) adımlarıdır; simülasyonun sayacındaki \"Adım 1 / 23\" ise simülasyonun karesidir."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra"
+          sütunu kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim kodumuz" etiketli parçaları
+          mağazanın ekibi yazar. Kuralın sahibi Ticaret ekibi; kural AppConfig'te sürüm sürüm durur ve her sunucudaki Agent'a
+          dağıtılır. Kuralı her eklemede sayıya çeviren Uygulama, yazmayla aynı anda kontrol eden DynamoDB'dir. Ödemede kural Aurora'daki
+          siparişlere karşı bir kez daha kontrol edilir. Aynı parçalar aşağıdaki simülasyonda birer kutu: üst sırada kuralın yolu,
+          sonra her ekleme, sonra ilk yükleme, sonra ödeme, altta izleme.
+        inventory:
+          - id: admin
+            name: Katalog yönetim servisi (kural ekranı)
+            kind: code
+            what: arka ofis programı (Adım 1, 9, 12)
+            does: >-
+              Ticaret ekibinin kural ekranının arka ucu. Varsayılan sınırı, ürüne özel sınırları ve kampanyaları alır, AppConfig'e
+              yeni bir sürüm olarak yazar ve dağıtımı başlatır. Sepet tablosuna dokunmaz.
+            box: "Kural değişikliğini AppConfig'e yeni sürüm olarak yazar, dağıtımı başlatır."
+            phases: [2, 3, 4]
+            before: Ticaret ekibi (kural ekranı)
+            after: appconfig
+          - id: appconfig
+            name: AWS AppConfig (sepet-kurallari)
+            kind: aws
+            what: sürümlü yapılandırma servisi
+            does: >-
+              Kuralın asıl yeri. Her değişiklik numaralı bir sürüm; doğrulayıcı (JSON Schema) uymayan sürümün dağıtılmasını durdurur. Sürümü
+              sunuculara adım adım dağıtır; dağıtım sırasında ya da sonraki 30 dakikada ret alarmı çalarsa önceki sürüme döner.
+            box: "Kuralın asıl yeri: sürümler, doğrulayıcı, adım adım dağıtım, alarmla geri alma."
+            phases: [1, 2, 3, 4]
+            before: admin
+            after: agent
+          - id: agent
+            name: AppConfig Agent (her EC2'de)
+            kind: aws
+            what: AWS'in sunucuya kurulan programı
+            does: >-
+              Kuralı AppConfig'ten alır ve belleğinde tutar; 45 saniyede bir yeni sürüm var mı diye sorar. Uygulama kuralı her
+              eklemede ondan, sunucunun içinden (localhost:2772) okur. AppConfig'e ulaşılamazsa son sürümü vermeye devam eder.
+            box: "Kuralın sunucudaki kopyası; 45 sn'de bir yenilenir."
+            phases: [2, 3, 4]
+            before: appconfig
+            after: web
+          - id: web
+            name: Uygulama (mağaza sayfaları)
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucusunda)
+            does: >-
+              Her eklemede kuralı Agent'tan okur, ürünün sınırını bulur ve sayıya çevirir (:max = sınır − eklenen). UpdateItem'ı
+              ADD ve koşulla birlikte tek komut olarak gönderir. Reddi yakalar, satırdaki adedi ret cevabından alır, mesajı hazırlar
+              ve iki sayacını (ekleme, ret) CloudWatch'a yazar. Ödemede kuralı yeniden uygular.
+            box: "Kuralı sayıya çevirir, koşulu komuta koyar; reddi mesaja ve sayaca çevirir."
+            phases: [1, 2, 3, 4]
+            before: [Tarayıcı (ürün sayfası), agent]
+            after: [dynamodb, aurora, monitor]
+          - id: dynamodb
+            name: DynamoDB (dbws-cart)
+            kind: aws
+            what: anahtar-değer veritabanı, on-demand
+            does: >-
+              Koşulu satırın o anki adedine bakarak kontrol eder ve eklemeyi aynı adımda yapar; aynı satıra gelen komutları sırayla
+              işler. Koşul tutmazsa yazmaz, ConditionalCheckFailedException ve (istenirse) satırın o anki hâlini döner. Retleri
+              ConditionalCheckFailedRequests ölçüsüyle sayar.
+            box: "Koşul ve eklemeyi tek adımda yapar; ret de 1 WRU."
+            phases: [1, 2, 3, 4]
+            before: [web, migrate]
+            after: [monitor, "Sepete ekle (t0)"]
+          - id: migrate
+            name: Sepet taşıma işi
+            kind: code
+            what: bir kez çalışan program (AWS Lambda, Adım 12)
+            does: >-
+              T anında eski sitenin açık sepetlerini yeni tabloya yazdı. Yazmalarının koşulu sadece "adres boşsa"; adet koşulu
+              yok. Bu yüzden yazmaya başlamadan önce dosyadaki her adedi kuralla karşılaştırdı: 5'ten büyük adet 0.
+            box: "Eski satırları yazmadan önce kurala karşı saydı: fazla 0."
+            phases: [2, 4]
+            before: S3 (taşıma klasörü)
+            after: dynamodb
+          - id: aurora
+            name: Aurora PostgreSQL (shop)
+            kind: aws
+            what: sipariş veritabanı
+            does: >-
+              Ödemede sipariş burada tek iş paketiyle yazılır (Adım 22–25). Uygulama paketin içinde kuralı yeniden uygular;
+              kampanyada müşteri başına sınır varsa bu müşterinin önceki siparişlerini burada toplar.
+            box: "Ödemede son kontrol: siparişler ve müşteri başına toplam."
+            phases: [3, 4]
+            before: web
+            after: Sipariş zinciri (outbox → Kinesis, Adım 12 ve 33)
+          - id: monitor
+            name: CloudWatch alarmları
+            kind: aws
+            what: AWS'in izleme servisi
+            does: >-
+              Uygulama'nın iki sayacından ret oranını hesaplar (5 dakikada LimitReddi / SepeteEkle, eşik %5) ve DynamoDB'nin
+              ConditionalCheckFailedRequests ölçüsüyle karşılaştırır. Ret alarmı AppConfig'in canli ortamına bağlıdır: kural
+              dağıtılırken çalarsa sürüm geri alınır. Uygulama'nın "koddaki varsayılan kullanıldı" sayacını (KuralVarsayilan) da
+              izler.
+            box: "Ret oranı: pay ve payda, 5 dk, eşik %5; AppConfig'i geri aldırır."
+            phases: [1, 2, 3, 4]
+            before: [web, dynamodb]
+            after: [Ekip (alarm), appconfig]
+        sim_title: "Simülasyon: kural nereden geldi, her eklemede yazmaya nasıl girdi?"
+        sim:
+          kind: pipeline
+          title: Ticaret ekibi → AppConfig → Agent → Uygulama (:max) → DynamoDB (koşul + ADD); ödemede Aurora; ret → CloudWatch
+          caption: >-
+            DynamoDB kutusundaki tablo kesit: t0'daki 6 satır, üç sepet (senin tarayıcın 7f3a…, c41e…, 09bd…); senin ödediğin
+            Akıllı Saat satırı da bir süre görünüyor. Tabloda binlerce sepet var. Ürün adları t0'daki gibi kısaltılmış. expires_at
+            sütunu silinme zamanı; tabloda saniye olarak bir sayıdır, burada okunur hâli. AppConfig kutusundaki tablo kuralın
+            sürümleri. Önce kuralın ilk sürümünün yayına çıkması ve eski sepetlerin taşınması, sonra eklemeler (biri reddediliyor),
+            bir ödeme ve ölçüm, en sonda tutarlılık ve onarım oynuyor. 4. aşamada "Olsaydı" diye başlayan kareler yaşanmadı;
+            yaşansaydı ne olacağını gösteriyor, her biri ayrı bir durum. Canlı sistemden: kural (bir üründen en fazla 5), tablo
+            ayarları ve birim bedelleri (bir ekleme ve bir ret 1 WRU). Temsilî: saatler, sepet kimlikleri, sipariş no O004812,
+            kampanya adı, sayılar ve oranlar. Son karede tablo ve kural, "Add to cart"a basacağın andaki (t0) hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım}
+          rows:
+            - {id: rule, title: "Kuralın yolu: Ticaret ekibi → kural ekranı → AppConfig (sürümler) → her sunucudaki Agent", flow: true}
+            - {id: write, title: "Her eklemede: Uygulama kuralı sayıya çevirir, DynamoDB koşulu yazmayla aynı adımda kontrol eder", flow: true}
+            - {id: load, title: "İlk yükleme: eski sitenin açık sepetleri (Adım 12)"}
+            - {id: order, title: "Ödemede: kural sipariş veritabanında bir kez daha"}
+            - {id: helpers, title: "Yandaki iş: ret ölçüsü ve alarm", side: true}
+          summary: >-
+            Kural kodun içinde değil, AppConfig'te: sahibi Ticaret ekibi, her değişiklik doğrulanmış ve numaralı bir sürüm, sunuculara
+            adım adım gider ve alarm çalarsa geri alınır. Her sunucudaki Agent kuralı yerelde tutar. Her eklemede Uygulama kuralı
+            sayıya çevirdi (:max = sınır − eklenen) ve koşulu eklemeyle aynı komuta koydu; DynamoDB ikisini tek adımda yaptı, aynı
+            anda gelen eklemeleri sırayla işledi, kuralı bozanı reddedip satırın o anki adedini döndü. Retler payıyla ve paydasıyla
+            sayıldı. Ödemede kural siparişlere karşı bir kez daha kontrol edildi. Son durum: kesitte 6 satır, kural sürüm 1 (5);
+            t0'daki simülasyonun başladığı durum.
+          boxes:
+            - id: admin
+              row: rule
+            - id: appconfig
+              row: rule
+              tables:
+                - name: "sepet-kurallari sürümleri (canli ortamı)"
+                  cols: [sürüm, kural, yayında]
+                  rows:
+                    - {key: v1, sürüm: "1", kural: "varsayılan 5 · ürüne özel yok · kampanya yok", yayında: "henüz değil", hidden: true}
+                    - {key: v2, sürüm: "2 (olsaydı)", kural: "+ kampanya POWER-HAFTA: P0066 en fazla 2", yayında: "dağıtılıyor", hidden: true}
+                    - {key: v3, sürüm: "3 (olsaydı)", kural: "varsayılan 0", yayında: "kayıtlı · doğrulayıcı dağıtmadı", hidden: true}
+                    - {key: v4, sürüm: "4 (olsaydı)", kural: "varsayılan 1", yayında: "alarm · geri alındı", hidden: true}
+            - id: agent
+              row: rule
+            - id: web
+              row: write
+            - id: dynamodb
+              row: write
+              tables:
+                - name: "dbws-cart (kesit: t0'daki 6 satır, 3 sepet; tabloda binlerce sepet)"
+                  cols: [pk, "sk · name", qty, expires_at]
+                  rows:
+                    - {key: t1, pk: "CART#7f3a… (sen)", "sk · name": "ITEM#P0001 Kablosuz Kulaklık", qty: 1, expires_at: "1 Kas 10:00", hidden: true}
+                    - {key: s1, pk: "CART#7f3a… (sen)", "sk · name": "ITEM#P0131 Mekanik Klavye", qty: 2, expires_at: "1 Kas 09:52", hidden: true}
+                    - {key: s0, pk: "CART#7f3a… (sen)", "sk · name": "ITEM#P0021 Akıllı Saat", qty: 1, expires_at: "1 Kas 09:40", hidden: true}
+                    - {key: c1, pk: "CART#c41e…", "sk · name": "ITEM#P0021 Akıllı Saat", qty: 1, expires_at: "31 Eki 19:10", hidden: true}
+                    - {key: c2, pk: "CART#c41e…", "sk · name": "ITEM#P0066 Powerbank", qty: 3, expires_at: "1 Kas 08:40", hidden: true}
+                    - {key: b1, pk: "CART#09bd…", "sk · name": "ITEM#P0105 Deri Ceket", qty: 1, expires_at: "31 Eki 21:15", hidden: true}
+                    - {key: b2, pk: "CART#09bd…", "sk · name": "ITEM#P0176 Bluetooth Hoparlör", qty: 4, expires_at: "31 Eki 21:22", hidden: true}
+            - id: migrate
+              row: load
+            - id: aurora
+              row: order
+              tables:
+                - name: "siparişler (kesit)"
+                  cols: [sipariş, "ürün · kontrol"]
+                  rows:
+                    - {key: o1, sipariş: "O004812 · C00007", "ürün · kontrol": "P0021 × 1 ≤ 5 ✓ (sürüm 1)", hidden: true}
+                    - {key: o2, sipariş: "c41e… (olsaydı)", "ürün · kontrol": "P0066 × 3 > 2 ✗ (sürüm 2) · yazılmadı", hidden: true}
+            - id: monitor
+              row: helpers
+          frames:
+            - phase: 2
+              who: admin
+              lit: [admin, appconfig]
+              packet: {at: appconfig, text: "create-hosted-configuration-version · sepet-kurallari · {varsayilan_limit: 5, urun_limit: {}, kampanyalar: []} → sürüm 1"}
+              show: {appconfig: [v1]}
+              fresh: {appconfig: [v1]}
+              note: {appconfig: "sürüm 1 kayıtlı · henüz hiçbir sunucuda değil"}
+              say: >-
+                30 Eki 17:30 (temsilî). Ticaret ekibi kuralı kural ekranına yazdı: bir üründen en fazla 5 adet; ürüne özel sınır
+                ve kampanya yok. Katalog yönetim servisi bunu AppConfig'e yeni bir sürüm olarak gönderdi; sürüm 1 kaydedildi.
+                Kayıt henüz yayın değil: sunucular onu dağıtım başlayınca alır.
+            - phase: 2
+              who: monitor
+              lit: [monitor, appconfig]
+              packet: {at: monitor, text: "put-metric-alarm sepet-ret-orani · 100 × LimitReddi / SepeteEkle · 5 dk · eşik %5 · update-environment canli --monitors sepet-ret-orani"}
+              note: {appconfig: "", monitor: "alarm hazır · AppConfig'in canli ortamına bağlı"}
+              say: >-
+                Ekip ret alarmını kurdu: 5 dakikada reddedilen eklemeler bütün ekleme denemelerinin %5'ini geçerse alarm. Alarmı
+                AppConfig'in canli ortamına da bağladı: bir kural sürümü dağıtılırken ya da dağıtımdan sonraki bekleme süresinde bu
+                alarm çalarsa AppConfig sürümü kendisi geri alır.
+            - phase: 2
+              who: appconfig
+              lit: [admin, appconfig, agent, web]
+              packet: {at: agent, text: "start-deployment · sürüm 1 · doğrulayıcı: geçti · AppConfig.Linear20PercentEvery6Minutes → Agent: GetLatestConfiguration → sürüm 1 · bellekte · 45 sn'de bir yeniden sorar"}
+              set: {appconfig: {v1: {yayında: "18:00 başladı · 18:30 bütün sunucularda · 19:00'a kadar izlendi"}}}
+              note: {monitor: "", agent: "sürüm 1 · her sunucuda bir kopya", web: "kuralı localhost:2772'den okur"}
+              say: >-
+                18:00. Katalog yönetim servisi sürüm 1'in dağıtımını başlattı. AppConfig önce doğrulayıcıya baktı: sınır 1 ile 20
+                arasında bir tam sayı mı? Evet. Sonra her 6 dakikada sunucuların %20'si yeni sürümü aldı, 30 dakikada hepsi;
+                sonraki 30 dakika AppConfig alarmı izledi, alarm çalmadı. Her sunucudaki AppConfig Agent kuralı aldı ve
+                belleğinde tuttu. Uygulama kuralı her eklemede ondan, sunucunun kendi içinden okur.
+            - phase: 2
+              who: migrate
+              lit: [migrate, dynamodb]
+              packet: {at: dynamodb, text: "önce: dosyada qty > 5 olan satır 0 · sonra put_item(CART#c41e… / ITEM#P0066, qty 2, …, ConditionExpression='attribute_not_exists(pk)')"}
+              show: {dynamodb: [c1, c2]}
+              fresh: {dynamodb: [c1, c2]}
+              set: {dynamodb: {c2: {qty: 2, expires_at: "31 Eki 19:10"}}}
+              note: {agent: "", web: "", migrate: "kesitte yazılan 2 (c41e…) · bütün dosyada 5'ten büyük adet 0 · yazılan 1.180 (Adım 12, temsilî)"}
+              say: >-
+                T anı: 30 Eki 20:00. Taşıma işi eski sitenin açık sepetlerini yeni tabloya yazdı (Adım 12). Bu yazmaların koşulu
+                sadece "adres boşsa"; adet koşulu yok. Bu yüzden iş, yazmaya başlamadan önce dosyadaki her adedi kuralla
+                karşılaştırdı: 5'ten büyük adet yok (eski sitenin kuralı da 5'ti). Bir tane bile olsaydı iş yazmadan durur, ekip
+                bakardı. Satırların silinme zamanı eski sitedeki son değişiklikten sayıldı (Adım 12): c41e…'in sepeti 30 Eki
+                19:10'da değişmişti, satırları 31 Eki 19:10'a kadar yaşar.
+            - phase: 3
+              who: web
+              lit: [agent, web, dynamodb]
+              packet: {at: dynamodb, text: "update_item(CART#09bd… / ITEM#P0105, ADD qty :q …, ConditionExpression='attribute_not_exists(qty) OR qty <= :max') · :q = 1 · :max = 5 − 1 = 4 · satır yok → koşul doğru · 1 WRU"}
+              show: {dynamodb: [b1]}
+              fresh: {dynamodb: [b1]}
+              note: {migrate: "", agent: "P0105 için: sınır 5 (sürüm 1)", web: ":max = 5 − 1 = 4"}
+              say: >-
+                30 Eki 21:15. 09bd… Deri Ceket'i 1 adet ekledi. Uygulama kuralı Agent'tan okudu: P0105'e özel sınır yok, kampanya
+                yok, sınır 5. Kuralı sayıya çevirdi: satırdaki adet en fazla 5 − 1 = 4 olabilir. Komutu koşuluyla gönderdi. Satır
+                yoktu; koşulun ilk yarısı (attribute_not_exists) doğruydu, DynamoDB satırı adet 1 ile yazdı.
+            - phase: 3
+              who: web
+              lit: [web, dynamodb]
+              packet: {at: dynamodb, text: "21:20 · ADD 1 · :max 4 · satır yok → qty 1 · 21:22 · ADD 3 · :max = 5 − 3 = 2 · qty 1 ≤ 2 → qty 4 · her biri 1 WRU"}
+              show: {dynamodb: [b2]}
+              fresh: {dynamodb: [b2]}
+              note: {agent: "", web: ""}
+              say: >-
+                09bd… Bluetooth Hoparlör'ü önce 1 adet ekledi, iki dakika sonra 3 adet daha. İkinci komutta :max = 5 − 3 = 2:
+                satırdaki adet 1, 2'yi geçmiyor; DynamoDB kontrolle eklemeyi aynı adımda yaptı ve adet 4 oldu. Uygulama satırı
+                önceden okumadı.
+            - phase: 3
+              who: dynamodb
+              lit: [web, dynamodb]
+              packet: {at: dynamodb, text: "21:25 · ADD 2 · :max = 5 − 2 = 3 · qty 4 > 3 → ConditionalCheckFailedException · ReturnValuesOnConditionCheckFailure='ALL_OLD' → Item {qty: 4} · 1 WRU"}
+              mark: {dynamodb: {b2: fix}}
+              note: {dynamodb: "yazılmadı · adet 4 kaldı"}
+              say: >-
+                21:25. 09bd… aynı hoparlörden 2 adet daha istedi. :max = 3, satırdaki adet 4. Koşul tutmadı: DynamoDB hiçbir şey
+                yazmadı ve "koşul tutmadı" cevabını döndü. Komutta ReturnValuesOnConditionCheckFailure = ALL_OLD olduğu için
+                cevaba satırın o anki hâlini de koydu: adet 4. Ret de 1 WRU harcadı.
+            - phase: 3
+              who: web
+              lit: [web, monitor]
+              mark: {dynamodb: {b2: ""}}
+              note: {dynamodb: "", web: "mesaj: \"Sepetinde 4 var; sınır 5. Ekleyebileceğin: 1.\"", monitor: "SepeteEkle +1 · LimitReddi +1"}
+              say: >-
+                Uygulama ret cevabını yakaladı. Adet cevapla geldiği için sepeti yeniden okumadı; mesajı hazırladı: sepetinde 4
+                var, sınır 5, en fazla 1 daha. Kendi iki sayacını da CloudWatch'a yazdı: bir ekleme denemesi, bir limit reddi. Ret bir
+                arıza değil, beklenen bir cevaptır.
+            - phase: 3
+              who: web
+              lit: [agent, web, dynamodb]
+              packet: {at: dynamodb, text: "update_item(CART#c41e… / ITEM#P0066, ADD qty 1 …) · :max = 4 · qty 2 ≤ 4 → qty 3 · 1 WRU"}
+              set: {dynamodb: {c2: {qty: 3, expires_at: "1 Kas 08:40"}}}
+              fresh: {dynamodb: [c2]}
+              note: {web: "", monitor: "", agent: "kural hâlâ sürüm 1 · 45 sn'de bir soruldu, yeni sürüm yok"}
+              say: >-
+                31 Eki 08:40. c41e… taşınan Powerbank satırına 1 adet daha ekledi. Kural aynı: sınır 5, :max 4. Satırdaki adet 2;
+                DynamoDB adedi 3 yaptı. Agent bu arada kuralı her 45 saniyede bir AppConfig'e sordu; yeni sürüm yoktu.
+            - phase: 3
+              who: web
+              lit: [web, dynamodb]
+              packet: {at: dynamodb, text: "update_item(CART#7f3a… / ITEM#P0021, ADD qty 1 …) · :max 4 · satır yok → qty 1"}
+              show: {dynamodb: [s0]}
+              fresh: {dynamodb: [s0]}
+              note: {agent: ""}
+              say: >-
+                09:40. Sen (7f3a…) Akıllı Saat'i 1 adet ekledin; satır adet 1 ile yazıldı.
+            - phase: 3
+              who: web
+              lit: [agent, web, aurora, dynamodb]
+              packet: {at: aurora, text: "BEGIN · kural sürüm 1: P0021 × 1 ≤ 5 ✓ · kampanya yok · INSERT orders, order_items · COMMIT → sepetten delete_item(ITEM#P0021)"}
+              show: {aurora: [o1]}
+              fresh: {aurora: [o1]}
+              hide: {dynamodb: [s0]}
+              say: >-
+                09:50. Ödemeye geçtin. Uygulama siparişi yazmadan önce kuralı yeniden okudu ve sepetteki her satıra yeniden
+                uyguladı: Akıllı Saat 1 adet, sınır 5. Ürün bir kampanyada olsaydı bu müşterinin aynı kampanyadaki eski
+                siparişlerini de Aurora'dan toplardı. Sipariş tek iş paketiyle yazıldı; ödenen satır sepetten silindi (Adım 12).
+            - phase: 3
+              who: dynamodb
+              lit: [web, dynamodb]
+              packet: {at: dynamodb, text: "aynı saniyede iki sekmeden · 1.: ADD 1 · satır yok → qty 1 · 2.: ADD 1 · :max 4 · qty 1 ≤ 4 → qty 2"}
+              show: {dynamodb: [s1]}
+              fresh: {dynamodb: [s1]}
+              say: >-
+                09:52. Sen Mekanik Klavye'yi iki sekmeden aynı anda ekledin. DynamoDB aynı satıra gelen iki komutu sırayla işler:
+                birinin kontrolü ve yazması bitmeden ötekine başlamaz. İkinci komutun koşulu, ilkinin yazdığı adede (1) baktı.
+                Adet 2 oldu.
+            - phase: 3
+              who: web
+              lit: [agent, web, dynamodb]
+              packet: {at: dynamodb, text: "update_item(CART#7f3a… / ITEM#P0001, ADD qty 1 SET #n = :n, unit_price = :p, expires_at = :e …) · :max 4 · satır yok → qty 1"}
+              show: {dynamodb: [t1]}
+              fresh: {dynamodb: [t1]}
+              say: >-
+                10:00. Adım 12'de Kablosuz Kulaklık'ı (P0001) 1 adet ekledin. Satır adet 1 ile yazıldı; silinme zamanı 1 Kas 10:00.
+            - phase: 3
+              who: monitor
+              lit: [web, dynamodb, monitor]
+              note: {monitor: "09:55–10:00: LimitReddi 41 / SepeteEkle 6.200 = %0,7 (eşik %5) · tablonun ConditionalCheckFailedRequests'i 41 (temsilî)"}
+              say: >-
+                CloudWatch son 5 dakikayı topladı: 6.200 ekleme denemesinin 41'i limit reddi, %0,7. Eşik %5; alarm yok. Ekip
+                ayrıca DynamoDB'nin kendi ölçüsüne bakar: tablonun ConditionalCheckFailedRequests'i de 41. Tablo ölçüsü tablodaki
+                bütün koşullu retleri sayar (ör. T anında taşıma işinin "adres dolu" retlerini de). Bu 5 dakikada başka koşullu
+                yazan yok, bu yüzden iki sayı eşit olmalı, ve eşit. Tablo ölçüsü büyük çıksaydı başka bir yazanın koşulu tutmuyor
+                demekti.
+            - phase: 4
+              who: web
+              lit: [web, dynamodb]
+              packet: {at: web, text: "olsaydı, koşulsuz: sekme A get_item → 4 · 4 + 1 ≤ 5 ✓ · sekme B get_item → 4 · ✓ · ADD 1 · ADD 1 → qty 6"}
+              set: {dynamodb: {b2: {qty: 6}}}
+              mark: {dynamodb: {b2: fix}}
+              note: {monitor: "", dynamodb: "olsaydı: Hoparlör 6 · kural aşıldı, kimse uyarılmadı"}
+              say: >-
+                Olsaydı: kural yazmanın içinde değil, Uygulama'da olsaydı. 09bd… iki sekmeden aynı anda 1'er adet eklese: iki istek
+                de satırı okur, ikisi de 4 görür, ikisi de "4 + 1 = 5, uygun" der ve yazar. Adet 6 olur. Okuma ile yazma arasındaki
+                aralık ne kadar kısa olursa olsun, ikinci istek o aralığa girebilir.
+            - phase: 4
+              who: dynamodb
+              lit: [web, dynamodb]
+              packet: {at: dynamodb, text: "olsaydı, koşulla: A · ADD 1 · :max 4 · qty 4 ≤ 4 → 5 · B · ADD 1 · :max 4 · qty 5 > 4 → ConditionalCheckFailedException (ALL_OLD: qty 5)"}
+              set: {dynamodb: {b2: {qty: 5}}}
+              note: {dynamodb: "olsaydı: biri yazıldı (5), öteki reddedildi"}
+              say: >-
+                Olsaydı, gerçek sistemdeki gibi koşulla: DynamoDB iki komutu sırayla işler. A'nın koşulu 4'e bakar ve adedi 5
+                yapar; B'nin koşulu 5'e bakar ve tutmaz. Kural, hangisinin önce geldiğinden bağımsız korunur. B'ye "sepetinde 5
+                var" mesajı gider.
+            - phase: 4
+              who: admin
+              lit: [admin, appconfig, agent]
+              packet: {at: appconfig, text: "olsaydı: sürüm 2 · kampanya POWER-HAFTA: P0066 sepette en fazla 2, müşteri başına toplam 2 · start-deployment … doğrulayıcı geçti · Linear20PercentEvery6Minutes"}
+              show: {appconfig: [v2]}
+              fresh: {appconfig: [v2]}
+              set: {dynamodb: {b2: {qty: 4}}}
+              mark: {dynamodb: {b2: "", c2: fix}}
+              note: {dynamodb: "olsaydı: c41e… Powerbank 3 > yeni sınır 2 · satır yeniden yazılmadı", agent: "olsaydı: sürüm 2, sunucu dağıtım payına girince en geç 45 sn sonra"}
+              say: >-
+                Olsaydı: Ticaret ekibi "Powerbank haftası" kampanyası açsaydı: P0066 bir sepette en fazla 2, müşteri başına
+                toplam 2. Kural ekranı AppConfig'e sürüm 2'yi yazar ve dağıtımı başlatır, doğrulayıcı geçer. Tabloda hiçbir satır yeniden yazılmaz (veri taşıma
+                yok): c41e…'in Powerbank'ı 3 adetle kalır. Yeni kural sadece bundan sonraki eklemelerde ve ödemede kontrol edilir.
+            - phase: 4
+              who: dynamodb
+              lit: [agent, web, dynamodb]
+              packet: {at: dynamodb, text: "olsaydı: c41e… ADD 1 · sınır 2 · :max = 2 − 1 = 1 · qty 3 > 1 → ret · ALL_OLD: qty 3"}
+              note: {agent: "", web: "olsaydı: \"Sepetinde 3 var; sınır 2 (kampanya). Ekleyebileceğin: 0.\""}
+              say: >-
+                Olsaydı: c41e… bir Powerbank daha eklemek isteseydi: :max = 1, satırdaki adet 3; DynamoDB reddeder. Uygulama mesajda
+                kampanyanın sınırını ve satırdaki adedi gösterir. Sepet sayfası 3 adedi göstermeye devam eder.
+            - phase: 4
+              who: web
+              lit: [agent, web, aurora]
+              packet: {at: aurora, text: "olsaydı: BEGIN · SELECT … FOR UPDATE (müşteri) · kampanyadaki önceki siparişler: 0 · P0066 × 3 > 2 ✗ → ROLLBACK · müşteriye: adedi 2'ye indir"}
+              show: {aurora: [o2]}
+              fresh: {aurora: [o2]}
+              note: {web: "", dynamodb: ""}
+              say: >-
+                Olsaydı: c41e… ödemeye geçseydi. Uygulama kuralı yeniden uygular: Powerbank 3, sınır 2. Sınır müşteri başına olduğu
+                için bu müşterinin kampanyadaki eski siparişlerini Aurora'dan toplar (0). 3 > 2: sipariş yazılmaz, müşteriye adedi
+                2'ye indirmesi söylenir. Son söz ödemededir: aynı müşterinin başka bir tarayıcıdaki sepeti ya da önceki siparişi ancak
+                burada görünür.
+            - phase: 4
+              who: appconfig
+              lit: [admin, appconfig]
+              packet: {at: appconfig, text: "olsaydı: sürüm 3 · varsayilan_limit: 0 · start-deployment → doğrulayıcı: minimum 1 ✗ · dağıtım başlamaz"}
+              show: {appconfig: [v3]}
+              fresh: {appconfig: [v3]}
+              mark: {dynamodb: {c2: ""}}
+              say: >-
+                Olsaydı: biri kural ekranında sınırı yanlışlıkla 0 yazsaydı. Sürüm 3 kaydedilir, ama dağıtım başlarken doğrulayıcı
+                (JSON şeması: tam sayı, 1–20) reddeder; sürüm hiçbir sunucuya gitmez. Böyle bir sürüm bütün eklemeleri durdururdu.
+            - phase: 4
+              who: monitor
+              lit: [appconfig, agent, web, monitor]
+              packet: {at: monitor, text: "olsaydı: sürüm 4 · varsayilan_limit 1 · ilk %20 sunucuda · ret oranı %0,7 → %9 · ALARM → AppConfig geri alır: sürüm 1"}
+              show: {appconfig: [v4]}
+              fresh: {appconfig: [v4]}
+              note: {monitor: "olsaydı: 5 dk ret oranı %9 > %5 · ALARM", appconfig: "olsaydı: sürüm 4 geri alındı · sunucular önceki sürüme döner"}
+              say: >-
+                Olsaydı: sınır 1 yazılsaydı. 1 geçerli bir sayı; doğrulayıcı geçirir. Dağıtım başlar ve ilk %20 sunucu yeni kuralı
+                alır; o sunuculardaki eklemelerin çoğu reddedilir. 5 dakikalık ret oranı %9'a çıkar, alarm çalar ve AppConfig
+                dağıtımı kendisi geri alır. Tabloda düzeltilecek veri yoktur: reddedilen eklemeler hiç yazılmamıştı.
+            - phase: 4
+              who: agent
+              lit: [appconfig, agent, web]
+              packet: {at: agent, text: "olsaydı: AppConfig'e ulaşılamıyor · Agent bellekteki son sürümü vermeye devam eder · kopyası olmayan yeni sunucu → Uygulama koddaki güvenli varsayılan (5)"}
+              note: {monitor: "", appconfig: "olsaydı: ulaşılamıyor", agent: "olsaydı: son sürümü veriyor"}
+              say: >-
+                Olsaydı: AppConfig'e bir süre ulaşılamasaydı. Agent belleğindeki son sürümü vermeye devam eder; eklemeler etkilenmez.
+                O sırada yeni açılan bir sunucunun henüz kopyası yoksa Uygulama kodun içindeki güvenli varsayılanı (5) kullanır ve
+                bunu KuralVarsayilan sayacıyla CloudWatch'a bildirir.
+            - phase: 4
+              who: dynamodb
+              lit: [appconfig, agent, dynamodb]
+              hide: {appconfig: [v2, v3, v4], aurora: [o2]}
+              note: {appconfig: "yayında: sürüm 1 · sınır 5", agent: "sürüm 1", dynamodb: "kesitte 6 satır · 3 sepet · t0 ile aynı"}
+              say: >-
+                Hazır. "Olsaydı" karelerindeki eşzamanlı ekleme, kampanya, yanlış sürümler, geri alma ve kesinti yaşanmadı;
+                Hoparlör'de 4, Powerbank'ta 3 adet var. Kesitte 6 satır: senin 2 (Kablosuz Kulaklık 1, Mekanik Klavye 2),
+                c41e…'in 2, 09bd…'in 2 satırı. Kural sürüm 1: bir üründen en fazla 5. Şimdi (t0) adet kutusuna 5 yazıp "Add to
+                cart"a basınca Uygulama :max = 5 − 5 = 0 hesaplayacak; satırdaki adet 1 olduğu için DynamoDB reddedecek.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Önce üç soru cevaplanır: kural kimin ve nerede durur, kural nerede uygulanır, ret gelince ne olur ve nasıl ölçülür.
+              Tablo (anahtar, ömür, akış) Adım 12'de kuruldu; burada tabloya bir şey eklenmez. Kural tablonun ayarı değil, her
+              yazmanın bir parçasıdır.
+            cards:
+              - title: "Kural kimin, nerede durur?"
+                text: >-
+                  "En fazla 5" bir iş kararıdır; sahibi Ticaret ekibidir ve kampanyalarda değişir. Kodun içine sabit bir sayı olarak
+                  yazılsaydı her değişiklik bir yazılım sürümü isterdi. Kural AppConfig'te, sepet-kurallari adlı bir dosyada durur:
+                  varsayılan sınır, ürüne özel sınırlar ve kampanyalar. Her değişiklik numaralı bir sürümdür; hangi gün hangi kuralın
+                  geçerli olduğu görülür, eski bir sürüme dönülebilir. Seçilmeyen yol: sınırı her ürünün katalog dokümanına yazmak;
+                  kampanyalar birçok ürünü birden ve belli tarihlerde etkiler, bu yüzden ayrı ve sürümlü bir dosya daha uygun.
+                code_title: sepet-kurallari, sürüm 1
+                code:
+                  - {code: "{ \"varsayilan_limit\": 5,", tag: AppConfig'in içinde, say: "Her ürün için en fazla 5 adet."}
+                  - {code: "  \"urun_limit\": { },", tag: AppConfig'in içinde, say: "Ürüne özel sınır (ör. \"P0090\": 10); şimdilik yok."}
+                  - {code: "  \"kampanyalar\": [ ] }", tag: AppConfig'in içinde, say: "Kampanyanın ürünleri, sınırı ve tarihleri; şimdilik yok."}
+              - title: "Doğrulayıcı: yanlış sayı yayına çıkamaz"
+                text: >-
+                  Kural ekranına yazılan her sürüm, dağıtım başlarken, sunuculara gitmeden önce bir JSON şemasına karşı kontrol edilir. Sınır 0 olsaydı
+                  hiç kimse sepete ekleyemezdi; "beş" yazılsaydı Uygulama sayıyı okuyamazdı. Şema bunları durdurur. Şemanın
+                  yakalamadığını (geçerli ama yanlış bir sayı) dağıtım stratejisi ve alarm yakalar (t-1 · 4).
+                code:
+                  - {code: "\"varsayilan_limit\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 20}", tag: AppConfig'in içinde, say: "Tam sayı, 1 ile 20 arası. Uymayan sürüm dağıtılamaz."}
+              - title: "Kural neden yazmanın içinde?"
+                text: >-
+                  Seçilmeyen yol: Uygulama önce satırı okur, "şimdiki + eklenen ≤ 5 mi?" diye kendisi bakar, sonra yazar. Okuma ile
+                  yazma arasında başka bir istek (aynı müşterinin ikinci sekmesi, iki kez tıklanan buton) aynı eski değeri okuyabilir;
+                  ikisi de "uygun" der ve kural aşılır. Seçilen yol: kural koşul olarak eklemeyle aynı UpdateItem'a konur. DynamoDB
+                  koşulu satırın o anki değerine bakarak kontrol eder ve eklemeyi aynı adımda yapar; aynı satıra gelen komutları sırayla
+                  işler. Ayrıca bir okuma da gerekmez: bir ekleme 1 WRU, okuma artı yazma daha pahalı ve daha yavaş olurdu.
+                code:
+                  - {code: "qty = get_item(…)['qty']; if qty + q <= 5: update_item(ADD qty :q)", tag: [Uygulama → DynamoDB, DynamoDB → Uygulama], say: "Seçilmeyen yol: iki adım; arasına başka bir ekleme girebilir."}
+                  - {code: "update_item(ADD qty :q, ConditionExpression='attribute_not_exists(qty) OR qty <= :max')", tag: Uygulama → DynamoDB, say: "Seçilen yol: kontrol ve ekleme tek komutta, tek adımda."}
+              - title: "Kural sayıya çevrilir: :max = sınır − eklenen"
+                text: >-
+                  DynamoDB koşulda satırın şimdiki değerine bakar; "şimdiki + eklenen" toplamını koşulda kurmak yerine Uygulama sayıyı
+                  önceden hesaplar: satırdaki adet en fazla sınır − eklenen olabilir. Sınır ürüne göre bulunur; ürün bir kampanyadaysa
+                  küçük olan geçerlidir. İsteğin kendi adedi sınırdan büyükse (ör. boş sepete 6) komut hiç gönderilmez: koşulun
+                  attribute_not_exists yarısı boş satıra her adedi yazdırırdı, ve bunu anlamak için okumaya gerek yok.
+                code:
+                  - {code: "limit = kural['urun_limit'].get(pid, kural['varsayilan_limit'])", tag: Uygulamanın içinde, say: "Ürünün sınırı; ürüne özel yoksa varsayılan (5)."}
+                  - {code: "limit = min([limit] + [k['limit'] for k in aktif_kampanyalar(kural, pid)])", tag: Uygulamanın içinde, say: "Ürün bir kampanyadaysa küçük olan geçerli."}
+                  - {code: "if q > limit: return hata(f'en fazla {limit}')", tag: Uygulamanın içinde, say: "İsteğin adedi tek başına sınırı aşıyorsa komut gitmez."}
+                  - {code: "values[':max'] = limit - q", tag: Uygulamanın içinde, say: "1 adet eklenecekse satırdaki adet en fazla 4 olabilir."}
+              - title: "Ret: satırın o anki adedi cevapla gelir"
+                text: >-
+                  Koşul tutmazsa DynamoDB hiçbir şey yazmaz ve ConditionalCheckFailedException döner; bu bir arıza değil, beklenen bir
+                  cevaptır. Komuta ReturnValuesOnConditionCheckFailure = ALL_OLD eklenirse cevap satırın o anki hâlini de taşır; Uygulama
+                  "sepetinde 4 var, en fazla 1 daha" mesajı için sepeti ayrıca okumaz. Ret de 1 WRU harcar (satır 1 KB'ın altında).
+                code:
+                  - {code: "ReturnValuesOnConditionCheckFailure='ALL_OLD'", tag: Uygulama → DynamoDB, say: "Koşul tutmazsa satırın o anki hâlini de gönder."}
+                  - {code: "except ConditionalCheckFailedException as e: simdiki = int(e.response['Item']['qty']['N'])", tag: DynamoDB → Uygulama, say: "Ret ve satırdaki adet tek cevapta."}
+                  - {code: "kalan = max(0, limit - simdiki)", tag: Uygulamanın içinde, say: "Daha kaç adet eklenebilir; sınır düştüyse 0 (eksi değil)."}
+                  - {code: "mesaj = f'Sepetinde {simdiki} var; sınır {limit}. Ekleyebileceğin: {kalan}.'", tag: Uygulamanın içinde, say: "Müşteriye ne yapabileceğini söyleyen mesaj."}
+              - title: "Ret ölçülür: pay ve payda"
+                text: >-
+                  "5 dakikada 41 ret" tek başına bir şey söylemez; aynı 5 dakikada kaç ekleme denendiği de bilinmeli. Uygulama her
+                  denemede iki sayaç yazar: SepeteEkle (payda) ve LimitReddi (pay). Alarm, 5 dakikalık oranın %5'i geçmesine bakar.
+                  DynamoDB'nin kendi ölçüsü ConditionalCheckFailedRequests tablodaki bütün koşullu retleri sayar (başka yazanlarınki
+                  de); Uygulama'nın sayacıyla karşılaştırılır.
+                code:
+                  - {code: "metrics.add('SepeteEkle', 1); metrics.add('LimitReddi', 1 if ret else 0)", tag: Uygulama → CloudWatch, say: "Her denemede payda, her retde pay."}
+                  - {code: "oran = 100 * LimitReddi / SepeteEkle      # 5 dakikalık toplamlar", tag: CloudWatch'ın içinde, say: "Alarmın baktığı sayı; eşik %5."}
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              Yeni site yayına girmeden önce kuralın ilk sürümü her sunucuda olmalı, ret alarmı kurulmuş olmalı ve eski siteden
+              gelecek sepetlerin kurala uyduğu bilinmeli. Sıra bilerek böyledir: kuralın ilk sürümü kaydedilir, alarm kurulur ve
+              dağıtıma bağlanır (dağıtımı alarm korur, bu yüzden dağıtımdan önce hazır olmalı), sonra sürüm dağıtılır ve her
+              sunucudaki Agent onu alır; en sonda T anı ve taşıma.
+            cards:
+              - title: "Kuralın ilk sürümü kaydedilir"
+                text: >-
+                  Ticaret ekibi kuralı kural ekranına yazar; Katalog yönetim servisi onu AppConfig'e sürüm 1 olarak kaydeder.
+                  Kaydedilen sürüm kendiliğinden yayına çıkmaz; sunuculara ancak dağıtımla gider.
+                code:
+                  - {code: "aws appconfig create-hosted-configuration-version --application-id magaza \\", tag: Katalog yönetim servisi → AppConfig, say: "Yeni sürüm…"}
+                  - {code: "  --configuration-profile-id sepet-kurallari --content fileb://kural-v1.json …", tag: AppConfig'in içinde, say: "…sürüm 1 olarak saklanır."}
+              - title: "Alarm kurulur ve dağıtıma bağlanır"
+                text: >-
+                  Ret alarmı iki ölçüden hesaplanan bir orana bakar (metric math). AppConfig'in canli ortamına bağlanır; AppConfig'in
+                  alarmı okuyabilmesi için ona ayrı bir IAM rolü verilir. Böylece aynı alarm hem ekibe haber verir hem de çalarsa o
+                  sırada dağıtılan kural sürümünü geri aldırır. Dağıtımı alarm koruduğu için alarm dağıtımdan önce kurulur.
+                code:
+                  - {code: "aws cloudwatch put-metric-alarm --alarm-name sepet-ret-orani --metrics file://oran.json \\", tag: Ekip → CloudWatch, say: "Oran: 100 × LimitReddi / SepeteEkle, 5 dakika."}
+                  - {code: "  --comparison-operator GreaterThanThreshold --threshold 5 --evaluation-periods 1", tag: CloudWatch'ın içinde, say: "%5'i geçerse alarm."}
+                  - {code: "aws appconfig update-environment … --monitors AlarmArn=…sepet-ret-orani,AlarmRoleArn=…", tag: Ekip → AppConfig, say: "Dağıtım sırasında çalarsa sürüm geri alınır."}
+              - title: "Sürüm 1 T'den önce dağıtılır"
+                text: >-
+                  Katalog yönetim servisi dağıtımı başlatır. AppConfig önce doğrulayıcıyı çalıştırır; geçerse
+                  AppConfig.Linear20PercentEvery6Minutes her 6 dakikada sunucuların %20'sine verir, 30 dakikada hepsine; sonraki 30
+                  dakika bağlı alarmı izler. Yayın T'den saatler önce biter.
+                code:
+                  - {code: "aws appconfig start-deployment --environment-id canli --configuration-version 1 \\", tag: Katalog yönetim servisi → AppConfig, say: "Sürüm 1'i canlı sisteme dağıt…"}
+                  - {code: "  --deployment-strategy-id AppConfig.Linear20PercentEvery6Minutes …", tag: AppConfig'in içinde, say: "…doğrulayıcı geçerse 6 dakikada bir %20, sonra 30 dakika izleme."}
+              - title: "Agent her sunucuda; kural sunucunun içinden okunur"
+                text: >-
+                  Her EC2 sunucusuna AppConfig Agent kurulur; sunucu açılırken çalışan kurulum komutları (EC2 user data) bunu
+                  kendiliğinden yapar. Agent kuralı alır, belleğinde tutar ve 45 saniyede bir yeni sürümü sorar. Uygulama her
+                  eklemede kuralı Agent'tan, sunucunun kendi içindeki bir adresten okur; istek ağa çıkmaz, AppConfig'e her eklemede
+                  sorulmaz. Uygulama'nın kodunda ayrıca bir güvenli varsayılan (5) durur: Agent'ta henüz kopya yoksa o kullanılır.
+                code:
+                  - {code: "sudo yum install …/aws-appconfig-agent.rpm && sudo systemctl start aws-appconfig-agent", tag: EC2'nin içinde, say: "Sunucu açılırken kurulur ve başlar."}
+                  - {code: "GET http://localhost:2772/applications/magaza/environments/canli/configurations/sepet-kurallari", tag: [Uygulama → Agent, Agent → Uygulama], say: "Kural yerel kopyadan; sunucudan dışarı çıkmaz."}
+              - title: "Eski sepetler kurala uyuyor mu?"
+                text: >-
+                  T anında taşıma işi eski sitenin açık sepetlerini yazar (Adım 12). Onun koşulu sadece "adres boşsa"; adet koşulu
+                  yoktur. Bu yüzden iş yazmaya başlamadan önce dosyadaki her adedi kuralla karşılaştırır. 5'ten büyük bir adet varsa
+                  yazmaz ve ekibe raporlar; ekip o satırları kurala göre düzeltir ya da müşteriye bırakır. Bu taşımada: 0 (eski sitenin
+                  kuralı da 5'ti).
+                code:
+                  - {code: "fazla = [s for s in satirlar if s['qty'] > limit]", tag: Taşıma işinin içinde, say: "Kuralı aşan eski satırlar."}
+                  - {code: "if fazla: return rapor(fazla)", tag: Taşıma işinin içinde, say: "Bir tane bile varsa iş yazmaya başlamaz."}
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              T anından sonra her eklemede kural Agent'tan okunur, sayıya çevrilir ve yazmanın içine girer. Kural değişirse yeni
+              sürüm aynı yoldan gelir; tablodaki satırlar yeniden yazılmaz. Ödemede kural bir kez daha kontrol edilir.
+            cards:
+              - title: "Her eklemede: kural, sayı, tek komut"
+                text: >-
+                  Uygulama kuralı yerel kopyadan okur, ürünün sınırını bulur, :max'ı hesaplar ve UpdateItem'ı ADD, koşul ve ALL_OLD
+                  ile tek komut olarak gönderir. Koşul tutarsa ekleme yazılır (1 WRU); tutmazsa ret ve satırın o anki adedi döner (1
+                  WRU). Bu komutun gönderildiği satırlar t0'daki kod kartında.
+                code:
+                  - {code: "kural = agent_oku('sepet-kurallari')", tag: [Uygulama → Agent, Agent → Uygulama], say: "Kural, sunucunun içinden."}
+                  - {code: "limit = sinir(kural, pid); values[':max'] = limit - q", tag: Uygulamanın içinde, say: "Sınır 5, eklenen 1 → :max 4."}
+                  - {code: "table().update_item(Key=…, UpdateExpression='ADD qty :q SET #n = :n, unit_price = :p, expires_at = :e',", tag: Uygulama → DynamoDB, say: "Adede ekle; ad, fiyat ve silinme zamanını yaz…"}
+                  - {code: "  ConditionExpression='attribute_not_exists(qty) OR qty <= :max', ReturnValuesOnConditionCheckFailure='ALL_OLD')", tag: [Uygulama → DynamoDB, DynamoDB → Uygulama], say: "…ama sadece kurala uyuyorsa; ikisi tek adımda."}
+              - title: "Kural değişince: sürüm, dağıtım, veri taşıma yok"
+                text: >-
+                  Ticaret ekibi kural ekranında sınırı ya da bir kampanyayı değiştirir; Katalog yönetim servisi yeni bir sürüm yazar,
+                  doğrulayıcı kontrol eder, dağıtım adım adım ilerler. Her Agent yeni sürümü en geç 45 saniyede alır; bir dağıtım
+                  sırasında bazı sunucular eski, bazıları yeni kuralla çalışır (bilerek: yanlış bir kural önce az sunucuyu etkiler).
+                  Tablodaki satırlar yeniden yazılmaz: kural her yazmada uygulanır, satırın içinde durmaz. Sınırın üstünde kalan eski
+                  bir satır sonraki eklemede ve ödemede yakalanır (t-1 · 4).
+                code:
+                  - {code: "create-hosted-configuration-version … (sürüm 2) → start-deployment … --configuration-version 2", tag: Katalog yönetim servisi → AppConfig, say: "Yeni sürüm ve dağıtımı."}
+                  - {code: "GetLatestConfiguration (45 sn'de bir) → sürüm 2 → yerel kopya", tag: [Agent → AppConfig, AppConfig → Agent], say: "Her sunucu yeni kuralı kendisi çeker."}
+                  - {code: "dbws-cart: hiçbir satır yeniden yazılmaz", tag: DynamoDB'nin içinde, say: "Kural değişikliği veri taşıma istemez."}
+              - title: "Ödemede kural yeniden kontrol edilir"
+                text: >-
+                  Sepetteki koşul tek bir satırı korur. Ödemede Uygulama kuralı yeniden okur ve sepetteki her satıra uygular. Kampanyada
+                  "müşteri başına" bir sınır varsa bu müşterinin aynı kampanyadaki önceki siparişlerini Aurora'dan toplar; aynı
+                  müşterinin iki ödemesi aynı anda sayılmasın diye müşterinin satırını paket bitene kadar kilitler. Uymayan bir satır
+                  varsa sipariş yazılmaz, müşteriye adedi indirmesi söylenir.
+                code:
+                  - {code: "fazla = [i for i in sepet if i['qty'] > sinir(kural, i['pid'])]", tag: Uygulamanın içinde, say: "Sepette kuralı aşan satır var mı?"}
+                  - {code: "BEGIN; SELECT 1 FROM customers WHERE customer_id = %s FOR UPDATE;", tag: Uygulama → Aurora, say: "Bu müşterinin ödemeleri sırayla."}
+                  - {code: "SELECT coalesce(sum(qty), 0) FROM order_items JOIN orders … WHERE customer_id = %s AND campaign_id = %s", tag: [Uygulama → Aurora, Aurora → Uygulama], say: "Kampanyada daha önce kaç adet aldı?"}
+                  - {code: "INSERT INTO orders …, order_items …; COMMIT;   # uymuyorsa ROLLBACK", tag: Uygulama → Aurora, say: "Sipariş ya kurala uygun yazılır ya hiç."}
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              İki ekleme aynı anda gelirse, kural değişince sınırın üstünde satırlar kalırsa, yanlış bir kural sürümü yayına çıkmaya
+              başlarsa, AppConfig'e ulaşılamazsa ya da kuralı koşulun göremediği bir yerden aşan bir durum olursa ne olur? Her biri
+              için zincirde bir parça var; her parçanın ne zaman çalıştığı, neyi yakalamadığı ve ekibin ne yaptığı aşağıda.
+            cards:
+              - title: "İki ekleme aynı anda gelirse"
+                text: >-
+                  DynamoDB aynı satıra gelen komutları sırayla işler ve her komutun koşulu bir önceki komutun yazdığı değere bakar;
+                  biri sınıra kadar yazar, öteki reddedilir. Ne zaman: her yazmada. Yakalamadığı: bir eklemenin cevabı yolda
+                  kaybolursa (ağ bir an koparsa) Uygulama'nın kullandığı AWS kütüphanesi (boto3) aynı isteği kendiliğinden bir kez daha
+                  gönderebilir; ADD "ekle" dediği için ikinci gönderme de sayılır (Adım 12). Koşul toplamın 5'i geçmesini yine
+                  durdurur, ama müşterinin istediği 2 adedin 3 olmasını durdurmaz: 3 de kurala uygundur. Onarım: müşteri adedi sepet
+                  sayfasında düzeltir; ödeme adetleri gösterir.
+              - title: "Kural değişince sınırın üstünde kalan satırlar"
+                text: >-
+                  Kural satırın içinde değil, yazmada durur; sınır 5'ten 2'ye inince 3 adetlik bir satır olduğu gibi kalır. Ne zaman:
+                  bir sonraki eklemede (reddedilir, mesaj sınırı ve adedi söyler) ve ödemede (sipariş yazılmaz, müşteriden adedi
+                  indirmesi istenir). Yakalamadığı: sepet sayfası ödemeye kadar eski adedi gösterir. Onarım: gerekmez; bilerek veri
+                  taşıma yapılmaz. Sepet satırı son yazılmasından 24 saat sonra zaten silinir.
+              - title: "Yanlış bir kural sürümü"
+                text: >-
+                  Biçimi yanlış sürümü (0, "beş") doğrulayıcı dağıtmadan durdurur. Geçerli ama yanlış bir sayıyı (1) adım adım dağıtım
+                  ve ret alarmı yakalar: ilk %20 sunucuda ret oranı fırlar, alarm çalar, AppConfig önceki sürüme döner. Ne zaman:
+                  doğrulayıcı dağıtım başlarken; alarm 5 dakikalık pencerede, dağıtım ve 30 dakikalık bekleme süresi boyunca.
+                  Yakalamadığı: ret oranını yükseltmeyen yanlışlar (ör. 5 yerine 15: şemaya uyar, ret azalır) ve bekleme süresinden
+                  sonra fark edilenler. Ödemedeki kontrol de aynı yanlış kuralı okuduğu için onları geçirir. Onarım: ekip AppConfig'in
+                  sürüm geçmişinden önceki sürümü yeniden dağıtır (veri taşıma yok). O arada 5'in üstüne çıkan satırlar tabloda kalır;
+                  sonraki eklemede reddedilir, ödemede doğru kuralla yakalanır.
+              - title: "AppConfig'e ulaşılamazsa"
+                text: >-
+                  Agent belleğindeki son sürümü vermeye devam eder; eklemeler etkilenmez. Ne zaman: kesinti boyunca. Yakalamadığı:
+                  kesinti sırasında yayınlanan yeni bir kural sunuculara ulaşmaz; yeni açılan ve henüz kopyası olmayan bir sunucu
+                  koddaki güvenli varsayılanı (5) kullanır, ürüne özel sınırları ve kampanyaları bilmez. Onarım: gerekmez; Agent
+                  AppConfig'e yeniden ulaşınca son sürümü alır. Uygulama "koddaki varsayılan kullanıldı" sayacını (KuralVarsayilan) yazar; CloudWatch onu izler, ekip ona bakar.
+              - title: "Koşulun korumadığı yerler"
+                text: >-
+                  Koşul tek bir satırı (bir sepette bir ürünü) korur. Korumadıkları: sepetin toplamı (40 farklı üründen 5'er adet);
+                  aynı müşterinin iki sepeti (iki tarayıcı) ya da önceki siparişleri; koşulu taşımayan bir yazan (taşıma işi, elle
+                  yapılan bir toplu düzeltme). Ne zaman yakalanır: sepet toplamı ve müşteri başına sınır ödemede, Aurora'daki iş
+                  paketinin içinde; taşıma işinin satırları yazmadan önce sayılarak. Onarım: yeni bir yazan eklenirse aynı
+                  "sepete yaz" fonksiyonunu kullanır; tablo ölçüsü (ConditionalCheckFailed​Requests) ile Uygulama'nın sayacı arasındaki
+                  fark ve ödemedeki "fazla" retleri izlenir.
+              - title: "Ret oranı birden değişirse"
+                text: >-
+                  CloudWatch 5 dakikalık ret oranına bakar (pay LimitReddi, payda SepeteEkle). Ne zaman: en geç 5 dakikada.
+                  Yakalamadığı: ret sayısının az olduğu sessiz saatlerde oran oynaktır (10 denemede 1 ret %10 olur); bu yüzden
+                  alarm ayrıca en az 200 deneme ister (temsilî). Oranın birden düşmesi de bir işarettir: koşulu unutan yeni bir kod
+                  sürümü hiç ret üretmez. Onarım: ekip son kural sürümüne ve son kod sürümüne bakar; kural ise AppConfig'te geri
+                  alır, kod ise önceki sürüme döner.
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
