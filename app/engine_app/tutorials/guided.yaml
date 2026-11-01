@@ -24321,49 +24321,464 @@ steps:
           - [OPTIONAL MATCH, "Eşleşme yoksa satırı düşürmeden devam etmek; çevresi boş bir ürün de listede kalır."]
           - ["collect(...)[0..3]", "Bir ürünün diğer alıcılarından sadece ilk üçünü almak; ağ okunabilir kalsın diye."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde müşteri grafı için hazırlık
-        intro: >-
-          Graf ekranı hiç açılmadan, model, sınırlar ve bu ekranın sorgusu hazırlanır. Aşağıdaki beş adım bu hazırlığın sırasıdır.
-        text:
-          - title: Önce ekranın sorusu yazılır
-            text: >-
-              "Bu müşterinin aldığı ürünler ve her ürünü alan birkaç başka müşteri". Çıktı bir ağ: düğümler ve kenarlar.
-            code: |-
-              MATCH (me:Customer {`~id`: $cid})-[:BOUGHT]->(p:Product)
-              OPTIONAL MATCH (p)<-[:BOUGHT]-(o:Customer) WHERE o <> me
-              WITH me, p, collect(DISTINCT o)[0..3] AS others
-              RETURN … LIMIT 12
-          - title: Ağ boyutu sınırlanır
-            text: >-
-              Çok satan bir ürünün binlerce alıcısı olabilir (süper düğüm). Ekran için ürün başına birkaç alıcı ve toplamda birkaç
-              ürün alınır (collect(...)[0..3], LIMIT 12); bütün çevre çizilmez.
-          - title: Plan ve süre kontrol edilir
-            text: >-
-              openCypher explain ile sorgunun hangi düğümden başladığı ve kaç kenar dolaştığı görülür. Başlangıç düğümü ~id ile
-              verildiği için arama doğrudan oradan başlar.
-          - title: Soğuk başlangıç hesaba katılır
-            text: >-
-              Neptune Serverless bir süre sorgu almazsa kapasitesini düşürür ve veri bellekten çıkar; ilk sorgu birkaç saniye
-              sürebilir, sonrakiler hızlanır. Kullanıcıya bekleme göstergesi gösterilir; kritik ekranlar için en düşük kapasite
-              yükseltilir.
-          - title: Ağır analizler ayrı çalışır
-            text: >-
-              Topluluk bulma ya da merkezilik gibi bütün grafı tarayan analizler uygulamanın isteğinde değil, ayrı bir işte (ör.
-              Neptune Analytics) çalışır; sonuçlar düğümlere özellik olarak yazılır.
-      feed:
-        title: Veri nereden geliyor?
-        writes: >-
-          Asıl sipariş kaydı ilişkisel veritabanına yazılır; grafa her yeni siparişin BOUGHT kenarlarını bir besleme süreci ekler.
-        reads: Uygulama, müşteri grafı ekranı ve öneri şeritleri için.
-        kind: >-
-          Neptune başka bir veritabanından kendiliğinden veri çekmez; graf dışarıdan beslenir (değişiklik akışı ya da outbox ile).
-        with: >-
-          Müşteri adları ve ürün kategorileri graftaki düğümlerde kopya olarak durur; asıl müşteri kaydı ilişkisel veritabanında
-          (Aurora), ürünün asıl kaydı katalogda (DocumentDB).
-        best: >-
-          İlişki soruları grafta, kısa ve sınırlı yürüyüşlerle; bütün grafı tarayan analizler ayrı bir işte. Graf asıl kayıttan
-          beslenir ve gerekirse ondan yeniden kurulur.
+      t1:
+        title: "Önceden ne vardı? Lukas'ın çevresi grafta nasıl hazır oldu?"
+        intro: "Listeden Lukas'ı seçmeden önce grafta onun düğümü, adı, şehri, aldığı kitaplar ve o kitapları alan başka müşteriler zaten var. Grafın nasıl dolduğunu Adım 11 anlatıyor: S3'teki CSV dosyaları ve bulk loader, sonra DMS ve Graf tüketicisi. Burada başka bir soru var: bir müşterinin çevresini okumak güvenli ve hızlı olsun diye neler hazırlanır? Adres değişince düğümü kim günceller, sipariş iptal olunca ya da müşteri silinmek isteyince grafta ne olur, sorgu nasıl sınırlanır ve izlenir?"
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1", "t0'daki seçiminden önceki zaman. Bu bölüm, grafın o ana kadar nasıl hazırlandığını anlatır."]
+          - ["Ekip", "Mağazanın sistemini kuran ve işleten mühendisler. Alarmlara onlar bakar, onarımı onlar başlatır."]
+          - ["Kesit, temsilî, Örnek durum ve Olsaydı", "Kesit: tablonun t0'da kullanılan küçük bir parçası. Temsilî: anlatım için seçilmiş, canlı sistemden gelmeyen değer. Örnek durum: yaşanmış gibi anlatılan aksilik. Olsaydı: yaşanmadı; her biri ayrı bir varsayım, bitince tablolar eski hâline döner."]
+          - ["Düğüm, kenar ve özellik", "Düğüm (vertex): grafta bir müşteri ya da ürün. Kenar (edge): ikisi arasındaki bağ, burada BOUGHT (satın aldı). Özellik (property): düğümün ya da kenarın üstündeki bilgi; müşterinin adı ve şehri, kenarın order_id ve qty (adet) bilgisi gibi."]
+          - ["Hop", "Bir kenardan geçmek; haritada bir duraktan ötekine gitmek gibi. Lukas → kitap 1. hop, kitap → başka müşteri 2. hop."]
+          - ["Süper düğüm (super node)", "Çok fazla kenarı olan düğüm: çok satan bir ürün. Çok kalabalık bir kavşak gibi; oradan geçen her yürüyüş yavaşlar."]
+          - ["Asıl kayıt ve kopya", "Asıl kayıt Aurora'da durur. Graf, ondan türetilen bir kopyadır: bozulursa Aurora'dan yeniden kurulur, tersi olmaz."]
+          - ["Outbox ve olay", "Outbox: Aurora'da, asıl değişiklikle aynı iş paketinde yazılan olay satırları; giden mektupların konduğu kutu gibi (Adım 25). Olay: \"adres değişti\", \"sipariş iptal edildi\" gibi tek bir haber."]
+          - ["WAL, DMS, Kinesis ve şerit (shard)", "WAL: Aurora'nın her kalıcı değişikliği sırayla yazdığı defter. AWS DMS: bu defterden outbox satırlarını okuyup akışa koyan servis. Kinesis lm-order-events: olayların sırayla durduğu bant (Adım 25). Şerit: bandın kollarından biri; bölüm anahtarı aynı olan olaylar hep aynı şeride ve sırayla gider."]
+          - ["Tüketici ve Lambda", "Tüketici: akıştan olay okuyan kod. AWS Lambda: böyle bir kodu olay gelince çalıştıran AWS servisi; sunucuyu AWS yönetir."]
+          - ["MERGE, ON CREATE SET ve SET", "MERGE: varsa bul, yoksa yarat. ON CREATE SET: sadece yeni yaratılırsa yaz; var olan düğüme dokunma. SET: her durumda yaz; var olan değerin üstüne yazar."]
+          - ["DELETE ve DETACH DELETE", "DELETE: kenarı siler. DETACH DELETE: düğümü, ona bağlı bütün kenarlarla birlikte siler."]
+          - ["MATCH, WITH, RETURN, LIMIT, collect", "openCypher sorgu sözcükleri. MATCH: bu yolu bul. WITH: bulunanları bir sonraki adıma aktar. RETURN: sonucu ver. LIMIT 12: en fazla 12 satır. collect(...): bulunanları tek bir listede topla; [0..3] bu listenin ilk üçünü alır."]
+          - ["CALL alt sorgusu", "Her ürün için ayrı çalışan küçük bir sorgu. İçindeki LIMIT o ürünün alıcılarını okurken durur."]
+          - ["explain=dynamic (plan ve profil)", "Neptune'a sorguyla birlikte gönderilen ayar: sorguyu çalıştırır ve her adımda kaç kayıttan geçtiğini, ne kadar sürdüğünü yazar. Bir arabanın yol bilgisayarı gibi. openCypher'da profil işini bu görür. Sadece okuma sorgularında çalışır."]
+          - ["Yazma sunucusu ve okuma kopyası (reader)", "Yazma sunucusu grafa yazar, okuma da yapar. Okuma kopyası sadece okur ve aynı diski paylaşır; değişiklik ona çok kısa bir gecikmeyle yansır. Yazma sunucusu düşerse yerine geçer (yük devri, failover)."]
+          - ["Cluster endpoint ve reader endpoint", "Uç nokta: bağlanılan adres. Cluster endpoint hep o anki yazma sunucusunu gösterir. Reader endpoint (adında cluster-ro var) bağlantıları okuma kopyalarına dağıtır."]
+          - ["NCU ve Neptune Serverless", "Serverless: sunucu boyutu yüke göre kendiliğinden değişir. NCU boyutun birimidir; 1 NCU yaklaşık 2 GiB bellek demektir. Bu kümede sınır 1–8 NCU."]
+          - ["Önbellek (buffer cache)", "Neptune'un son okuduğu veriyi bellekte tutması. Bellekteki veri hızlı gelir, bellekte olmayan diskten gelir ve yavaştır."]
+          - ["KVKK ve anonimleştirme", "KVKK: Türkiye'nin kişisel verileri koruma kanunu. Kişi verisinin silinmesini isteyebilir. Anonimleştirme: satırı tutup kişiyi tanıtan bilgileri (ad, e-posta, şehir) geri dönmeyecek biçimde silmek."]
+          - ["CSV, S3 ve bulk loader", "CSV: virgülle ayrılmış satırlardan oluşan dosya. S3: AWS'in dosya deposu. Bulk loader: Neptune'un dosyadan toplu yükleme özelliği (Adım 11)."]
+          - ["T anı ve lm-order-fanout", "T anı: ilk yüklemenin kesildiği an, 1 Eki 03:00; yükleme bu ana kadarki veriyi alır, sonrasını akış getirir (Adım 25). lm-order-fanout: sipariş zincirinin CloudWatch panosu (Adım 25)."]
+          - ["CDC ve Availability Zone", "CDC: veritabanındaki değişiklikleri olduğu anda yakalama. Availability Zone: aynı AWS bölgesindeki ayrı veri merkezi."]
+          - ["DLQ ve IteratorAge", "DLQ (hata kuyruğu): işlenemeyen olayın akıştaki yerinin (hangi şerit, hangi sıra numarası) not edildiği SQS kuyruğu. Olay akışta durur, tüketici onu beklemez; ekip o yerden yeniden okutur. Akış olayı 24 saat tutar (Adım 25). IteratorAge: tüketicinin akışın ne kadar gerisinde olduğu (Adım 25)."]
+          - ["CloudWatch ve EventBridge Scheduler", "CloudWatch: AWS'in ölçüm, kayıt ve alarm servisi. EventBridge Scheduler: bir işi belli saatte başlatan AWS servisi."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: "İş yapan her parça bir satır. \"Aşama\" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–5) çalıştığını, \"Önce → Sonra\" sütunu veriyi kimden alıp kime verdiğini söyler. \"AWS\" etiketli parçaları AWS çalıştırır; \"bizim kodumuz\" etiketli parçaları mağazanın ekibi yazar. Aynı parçalar aşağıdaki simülasyonda birer kutu: üst sırada bir değişikliğin grafa yolu, alt sırada yandaki işler."
+        inventory:
+          - {id: app, name: Uygulama, kind: code, what: "mağazanın arka uç programı (EC2 sunucusunda)", does: "Adres değişince ve sipariş iptal olunca Aurora'ya asıl değişikliği ve olayını aynı iş paketinde yazar. Grafa yazmaz. Graf ekranı için sorguyu Neptune'a gönderir.", box: "Değişikliği ve olayını Aurora'ya yazar; graf ekranının sorgusunu gönderir.", phases: [3, 4, 5], before: "Tarayıcı", after: [aurora, neptune]}
+          - {id: aurora, name: "Aurora PostgreSQL (shop)", kind: aws, what: "işlemsel veritabanı, asıl kayıt", does: "Müşterinin adı ve şehri, siparişler, iptaller ve outbox burada durur. Graf bunun kopyasıdır.", box: "Asıl kayıt: customers, orders, outbox.", phases: [1, 2, 3, 4], before: [app, erase], after: [wal, export, reconcile]}
+          - {id: wal, name: "Aurora'nın değişiklik kaydı (WAL)", kind: aws, what: "Aurora'nın içinde; DMS okuyabilsin diye mantıksal kayıt ayarı açılır", does: "Kalıcı olan her değişikliği sırayla yazar. DMS buradan okur.", box: "Her COMMIT'i sırayla yazar.", phases: [3, 4], before: aurora, after: dms}
+          - {id: dms, name: "AWS DMS (CDC görevi)", kind: aws, what: "AWS'in değişiklik yakalama servisi", does: "Outbox'a eklenen satırları okur, akışa kayıt olarak koyar (Adım 25).", box: "Outbox'a eklenen satırı akışa koyar.", phases: [2, 3, 4], before: wal, after: kinesis}
+          - {id: kinesis, name: "Kinesis Data Streams (lm-order-events)", kind: aws, what: "olay akışı", does: "Olayları şeritlerde sırayla saklar. Sipariş olaylarının bölüm anahtarı sipariş numarası, müşteri olaylarının müşteri numarasıdır.", box: "Olayları sırayla saklar; aynı anahtar aynı şerit.", phases: [3, 4], before: dms, after: consumer}
+          - {id: consumer, name: "Graf tüketicisi (Lambda)", kind: code, what: "AWS Lambda'da çalışan kod (Adım 11)", does: "Olayın türüne göre yazar: order_placed kenarı MERGE eder (order_id ile, qty ile), customer_updated adı ve şehri SET eder, order_cancelled o siparişin kenarlarını siler, customer_erased düğümü siler.", box: "Olaya göre: kenar MERGE, ad/şehir SET, kenar DELETE, düğüm DETACH DELETE.", phases: [3, 4, 5], before: kinesis, after: [neptune, dlq]}
+          - {id: neptune, name: "Neptune yazma sunucusu (graf)", kind: aws, what: "graf veritabanı, cluster endpoint", does: "Düğümler, özellikleri ve BOUGHT kenarları. Tüketici buraya yazar; graf ekranının sorgusu da cluster endpoint'ten buraya gelir.", box: "Düğümler ve kenarlar; yazar ve okur.", phases: [1, 2, 3, 4, 5], before: [consumer, loader, reconcile, app], after: replica}
+          - {id: replica, name: "Neptune okuma kopyası", kind: aws, what: "sadece okuyan ikinci sunucu, başka bir Availability Zone'da; reader endpoint", does: "Aynı diski paylaşır. Karşılaştırma işi ve plan kontrolü buradan okur, yazma sunucusu düşerse yerine geçer.", box: "Ağır okumalar buraya; yazma sunucusu düşerse yerine geçer.", phases: [1, 4, 5], before: neptune, after: [reconcile, planchk]}
+          - {id: export, name: "Dışa aktarma işi", kind: code, what: "ilk yüklemede ve graf baştan kurulurken çalışan program (Adım 11)", does: "Aurora'nın okuma kopyasından müşterileri, ürünleri ve iptal edilmemiş satın almaları okur. KVKK ile silinen müşterileri dosyaya koymaz.", box: "İptal edilen sipariş ve silinen müşteri dosyaya girmez.", phases: [2], before: aurora, after: s3}
+          - {id: s3, name: "S3 (yükleme klasörü)", kind: aws, what: "Amazon S3 bucket'ı", does: "CSV dosyalarının yükleme bitene kadar durduğu yer. İçinde ad ve şehir olduğu için bir yaşam döngüsü kuralı dosyaları 7 gün sonra siler (temsilî).", box: "CSV'ler; 7 gün sonra silinir (temsilî).", phases: [2, 4], before: export, after: loader}
+          - {id: loader, name: "Neptune bulk loader", kind: aws, what: "Neptune'un toplu yükleme özelliği", does: "S3'teki dosyaları tek işte grafa yükler. Düğümün adını ve şehrini ilk kez bu yazar.", box: "Dosyaları tek işte yükler; ad ve şehri ilk kez yazar.", phases: [2], before: s3, after: neptune}
+          - {id: erase, name: "Kişisel veri silme işi", kind: code, what: "KVKK talebi onaylanınca çalışan program", does: "Müşteri satırında ad, e-posta ve şehri anonimleştirir, erased_at tarihini ve customer_erased olayını aynı iş paketinde Aurora'ya yazar. Siparişler yasal süre boyunca kalır.", box: "Müşteri satırını anonimleştirir; customer_erased olayını yazar.", phases: [4], before: "Müşteri hizmetleri (onaylı talep)", after: aurora}
+          - {id: dlq, name: "Hata kuyruğu (SQS DLQ)", kind: aws, what: "Amazon SQS kuyruğu", does: "İşlenemeyen olayın akıştaki yerini saklar. Ekip olayı 24 saat içinde yeniden işletir; bu yüzden eski bir olay geç gelebilir.", box: "İşlenemeyen olayın yeri; ekip sonra yeniden işletir.", phases: [4], before: consumer, after: "Ekip (inceler, yeniden gönderir)"}
+          - {id: scheduler, name: EventBridge Scheduler, kind: aws, what: "AWS'in zamanlayıcısı", does: "Karşılaştırma işini her gece 03:00'te başlatır (temsilî).", box: "Her gece karşılaştırmayı başlatır.", phases: [4], before: "Takvim", after: reconcile}
+          - {id: reconcile, name: "Karşılaştırma işi", kind: code, what: "Lambda'da çalışan program (Adım 11)", does: "Aurora ile okuma kopyasını üç soruyla karşılaştırır: kenar sayısı, ad ve şehir, silinmiş müşteri. Farkı yazma sunucusunda düzeltir.", box: "Kenar sayısı, ad/şehir, silinen müşteri: farkı düzeltir.", phases: [4], before: [scheduler, aurora, replica], after: neptune}
+          - {id: backup, name: "Neptune otomatik yedeği", kind: aws, what: "kesintisiz yedek; saklama 7 gün (temsilî, Neptune'da 1–35 gün)", does: "Graf bozulursa belli bir ana dönmeyi sağlar. Okuma kopyasından farklıdır: kopya şimdiki veriyi tutar, yedek geçmişi. Silinen müşteri saklama süresi dolana kadar yedekte kalır.", box: "Geçmişe dönüş; süresi dolana kadar eski veriyi de tutar.", phases: [4], before: neptune, after: "Ekip (geri yükleme)"}
+          - {id: planchk, name: "Sorgu plan kontrolü", kind: code, what: "yayın öncesi çalışan test", does: "Ekrana giden sorguyu en çok alışveriş yapan müşteriyle explain=dynamic ile okuma kopyasında çalıştırır. Geçilen kenar sayısı ve süre sınırı aşılırsa yayını durdurur. Süreyi önbellek ısındıktan sonra, ikinci çalıştırmada ölçer.", box: "Yayından önce: kaç kenar, kaç ms? Sınır aşılırsa yayın durur.", phases: [1, 5], before: "Yeni sorgu kodu", after: replica}
+          - {id: monitor, name: "CloudWatch alarmları ve yavaş sorgu kaydı", kind: aws, what: "AWS'in izleme servisi", does: "Sunucu hatalarını, kapasiteyi, önbelleği ve kopya gecikmesini izler; eşiği aşan sorguları kaydeder. Adım 25'teki panoda graf tüketicisinin gecikmesi de var.", box: "Hata, kapasite, önbellek, kopya gecikmesi, yavaş sorgu.", phases: [4, 5], before: [neptune, replica, consumer], after: "Ekip (alarm)"}
+        sim_title: "Simülasyon: Lukas'ın çevresi nasıl hazır oldu ve nasıl doğru kalıyor?"
+        sim:
+          kind: pipeline
+          title: "Aurora → değişiklik kaydı → DMS → Kinesis → Graf tüketicisi → Neptune → okuma kopyası"
+          caption: "Kesit: t0'daki simülasyonun 7 müşterisi, 4 kitabı ve 10 BOUGHT kenarı. Bütün grafta 1.000 müşteri, 200 ürün ve 11.890 kenar var. Müşteriler, şehirleri, ürünler ve sipariş numaraları canlı sistemden; yanında (temsilî) yazan numaralar, Lukas'ın eski şehri Köln, tarihler ve O004988 anlatım için seçildi. Kitap adlarının başındaki marka kısa olsun diye yazılmadı (katalogda \"Nordwind Python ile Veri 9\"). T anı Adım 25'tekiyle aynı: 1 Eki 03:00. Oynayış: ilk yükleme, Lukas'ın adres değişikliği, iptal, KVKK silmesi, sonra okumanın sınırları ve izlenmesi. Son karede graf t0'ın başladığı hâlde."
+          tick_ms: 2800
+          phases: {2: "İlk yükleme", 3: "Sürekli besleme", 4: "Tutarlılık ve onarım", 5: "Okuma ve izleme"}
+          rows:
+            - {id: chain, title: "Bir değişikliğin grafa yolu: Uygulama → Aurora → WAL → DMS → Kinesis → Graf tüketicisi → Neptune", flow: true}
+            - {id: side, title: "Yandaki işler: ilk yükleme, silme, hata kuyruğu, karşılaştırma, yedek, plan kontrolü, izleme", side: true}
+          summary: "Düğümü ilk kez bulk loader yazdı. Adres değişikliğini ve iptali Graf tüketicisi taşıdı. Geç gelen olay şehri geri alamadı, çünkü ON CREATE SET var olan düğüme dokunmaz. Geri gelen kenar ve KVKK silmesi birer Olsaydı'ydı; ikisinde de gece Karşılaştırma işinin neyi onardığını gördün. Ekrana giden cevap en fazla 49 düğüm ve 48 kenar. Son durum, t0'daki simülasyonun başladığı durum."
+          boxes:
+            - {id: app, row: chain}
+            - id: aurora
+              row: chain
+              tables:
+                - name: "customers (kesit: t0'daki 7 müşteri; toplam 1.000)"
+                  cols: [customer_id, name, city]
+                  rows:
+                    - {key: C00004, customer_id: C00004, name: Lukas Weber, city: Frankfurt, hidden: true}
+                    - {key: C00422, customer_id: C00422, name: Mehmet Şahin, city: Hamburg, hidden: true}
+                    - {key: C00760, customer_id: C00760, name: İrem Fischer, city: Frankfurt, hidden: true}
+                    - {key: C00062, customer_id: C00062, name: İrem Aydın, city: München, hidden: true}
+                    - {key: C00378, customer_id: C00378, name: Naz Yılmaz, city: Antalya, hidden: true}
+                    - {key: C00910, customer_id: C00910, name: Umut Weber, city: München, hidden: true}
+                    - {key: C00829, customer_id: C00829, name: Mert Arslan, city: München, hidden: true}
+                - name: "orders (kesit: Umut'un iki siparişi)"
+                  cols: [order_id, status]
+                  rows:
+                    - {key: O003480, order_id: O003480, status: delivered, hidden: true}
+                    - {key: O004988, order_id: "O004988 (temsilî)", status: processing, hidden: true}
+                - name: "outbox (kesit: son olay)"
+                  cols: [olay, anahtar]
+                  rows:
+                    - {key: ev1, olay: customer_updated, anahtar: C00004, hidden: true}
+                    - {key: ev2, olay: order_placed, anahtar: O004988, hidden: true}
+                    - {key: ev3, olay: order_cancelled, anahtar: O004988, hidden: true}
+                    - {key: ev4, olay: customer_erased, anahtar: C00062, hidden: true}
+            - {id: wal, row: chain}
+            - {id: dms, row: chain}
+            - {id: kinesis, row: chain}
+            - {id: consumer, row: chain}
+            - id: neptune
+              row: chain
+              tables:
+                - name: "Customer düğümleri (kesit: 7; bugün grafta 1.000)"
+                  cols: ["~id", name, city]
+                  rows:
+                    - {key: C00004, "~id": C00004, name: Lukas Weber, city: Frankfurt, hidden: true}
+                    - {key: C00422, "~id": C00422, name: Mehmet Şahin, city: Hamburg, hidden: true}
+                    - {key: C00760, "~id": C00760, name: İrem Fischer, city: Frankfurt, hidden: true}
+                    - {key: C00062, "~id": C00062, name: İrem Aydın, city: München, hidden: true}
+                    - {key: C00378, "~id": C00378, name: Naz Yılmaz, city: Antalya, hidden: true}
+                    - {key: C00910, "~id": C00910, name: Umut Weber, city: München, hidden: true}
+                    - {key: C00829, "~id": C00829, name: Mert Arslan, city: München, hidden: true}
+                - name: "Product düğümleri (kesit: 4; bugün grafta 200)"
+                  cols: ["~id", name]
+                  rows:
+                    - {key: P0009, "~id": P0009, name: Python ile Veri 9, hidden: true}
+                    - {key: P0019, "~id": P0019, name: Bulut Mimarisi 19, hidden: true}
+                    - {key: P0029, "~id": P0029, name: Veritabanı Tasarımı 29, hidden: true}
+                    - {key: P0039, "~id": P0039, name: Dağıtık Sistemler 39, hidden: true}
+                - name: "BOUGHT kenarları (kesit: 10; bugün grafta 11.890)"
+                  cols: [kenar, "order_id · qty"]
+                  rows:
+                    - {key: e1, kenar: "C00004 → P0009", "order_id · qty": "O000046 · 2", hidden: true}
+                    - {key: e2, kenar: "C00004 → P0019", "order_id · qty": "O000047 · 1", hidden: true}
+                    - {key: e3, kenar: "C00004 → P0029", "order_id · qty": "O000046 · 3", hidden: true}
+                    - {key: e4, kenar: "C00004 → P0039", "order_id · qty": "O000056 · 3", hidden: true}
+                    - {key: e5, kenar: "C00422 → P0009", "order_id · qty": "O003456 · 3", hidden: true}
+                    - {key: e6, kenar: "C00760 → P0009", "order_id · qty": "O002901 · 1 (temsilî)", hidden: true}
+                    - {key: e7, kenar: "C00062 → P0019", "order_id · qty": "O003414 · 3", hidden: true}
+                    - {key: e8, kenar: "C00378 → P0019", "order_id · qty": "O001193 · 1 (temsilî)", hidden: true}
+                    - {key: e9, kenar: "C00910 → P0029", "order_id · qty": "O003480 · 1", hidden: true}
+                    - {key: e10, kenar: "C00829 → P0039", "order_id · qty": "O003406 · 2", hidden: true}
+                    - {key: e11, kenar: "C00910 → P0029", "order_id · qty": "O004988 · 1 (temsilî)", hidden: true}
+            - {id: replica, row: chain}
+            - {id: export, row: side}
+            - {id: s3, row: side}
+            - {id: loader, row: side}
+            - {id: erase, row: side}
+            - {id: dlq, row: side}
+            - {id: scheduler, row: side}
+            - {id: reconcile, row: side}
+            - {id: backup, row: side}
+            - {id: planchk, row: side}
+            - {id: monitor, row: side}
+          frames:
+            - phase: 2
+              who: export
+              lit: [dms, aurora, export]
+              show: {aurora: [C00004, C00422, C00760, C00062, C00378, C00910, C00829, O003480]}
+              set: {aurora: {C00004: {city: Köln}}}
+              packet: {at: export, text: "SELECT … FROM customers, products, orders JOIN order_items WHERE status <> 'cancelled' AND order_date < :T"}
+              note: {neptune: "boş", dms: "T anından itibaren yakalıyor"}
+              say: "Graf boş. Zaman T anı, 1 Eki 03:00: yükleme bu ana kadarki veriyi alır, sonrası akıştan gelir (Adım 25). DMS görevi bu andan sonraki olayları yakalıyor. Dışa aktarma işi T'ye kadarki müşterileri, ürünleri ve iptal edilmemiş satın almaları Aurora'nın okuma kopyasından okudu. O gün Lukas Köln'de oturuyor (temsilî)."
+            - phase: 2
+              who: export
+              lit: [export, s3]
+              packet: {at: s3, text: "nodes/customers.csv: C00004,Customer,Lukas Weber,Köln · edges/bought.csv: O000046-P0009,C00004,P0009,BOUGHT,O000046,2"}
+              note: {dms: ""}
+              say: "Satırlar CSV dosyalarına yazıldı: müşterinin adı ve şehri düğüm dosyasına, order_id ve qty kenar dosyasına (biçim Adım 11'de). Bu dosyalarda kişisel veri var; S3'teki kural onları 7 gün sonra siler (temsilî)."
+            - phase: 2
+              who: loader
+              lit: [s3, loader, neptune]
+              show: {neptune: [C00004, C00422, C00760, C00062, C00378, C00910, C00829, P0009, P0019, P0029, P0039, e1, e2, e3, e4, e5, e6, e7, e8, e9, e10]}
+              fresh: {neptune: [C00004, e1, e2, e3, e4]}
+              set: {neptune: {C00004: {city: Köln}}}
+              note: {neptune: ""}
+              say: "Bulk loader dosyaları tek işte yükledi. Düğümlerin adını ve şehrini ilk kez bu iş yazdı. Lukas'ın düğümü hazır: şehri Köln, kitaplara giden kenarları order_id ve qty taşıyor."
+            - phase: 3
+              who: app
+              lit: [app, aurora]
+              show: {aurora: [ev1]}
+              set: {aurora: {C00004: {city: Frankfurt}}}
+              fresh: {aurora: [C00004, ev1]}
+              packet: {at: app, text: "BEGIN; UPDATE customers SET city = 'Frankfurt' WHERE customer_id = 'C00004'; INSERT INTO outbox (customer_updated …); COMMIT;"}
+              say: "14 Eki (temsilî): Lukas Frankfurt'a taşındı ve hesabında adresini değiştirdi. Uygulama aynı iş paketinde müşteri satırını ve customer_updated olayını Aurora'ya yazdı. Grafa dokunmadı. Şu an Aurora Frankfurt, graf hâlâ Köln diyor."
+            - phase: 3
+              who: wal
+              lit: [aurora, wal]
+              packet: {at: wal, text: "INSERT outbox customer_updated C00004"}
+              say: "Aurora değişikliği değişiklik kaydına yazdı. Uygulamanın işi burada bitti."
+            - phase: 3
+              who: dms
+              lit: [wal, dms, kinesis]
+              packet: {at: dms, text: "kayıt: customer_updated · C00004 · Lukas Weber · Frankfurt"}
+              say: "DMS outbox'a eklenen satırı gördü ve akışa koydu. Siparişlerle aynı yol, aynı görev; sadece olayın türü farklı (zincir Adım 25'te)."
+            - phase: 3
+              who: kinesis
+              lit: [kinesis, consumer]
+              packet: {at: kinesis, text: "bölüm anahtarı: C00004 → hep aynı şerit"}
+              say: "Müşteri olaylarının bölüm anahtarı müşteri numarası. Lukas iki kez üst üste taşınsa iki olay aynı şeritte, doğru sırayla okunur; son adres kazanır."
+            - phase: 3
+              who: consumer
+              lit: [consumer, neptune]
+              packet: {at: consumer, text: "MERGE (c:Customer {`~id`: 'C00004'}) SET c.name = 'Lukas Weber', c.city = 'Frankfurt'"}
+              say: "Graf tüketicisi olayı aldı. Burada düz SET kullandı (ON CREATE SET'ten farkı t-1 · 3'te): var olan düğümün adı ve şehri olayın değeriyle yazılır."
+            - phase: 3
+              who: neptune
+              lit: [consumer, neptune]
+              set: {neptune: {C00004: {city: Frankfurt}}}
+              fresh: {neptune: [C00004]}
+              say: "Düğümde şehir artık Frankfurt; kenarlara dokunulmadı. Aurora ile graf yine aynı. Graf ekranı şehri çizmez, adı çizer; ad değişikliği de aynı yoldan gelir ve bir sonraki çizimde görünür."
+            - phase: 3
+              who: consumer
+              lit: [kinesis, consumer, neptune]
+              note: {neptune: "olsaydı: C01001 Ada Polat (temsilî; kesitin dışında)"}
+              packet: {at: consumer, text: "MERGE (c:Customer {`~id`: 'C01001'}) ON CREATE SET c.name = 'Ada Polat', c.city = 'Ankara'"}
+              say: "Olsaydı: yeni bir müşteri ilk siparişini verseydi. T anından sonra doğan bir düğümü bulk loader yaratamaz. order_placed olayı adı ve şehri de taşır (Adım 11); tüketici düğümü ON CREATE SET ile yaratır, sonra kenarı MERGE eder. Ada'nın Aurora satırı ve kenarı bu kesitte yok; tablolar değişmiyor."
+            - phase: 4
+              who: dlq
+              lit: [dlq, consumer, neptune]
+              packet: {at: consumer, text: "olay: order_placed · C00004 · city: Köln → ON CREATE SET çalışmadı, şehir Frankfurt kaldı"}
+              say: "Örnek durum, 14 Eki akşamı (temsilî): Lukas'ın o sabah, taşınmadan önce verdiği bir siparişin olayı işlenememişti; ekip onu DLQ'daki yerinden yeniden işletti (kitabı bu kesitte yok). Olay eski şehri, Köln'ü taşıyor. Düğüm var olduğu için ON CREATE SET çalışmadı, şehir Frankfurt kaldı. Sipariş olayının adı ve şehri sadece yeni düğüm içindir."
+            - phase: 4
+              who: app
+              lit: [app, aurora]
+              hide: {aurora: [ev1]}
+              note: {neptune: ""}
+              show: {aurora: [O004988, ev2], neptune: [e11]}
+              fresh: {aurora: [O004988, ev2], neptune: [e11]}
+              packet: {at: app, text: "order_placed O004988 · C00910 · P0029 × 1 → birkaç saniye sonra MERGE ile yeni kenar"}
+              say: "Örnek durum, 20 Eki (temsilî): Umut Weber aynı kitabı ikinci kez sipariş etti. Olay Adım 11'deki yoldan geldi; grafta C00910 → P0029 arasında artık iki kenar var, order_id'leri farklı."
+            - phase: 4
+              who: app
+              lit: [app, aurora, wal, dms, kinesis]
+              hide: {aurora: [ev2]}
+              show: {aurora: [ev3]}
+              set: {aurora: {O004988: {status: cancelled}}}
+              fresh: {aurora: [O004988, ev3]}
+              packet: {at: dms, text: "order_cancelled · O004988 → aynı şerit (anahtar sipariş numarası)"}
+              say: "Umut siparişi aynı gün iptal etti. Uygulama aynı iş paketinde status alanını cancelled yaptı ve order_cancelled olayını yazdı. Aurora'da satır kalır; iptal de bir kayıttır. Olayın anahtarı sipariş numarası olduğu için iptal, sipariş olayından sonra okunur (Adım 25)."
+            - phase: 4
+              who: consumer
+              lit: [kinesis, consumer, neptune]
+              hide: {neptune: [e11]}
+              packet: {at: consumer, text: "MATCH ()-[b:BOUGHT {order_id: 'O004988'}]->() DELETE b"}
+              say: "Tüketici kenarı order_id ile bulup sildi. Sadece bu siparişin kenarı gitti; O003480 kenarı yerinde. Umut hâlâ bu kitabın alıcısı, Lukas'ın çevresinde görünmeye devam eder. Aynı olay ikinci kez gelirse silinecek kenar yoktur, sonuç değişmez."
+            - phase: 4
+              who: dlq
+              lit: [dlq, consumer, neptune]
+              show: {neptune: [e11]}
+              mark: {neptune: {e11: fix}}
+              packet: {at: dlq, text: "olsaydı: DLQ'daki yerden yeniden okuma → order_placed O004988 ikinci kez"}
+              note: {neptune: "olsaydı: iptal edilen kenar geri geldi"}
+              say: "Olsaydı: ekip DLQ'daki bir yerden akışı yeniden okutsaydı ve okunan aralıkta, daha önce işlenmiş olan bu order_placed de bulunsaydı. MERGE kenarı yeniden yaratırdı. Tablo o anı gösteriyor: kenar yanlışlıkla geri geldi. Tüketici Aurora'ya sormaz, bunu kendisi fark edemez."
+            - phase: 4
+              who: reconcile
+              lit: [scheduler, reconcile, aurora, replica, neptune]
+              hide: {neptune: [e11]}
+              mark: {neptune: {e11: ""}}
+              packet: {at: reconcile, text: "03:00 · C00910 Aurora'da 7 kenar, grafta 8 → fazla: O004988 (cancelled) → silindi"}
+              note: {neptune: "", reconcile: "fark 1 → düzeltildi"}
+              say: "EventBridge Scheduler Karşılaştırma işini gece 03:00'te başlattı. İş Aurora'dan (iptaller hariç) ve okuma kopyasından müşteri başına kenar sayısını aldı. Umut'ta bir fazla buldu, yazma sunucusunda sildi. Olsaydı bitti; kenar yine yok. Umut'un canlı kenar sayısı 7."
+            - phase: 4
+              who: erase
+              lit: [erase, aurora]
+              hide: {aurora: [ev3]}
+              show: {aurora: [ev4]}
+              set: {aurora: {C00062: {name: "(anonim)", city: "—"}}}
+              note: {reconcile: ""}
+              fresh: {aurora: [C00062, ev4]}
+              packet: {at: erase, text: "BEGIN; UPDATE customers SET name = NULL, email = NULL, city = NULL, erased_at = now() …; INSERT INTO outbox (customer_erased …); COMMIT;"}
+              say: "Olsaydı: İrem Aydın (C00062) KVKK kapsamında verisinin silinmesini isteseydi. Talep onaylanınca Kişisel veri silme işi müşteri satırında kişiyi tanıtan bilgileri silerdi. Siparişler vergi kaydı olduğu için yasal süre boyunca kalırdı, ama artık kişiyi göstermezdi. Tablo o anı gösteriyor. Olay anahtarı müşteri numarası."
+            - phase: 4
+              who: consumer
+              lit: [dms, kinesis, consumer, neptune]
+              hide: {neptune: [C00062, e7]}
+              packet: {at: consumer, text: "MATCH (c:Customer {`~id`: 'C00062'}) DETACH DELETE c"}
+              note: {neptune: "olsaydı: İrem Aydın ve 24 kenarı silindi"}
+              say: "Olay her zamanki yoldan geldi. Tüketici düğümü DETACH DELETE ile bağlı bütün kenarlarla sildi: İrem'in 24 kenarı (kesitte 1'i). Artık Lukas'ın P0019 kitabında başka bir alıcı görünür. Silinen müşteri listeden de çıkar. Numarası elle istenirse ekranda sadece numara çizilir, adı gelmez: kenarı olmayan bir müşteri canlıda da böyle görünür."
+            - phase: 4
+              who: backup
+              lit: [backup, neptune, s3, reconcile, replica]
+              packet: {at: backup, text: "olsaydı: 3 gün önceye geri yükleme → C00062 grafta yine var → gece: erased_at dolu → DETACH DELETE"}
+              note: {backup: "7 gün sonra eski veri düşer (temsilî)", s3: "CSV'ler 7 gün sonra silinir (temsilî)"}
+              say: "Silmeden sonra kişinin adı üç yerde bir süre daha durur: akıştaki eski olaylar 24 saatte, yedek ve S3'teki CSV'ler 7 günde düşer (temsilî). Outbox'taki eski satırlarının payload alanını Kişisel veri silme işi aynı pakette boşaltır. Graf 3 gün önceki yedeğe dönseydi İrem geri gelirdi. Bu yüzden Karşılaştırma işi her gece Aurora'daki silinenler listesini grafta arar ve bulduğunu yeniden siler."
+            - phase: 4
+              who: reconcile
+              lit: [scheduler, reconcile, aurora, replica, neptune]
+              show: {neptune: [C00062, e7], aurora: [ev3]}
+              hide: {aurora: [ev4]}
+              set: {aurora: {C00062: {name: İrem Aydın, city: München}}}
+              packet: {at: reconcile, text: "03:00 · kenar sayısı: fark 0 · ad ve şehir: fark 0 · silinen müşteri: grafta 0"}
+              note: {neptune: "", backup: "", s3: "", reconcile: "3 kontrol: fark 0"}
+              say: "Olsaydı bitti, tablolar eski hâlinde: İrem Aydın yine kesitte. Karşılaştırma işinin normal gecesi: üç soru, üç sıfır."
+            - phase: 5
+              who: planchk
+              lit: [planchk, replica]
+              packet: {at: planchk, text: "POST /openCypher · explain=dynamic · en çok alışveriş yapan müşteri → geçilen kenar, süre"}
+              note: {reconcile: "", planchk: "sınır: 5.000 kenar · 1 sn (temsilî)"}
+              say: "Yayın öncesi: Sorgu plan kontrolü ekranın sorgusunu okuma kopyasında çalıştırdı ve her adımda kaç kayıttan geçtiğini ölçtü. Sınırı aşan sorgu yayına çıkmaz. Bir fikir vermesi için canlı grafta Lukas'ın 37 kenarı, kitap başına 51–72 alıcı kenarı var: yaklaşık 2.200 kenardan geçer (tahmin), cevap 48 kenar."
+            - phase: 5
+              who: app
+              lit: [app, neptune, replica]
+              packet: {at: app, text: "ekran → cluster endpoint (dbws-neptune.cluster-…) · karşılaştırma ve plan kontrolü → reader endpoint (…cluster-ro-…)"}
+              note: {planchk: "", app: "≈ 200 ms (canlı ölçüm)"}
+              say: "Ekranın sorgusu cluster endpoint'ten yazma sunucusuna gider: t0'daki paketlerde bu adresi göreceksin. Sorgu küçük, sunucu rahat; bu izlenen bir karardır. Yazma sunucusu dolarken okuma kopyası boş kalırsa adres reader endpoint'e çevrilir. Uzun okumalar zaten kopyada."
+            - phase: 5
+              who: replica
+              lit: [neptune, replica, app, consumer]
+              packet: {at: replica, text: "olsaydı: yazma sunucusu düştü → okuma kopyası yerine geçti · cluster endpoint yeni sunucuyu gösteriyor"}
+              note: {neptune: "olsaydı: düştü", replica: "olsaydı: yeni yazma sunucusu", app: "olsaydı: graf ekranı kısa süre hata"}
+              say: "Olsaydı: yazma sunucusu düşseydi Neptune okuma kopyasını yerine geçirirdi; genellikle bir dakikadan kısa sürer (AWS). Bu arada graf ekranı hata verir, tüketici aynı kayıtları yeniden dener (Adım 25). Disk ortak olduğu için veri kaybolmaz. Daha uzun bir kesintiyi Adım 25 anlatıyor."
+            - phase: 5
+              who: monitor
+              lit: [app, neptune, monitor]
+              packet: {at: neptune, text: "olsaydı: 30 sn doldu → Neptune sorguyu durdurdu → TimeLimitExceeded · yavaş sorgu kaydı: 2 sn'yi geçti"}
+              note: {neptune: "olsaydı: sorgu 30 sn'de kesildi", replica: "", app: "olsaydı: ekranda hata", monitor: "olsaydı: yavaş sorgu → ekibe haber"}
+              say: "Olsaydı: bir ürün yıllar içinde süper düğüm olsaydı ve sorgu uzasaydı. Neptune'un zaman sınırı 30 sn (temsilî), Uygulama'nın bekleme süresi 60 sn (gerçek kod). Önce Neptune keser, sonra hata Uygulama'ya döner ve ekranda görünür. 2 sn'yi geçen sorgu yavaş sorgu kaydına düşer; ekip planı inceler."
+            - phase: 5
+              who: app
+              lit: [app]
+              packet: {at: app, text: "1 + 12 + 12 × 3 = en fazla 49 düğüm · 12 + 36 = en fazla 48 kenar · canlı: 49 düğüm, 48 kenar, ≈ 5,4 KB"}
+              note: {neptune: "", app: "", monitor: ""}
+              say: "Tarayıcıya giden çizim sınırlı: 1 müşteri, en fazla 12 ürün, ürün başına en fazla 3 başka müşteri. Canlıda ölçtüğümüz üç müşterinin üçü de tam bu sınırda: 49 düğüm, 48 kenar, yaklaşık 5,4 KB. Çizim hep ekrana sığar; bütün çevreyi değil, bir örneğini gösterir."
+            - phase: 5
+              who: monitor
+              lit: [neptune, replica, consumer, monitor]
+              packet: {at: monitor, text: "hata 0 · NCUUtilization %12 · önbellek %99,95 · kopya gecikmesi 20 ms · IteratorAge(graf) 2 sn · yavaş sorgu 0 (temsilî)"}
+              say: "Normal bir gün: CloudWatch sunucu hatasını, kapasiteyi, önbelleği, kopya gecikmesini ve yavaş sorguları izliyor. Graf tüketicisinin gecikmesi Adım 25'teki lm-order-fanout panosunda duruyor."
+            - phase: 5
+              who: neptune
+              lit: [neptune]
+              say: "Hazır: graf t0'daki simülasyonun başladığı hâlde. Kesitte Lukas Weber, 4 kitabı, o kitapları alan 6 başka müşteri ve aralarındaki 10 kenar yerinde."
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: "Önce ekranın sorusu ve çizimin sınırları yazılır, sonra bu sınırların Neptune'un işini ne kadar azalttığı ölçülür. Son olarak düğümün her özelliğini kimin yazdığı ve kimin güncellediği belirlenir."
+            cards:
+              - title: Sorgu nereye yürür?
+                text: "Soru: \"Bu müşteri neler aldı ve aynı şeyleri başka kimler aldı?\" Yürüyüş iki hop: müşteri → ürünler → aynı ürünü alan başka müşteriler. Başlangıç düğümü numarasıyla (~id) verilir, Neptune aramadan doğrudan oradan başlar. Üçüncü hop yok; her hop sonucu katlar, ekran için gerekmez."
+                code:
+                  - {code: "MATCH (me:Customer {`~id`: $cid})-[:BOUGHT]->(p:Product)", tag: Uygulama → Neptune, say: "1. hop: seçilen müşteriden aldığı ürünlere."}
+                  - {code: "OPTIONAL MATCH (p)<-[:BOUGHT]-(o:Customer) WHERE o <> me", tag: Neptune'un içinde, say: "2. hop: her ürünü alan başka müşteriler; kendisi hariç."}
+                  - {code: "WITH me, p, collect(DISTINCT o)[0..3] AS others … LIMIT 12", tag: Neptune'un içinde, say: "Ürün başına en fazla 3 müşteri, toplam en fazla 12 ürün."}
+              - title: Çizimin bütçesi
+                text: "Ekran bir ağ çizer; çok düğüm okunmaz olur ve tarayıcıyı yorar. Bu yüzden sınır baştan hesaplanır: en fazla 49 düğüm, 48 kenar. Canlıda 200 ms civarında cevap geliyor ve cevap yaklaşık 5,4 KB."
+                map:
+                  cols: [Sınır, Nerede, Ne keser]
+                  rows:
+                    - ["2 hop", "sorgunun yolu", "daha uzak müşteriler okunmaz"]
+                    - ["ürün başına 3 müşteri", "collect(...)[0..3]", "cevaba giren alıcı sayısı"]
+                    - ["en fazla 12 ürün", "LIMIT 12", "cevaptaki satır sayısı"]
+                    - ["ad en fazla 28 harf", "tarayıcının kodu", "kutu taşmaz"]
+              - title: "Süper düğüm: kesmek, okumamak değildir"
+                text: "collect(...)[0..3] ve LIMIT cevabı kısaltır, okumayı değil: Neptune önce alıcıları toplar, sonra listeyi keser. Canlı sayılar: Lukas'ın 37 kenarı var (kalem başına bir kenar), kitap başına 51–72 alıcı kenarı. Yani yaklaşık 2.200 kenardan geçilir (tahmin), bu da 11.890 kenarlık grafın yaklaşık beşte biridir, cevapta ise 48 kenar kalır. Bugün sorun değil; en kalabalık ürün ölçtüklerimiz arasında 75 kenarlı. Geçilen kenar sayısı plan kontrolünün sınırını (5.000, temsilî) aşarsa ekip sorguyu CALL alt sorgusuyla yeniden yazar: o zaman sınır okumayı da keser. CALL, Neptune 1.4.1 ve üstünde var. Hangi 3 müşterinin geleceği de garanti değil: sorguda sıralama yok. Canlıda aynı kitapta iki farklı müşteri, farklı üç alıcı gördü. Bu ekran keşif içindir, sıralama için değil; sıralı sonuç isteyen öneri sorgularında ORDER BY var (Adım 11)."
+                code:
+                  - {code: "CALL { WITH p, me", tag: Neptune'un içinde, say: "Her ürün için ayrı küçük bir sorgu."}
+                  - {code: "  MATCH (p)<-[:BOUGHT]-(o:Customer) WHERE o <> me", tag: Neptune'un içinde, say: "Bu ürünün alıcılarına yürü."}
+                  - {code: "  RETURN DISTINCT o LIMIT 3 }", tag: Neptune'un içinde, say: "Üç alıcı bulununca dur; ürünün binlerce alıcısı olsa bile."}
+              - title: Düğümün özelliklerini kim yazar?
+                text: "Graf bir kopya: hiçbir alan grafta doğmaz. Her alanın bir ilk yazanı ve bir güncelleyeni vardır. Uygulama hiçbirine dokunmaz; Aurora'ya yazar, gerisi akışla gelir."
+                map:
+                  cols: [Grafta, İlk kim yazar, Sonra kim değiştirir]
+                  rows:
+                    - ["Customer ~id", "Bulk loader; T'den sonrakini Graf tüketicisi", "Değişmez; KVKK silmesinde düğüm gider"]
+                    - ["Customer name, city", "Bulk loader; yeni müşteride order_placed (ON CREATE SET)", "customer_updated → Graf tüketicisi (SET)"]
+                    - ["Product name, category", "Bulk loader; yeni üründe product_created (Adım 11)", "Aynı akıştan ürün olayı"]
+                    - ["BOUGHT order_id, qty", "Bulk loader; yeni siparişte order_placed (MERGE)", "Değişmez; iptalde kenar silinir"]
+              - title: Her değişikliğin bir olayı var
+                text: "Graf bir kopya olduğu için kendi başına iptali ya da silmeyi bilemez; her biri için Aurora'da bir olay yazılır. Bölüm anahtarı, sırası korunacak şeyin numarasıdır."
+                map:
+                  cols: [Olay, Bölüm anahtarı, Graf tüketicisi ne yapar]
+                  rows:
+                    - ["order_placed", "sipariş no", "Kenarı MERGE eder; müşteri yoksa yaratır"]
+                    - ["order_cancelled", "sipariş no", "O siparişin kenarlarını siler"]
+                    - ["customer_updated", "müşteri no", "name ve city yazar (SET)"]
+                    - ["customer_erased", "müşteri no", "Düğümü ve kenarlarını siler"]
+          - n: 2
+            title: İlk yükleme
+            intro: "Yüklemenin yolu Adım 11'de. Bu sayfayı ilgilendiren: düğümlerin adını ve şehrini ilk kez bulk loader yazar, iptal edilen sipariş ve silinen müşteri dosyaya girmez, dosyalar kişisel veri taşır."
+            cards:
+              - title: Dosyaya ne girer, ne girmez?
+                text: "Dışa aktarma işi T anına kadarki veriyi okuyup CSV yazar. Graf baştan kurulurken de aynı iş çalışır; bu yüzden iki kural burada yazılıdır: iptal edilen sipariş kenar olmaz, KVKK ile silinen müşteri düğüm olmaz. Böylece yeniden kurulan graf silinen birini geri getirmez."
+                code:
+                  - {code: "SELECT customer_id, name, city FROM customers WHERE erased_at IS NULL;", tag: Dışa aktarma işi → Aurora, say: "Silinmemiş müşteriler; ad ve şehirleriyle."}
+                  - {code: "SELECT o.customer_id, i.product_id, o.order_id, i.qty FROM orders o JOIN order_items i JOIN customers c …", tag: Dışa aktarma işi → Aurora, say: "Satın almalar: her kalem bir kenar."}
+                  - {code: "  WHERE o.status <> 'cancelled' AND c.erased_at IS NULL AND o.order_date < :T;", tag: Aurora'nın içinde, say: "İptaller ve silinen müşteriler hariç, T anına kadar."}
+              - title: Dosyalar kişisel veri taşır
+                text: "Düğüm dosyasında ad ve şehir var. Yükleme bitince dosyalara gerek kalmaz. S3 yaşam döngüsü kuralı onları 7 gün sonra siler (temsilî); yükleme hata verirse ekibe inceleme payı kalır. Klasöre sadece Dışa aktarma işi ve Neptune'un yükleme rolü erişir."
+          - n: 3
+            title: Sürekli besleme
+            intro: "Adres değişince Uygulama sadece Aurora'ya yazar; olay her siparişin geçtiği yoldan grafa ulaşır. Tüketici var olan düğümde SET ile, yeni düğümde ON CREATE SET ile yazar."
+            cards:
+              - title: "Adres değişikliği: Aurora'ya tek paket"
+                text: "Müşteri satırını güncellemek ve grafa ayrıca yazmak iki ayrı yazma olurdu; ikincisi başarısız olursa graf eskide kalırdı. Bunun yerine değişiklik ile olay aynı iş paketinde yazılır, sipariş gibi (Adım 25)."
+                code:
+                  - {code: "BEGIN;", tag: Uygulama → Aurora, say: "İş paketi başlar."}
+                  - {code: "UPDATE customers SET city = 'Frankfurt' WHERE customer_id = 'C00004';", tag: Uygulama → Aurora, say: "Asıl kayıt."}
+                  - {code: "INSERT INTO outbox (event, key, payload) VALUES ('customer_updated', 'C00004', …);", tag: Uygulama → Aurora, say: "Aynı pakette olay: yeni ad ve şehir."}
+                  - {code: "COMMIT;", tag: Uygulama → Aurora, say: "Ya ikisi de kalıcı olur ya hiçbiri."}
+              - title: "Aynı alanın iki yazanı: ON CREATE SET ve SET"
+                text: "Şehir iki olayla gelir ve kuralı farklıdır. order_placed olayı yazıldığı andaki şehri taşır, geç gelebilir; bu yüzden sadece yeni düğüme yazar (ON CREATE SET). customer_updated ise şehrin değiştiğini söyler; var olan değerin üstüne yazar (SET). Böylece sipariş olayları adresi hiç geri almaz."
+                code:
+                  - {code: "MERGE (c:Customer {`~id`: $cid}) ON CREATE SET c.name = $name, c.city = $city", tag: Tüketici → Neptune, say: "order_placed: düğüm varsa dokunma, yoksa yarat."}
+                  - {code: "MERGE (c)-[b:BOUGHT {order_id: $oid}]->(p) ON CREATE SET b.qty = i.qty", tag: Tüketici → Neptune, say: "order_placed: kenar sipariş numarasıyla (Adım 11)."}
+                  - {code: "MERGE (c:Customer {`~id`: $cid}) SET c.name = $name, c.city = $city", tag: Tüketici → Neptune, say: "customer_updated: yeni değerleri yaz."}
+              - title: Değişiklik ne zaman görünür?
+                text: "Aurora hemen değişir; graf yaklaşık 2 saniye sonra (Adım 25'teki hedef, temsilî). O aralıkta ekran eski adı çizebilir. Bu ekran için kabul edilebilir: yanlış işlem yaptırmaz, bir sonraki çizimde düzelir. Ödeme ve fatura adresi her zaman Aurora'dan okunur, grafın kopyasından değil."
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: "Graf bir kopya olduğu için dört aksiliğe hazır olmalı: iptal, geç gelen eski olay, KVKK silmesi ve yedekten dönüş. Her biri için kimin ne zaman ne yaptığı ve neyi yakalamadığı aşağıda."
+            cards:
+              - title: İptal edilen sipariş
+                text: "Ne zaman: order_cancelled olayı gelince, birkaç saniye içinde. Ne yapar: o sipariş numarasının kenarlarını siler; başka siparişlerin kenarları kalır. Aynı olay iki kez gelirse silinecek kenar yoktur. Yakalamadığı: iptalden sonra eski order_placed DLQ'dan yeniden işletilirse kenar geri gelir. Onarım: gece Karşılaştırma işi fazla kenarı siler; ekip DLQ'dan işletmeden önce siparişin status alanına bakar."
+                code:
+                  - {code: "MATCH ()-[b:BOUGHT {order_id: $oid}]->() DELETE b", tag: Tüketici → Neptune, say: "Bu siparişin bütün kenarları; kalem başına bir kenar."}
+              - title: Geç gelen eski olay
+                text: "Ne zaman: ekip DLQ'daki bir yerden akışı yeniden okutunca; akış olayı 24 saat tuttuğu için bu pencerenin içinde. Ne yapar: order_placed var olan düğümün adına ve şehrine dokunmaz (ON CREATE SET), kenarı order_id ile MERGE ettiği için çoğaltmaz. Yakalamadığı: eski bir customer_updated SET ile eski şehri yazar; silinmiş müşterinin eski olayı düğümü geri getirir. Onarım: gece Karşılaştırma işi ad ve şehir farkını Aurora'dan düzeltir, silinenler listesindeki düğümü yeniden siler. Ekip yeniden okutmadan önce aralıktaki olayların türüne bakar."
+              - title: "KVKK: müşteri silinmek isterse"
+                text: "Ne zaman: talep onaylanınca Kişisel veri silme işi çalışır. KVKK'ya göre başvuru en geç 30 günde sonuçlanır; bu zincir saniyeler içinde biter. Ne yapar: Aurora'da ad, e-posta ve şehir silinir, siparişler kalır (vergi kaydı). Grafta düğüm ve kenarları DETACH DELETE ile gider; o müşteri artık kimsenin çevresinde görünmez, önerilerdeki sayımlar da onsuz hesaplanır. Yakalamadığı: akıştaki eski bir order_placed düğümü ON CREATE SET ile adıyla yeniden yaratabilir; yedekte ve S3'teki CSV'de veri bir süre daha durur. Onarım: gece Karşılaştırma işi siler; yedek ve CSV 7 günde düşer (temsilî), yedekten dönülürse aynı liste yeniden uygulanır. Bu kart grafın payını anlatır; aynı olayı akıştan öbür tüketiciler de okur (Adım 25)."
+                code:
+                  - {code: "UPDATE customers SET name = NULL, email = NULL, city = NULL, erased_at = now() WHERE customer_id = $cid;", tag: Kişisel veri silme işi → Aurora, say: "Kişiyi tanıtan bilgiler gider, satır ve siparişler kalır."}
+                  - {code: "INSERT INTO outbox (event, key, payload) VALUES ('customer_erased', $cid, '{}');", tag: Kişisel veri silme işi → Aurora, say: "Olay sadece numarayı taşır; adı değil."}
+                  - {code: "MATCH (c:Customer {`~id`: $cid}) DETACH DELETE c", tag: Tüketici → Neptune, say: "Düğüm, bağlı bütün kenarlarla birlikte."}
+              - title: Karşılaştırma işi üç soru sorar
+                text: "Ne zaman: her gece 03:00 (temsilî), EventBridge Scheduler başlatır. Grafı okuma kopyasından okur, yazma sunucusu yorulmaz. Son birkaç dakikanın siparişleri hariç, onlar hâlâ akışta olabilir (Adım 11). Yakalamadığı: gündüz oluşan bir fark ertesi geceye kadar kalır; aynı müşteride hem bir eksik hem bir fazla kenar varsa sayı eşit çıkar; bu fark graf bir sonraki baştan kurulduğunda temizlenir (üç ayda bir, temsilî). Onarım: fark çıkan müşterinin kenarlarını, adını ve şehrini Aurora'dan yeniden yazar; fark çoksa alarm çalar ve ekip grafı ilk yüklemeyle baştan kurar."
+                code:
+                  - {code: "SELECT o.customer_id, count(*) FROM order_items i JOIN orders o … JOIN customers c …", tag: Karşılaştırma işi → Aurora, say: "Müşteri başına satın alma kalemi sayısı."}
+                  - {code: "  WHERE o.status <> 'cancelled' AND c.erased_at IS NULL AND o.order_date < now() - interval '10 minutes' GROUP BY 1;", tag: Aurora'nın içinde, say: "İptaller, silinen müşteriler ve son 10 dakika (temsilî) sayılmaz."}
+                  - {code: "MATCH (c:Customer) OPTIONAL MATCH (c)-[b:BOUGHT]->() RETURN c.`~id`, c.name, c.city, count(b);", tag: [Karşılaştırma işi → okuma kopyası, okuma kopyası → Karşılaştırma işi], say: "Grafta aynı sayılar, ad ve şehir."}
+                  - {code: "SELECT customer_id FROM customers WHERE erased_at IS NOT NULL;", tag: [Karşılaştırma işi → Aurora, Aurora → Karşılaştırma işi], say: "Silinenler listesi: grafta olmamalı."}
+              - title: Kopya ve yedek ayrı şeylerdir
+                text: "Okuma kopyası şimdiki veriyi tutar; yanlış bir silme ona da yansır. Yedek geçmişi tutar. Graf zaten Aurora'dan yeniden kurulabildiği için yedek saklama süresi kısa tutulur: 7 gün (temsilî). Kısa saklama, silinen birinin verisinin yedekte kalma süresini de kısaltır. Asıl kaydın yedeği Aurora'nındır. Yakalamadığı: yedekten dönünce aradaki günlerin siparişleri grafta eksik kalır. Onarım: Karşılaştırma işi eksikleri kenar sayısından bulup Aurora'dan yazar; fark çoksa graf ilk yüklemeyle baştan kurulur."
+          - n: 5
+            title: Okuma ve izleme
+            intro: "Son olarak okumanın kendisi: plan yayından önce ölçülür, ekranın hangi adresten okuyacağı seçilir, zaman sınırları birbirine göre ayarlanır, çizim tarayıcıda sınırlanır ve her şey izlenir."
+            cards:
+              - title: Plan yayından önce ölçülür
+                text: "Sorgu plan kontrolü sorguyu okuma kopyasında explain=dynamic ile çalıştırır. Üç mod var: static sorguyu çalıştırmaz, sadece planı gösterir; dynamic çalıştırır ve her adımdaki kayıt sayısını ve süreyi yazar; details bunlara sorgu metnini ve tahminleri ekler. Bir de AWS'in uyarısı var: collect(DISTINCT ...) pahalıdır. Burada gerekli: bir müşteri aynı ürünü iki siparişte aldıysa iki kenarı vardır, listede iki kez çıkmasın diye. Bedeli de bu ölçümde görünür."
+                code:
+                  - {code: "POST https://<neptune>:8182/openCypher", tag: Plan kontrolü → okuma kopyası, say: "Ekranın sorgusunun aynısı, okuma kopyasının adresine gider."}
+                  - {code: "query=MATCH (me:Customer …   &parameters={\"cid\": \"<en çok alan müşteri>\"}", tag: Plan kontrolü → okuma kopyası, say: "En kötü durumu ölçmek için en çok alışveriş yapan müşteri."}
+                  - {code: "explain=dynamic", tag: [Plan kontrolü → okuma kopyası, okuma kopyası → Plan kontrolü], say: "Çalıştır ve adım adım say. Yazma sorgularında kullanılamaz."}
+              - title: Ekran hangi adresten okur?
+                text: "Kümede iki sunucu var, ayrı Availability Zone'larda; disk ortak. Değişiklik okuma kopyasına çok kısa bir gecikmeyle yansır (ClusterReplicaLag). Okuma kopyasının öncelik sırası (promotion tier) 1'dir: AWS bu sıradaki Serverless kopyayı yazma sunucusuyla aynı kapasitede tutar, yük devrinde küçük bir sunucuya düşülmez. Bedeli: iki sunucunun da aynı kapasitesine ödeme yapılır."
+                map:
+                  cols: [Kim okur, Adres, Neden]
+                  rows:
+                    - ["Graf ekranı ve öneri şeritleri", "cluster endpoint", "Küçük sorgular; sunucu rahat. İzlenen karar."]
+                    - ["Karşılaştırma işi", "reader endpoint", "Bütün grafı sayar; yazmayı yormasın."]
+                    - ["Sorgu plan kontrolü", "reader endpoint", "Ölçüm canlı trafiği etkilemesin."]
+              - title: Zaman sınırları birbirine göre ayarlanır
+                text: "Ne zaman: her sorguda. Neptune sınırı aşan sorguyu durdurur ve hata döner. Sınır bir küme ayarıdır, değişmesi için sunucu yeniden başlatılır; bu yüzden nadiren dokunulur. Neptune'un varsayılanı 120 sn, Uygulama ise en fazla 60 sn bekler: öyle kalsa Uygulama vazgeçtikten sonra sorgu boşuna çalışmaya devam eder ve Serverless kapasiteyi büyütüp para harcatabilir. Sınır bu yüzden Uygulama'nın süresinden kısa seçilir. Yakalamadığı: 30 sn'nin altında kalan ama yavaş olan sorgu; onu yavaş sorgu kaydı yakalar. Onarım: ekip kayıttan sorguyu bulur, planına bakar; çalışan bir sorguyu durdurmak için Neptune'un sorgu durum adresine (/openCypher/status) iptal isteği gönderir."
+                code:
+                  - {code: "neptune_query_timeout = 30000", tag: Ekip → Neptune, say: "Her sorgu için en fazla 30 sn (temsilî)."}
+                  - {code: "requests.post(url, data=req.body, headers=dict(req.headers), timeout=60)", tag: Uygulama → Neptune, say: "Uygulama'nın gerçek kodu: en fazla 60 sn bekler."}
+                  - {code: "neptune_enable_slow_query_log = info · neptune_slow_query_log_threshold = 2000", tag: Ekip → Neptune, say: "2 sn'yi geçen sorgu CloudWatch Logs'a yazılır (temsilî)."}
+              - title: "İlk sorgu neden yavaş olabilir?"
+                text: "Serverless kapasite 1 NCU'ya kadar iner. Yük azalınca bellek küçülür ve veri önbellekten çıkar. Sonraki ilk sorgu veriyi diskten okur, birkaç saniye sürebilir; arkasından gelenler yine yaklaşık 200 ms. Bu ekran bunu kabul eder ve bekleme gösterir. Önbellek oranı alarmı bu yüzden tek başına çalmaz: gece sonrası ilk sorgu normaldir."
+              - title: Çizim tarayıcıda sınırlanır
+                text: "Sunucudaki sınırların üstüne tarayıcı da kendi korumasını koyar. Uzun ad kısaltılır ki kutu taşmasın. Ağı çizen kütüphane (vis-network) düğümleri ekrana yerleştirmek için önce hesap yapar; çizim ondan sonra görünür. Düğüm sayısı 49'u geçmediği için bu hesap kısadır. Bu ekran müşteri adı gösterdiği için sadece yetkili personele açıktır."
+                code:
+                  - {code: "label: n.label.length > 28 ? n.label.slice(0, 27) + \"…\" : n.label", tag: Tarayıcının içinde, say: "28 harften uzun ad kısaltılır."}
+                  - {code: "physics: { stabilization: true, barnesHut: { springLength: 140 } }", tag: Tarayıcının içinde, say: "Düğümler önce yerleşir, sonra çizim görünür."}
+              - title: Neyi kim izler?
+                text: "Graf tüketicisinin gecikmesi ve DLQ Adım 25'teki panoda. Burada okumaya özel olanlar var. Eşikler temsilîdir; yüzde olanlar en yüksek kapasiteye göre hesaplandığı için kapasite değişince güncellenmez. Yakalamadığı: bu alarmlar sorgunun doğru cevap verdiğini söylemez; onu Karşılaştırma işi söyler."
+                map:
+                  cols: [Ölçü, Alarm, Ne anlama gelir]
+                  rows:
+                    - ["Sunucu hatası / toplam istek", "son 5 dk'da > %5, en az 20 istek varsa", "Ekran hata veriyor; az istekte tek hata alarm çaldırmaz."]
+                    - ["NCUUtilization", "15 dk > %80", "Üst sınıra yaklaşıldı: sınırı yükselt ya da okumayı kopyaya taşı."]
+                    - ["BufferCacheHitRatio", "1 saat < %99 ve yavaş sorgu var", "Veri belleğe sığmıyor. AWS'in önerisi %99,9'un üstü."]
+                    - ["ClusterReplicaLagMaximum", "5 dk > 1 sn", "Okuma kopyası geride; gece sayımı yanlış fark bulabilir."]
+                    - ["Yavaş sorgu kaydı", "1 saatte ≥ 5 kayıt", "Plan bozuldu ya da bir ürün kalabalıklaştı."]
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
