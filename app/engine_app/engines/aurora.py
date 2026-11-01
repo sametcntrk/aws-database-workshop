@@ -138,7 +138,7 @@ GROUP BY o.order_id ORDER BY o.order_date DESC LIMIT 20"""
     def api_report():
         explain = request.args.get("explain") == "on"
         q = """SELECT c.segment, count(DISTINCT o.order_id) AS orders, sum(oi.qty * oi.unit_price) AS revenue,
-       round(avg(o.total), 2) AS avg_order
+       round(sum(oi.qty * oi.unit_price) / count(DISTINCT o.order_id), 2) AS avg_order
 FROM orders o JOIN customers c USING (customer_id) JOIN order_items oi USING (order_id)
 WHERE o.status <> 'cancelled'
 GROUP BY c.segment ORDER BY revenue DESC"""

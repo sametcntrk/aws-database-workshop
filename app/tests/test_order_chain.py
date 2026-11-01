@@ -1,5 +1,6 @@
 """The order chain with stubs: no AWS and no live writes. Run: ENGINE=docdb python -m unittest discover -s app/tests"""
 import os
+import sqlite3
 import sys
 import unittest
 from pathlib import Path
@@ -77,6 +78,56 @@ class FakeAurora:
 
     def fetchone(self):
         return self.row
+
+
+class ReportDb:
+    """The report's real SQL on SQLite: two orders, one with two items. An order counts once in the average."""
+
+    def __init__(self):
+        self.db = sqlite3.connect(":memory:")
+        self.db.create_function("date_trunc", 2, lambda part, value: value)
+        self.db.executescript("""
+            CREATE TABLE customers (customer_id TEXT, segment TEXT);
+            CREATE TABLE orders (order_id TEXT, customer_id TEXT, visitor_id TEXT, order_date TEXT, status TEXT, total REAL);
+            CREATE TABLE order_items (order_id TEXT, product_id TEXT, qty INT, unit_price REAL);
+            INSERT INTO customers VALUES ('C1', 'premium');
+            INSERT INTO orders VALUES ('O1', 'C1', NULL, 'x', 'delivered', 300), ('O2', 'C1', NULL, 'x', 'delivered', 100),
+                                      ('O3', 'C1', NULL, 'x', 'cancelled', 999);
+            INSERT INTO order_items VALUES ('O1', 'P1', 1, 100), ('O1', 'P2', 2, 100), ('O2', 'P1', 1, 100), ('O3', 'P1', 1, 999);
+        """)
+
+    def __call__(self):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def cursor(self):
+        return self
+
+    def execute(self, text, params=None):
+        self.cur = self.db.execute(text)
+        self.rowcount = -1
+        return self
+
+    def fetchall(self):
+        return self.cur.fetchall()
+
+
+class ReportTest(unittest.TestCase):
+    def setUp(self):
+        self.conn, aurora.conn = aurora.conn, ReportDb()
+        self.c = client_for(aurora)
+
+    def tearDown(self):
+        aurora.conn = self.conn
+
+    def test_average_counts_a_multi_item_order_once(self):
+        seg = self.c.get("/api/report").get_json()["data"]["segments"][0]
+        self.assertEqual((seg["orders"], seg["revenue"], seg["avg_order"]), (2, 400.0, 200.0))
 
 
 class OrderTest(unittest.TestCase):

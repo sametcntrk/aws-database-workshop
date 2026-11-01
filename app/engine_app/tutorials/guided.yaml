@@ -24815,7 +24815,7 @@ steps:
               tag: Ekip → Aurora
               say: Sunucuların bellekteki plan listesini yeniler.
           - title: 'Planın göstermediği: rakam doğru mu?'
-            text: 'Örnek durum. Plan bir sorgunun ne kadar hızlı çalıştığını söyler, doğru olup olmadığını söylemez. Bu raporda canlı bir örnek var: avg(o.total) JOIN''den sonra hesaplanır, yani iki kalemli bir sipariş ortalamaya iki kez girer. 1 Kas''ta premium için avg_order 15.571,57 TL; ciro bölü sipariş ise 21.905.868,57 / 1.688 = 12.977,41 TL. Çok kalemli siparişler ortalamayı yukarı çeker. Sipariş sayısı ve ciro doğrudur. Emniyet: raporun rakamları Redshift mutabakatı (Adım 29) gibi başka bir defterle karşılaştırılır. Yakalamadığı: mutabakat ciroya bakar, ortalamaya bakmaz. Onarım: ortalama siparişler üzerinden, JOIN''den önce hesaplanır.'
+            text: 'Örnek durum. Plan bir sorgunun ne kadar hızlı çalıştığını söyler, doğru olup olmadığını söylemez. Bu raporda yaşandı: avg_order ilk sürümde avg(o.total) ile, JOIN''den sonra hesaplanıyordu; iki kalemli bir sipariş ortalamaya iki kez giriyordu. 1 Kas''ta premium için 15.571,57 TL çıkıyordu; ciro bölü sipariş ise 21.905.868,57 / 1.688 = 12.977,41 TL. Plan bunu göstermedi: süre de satır sayıları da normaldi. Sipariş sayısı ve ciro baştan doğruydu. Emniyet: raporun rakamları Redshift mutabakatı (Adım 29) gibi başka bir defterle karşılaştırılır. Yakalamadığı: mutabakat ciroya bakar, ortalamaya bakmaz; bu yüzden hatayı rakamı elle hesaplayan biri buldu. Onarım: ortalama artık ciro bölü sipariş sayısıdır, küçük bir test de iki kalemli siparişin bir kez sayıldığına bakar.'
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
@@ -24874,7 +24874,7 @@ steps:
           - [Kimlik, "Kullanıcı adı + şifre, bağlantı açılırken", gerçek, "Şifre kodda yazmaz; uygulama onu AWS Secrets Manager'dan alır."]
         body_label: Gönderilen SQL'ler (sırasıyla)
         body: |-
-          SELECT c.segment, count(DISTINCT o.order_id) AS orders, sum(oi.qty * oi.unit_price) AS revenue, round(avg(o.total), 2) AS avg_order
+          SELECT c.segment, count(DISTINCT o.order_id) AS orders, sum(oi.qty * oi.unit_price) AS revenue, round(sum(oi.qty * oi.unit_price) / count(DISTINCT o.order_id), 2) AS avg_order
           FROM orders o JOIN customers c USING (customer_id) JOIN order_items oi USING (order_id)
           WHERE o.status <> 'cancelled' GROUP BY c.segment ORDER BY revenue DESC;
           EXPLAIN ANALYZE <aynı sorgu>;
@@ -24918,9 +24918,9 @@ steps:
             hl: app
           - id: sel
             say: her segment için sipariş sayısını, ciroyu ve ortalama sipariş tutarını,
-            code: "SELECT c.segment, count(DISTINCT o.order_id), sum(oi.qty * oi.unit_price), round(avg(o.total), 2)"
+            code: "SELECT c.segment, count(DISTINCT o.order_id), sum(oi.qty * oi.unit_price), round(sum(oi.qty * oi.unit_price) / count(DISTINCT o.order_id), 2)"
             name: Ne hesaplansın?
-            note: Üç toplam; GroupAggregate düğümü bunları hesaplar.
+            note: "Üç toplam; GroupAggregate düğümü bunları hesaplar. Ortalama, ciro bölü sipariş sayısıdır: iki kalemli sipariş bir kez sayılır."
             hl: app
           - id: frm
             say: siparişleri müşteriler ve kalemlerle birleştirerek,
