@@ -23199,45 +23199,786 @@ steps:
           - [CdcRefreshState, "Entegrasyonun ilk kopyalamayı bitirip değişiklikleri sürekli uyguladığı durum."]
           - [Gecikme (replication lag), "Kaynaktaki değişiklik ile kopyadaki görünmesi arasındaki süre."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde kopyanın izlenmesi için hazırlık
-        intro: >-
-          Rapora güvenmeden önce kopyanın nasıl izleneceği belirlenir. Aşağıdaki dört adım bu hazırlığın sırasıdır.
-        text:
-          - title: Durum görünümü okunur
-            text: >-
-              svv_integration entegrasyonun durumunu ve tablo sayılarını verir. "total_tables_failed" sıfırdan büyükse bir tablo
-              kopyalanamıyordur (ör. birincil anahtarı yok).
-            code: |-
-              SELECT integration_id, target_database, state, total_tables_replicated, total_tables_failed FROM svv_integration;
-          - title: Gecikme ölçülür
-            text: >-
-              En basit ölçü: kopyadaki en yeni satırın zamanı ile şimdiki zaman arasındaki fark. CloudWatch'ta entegrasyonun gecikme
-              metriği de izlenir ve bir eşiğe alarm kurulur.
-            code: |-
-              SELECT max(order_date), datediff(second, max(order_date)::timestamp, getdate()) FROM aurora_live.public.orders;
-          - title: Rapor ekranına tazelik yazılır
-            text: >-
-              Kullanıcıya "veriler şu saate kadar günceldir" bilgisi gösterilir; gecikme büyürse ekran uyarır.
-          - title: Kaynaktaki şema değişikliği planlanır
-            text: >-
-              Aurora'da bir tablo değiştirildiğinde (sütun eklemek gibi) entegrasyon bunu taşır; bazı değişiklikler tablonun yeniden
-              kopyalanmasını gerektirir. Bu yüzden şema değişiklikleri sakin saatlerde yapılır ve durum izlenir.
-      feed:
-        title: Veri nereden geliyor?
-        writes: >-
-          Kullanıcı yazmaz. Geçmiş satışlar toplu yükleme ile (ör. S3'ten COPY) gelir; canlı siparişler işlemsel veritabanından
-          zero-ETL ile kendiliğinden kopyalanır.
-        reads: Rapor ekranları, panolar ve analistlerin sorguları.
-        kind: >-
-          Motordan motora: Aurora'nın değişiklikleri zero-ETL entegrasyonuyla Redshift'e akar; arada uygulama ya da yazılmış bir
-          veri hattı yoktur. Geçmiş veri ise toplu yüklemeyle gelir.
-        with: >-
-          Raporun her satırı başka bir veritabanında doğdu: sipariş Aurora'da yazıldı, Redshift onun kopyasını tutuyor. Aynı
-          sipariş Keyspaces'te olay, ElastiCache'te sıralama puanı olarak da durur; rapor için doğru kaynak Redshift'teki kopyadır.
-        best: >-
-          Analiz sorguları işlemsel veritabanında değil, sütun bazlı bir analiz deposunda çalışır. İşlemsel veri ona zero-ETL ile
-          kod yazmadan, kısa bir gecikmeyle (burada yaklaşık 30 saniye) akar; ağır raporlar siparişleri hiç yavaşlatmaz.
+      t1:
+        title: Önceden ne vardı? Kopyanın durumunu kim, nasıl ölçüyor?
+        intro: 'Kutuya bakmadan önce entegrasyon zaten çalışıyor ve Redshift durumunu kendi görünümlerine yazıyor. Kopyanın nasıl dolduğunu Adım 30 anlatıyor. Burada başka bir soru var: bir kopyaya ne zaman güvenilir? Akıp akmadığını, ne kadar geride olduğunu ve hangi tablonun sorunlu olduğunu kim ölçer, sayı büyüyünce kim haberdar olur, kim onarır? Kutudaki "sn önce" neden gecikme değildir? Önce bileşenler, sonra bir simülasyon, sonra dört aşama.'
+        terms_title: Bu bölümün terimleri
+        terms:
+        - - t-1
+          - 't0''da kutuya bakmandan önceki zaman. Kutu: raporlar sayfasının altındaki "Zero-ETL replication" bölümü; durumu, tablo sayısını ve en yeni siparişin kaç saniye önce olduğunu yazar.'
+        - - Ekip
+          - Mağazanın sistemini kuran ve işleten mühendisler. Alarmlara onlar bakar, onarım komutunu onlar gönderir.
+        - - zero-ETL, entegrasyon ve aurora_live
+          - 'zero-ETL: Aurora''yı Redshift''e kendiliğinden kopyalayan AWS servisi; zincirin kendisini Adım 30 anlatır. Entegrasyon: bu kopyalamanın tek bir kurulumu; burada bir tane var. aurora_live: Redshift''teki salt okunur kopya.'
+        - - COMMIT, değişiklik kaydı (WAL) ve outbox
+          - 'COMMIT: yazmaları kalıcı yapan son komut. WAL: Aurora''nın kalıcı olan her değişikliği sırayla yazdığı kayıt; zero-ETL buradan okur. Outbox: siparişle aynı pakette yazılan olay satırları (Adım 25).'
+        - - Gecikme (lag)
+          - Bir değişikliğin Aurora'da COMMIT edildiği an ile Redshift'te sorgulanabilir olduğu an arasındaki süre; mektubun postaya verildiği an ile ulaştığı an arasındaki fark gibi.
+        - - Sistem görünümü
+          - Redshift'in kendi durumunu yazdığı hazır tablo. Yazılmaz, sadece okunur; arabanın gösterge paneli gibi.
+        - - svv_integration
+          - 'Entegrasyon başına bir satır: state (durum), total_tables_replicated (kopyalanan tablo), total_tables_failed (hatalı tablo), current_lag (gecikme, milisaniye).'
+        - - state değerleri
+          - 'PendingDbConnectState: kopyanın veritabanı bekleniyor. SchemaDiscoveryState: tablolar çıkarılıyor, ilk kopya alınıyor. CdcRefreshState: ilk kopya bitti, değişiklikler sürekli uygulanıyor. ErrorState: hata verdi. CDC: değişiklikleri olduğu anda yakalama.'
+        - - svv_integration_table_state
+          - 'Tablo başına bir satır. table_state: Synced (kopya yetişti), ResyncRequired (yeniden kopyalanmalı), ResyncInitiated (yeniden kopyalanıyor), Failed (hatalı). reason: tablonun son hâl değişikliğinin sebebi.'
+        - - Resync
+          - Bir tablonun baştan yeniden kopyalanması. Bitene kadar o tablo sorgulanamaz; öbür tablolar akmaya devam eder.
+        - - Birincil anahtar (primary key) ve şema değişikliği
+          - 'Birincil anahtar: bir satırı tek başına tanıtan sütun; zero-ETL onsuz tabloyu kopyalamaz. Şema değişikliği: tablonun tanımının değişmesi, örneğin ALTER TABLE ile sütun eklemek.'
+        - - CloudWatch, metrik, alarm ve pano
+          - 'CloudWatch: AWS''in ölçüm ve alarm servisi. Metrik: dakika dakika kaydedilen sayı. Alarm: bir metrik eşiği aşınca Ekibe mesaj gönderen kural. Pano: Ekibin metrikleri grafik olarak gördüğü ekran.'
+        - - Entegrasyon metrikleri
+          - 'Redshift''in CloudWatch''a dakikada bir yazdığı sayılar. IntegrationLag: gecikme, saniye. IntegrationState: durum numarası; 2 kopyalıyor, 3 hata, 4 durdu. IntegrationNumTablesFailedReplication: hatalı tablo sayısı.'
+        - - EventBridge
+          - AWS'in olay servisi. Entegrasyonda bir olay olunca (hata, yeniden başlama) kurala göre haber verir; ölçüm gelmesini beklemez.
+        - - Gece mutabakatı ve sales
+          - 'sales: kapanmış günlerin Redshift''teki geniş tablosu; S3 arşivinden, ayrı bir yoldan gelir (Adım 29). Gece mutabakatı: aurora_live ile sales''in toplamlarını kapanmış günler için karşılaştıran iş.'
+        - - Kesit, temsilî, Örnek durum ve Olsaydı
+          - 'Kesit: tablonun gösterilen küçük parçası. Temsilî: canlı sistemden gelmeyen, anlatım için seçilmiş değer. Örnek durum: yaşanmış bir aksilik. Olsaydı: yaşanmadı; her biri ayrı bir durumdur, sonraki karede geri alınır.'
+        - - Kod kartlarındaki sözcükler
+          - 'SELECT: oku. max(): en büyüğü. datediff(second, a, b): iki an arasındaki saniye. getdate(): şu an. WHERE: süz. ALTER DATABASE … REFRESH TABLES: bu tabloları yeniden kopyala. put-metric-alarm: alarm yaz. threshold: eşik. evaluation-periods: üst üste kaç ölçüm.'
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: 'İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra" sütunu kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim kodumuz" etiketli parçaları mağazanın ekibi yazar. Aynı parçalar simülasyonda birer kutu: üst sırada siparişin kopyaya yolu, alt sırada onu izleyenler.'
+        inventory:
+        - id: app
+          name: Uygulama
+          kind: code
+          what: mağazanın arka uç programı (EC2 sunucularında)
+          does: Siparişi Aurora'ya yazar; kopyalama için bir şey yapmaz. Raporlar sayfası açılınca Redshift'e iki durum sorgusu gönderir, cevabı kutuya yazdırır.
+          box: Siparişi Aurora'ya yazar; durum isteğinde Redshift'e iki sorgu gönderir.
+          phases:
+          - 3
+          - 4
+          before: Tarayıcı
+          after:
+          - aurora
+          - views
+          - redshift
+        - id: aurora
+          name: Aurora PostgreSQL (shop)
+          kind: aws
+          what: işlemsel veritabanı, asıl kayıt
+          does: 'Siparişlerin asıl kaydı. Kopyalanan 5 tablo: orders, order_items, products, customers, outbox.'
+          box: Asıl kayıt; 5 tablo kopyalanıyor.
+          phases:
+          - 2
+          - 3
+          - 4
+          before: app
+          after: wal
+        - id: wal
+          name: Aurora'nın değişiklik kaydı (WAL)
+          kind: aws
+          what: Aurora'nın içinde
+          does: Her COMMIT'i sırayla yazar. zero-ETL buradan okur.
+          box: Her COMMIT'i sırayla yazar.
+          phases:
+          - 3
+          - 4
+          before: aurora
+          after: zetl
+        - id: zetl
+          name: zero-ETL entegrasyonu (Adım 30)
+          kind: aws
+          what: AWS'in kopyalama servisi
+          does: İlk kopyayı alır, sonra değişiklikleri uygular. Bir tablo bozulursa o tabloyu kendiliğinden yeniden kopyalamayı dener.
+          box: İlk kopya, sonra değişiklikler; bozulan tabloyu yeniden kopyalar.
+          phases:
+          - 2
+          - 3
+          - 4
+          before: wal
+          after: redshift
+        - id: redshift
+          name: Redshift · aurora_live
+          kind: aws
+          what: analiz deposu, salt okunur kopya
+          does: Raporların okuduğu kopya. t0'daki ikinci sorgu en yeni siparişin zamanını buradan okur.
+          box: Raporların okuduğu kopya.
+          phases:
+          - 1
+          - 2
+          - 3
+          - 4
+          before: zetl
+          after:
+          - views
+          - recon
+          - app
+        - id: views
+          name: Sistem görünümleri (svv_integration, svv_integration_table_state)
+          kind: aws
+          what: Redshift'in kendi durum tabloları
+          does: Entegrasyonun durumunu, tablo sayılarını, gecikmeyi ve her tablonun hâlini yazar. t0'daki birinci sorgu buradan okur; Ekip sorunun sebebini de burada arar.
+          box: Durum, tablo sayıları, gecikme, her tablonun hâli.
+          phases:
+          - 1
+          - 2
+          - 3
+          - 4
+          before: redshift
+          after:
+          - app
+          - Ekip (inceleme)
+        - id: cw
+          name: CloudWatch metrikleri ve alarmları
+          kind: aws
+          what: AWS'in izleme servisi
+          does: Redshift dakikada bir IntegrationLag, IntegrationState ve hatalı tablo sayısını yazar. Üç alarm eşiği izler, Ekibe mesaj gönderir. Kimse sayfayı açmasa da çalışır.
+          box: Dakikada bir ölçü; 3 alarm, sayfa açılmasa da çalışır.
+          phases:
+          - 1
+          - 2
+          - 3
+          - 4
+          before: redshift
+          after: Ekip (alarm)
+        - id: eb
+          name: EventBridge kuralı
+          kind: aws
+          what: AWS'in olay servisi
+          does: Entegrasyonun hata ve toparlanma olaylarını Ekibe iletir. Metrik eşiği beklemeden haber verir.
+          box: Entegrasyon olaylarını Ekibe iletir.
+          phases:
+          - 2
+          - 3
+          - 4
+          before: zetl
+          after: Ekip (alarm)
+        - id: recon
+          name: Gece mutabakatı (Adım 29)
+          kind: code
+          what: Lambda'da çalışan program
+          does: aurora_live ile sales tablosunun kapanmış gün toplamlarını karşılaştırır. sales ayrı yoldan, S3 arşivinden geldiği için biri yanlışsa fark çıkar; gecikme küçükken bile.
+          box: aurora_live ile sales'in kapanmış gün toplamları.
+          phases:
+          - 4
+          before: redshift
+          after: Ekip (alarm)
+        sim_title: 'Simülasyon: kopyanın durumu nasıl ölçülüyor?'
+        sim:
+          kind: pipeline
+          title: Aurora → değişiklik kaydı → zero-ETL → Redshift; yanında görünümler ve alarmlar
+          caption: 'Kesit: t0''ın başladığı tek sipariş; orders tablosunda binlerce satır var, kutu "boş" derken kesitteki sipariş henüz yok demektir. Canlı sistemden: durum adları, 5 tablo, yaklaşık 30 saniye, 5.535 saniye ölçümü, sütun eklenince orders tablosunun ResyncInitiated olup 4 kopyalanan, 1 hatalı sayılması. Temsilî: saatler, alarm eşikleri, panonun değerleri, current_lag''in tam değeri. Önce ilk kopya ve izlemenin kurulması, sonra tek bir siparişin gecikmesi, en sonda aksilikler oynuyor. Son karede her şey t0''ın başladığı hâlde.'
+          tick_ms: 1800
+          phases:
+            2: İlk yükleme
+            3: Sürekli besleme
+            4: Tutarlılık ve onarım
+          rows:
+          - id: chain
+            title: 'Siparişin kopyaya yolu: Uygulama → Aurora → WAL → zero-ETL → Redshift'
+            flow: true
+          - id: watch
+            title: 'Kopyayı izleyenler: görünümler, alarmlar, olaylar, mutabakat'
+            side: true
+          summary: 'Kopyanın durumunu Redshift kendi yazar: akış görünümlerde, gecikme hem görünümde hem CloudWatch''ta. Alarm gecikmeye bakar, kutudaki "sn önce"ye değil. Şema değişince tablo kendiliğinden yeniden kopyalanır; bitene kadar sorgulanamaz. Rakamın doğruluğunu görünümler değil, gece mutabakatı sınar. Son durum t0''ın başladığı durum: CdcRefreshState, 5 tablo, 0 hata.'
+          boxes:
+          - id: app
+            row: chain
+          - id: aurora
+            row: chain
+            tables:
+            - name: 'shop.public.orders (kesit: t0''ın başladığı tek sipariş; geçmişin binlerce satırı gösterilmiyor)'
+              cols:
+              - order_id
+              - order_date
+              - total
+              money:
+              - total
+              rows:
+              - key: o1
+                order_id: W1793380550
+                order_date: '10:12:04'
+                total: 951.92
+                hidden: true
+          - id: wal
+            row: chain
+          - id: zetl
+            row: chain
+          - id: redshift
+            row: chain
+            tables:
+            - name: aurora_live.public.orders (aynı kesit)
+              cols:
+              - order_id
+              - order_date
+              - total
+              money:
+              - total
+              rows:
+              - key: o1
+                order_id: W1793380550
+                order_date: '10:12:04'
+                total: 951.92
+                hidden: true
+          - id: views
+            row: watch
+            tables:
+            - name: svv_integration
+              cols:
+              - sütun
+              - değer
+              rows:
+              - key: state
+                sütun: state
+                değer: PendingDbConnectState
+              - key: rep
+                sütun: total_tables_replicated
+                değer: '0'
+              - key: fail
+                sütun: total_tables_failed
+                değer: '0'
+              - key: lag
+                sütun: current_lag
+                değer: '-'
+            - name: svv_integration_table_state
+              cols:
+              - tablo
+              - table_state
+              rows:
+              - key: orders
+                tablo: orders
+                table_state: Synced
+                hidden: true
+              - key: order_items
+                tablo: order_items
+                table_state: Synced
+                hidden: true
+              - key: products
+                tablo: products
+                table_state: Synced
+                hidden: true
+              - key: customers
+                tablo: customers
+                table_state: Synced
+                hidden: true
+              - key: outbox
+                tablo: outbox
+                table_state: Synced
+                hidden: true
+          - id: cw
+            row: watch
+            tables:
+            - name: 'pano: son ölçüm (temsilî)'
+              cols:
+              - metrik
+              - değer
+              rows:
+              - key: m_lag
+                metrik: IntegrationLag
+                değer: '-'
+              - key: m_state
+                metrik: IntegrationState
+                değer: '-'
+              - key: m_fail
+                metrik: hatalı tablo
+                değer: '-'
+          - id: eb
+            row: watch
+          - id: recon
+            row: watch
+          frames:
+          - phase: 2
+            who: zetl
+            lit:
+            - aurora
+            - zetl
+            - views
+            note:
+              views: kopyanın veritabanı bekleniyor
+            say: '30 Eyl gecesi. Geçmiş Aurora''ya taşındı, Ekip entegrasyonu kurdu (Adım 30). Redshift''te kopyanın veritabanı henüz yok; svv_integration bunu PendingDbConnectState diye yazıyor. Kopyanın hâli ilk andan görünümde yazar: tahmin edilmez, okunur.'
+          - phase: 2
+            who: zetl
+            lit:
+            - aurora
+            - zetl
+            - redshift
+            - views
+            set:
+              views:
+                state:
+                  değer: SchemaDiscoveryState
+            fresh:
+              views:
+              - state
+            note:
+              views: ''
+            packet:
+              at: zetl
+              text: 'ilk kopya: orders, order_items, products, customers, outbox'
+            say: Kopyanın veritabanı (aurora_live) yaratıldı. zero-ETL tabloların tanımını çıkarıyor ve ilk kopyayı alıyor; Aurora bu sırada çalışmaya devam ediyor. Durum SchemaDiscoveryState.
+          - phase: 2
+            who: views
+            lit:
+            - redshift
+            - views
+            set:
+              views:
+                state:
+                  değer: CdcRefreshState
+                rep:
+                  değer: '5'
+            show:
+              views:
+              - orders
+              - order_items
+              - products
+              - customers
+              - outbox
+            fresh:
+              views:
+              - state
+              - rep
+              - orders
+              - order_items
+              - products
+              - customers
+              - outbox
+            say: 'İlk kopya bitti. Durum CdcRefreshState oldu: artık sadece değişiklikler uygulanıyor. 5 tablo kopyalanıyor, 0 hatalı. Beşinci tablo outbox: raporlar onu okumaz, ama entegrasyon shop veritabanının bu beş tablosunu da aldığı için o da burada. Her tablonun hâli Synced.'
+          - phase: 2
+            who: cw
+            lit:
+            - cw
+            - eb
+            - views
+            set:
+              cw:
+                m_lag:
+                  değer: 0 sn
+                m_state:
+                  değer: 2 (kopyalıyor)
+                m_fail:
+                  değer: '0'
+            fresh:
+              cw:
+              - m_lag
+              - m_state
+              - m_fail
+            packet:
+              at: cw
+              text: IntegrationLag > 300 sn · IntegrationState ≠ 2 · hatalı tablo > 0 → Ekibe mesaj
+            say: 'Mağaza açılmadan Ekip izlemeyi kurdu. Redshift dakikada bir metrik yazıyor; üç alarm onları izliyor: gecikme 5 dakikayı geçerse, durum "kopyalıyor" değilse, bir tablo hatalıysa (eşikler temsilî). EventBridge kuralı da hata olaylarını iletiyor. Kimse sayfayı açmasa da izleme çalışır.'
+          - phase: 3
+            who: app
+            lit:
+            - app
+            - aurora
+            show:
+              aurora:
+              - o1
+            fresh:
+              aurora:
+              - o1
+            packet:
+              at: app
+              text: BEGIN; INSERT INTO orders …; INSERT INTO order_items …; INSERT INTO outbox …; COMMIT;
+            say: 'Mağaza açık. Bir müşteri sipariş verdi: Uygulama W1793380550''yi Aurora''ya yazdı, 10:12:04''te COMMIT edildi (saat temsilî). Uygulamanın işi bitti. Şu an Aurora''da satır var, kopyada yok: gecikme tam olarak bu aradır.'
+          - phase: 3
+            who: wal
+            lit:
+            - aurora
+            - wal
+            - zetl
+            packet:
+              at: zetl
+              text: INSERT orders W1793380550 …
+            say: 'COMMIT değişiklik kaydına yazıldı. zero-ETL kaydı okuyor ve değişiklikleri Redshift''e parti parti uyguluyor. Gecikmenin kaynağı burası: taşıma ve uygulama süresi.'
+          - phase: 3
+            who: redshift
+            lit:
+            - zetl
+            - redshift
+            - views
+            show:
+              redshift:
+              - o1
+            fresh:
+              redshift:
+              - o1
+            set:
+              views:
+                lag:
+                  değer: 30.000 ms (temsilî)
+            note:
+              redshift: COMMIT'ten ≈ 30 sn sonra
+            say: Yaklaşık 30 saniye sonra satır aurora_live'da. Bu 30 saniye canlıda ölçüldü; yüke göre değişir. svv_integration aynı anda gecikmeyi milisaniye olarak yazıyor.
+          - phase: 3
+            who: cw
+            lit:
+            - views
+            - cw
+            set:
+              cw:
+                m_lag:
+                  değer: 30 sn
+            fresh:
+              cw:
+              - m_lag
+            note:
+              redshift: ''
+            say: 'Aynı gecikmenin iki yolu var. current_lag sorulunca okunur; IntegrationLag dakikada bir kaydedilir, geçmişi saklanır ve alarm buna bakar. Bu yüzden panoda bir an sonra görünür. Birimleri de farklı: biri milisaniye, öbürü saniye.'
+          - phase: 3
+            who: app
+            lit:
+            - app
+            - views
+            - redshift
+            packet:
+              at: app
+              text: 'iki sorgu: svv_integration · en yeni sipariş (aurora_live)'
+            say: 'Raporlar sayfası açılınca Uygulama iki soru sorar: görünümden durum, kopyadan en yeni mağaza siparişinin zamanı. İkisi sayfanın altındaki "Zero-ETL replication" kutusuna yazılır; ikincisi "sn önce" diye. Bu gecikme değildir: en yeni siparişten bu yana geçen süredir. t0''da bu sayıyı göreceksin.'
+          - phase: 4
+            who: app
+            lit:
+            - app
+            - redshift
+            packet:
+              at: app
+              text: 'seconds_ago: 5535 (canlı ölçüm) · durum CdcRefreshState · hata 0'
+            say: 'Örnek durum: bir süre sipariş gelmedi. Canlıda bir ölçümde kutu 5.535 saniye yazdı, yani yaklaşık bir buçuk saat. Kopya geride değildi: yeni sipariş yoktu. Gecikme bu sırada küçük kaldı, çünkü geride bekleyen değişiklik yoktu. Sadece "sn önce"ye bakan biri boş yere telaşlanır; alarm bu yüzden ona değil, IntegrationLag''e bakar.'
+          - phase: 4
+            who: cw
+            lit:
+            - zetl
+            - redshift
+            - cw
+            set:
+              cw:
+                m_lag:
+                  değer: 420 sn
+              views:
+                lag:
+                  değer: 420.000 ms
+            fresh:
+              cw:
+              - m_lag
+            mark:
+              cw:
+                m_lag: fix
+            note:
+              cw: 'olsaydı: alarm → Ekip'
+            say: 'Olsaydı: kampanya gününde değişiklik yağsaydı ve zero-ETL geride kalsaydı. IntegrationLag 7 dakikaya çıkar, üç ölçüm üst üste 5 dakikayı geçer, alarm çalar. Siparişler kaybolmaz, değişiklik kaydında sırasını bekler. Bu arada raporlar sessizce eski rakam gösterir; kutudaki durum yine CdcRefreshState''tir. Bu yüzden Ekip panoya bakar.'
+          - phase: 4
+            who: zetl
+            lit:
+            - aurora
+            - zetl
+            - redshift
+            - views
+            set:
+              cw:
+                m_lag:
+                  değer: 30 sn
+                m_fail:
+                  değer: '1'
+              views:
+                lag:
+                  değer: 30.000 ms (temsilî)
+                rep:
+                  değer: '4'
+                fail:
+                  değer: '1'
+                orders:
+                  table_state: ResyncInitiated
+            mark:
+              cw:
+                m_lag: ''
+                m_fail: fix
+              views:
+                orders: fix
+            fresh:
+              views:
+              - rep
+              - fail
+              - orders
+            note:
+              cw: hatalı tablo alarmı → Ekip
+            packet:
+              at: aurora
+              text: ALTER TABLE orders ADD COLUMN request_id …
+            say: 'Olsaydı bitti, gecikme yine 30 saniye. Örnek durum, canlıda yaşandı (birkaç gün önce, tarih temsilî; satır tabloları bugünkü hâli gösteriyor): Ekip orders tablosuna request_id sütununu ekledi. zero-ETL bu şema değişikliğinde tabloyu kendiliğinden yeniden kopyalamaya başladı: orders ResyncInitiated, tablo sayısı 4 kopyalanan, 1 hatalı.'
+          - phase: 4
+            who: app
+            lit:
+            - app
+            - redshift
+            - views
+            packet:
+              at: app
+              text: 'en yeni sipariş: boş · hatalı tablo: 1'
+            note:
+              redshift: orders bitene kadar sorgulanamaz; tablo bugünkü satırı gösteriyor
+            say: 'Bu sırada kutu ne gösterir? Kopyadaki orders okunamadığı için "sn önce" görünmez. Raporların orders kullanan sorguları da hata verir. Öbür dört tablo akmaya devam eder. Siparişler Aurora''da yazılmaya devam eder: ödeme bundan hiç etkilenmez.'
+          - phase: 4
+            who: zetl
+            lit:
+            - zetl
+            - redshift
+            - views
+            - cw
+            set:
+              cw:
+                m_fail:
+                  değer: '0'
+              views:
+                rep:
+                  değer: '5'
+                fail:
+                  değer: '0'
+                orders:
+                  table_state: Synced
+            mark:
+              cw:
+                m_fail: ''
+              views:
+                orders: ''
+            fresh:
+              views:
+              - rep
+              - fail
+              - orders
+            note:
+              redshift: ''
+              cw: ''
+            say: 'Yeniden kopya bitti, Ekip bir komut göndermedi. orders yine Synced, 5 tablo, 0 hatalı; alarm kendiliğinden kapandı. Ders: Ekip böyle bir şema değişikliğini sakin bir saate planlar ve önceden duyurur.'
+          - phase: 4
+            who: views
+            lit:
+            - views
+            - zetl
+            - cw
+            set:
+              cw:
+                m_fail:
+                  değer: '1'
+              views:
+                rep:
+                  değer: '4'
+                fail:
+                  değer: '1'
+                products:
+                  table_state: Failed
+            mark:
+              views:
+                products: fix
+            fresh:
+              views:
+              - products
+            note:
+              cw: 'olsaydı: hatalı tablo alarmı → Ekip'
+            packet:
+              at: views
+              text: 'reason: table doesn''t have a primary key (temsilî) → ALTER DATABASE aurora_live INTEGRATION REFRESH TABLES products;'
+            say: 'Olsaydı: bir tablo kendiliğinden düzelmeseydi; örneğin birincil anahtarı silinseydi. Tablo Failed olur, reason sütunu sebebini yazar. Ekip önce sebebi giderir (anahtarı geri koyar), sonra o tabloyu yeniden kopyalatır.'
+          - phase: 4
+            who: eb
+            lit:
+            - zetl
+            - views
+            - cw
+            - eb
+            set:
+              cw:
+                m_fail:
+                  değer: '0'
+                m_state:
+                  değer: 3 (hata)
+                m_lag:
+                  değer: büyüyor
+              views:
+                rep:
+                  değer: '5'
+                fail:
+                  değer: '0'
+                state:
+                  değer: ErrorState
+                lag:
+                  değer: büyüyor
+                products:
+                  table_state: Synced
+            mark:
+              views:
+                products: ''
+                state: fix
+              cw:
+                m_state: fix
+            note:
+              eb: 'olsaydı: hata olayı → Ekip'
+              cw: 'olsaydı: durum alarmı → Ekip'
+            say: 'Olsaydı: entegrasyonun tamamı hata verseydi. products yine Synced; bu kez sorun tabloda değil: durum ErrorState, IntegrationState 3; EventBridge olayı da Ekibe gider. Raporlar son kopyadan okumayı sürdürür ve eskir; siparişler etkilenmez. Düzelmezse Ekip entegrasyonu yeniden kurar, ilk kopya baştan alınır: asıl kayıt Aurora''da olduğu için veri kaybolmaz.'
+          - phase: 4
+            who: recon
+            lit:
+            - aurora
+            - redshift
+            - recon
+            - views
+            set:
+              cw:
+                m_state:
+                  değer: 2 (kopyalıyor)
+                m_lag:
+                  değer: 30 sn
+              views:
+                state:
+                  değer: CdcRefreshState
+                lag:
+                  değer: 30.000 ms (temsilî)
+            mark:
+              views:
+                state: ''
+              cw:
+                m_state: ''
+            note:
+              eb: ''
+              cw: ''
+              recon: fark 0 (son 7 gün)
+            say: 'Olsaydı bitti. Son soru: görünümler her şey yolunda derken rakam yanlış olabilir mi? Evet: Aurora''ya yanlış yazılmış bir tutar kopyaya da kusursuzca gider. Görünümler akışı söyler, satırın doğruluğunu söylemez. Adım 29''daki gece mutabakatı aurora_live ile ayrı yoldan gelen sales''in kapanmış gün toplamlarını karşılaştırır.'
+          - phase: 4
+            who: views
+            lit:
+            - redshift
+            - views
+            note:
+              recon: ''
+            say: 'Hazır. Olsaydı kareleri yaşanmadı; tablolar bugünkü hâlinde: durum CdcRefreshState, 5 tablo, 0 hatalı. Kesitte iki defterde de W1793380550 var. t0''daki simülasyon burada başlıyor: yeni bir sipariş yazılacak, yaklaşık 30 saniye sonra kopyaya ulaşacak ve kutu bunu okuyacak.'
+        phases:
+        - n: 1
+          title: Tasarım
+          intro: Ekip önce "güncel" sözünün ne demek olduğunu yazar, sonra hangi ölçünün neye cevap verdiğini, en son raporun ne kadar eskiliğe dayanabileceğini.
+          cards:
+          - title: Dört ayrı soru, dört ayrı ölçü
+            text: '"Kopya güncel mi?" tek bir soru gibi görünür, ama dört sorudur. Akıyor mu? Hangi tablo sorunlu? Ne kadar geride? Son sipariş ne zaman geldi? Sonuncusu en kolay okunandır ve en çok karıştırılandır: sipariş gelmezse büyür, kopya tam güncel olsa bile.'
+            map:
+              cols:
+              - Soru
+              - Ölçü
+              - Nereden
+              - Ne zaman yanıltır
+              rows:
+              - - Akıyor mu?
+                - state, IntegrationState
+                - svv_integration, CloudWatch
+                - Akıyor der, ama geride olabilir
+              - - Hangi tablo sorunlu?
+                - table_state, reason
+                - svv_integration_table_state
+                - Synced der, rakamın doğruluğunu söylemez
+              - - Ne kadar geride?
+                - current_lag, IntegrationLag
+                - svv_integration, CloudWatch
+                - Yanıltmaz; ama kutuda görünmez, panoda okunur
+              - - Son sipariş ne zaman?
+                - max(order_date), "sn önce"
+                - aurora_live.public.orders
+                - Sipariş yokken büyür; bir sipariş yeni verildiyse gecikmeye yakındır
+          - title: Rapor ne kadar eskiliğe dayanır?
+            text: 'Bu karar ekranlara göre verilir. Şehir şehir satış raporu birkaç dakika eski olabilir: kimse ona bakarak bir müşteriye cevap vermez. Ödeme, stok ve Siparişlerim kopyadan okunmaz; Aurora''dan okunur (Adım 26). Hedef olağan günde 1 dakikanın altında, alarm 5 dakikada (temsilî). Aradaki gecikmeler alarm çaldırmaz, panoda görünür; Ekip haftalık bakar. Canlıda ölçülen yaklaşık 30 saniye.'
+        - n: 2
+          title: İlk yükleme
+          intro: Entegrasyon ilk kopyayı alırken durum görünümden okunur, kopya bitince izleme mağaza açılmadan kurulur.
+          cards:
+          - title: İlk kopya görünümden izlenir
+            text: 'Entegrasyonun kurulması ve ilk kopya Adım 30''da. Bu sayfanın sorusu: bittiği nereden anlaşılır? Görünümden. Durum CdcRefreshState ve 5 tablo Synced olmadan Ekip raporu kullanıma açmaz. Bu bir açılış şartıdır; sonradan bir tablo düşerse rapor açık kalır, o tabloyu okuyan sorgu hata verir.'
+            code_title: Ekibin baktığı iki sorgu
+            code:
+            - code: SELECT state, total_tables_replicated, total_tables_failed, current_lag FROM svv_integration;
+              tag:
+              - Ekip → Redshift
+              - Redshift → Ekip
+              say: Entegrasyonun hâli ve gecikmesi.
+            - code: SELECT table_name, table_state, reason FROM svv_integration_table_state;
+              tag:
+              - Ekip → Redshift
+              - Redshift → Ekip
+              say: Her tablonun hâli ve sebebi.
+          - title: Alarmlar açılıştan önce
+            text: Alarm sorun çıktıktan sonra kurulmaz. Metrikler Redshift'ten dakikada bir gelir. Gecikme ve durum için üç ölçüm üst üste aranır ki tek bir sıçrama kimseyi uyandırmasın; hatalı tablo alarmı ilk ölçümde çalar, çünkü o tablo o an sorgulanamıyor. Değerler temsilî.
+            code_title: Alarm (kısaltılmış)
+            code:
+            - code: aws cloudwatch put-metric-alarm --metric-name IntegrationLag …
+              tag: Ekip → CloudWatch
+              say: Gecikme alarmı.
+            - code: --threshold 300 --period 60 --evaluation-periods 3
+              tag: Ekip → CloudWatch
+              say: Üç dakika üst üste 5 dakikadan fazla gecikme.
+            - code: --dimensions Name=IntegrationId,Value=<entegrasyon no>
+              tag: Ekip → CloudWatch
+              say: Sadece bu entegrasyon.
+        - n: 3
+          title: Sürekli besleme
+          intro: Her sipariş kopyaya biraz geç ulaşır. Bu gecikme iki yerden okunur; raporlar sayfası ise başka bir sayı gösterir.
+          cards:
+          - title: Durum isteği ne sorar?
+            text: Raporlar sayfası her açıldığında ve "Refresh the status" butonunda Uygulama Redshift'e iki sorgu gönderir. Bu sorgular sadece okur; kopyalamaya etkisi yoktur.
+            code_title: Gerçek sorgular
+            code:
+            - code: SELECT integration_id, target_database, state, total_tables_replicated, total_tables_failed, last_replicated_checkpoint FROM svv_integration
+              tag:
+              - Uygulama → Redshift
+              - Redshift → Uygulama
+              say: 'Akıyor mu, kaç tablo, kaç hata? last_replicated_checkpoint: son uygulanan değişikliğin işareti.'
+            - code: SELECT max(order_date) AS newest, datediff(second, max(order_date)::timestamp, getdate()) AS seconds_ago
+              tag:
+              - Uygulama → Redshift
+              - Redshift → Uygulama
+              say: En yeni sipariş ne zaman, kaç saniye önce?
+            - code: FROM aurora_live.public.orders WHERE visitor_id IS NOT NULL
+              tag: Redshift'in içinde
+              say: Sadece mağazadan verilen siparişler; eski sitenin geçmişi sayılmaz.
+          - title: '"Sn önce" ne zaman gecikmeye yakındır?'
+            text: 'Tek bir durumda: sipariş verip hemen bakarsan. Sipariş verdiğin andan kutunun onu göstermesine kadar geçen süre, kabaca gecikmedir; kutuyu yenileyerek elle ölçülür. Sonra sayı büyümeye devam eder, ama artık gecikmeyi değil geçen süreyi gösterir. Kutu gecikmeyi göstermez; Ekip onu panoda IntegrationLag olarak görür.'
+          - title: Kim neyi izler?
+            text: 'Raporu okuyan kişi kutuya bakar; alarmlar Ekibe gider. Eşikler temsilî. Yakalamadığı: bunların hiçbiri rakamın doğruluğuna bakmaz; ona gece mutabakatı bakar (Adım 29).'
+            map:
+              cols:
+              - Ölçü
+              - Alarm
+              - Ne anlama gelir
+              rows:
+              - - IntegrationLag
+                - 3 dk üst üste > 300 sn
+                - Kopya geride; raporlar eski.
+              - - IntegrationState
+                - 3 dk üst üste ≠ 2
+                - Kopyalama durdu ya da hata verdi.
+              - - Hatalı tablo sayısı
+                - 1 ölçümde > 0
+                - Bir tablo sorgulanamıyor ya da eski.
+              - - EventBridge olayı
+                - olay gelince
+                - Entegrasyon hata verdi; ölçüm beklenmez.
+        - n: 4
+          title: Tutarlılık ve onarım
+          intro: Sipariş gelmezse, kopya geride kalırsa, şema değişirse, bir tablo ya da bütün entegrasyon hata verirse ne olur, akıyor olmak doğru olmak mıdır? Her biri için kimin ne zaman ne yaptığı, neyi yakalamadığı ve onarımı aşağıda.
+          cards:
+          - title: Sipariş gelmezse
+            text: 'Ne zaman: gece ya da sessiz bir saatte. Ne yapar: kutudaki sayı büyür, gecikme küçük kalır; alarm çalmaz, çünkü geride bekleyen değişiklik yoktur. Canlıda bir ölçümde 5.535 saniye görüldü. Yakalamadığı: kutu tek başına iki durumu ayıramaz; kopya durmuşsa da sayı büyür. Onarım: gerekmez; şüphe varsa Ekip durumu ve IntegrationLag''i panodan okur.'
+          - title: Gecikme büyürse
+            text: 'Ne zaman: IntegrationLag üç dakika üst üste 5 dakikayı geçince. Ne yapar: alarm Ekibe gider; siparişler kaybolmaz, değişiklik kaydında sırasını bekler. Yakalamadığı: 5 dakikanın altındaki gecikmeler; rapor için kabul edilir. Onarım: Ekip önce bekler, çünkü kopya genellikle kendiliğinden yetişir. Uzarsa Aurora''daki toplu yazmalara ve Redshift''in kapasitesine bakar; toplu işi sakin saate alır ya da kapasiteyi artırır.'
+          - title: Şema değişince
+            text: 'Ne zaman: canlıda orders''a sütun eklenince görüldü. Tablo yeniden kopyalandı, bu sırada 1 tablo hatalı sayıldı, sonra kendiliğinden düzeldi. Bitene kadar o tablo sorgulanamaz; süre tablonun boyuna bağlıdır, canlıdaki süre ölçülmedi. Yakalamadığı: alarm, hatanın planlı bir değişiklikten gelip gelmediğini ayıramaz. Onarım: Ekip şema değişikliğini sakin bir saate planlar, önceden duyurur ve bitişi svv_integration_table_state''ten izler.'
+            code:
+            - code: ALTER TABLE orders ADD COLUMN request_id …;
+              tag: Ekip → Aurora
+              say: Şema değişikliği; zero-ETL'i de etkiler.
+            - code: SELECT table_name, table_state, reason FROM svv_integration_table_state WHERE table_state <> 'Synced';
+              tag:
+              - Ekip → Redshift
+              - Redshift → Ekip
+              say: Eşit olmayan tablolar ve sebepleri.
+          - title: Tablo düzelmezse
+            text: 'Ne zaman: zero-ETL hatalı tabloyu kendiliğinden yeniden kopyalamayı dener; sebep sürüyorsa tablo Failed kalır. Yaygın sebepler: birincil anahtarın silinmesi, desteklenmeyen bir veri türü. Yakalamadığı: sebep sürüyorsa yeniden kopya yine hata verir; komut sebebi gidermez. Onarım: Ekip reason sütununu okur, sebebi Aurora''da giderir, sonra tabloyu yeniden kopyalatır.'
+            code:
+            - code: ALTER DATABASE aurora_live INTEGRATION REFRESH TABLES products;
+              tag: Ekip → Redshift
+              say: Sadece bu tablo baştan kopyalanır.
+          - title: Entegrasyon hata verirse
+            text: 'Ne zaman: state ErrorState olunca; EventBridge olayı ve IntegrationState alarmı aynı şeyi söyler. Ne yapar: raporlar son kopyadan okumayı sürdürür ve eskir, siparişler etkilenmez. Yakalamadığı: kutu sadece sayfayı açana görünür; rapor sorgusu tek başına eski olduğunu söylemez. Onarım: Ekip hata mesajına göre düzeltir; AWS düzeltilemez diyorsa entegrasyonu silip yeniden kurar ve ilk kopya baştan alınır. Asıl kayıt Aurora''da olduğu için veri kaybolmaz.'
+          - title: Akıyor olması doğru olması demek değil
+            text: 'Görünümler kopyanın akışını söyler. Aurora''ya yanlış yazılmış bir tutar kopyaya da kusursuzca gider. Doğruluğu Adım 29''daki gece mutabakatı sınar: aurora_live ile sales''in kapanmış gün toplamları aynı mı? Yakalamadığı: bugünün siparişleri ve toplamı değiştirmeyen bir yanlışlık; onlar mutabakata girmez. Onarım ve sınırları Adım 29''da.'
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
