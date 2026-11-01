@@ -12278,51 +12278,762 @@ steps:
           - [Throttle (geri çevirme), "Bir partition'ın sınırı aşılınca fazla isteğin reddedilmesi; uygulama yeniden dener."]
           - ["p50 / p95 / p99", "Yazmaların yüzde 50'si, 95'i, 99'u bu sürenin altında bitti. p99 en yavaş yüzde 1'i gösterir."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde ani yük için hazırlık
+      t1:
+        title: Önceden ne vardı? Sepet tablosu bir kampanya dalgasına nasıl hazırlandı?
         intro: >-
-          Kampanya başlamadan, tablonun kapasite modu ve anahtar tasarımı ani yüke göre seçilir. Aşağıdaki beş adım bu
-          hazırlığın sırasıdır.
-        text:
-          - title: Önce yükün şekli yazılır
-            text: >-
-              Normal günde saniyede kaç yazma var, kampanya anında kaç katına çıkıyor, ne kadar sürüyor? Ani ve tahmin
-              edilemeyen zirveler on-demand'i, düzgün ve bilinen yük provisioned + auto scaling'i gösterir.
-          - title: Kapasite modu seçilir
-            text: >-
-              On-demand tabloda kapasite ayarı yoktur. Tablo, daha önce ulaştığı en yüksek trafiğin iki katına kadar anında
-              çıkabilir; daha büyük sıçramalarda kısa süreli geri çevirme görülebilir. Bilinen büyük bir kampanyadan önce tablo
-              ısıtılabilir (warm throughput).
-            code: |-
-              aws dynamodb update-table --table-name dbws-cart --billing-mode PAY_PER_REQUEST
-          - title: Anahtar yükü dağıtır
-            text: >-
-              Bir partition saniyede en fazla 1.000 yazma birimi alır. Her alıcının kendi pk'si olduğu için yük binlerce
-              partition'a dağılır. Herkesin aynı pk'ye yazdığı bir sayaç ya da "bugünün siparişleri" anahtarı tek partition'ı
-              boğar; gerekirse anahtara bir son ek (#0 … #9) eklenerek yük bölünür (write sharding).
-            code: |-
-              pk = "CART#<ziyaretçi>"          (dağınık, iyi)
-              pk = "ORDERS#2026-10-30"         (sıcak, kötü)  →  "ORDERS#2026-10-30#" + rastgele(0..9)
-          - title: Geri çevirme için yeniden deneme hazırlanır
-            text: >-
-              AWS SDK'ları geri çevrilen isteği bekleme süresini artırarak (exponential backoff) kendiliğinden yeniden dener.
-              Uygulama bu ayarları bilir ve yazmanın iki kez yapılması sorun olmayacak şekilde (idempotent) tasarlanır.
-          - title: Ölçülür ve alarm kurulur
-            text: >-
-              CloudWatch'ta ConsumedWriteCapacityUnits, ThrottledRequests ve SuccessfulRequestLatency izlenir. Geri çevirme
-              görülürse önce anahtar dağılımına bakılır.
-      feed:
-        title: Veri nereden geliyor?
-        writes: Uygulama. Gerçekte her alıcının "sepete ekle" isteği; burada 200 sanal alıcının denemesi.
-        reads: Uygulama, sepet sayfası ve ödeme için.
-        kind: >-
-          Uygulama orkestrasyonu. Yazmalar doğrudan uygulamadan gelir; DynamoDB yükü kendi partition'larına kendisi dağıtır.
-        with: >-
-          Gerçek bir kampanyada sepet dalgasının arkasından ödeme dalgası gelir: siparişler ilişkisel veritabanına (Aurora),
-          fırsat stoğu bellekteki sayaca (ElastiCache) yazılır. Her birinin ani yük planı ayrı yapılır.
-        best: >-
-          Ani yük beklenen tablolar on-demand çalışır, anahtarları yükü dağıtacak şekilde seçilir ve SDK'nın yeniden deneme
-          ayarları açık tutulur. Yük testi gerçek kampanyadan önce, gerçek anahtar dağılımıyla yapılır.
+          Dalga gelmeden önce: 31 Eki 10:05'te (temsilî) Pazarlama ekibinin "Fırsat saati" kampanyası
+          başlıyor: 2 milyon müşterinin telefonuna aynı anda bir bildirim gidiyor ve birkaç dakika içinde on binlerce kişi
+          sepetine ürün ekliyor. Sepetlerin durduğu dbws-cart tablosunu ve satırlarının nasıl geldiğini Adım 12, adet kuralını
+          Adım 14, okumaların üç kopyadan nasıl yapıldığını Adım 15 anlattı. Bu bölüm başka bir soruyu anlatıyor: bu dalga
+          gelmeden önce ne hazırlandı? Kampanya takviminden çıkan kapasite planı, kampanyadan önceki yük testi, tablonun ön
+          ısıtılması, maliyet için bir tavan, bir partition'ın taşıyabileceği yük ve anahtarların bu yükü nasıl dağıttığı,
+          geri çevrilen yazmaların yeniden denenmesi, mağazanın önündeki yük dengeleyici ve sunucular, alarmlar ve bütçe; bir
+          şey ters giderse ne olur; dalga bitince ne olur. Adım 12, 14 ve 15'teki diğer parçalar (değişiklik akışı, terk edilen
+          sepet arşivi, AppConfig'teki adet kuralı, sipariş zinciri) ve her sayfada oturumunu tutan ElastiCache çalışmaya devam
+          ediyor; dalgayı karşılamakla ilgili bir ayarları olmadığı için burada yoklar. Önce zincirin bileşenleri, sonra bir
+          simülasyon, sonra beş aşama (tasarım, ilk yükleme, hazırlık, sürekli besleme, tutarlılık ve onarım).
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1, T anı ve şimdi", "t-1: sayfanın açılmasından (t0) önceki zaman. T anı: yeni sitenin ve sepet tablosunun yayına girdiği an; 30 Eki 20:00 (temsilî, Adım 12'deki gibi). Bu bölümde \"şimdi\" (t0) 31 Eki 10:05 (temsilî): kampanya bildiriminin gittiği an. Saatler Türkiye saatidir. Komutlarda \"Z\" ile biten zamanlar UTC'dir (dünya saati); Türkiye saati = UTC + 3 saat."]
+          - ["Ekip ve Pazarlama", "Ekip: mağazanın sistemini kuran ve işleten mühendisler; komutları onlar gönderir, alarmlara ve bütçeye onlar bakar. Pazarlama: kampanyaları planlayan ekip."]
+          - ["Kampanya takvimi ve kapasite planı", "Kampanya takvimi: Pazarlama'nın \"hangi gün, saat kaçta, kaç kişiye bildirim\" listesi. Kapasite planı: Ekip'in bu listeden çıkardığı hesap: saniyede kaç yazma ve okuma bekleniyor, tablo ve sunucular buna nasıl hazırlanacak. Düğün salonu gibi: davetli sayısı önceden bilinir, masa ve garson sayısı ona göre ayarlanır."]
+          - ["Partition ve partition sınırı", "Partition: tablonun parçalarından biri; DynamoDB satırları pk'ye göre parçalara dağıtır (Adım 12). Bir partition saniyede en fazla 1.000 yazma birimi ve 3.000 okuma birimi taşır (AWS belgelerinde WCU ve RCU diye geçer; WRU ve RRU ile aynı büyüklük); marketteki bir kasanın saniyede geçirebileceği müşteri sayısı gibi. Tablonun kaç partition'ı olduğunu DynamoDB göstermez; yükü taşımak için gerekirse kendisi yenilerini açar."]
+          - ["WRU, RRU, on-demand ve fiyat", "On-demand: kapasite ayarlanmayan, kullandığın kadar ödediğin tablo; dbws-cart böyle (Adım 12). WRU (write request unit): 1 KB'a kadar bir satırı yazmanın birimi; sepete her ekleme 1 WRU. RRU: okuma birimi (Adım 15). Frankfurt'ta 1 milyon WRU 0,7625 dolar, 1 milyon RRU 0,1525 dolar (AWS fiyat listesi). Partition sınırında geçen \"yazma birimi\" de aynı birimdir: 1 KB'a kadar bir yazma."]
+          - ["Warm throughput ve ön ısıtma", "Warm throughput: tablonun beklemeden, hemen karşılayabileceği hız (saniyede yazma ve okuma birimi). Yeni bir on-demand tablo 4.000 yazma ve 12.000 okuma ile başlar. Ön ısıtma (pre-warming): Ekip bu değeri kampanyadan önce yükseltir; DynamoDB tabloyu o hıza hazırlar. Kalabalık bir akşamdan önce fırının önceden ısıtılması gibi. Bir kez ödenir; yükseltilen değer sonra düşürülemez ve durduğu için ayrıca para alınmaz."]
+          - ["Önceki tepe ve iki kat kuralı", "On-demand bir tablo, daha önce ulaştığı en yüksek hızın (önceki tepe) iki katına kadar yükü hemen karşılar. Daha hızlı bir sıçramada DynamoDB kapasiteyi artırır, ama artış 30 dakikadan kısa sürede iki katı geçerse bazı istekler geri çevrilebilir. AWS bu yüzden ya ön ısıtmayı ya da yükün en az 30 dakikaya yayılmasını önerir."]
+          - ["Tavan (maximum throughput) ve hesap kotası", "Tavan: Ekip'in on-demand tabloya koyabildiği \"saniyede en fazla şu kadar\" sınırı (MaxWriteRequestUnits, MaxReadRequestUnits); üstündeki istekler hemen geri çevrilir. Maliyeti sınırlamak için konur; ücretsizdir. AWS'e göre bir hedeftir, kesin bir sınır değil: kısa anlarda biraz aşılabilir. Hesap kotası: AWS'in hesap başına koyduğu sınır; tablo başına varsayılan saniyede 40.000 okuma ve 40.000 yazma birimi; istenirse artırılır."]
+          - ["Geri çevirme (throttle) ve nedeni", "DynamoDB bir isteği sınır yüzünden yapmadan geri gönderir (ThrottlingException). Geri çevrilen yazma tabloya hiç yazılmamıştır. Hata, nedenini de söyler: bir partition'ın sınırı (KeyRange), tablonun tavanı (MaxOnDemand), hesap kotası (AccountLimit). Her neden CloudWatch'ta ayrı bir ölçüdür."]
+          - ["Yeniden deneme, exponential backoff ve jitter", "boto3 geri çevrilen isteği kendisi yeniden gönderir. Exponential backoff: her denemeden önce bekleme süresi katlanarak artar (ör. az, biraz daha, daha çok). Jitter: bekleme süresine rastgele bir pay eklenir, binlerce istemci aynı anda tekrar denemesin. Kasada sıra varsa herkesin aynı anda değil, birer birer dönmesi gibi."]
+          - ["Adaptive capacity ve split for heat", "Adaptive capacity: DynamoDB'nin, yükü fazla olan bir partition'a anında daha çok pay vermesi; ücretsiz ve her zaman açık. Split for heat: uzun süre sıcak kalan bir partition'ı DynamoDB'nin ikiye bölmesi; birkaç dakika sürer, haber verilmez. İkisi de tek bir satırın (aynı pk ve sk; sk: sepetteki ürün, Adım 12) saniyede 1.000 yazma sınırını aşmasını sağlayamaz."]
+          - ["Sıcak anahtar ve write sharding", "Sıcak anahtar (hot key): herkesin aynı pk'ye yazması; bütün kasalar boşken tek kasada kuyruk. Write sharding: anahtara rastgele bir son ek (#0 … #9) ekleyip yükü 10 anahtara bölmek; okurken 10'u toplanır."]
+          - ["Yük testi ve test ortamı", "Yük testi: gerçek kampanyadan önce, aynı hızda sahte bir dalga gönderip sistemin dayanıp dayanmadığını ölçmek; düğünden önceki prova gibi. Test ortamı: ayrı bir AWS hesabında mağazanın bir kopyası (Uygulama'nın aynı sürümü, aynı ayarlarla bir sepet tablosu: dbws-cart-yuk). Gerçek müşteriler oraya gitmez. Distributed Load Testing on AWS: AWS'in hazır yük testi çözümü; sahte alıcıları AWS Fargate'te çalıştırır: sunucusunu AWS'in yönettiği, dakika dakika kiralanan bir çalıştırma ortamı."]
+          - ["ALB ve LCU rezervasyonu", "ALB (Application Load Balancer): mağazanın giriş kapısı; tarayıcıdan gelen istekleri Uygulama sunucularına dağıtır. Kendisi de yüke göre büyür, ama beş dakikadan kısa sürede iki katını aşan sıçramalarda geride kalabilir. LCU (Load Balancer Capacity Unit): ALB'nin kapasite birimi; bir LCU saniyede belli sayıda yeni bağlantıyı, isteği ve veri miktarını karşılar. LCU rezervasyonu: kampanyadan önce \"en az şu kadar hazır olsun\" demek; en az 100 LCU, ek ücretli. Hesabın bölgedeki kotası varsayılan olarak 0'dır; Ekip artışı önceden ister."]
+          - ["EC2 Auto Scaling", "Uygulama sunucularının sayısını yöneten AWS servisi. Hedef izleme (target tracking): ortalama işlemci kullanımı %50'yi geçerse sunucu ekler, düşerse çıkarır; yeni bir sunucunun hazır olması dakikalar sürer. Planlı işlem (scheduled action): \"şu saatte en az şu kadar sunucu olsun\"."]
+          - ["CloudWatch, ölçü ve alarm", "CloudWatch: AWS'in ölçüm ve alarm servisi. Bu bölümdeki ölçüler (hepsi dbws-cart için, dakika dakika): ThrottledRequests (geri çevrilen istek sayısı), SuccessfulRequestLatency (başarılı isteklerin süresi; SampleCount istatistiği başarılı istek sayısını verir), ConsumedWriteCapacityUnits (harcanan yazma birimi), WriteKeyRangeThroughputThrottleEvents (partition sınırı yüzünden geri çevrilen yazma), WriteMaxOnDemandThroughputThrottleEvents (tavan yüzünden geri çevrilen yazma). Oran alarmı: pay / payda, 1 dakikalık pencerede; sessiz bir dakikada tek bir ret oranı şişirmesin diye en az 1.000 istek ister."]
+          - ["ms, p99 ve 5xx", "ms: milisaniye, saniyenin binde biri. p99: isteklerin yüzde 99'u bu sürenin altında bitti; en yavaş yüzde 1'i gösterir. 5xx: sunucu tarafında bir hata olduğunu söyleyen cevap kodu (ör. 503: şu an cevap veremiyorum)."]
+          - ["Provisioned", "DynamoDB'nin diğer kapasite modu: kapasite saatlik kiralanır, kullanılmasa da ödenir. dbws-cart bu modda değil; ön ısıtmanın fiyatı bu modun saatlik fiyatından hesaplanır."]
+          - ["Güçlü okuma", "En son yazılanı kesin gören okuma (Adım 15); ödeme ekranı sepeti böyle okur."]
+          - ["Zaman aşımı ve deneme kotası", "Zaman aşımı: cevap belli bir süre içinde gelmezse Uygulama'nın beklemeyi bırakması; istek yapılmış da olabilir, yapılmamış da. Deneme kotası (retry quota): boto3'ün standard modunda yeniden denemeler için bir pay; hatalar uzun sürerse pay biter ve boto3 yeniden denemeyi keser. AWS Budgets ile ilgisi yoktur."]
+          - ["Kod incelemesi ve geri alma", "Kod incelemesi: yeni kod yayına çıkmadan önce başka bir mühendisin onu okuması. Geri alma: hatalı sürüm yerine bir önceki sürümü yeniden yayına çıkarmak."]
+          - ["Contributor Insights", "CloudWatch'ın \"en çok geri çevrilen anahtarlar\" listesi. Sadece geri çevrilen anahtarları izleyen modda (THROTTLED_KEYS) her şey yolundayken veri ve ücret yoktur; ret olursa sıcak anahtarın adını gösterir."]
+          - ["AWS Budgets", "Aylık harcama için sınır koyan ve tahmin sınıra yaklaşınca e-posta gönderen AWS servisi (Adım 15'te okuma için dynamodb-okuma). Burada ikinci bütçe: dynamodb-yazma, sadece Frankfurt'taki yazma birimleri (EUC1-WriteRequestUnits). Faturadan beslenir; günde birkaç kez güncellenir."]
+          - ["Kesit, temsilî ve Olsaydı", "Kesit: simülasyonda gösterilen parça: tablonun 8 partition'ı (t0'daki simülasyon gibi). Tabloda daha fazlası var ve sayılar kesitin dışındaki partition'ları da içerir. Temsilî: canlı sistemden gelmeyen, anlatım için seçilmiş değer. \"Olsaydı\" diye başlayan kareler yaşanmadı; yaşansaydı ne olacağını gösterir. Her \"Olsaydı\" ayrı bir durumdur, birbirine eklenmez."]
+          - ["Kod kartlarındaki sözcükler", "aws dynamodb describe-table: tablonun ayarlarını oku; --query '…': cevaptan sadece bu kısmı göster. update-table: ayarı değiştir. --warm-throughput ReadUnitsPerSecond=…,WriteUnitsPerSecond=…: ön ısıtma değerleri. --on-demand-throughput MaxReadRequestUnits=…,MaxWriteRequestUnits=…: tavan. WarmThroughput.Status: ön ısıtmanın durumu (UPDATING: sürüyor, ACTIVE: hazır). update-contributor-insights … --contributor-insights-mode THROTTLED_KEYS: sadece geri çevrilen anahtarları izle. put-metric-alarm: alarm kur; file://… alarmın formülünü taşıyan dosya; IF(koşul, değer, 0): koşul tutmazsa 0 say; --evaluation-periods 3 --datapoints-to-alarm 2: son 3 dakikanın 2'si. Config(retries={…}): boto3'ün yeniden deneme ayarı; 'standard' mod; total_max_attempts=4: ilk deneme dahil en fazla 4. except … ThrottlingException: 4 deneme de geri çevrilirse; # sonrası açıklama. hata(…): müşteriye mesaj döndüren yardımcı (ad temsilî). ret, basarili, n: alarm formülündeki sayılar; SUM: dakikanın toplamı. file://ret.json: formül dosyası. put-scheduled-update-group-action: planlı işlem kur; --start-time: ne zaman (UTC). modify-capacity-reservation: ALB'ye LCU rezervasyonu. create-table: tablo kur. f\"KAMPANYA#SAYAC#{random.randint(0, 9)}\": 0–9 arası rastgele bir son ek. \\ satırın devam ettiği yer. … kısaltılmış kısım."]
+          - ["Diğer adlar", "Uygulama: mağazanın arka uç programı (EC2 sunucularında); tarayıcıdan gelen isteği alır, veritabanına komutu o gönderir. EC2: AWS'in kiralık sanal sunucusu. boto3: AWS'in Python kütüphanesi; Uygulama DynamoDB'ye onunla konuşur. update_item … ADD qty: sepetteki adedi artıran yazma (Adım 12, 14). ElastiCache: bellekte çalışan veritabanı; fırsat sayacı orada (Adım 17: bir sonraki adım). \"Adım 12\", \"Adım 17\" gibi adlar bu görevin (mağazadaki 37 adımın) adımlarıdır; simülasyonun sayacındaki \"Adım 1 / 22\" ise simülasyonun karesidir."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–5) çalıştığını, "Önce → Sonra"
+          sütunu isteği ya da bilgiyi kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim
+          kodumuz" etiketli parçayı mağazanın ekibi yazar. Bir kampanya isteği ALB'den Uygulama'ya, oradan DynamoDB'nin istek
+          yönlendiricisine ve sepetin partition'ına gider. Yük testi aracı ve test ortamı sadece kampanyadan önceki provada
+          çalışır. EC2 Auto Scaling sunucu sayısını, CloudWatch ölçüleri ve alarmları, AWS Budgets aylık yazma harcamasını
+          yönetir. Aynı parçalar aşağıdaki simülasyonda birer kutu: üst sırada istek yolu, altında partition'lar, sonra prova,
+          en altta yandaki işler.
+        inventory:
+          - id: alb
+            name: ALB (yük dengeleyici)
+            kind: aws
+            what: Application Load Balancer, mağazanın giriş kapısı
+            does: >-
+              Tarayıcılardan gelen istekleri sağlıklı Uygulama sunucularına dağıtır. Yüke göre kendisi büyür; kampanyadan önce
+              Ekip ona 400 LCU'luk bir rezervasyon (temsilî) verir, dalganın ilk saniyesinde büyümeyi beklemesin.
+            box: "İstekleri sunuculara dağıtır; kampanya için LCU rezervasyonu alır."
+            phases: [1, 2, 3, 4, 5]
+            before: Tarayıcı (müşteriler)
+            after: web
+          - id: web
+            name: Uygulama (mağaza sayfaları)
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucularında)
+            does: >-
+              Her "sepete ekle" isteğini dbws-cart'a bir update_item olarak gönderir; anahtar her sepette farklıdır
+              (CART#<ziyaretçi>). boto3'ün yeniden deneme ayarı açıkça yazılıdır (standard mod, en fazla 4 deneme); dört deneme
+              de geri çevrilirse müşteriye "şu an eklenemedi, tekrar dene" der.
+            box: "Her eklemeyi kendi sepetinin anahtarıyla yazar; geri çevrilirse bekleyip yeniden dener."
+            phases: [1, 2, 4, 5]
+            before: alb
+            after: [router, monitor]
+          - id: router
+            name: "DynamoDB (dbws-cart): tablo ayarları ve istek yönlendirici"
+            kind: aws
+            what: on-demand tablonun giriş kapısı
+            does: >-
+              İsteği alır, satırın partition'ını bulur ve oraya gönderir (Adım 15). Tablonun ayarlarını tutar: on-demand,
+              warm throughput (ön ısıtmadan sonra 15.000 yazma, 30.000 okuma), tavan (20.000 yazma, 36.000 okuma). Bir sınır
+              aşılırsa isteği geri çevirir ve nedenini söyler.
+            box: "İsteği partition'a yollar; warm ve tavanı uygular, sınırda geri çevirir."
+            phases: [1, 2, 3, 4, 5]
+            before: web
+            after: [parts, monitor]
+          - id: parts
+            name: "Partition'lar (dbws-cart)"
+            kind: aws
+            what: tablonun parçaları (DynamoDB işletir)
+            does: >-
+              Her partition kendi sepetlerinin yazmalarını taşır; saniyede en fazla 1.000 yazma birimi. Yük birine yığılırsa
+              DynamoDB ona anında daha çok pay verir (adaptive capacity), uzun sürerse onu böler (split for heat); tek bir
+              satırın sınırını ikisi de aşamaz.
+            box: "Her biri saniyede en fazla 1.000 yazma; dağınık anahtarlar yükü paylaştırır."
+            phases: [1, 2, 3, 4, 5]
+            before: router
+            after: "değişiklik akışı (Adım 12; burada yok)"
+          - id: loadgen
+            name: Yük testi aracı (Distributed Load Testing on AWS)
+            kind: aws
+            what: AWS'in hazır çözümü, test hesabında (Fargate)
+            does: >-
+              Kampanyadan önceki gece sahte alıcılarla test ortamına aynı dalgayı gönderir: 1 dakikada 0'dan saniyede 15.000
+              yazmaya çıkar, 10 dakika tutar. Sonra bilerek tek bir anahtara yüklenir, alarmların çalıştığı görülsün.
+            box: "Provada sahte dalgayı gönderir: 15.000 yazma/sn, 10 dakika."
+            phases: [3]
+            before: Ekip (test senaryosu)
+            after: staging
+          - id: staging
+            name: "Test ortamı (dbws-cart-yuk)"
+            kind: aws
+            what: ayrı hesapta mağazanın kopyası
+            does: >-
+              Uygulama'nın aynı sürümü, aynı ayarlarla bir sepet tablosu (dbws-cart-yuk) ve aynı alarmlar. Prova burada
+              ölçülür: tablo dayanıyor mu, kaç sunucu gerekiyor, ALB'ye kaç LCU lazım. Prova bitince tablo silinir, sunucular
+              kapanır.
+            box: "Provanın ölçüldüğü kopya; bitince silinir."
+            phases: [3]
+            before: loadgen
+            after: [monitor]
+          - id: asg
+            name: EC2 Auto Scaling (Uygulama sunucuları)
+            kind: aws
+            what: sunucu sayısını yöneten AWS servisi
+            does: >-
+              Normalde işlemci kullanımına göre 2 ile 20 arasında sunucu tutar. Kampanya için iki planlı işlem: 09:45'te en
+              az 12 sunucu (yük testinden), 11:30'da yeniden en az 2.
+            box: "Sunucu sayısı: normalde 2+, kampanyada 09:45'ten itibaren 12."
+            phases: [1, 2, 3, 4, 5]
+            before: [monitor]
+            after: [web, alb]
+          - id: monitor
+            name: CloudWatch (ölçüler, alarmlar, Contributor Insights)
+            kind: aws
+            what: AWS'in izleme servisi
+            does: >-
+              dbws-cart'ın ölçülerini dakika dakika toplar. Dört alarm: geri çevrilme oranı (1 dakikada en az 1.000 yazmada
+              %1), partition sınırı (sıcak anahtar), tavan, warm'ın %80'i. Contributor Insights geri çevrilen anahtarların adını
+              verir. Sunucuların işlemci ölçüsü Auto Scaling'i besler.
+            box: "Dört alarm: ret oranı, sıcak anahtar, tavan, warm'ın %80'i."
+            phases: [1, 2, 3, 4, 5]
+            before: [router, parts, staging, web]
+            after: [asg, "Ekip (alarm)"]
+          - id: budgets
+            name: AWS Budgets (dynamodb-yazma)
+            kind: aws
+            what: AWS'in bütçe servisi
+            does: >-
+              Frankfurt'taki DynamoDB yazma birimlerinin (EUC1-WriteRequestUnits) aylık harcamasını izler; ay sonu tahmini
+              bütçenin %80'ini geçerse ekibe e-posta gönderir. Okuma için Adım 15'teki dynamodb-okuma ayrıca çalışır.
+            box: "Aylık yazma bütçesi 75 USD; tahmin %80'i geçerse haber."
+            phases: [1, 2, 4, 5]
+            before: "AWS faturası (yazma birimleri)"
+            after: Ekip (e-posta)
+        sim_title: "Simülasyon: tablo ve önündeki parçalar kampanya dalgasına nasıl hazırlandı?"
+        sim:
+          kind: pipeline
+          title: ALB → Uygulama → istek yönlendirici → partition'lar; önceki gece prova; yanda sunucular, ölçü ve bütçe
+          caption: >-
+            Partition kutusundaki tablo kesit: t0'daki simülasyon gibi 8 partition ve her birinde örnek bir sepet anahtarı.
+            Tabloda daha fazla partition var; ön ısıtmada DynamoDB partition'ları bölüp anahtarları yeniden dağıtabilir, bunu
+            göstermez (burada 8'i sabit tutuyoruz). "Normal yazma/sn" o partition'ın o andaki yükü, "Dalga yazma/sn"
+            kampanya dalgasının payı. Önce T anındaki ayarlar, sonra önceki gece prova ve ön ısıtma, sonra kampanya sabahı,
+            en sonda "Olsaydı" kareleri oynuyor; "Olsaydı" kareleri yaşanmadı, her biri ayrı bir durum. Canlı sistemden: tablo
+            ayarı (on-demand), yazma birimi fiyatı (1 milyon WRU 0,7625 dolar), bir sepet yazmasının bedeli (1 WRU). AWS
+            belgelerinden: partition sınırı, yeni tablonun 4.000 / 12.000 başlangıç değeri, hesap kotası. Temsilî: saatler,
+            kampanya tahmini, ön ısıtma ve tavan değerleri, sunucu ve LCU sayıları, yük testi sonuçları, ölçüler ve bütçe.
+            Son karede her şey 10:05'teki (t0) hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: "Hazırlık: yük testi ve ön ısıtma", 4: Sürekli besleme, 5: Tutarlılık ve onarım}
+          rows:
+            - {id: path, title: "İstek yolu: ALB → Uygulama → DynamoDB'nin istek yönlendiricisi", flow: true}
+            - {id: parts, title: "dbws-cart'ın partition'ları (kesit: 8); her biri saniyede en fazla 1.000 yazma"}
+            - {id: test, title: "Kampanyadan önceki gece: test ortamında prova", flow: true}
+            - {id: helpers, title: "Yandaki işler: sunucu sayısı, ölçü ve alarm, bütçe", side: true}
+          summary: >-
+            Dalga gelmeden önce her parça hazırdı. Kampanya takviminden bir kapasite planı çıktı: saniyede 10.000 yazma
+            tahmini, 1,5 kat payla 15.000. Önceki gece test ortamında aynı dalga gönderildi: tablo dayandı, 12 sunucu ve 400 LCU
+            gerektiği ölçüldü, sıcak anahtar alarmının çalıştığı görüldü. Sabah tablo 15.000 yazmaya ön ısıtıldı, 20.000'lik
+            bir tavan kondu, sunucular 12'ye çıktı. Her sepetin kendi anahtarı olduğu için yük partition'lara dağıldı;
+            alarmlar oran ve partition sınırı için hazırdı. Son durum: 8 partition'da dalganın payı henüz 0; t0 buradan başlar.
+          boxes:
+            - id: alb
+              row: path
+              tables:
+                - name: "ALB (ayar)"
+                  cols: [ayar, değer]
+                  rows:
+                    - {key: lcu, ayar: "LCU rezervasyonu", değer: "yok"}
+            - id: web
+              row: path
+              tables:
+                - name: "boto3 ayarı"
+                  cols: [ayar, değer]
+                  rows:
+                    - {key: retry, ayar: "yeniden deneme", değer: "standard · en fazla 4 deneme"}
+            - id: router
+              row: path
+              tables:
+                - name: "dbws-cart (ayarlar)"
+                  cols: [ayar, değer]
+                  rows:
+                    - {key: mode, ayar: "kapasite modu", değer: "on-demand"}
+                    - {key: ww, ayar: "warm · yazma/sn", değer: "4.000"}
+                    - {key: wr, ayar: "warm · okuma/sn", değer: "12.000"}
+                    - {key: st, ayar: "warm durumu", değer: "ACTIVE"}
+                    - {key: max, ayar: "tavan (yazma · okuma)", değer: "yok"}
+                    - {key: kota, ayar: "hesap kotası (tablo)", değer: "40.000 · 40.000"}
+            - id: parts
+              row: parts
+              tables:
+                - name: "dbws-cart (kesit: 8 partition)"
+                  cols: [partition, "anahtar (örnek)", "normal yazma/sn", "dalga yazma/sn"]
+                  rows:
+                    - {key: p1, partition: P1, "anahtar (örnek)": "CART#0b2c…", "normal yazma/sn": "0", "dalga yazma/sn": "0", hidden: true}
+                    - {key: p2, partition: P2, "anahtar (örnek)": "CART#1d9e…", "normal yazma/sn": "0", "dalga yazma/sn": "0", hidden: true}
+                    - {key: p3, partition: P3, "anahtar (örnek)": "CART#7f3a… (senin)", "normal yazma/sn": "0", "dalga yazma/sn": "0", hidden: true}
+                    - {key: p4, partition: P4, "anahtar (örnek)": "CART#93d0…", "normal yazma/sn": "0", "dalga yazma/sn": "0", hidden: true}
+                    - {key: p5, partition: P5, "anahtar (örnek)": "CART#a51f…", "normal yazma/sn": "0", "dalga yazma/sn": "0", hidden: true}
+                    - {key: p6, partition: P6, "anahtar (örnek)": "CART#c41e…", "normal yazma/sn": "0", "dalga yazma/sn": "0", hidden: true}
+                    - {key: p7, partition: P7, "anahtar (örnek)": "CART#d7b2…", "normal yazma/sn": "0", "dalga yazma/sn": "0", hidden: true}
+                    - {key: p8, partition: P8, "anahtar (örnek)": "CART#f06a…", "normal yazma/sn": "0", "dalga yazma/sn": "0", hidden: true}
+            - id: loadgen
+              row: test
+              tables:
+                - name: "test senaryosu"
+                  cols: [ölçü, değer]
+                  rows:
+                    - {key: shape, ölçü: "dalga", değer: "1 dk'da 0 → 15.000 yazma/sn, 10 dk", hidden: true}
+                    - {key: keys, ölçü: "anahtarlar", değer: "40.000 sahte sepet (CART#<rastgele>)", hidden: true}
+                    - {key: rapor, ölçü: "rapor", değer: "12 sunucu · 400 LCU · warm 15.000", hidden: true}
+            - id: staging
+              row: test
+              tables:
+                - name: "dbws-cart-yuk (ölçüm)"
+                  cols: [ölçü, değer]
+                  rows:
+                    - {key: rate, ölçü: "ulaşılan", değer: "—", hidden: true}
+                    - {key: thr, ölçü: "geri çevrilen", değer: "—", hidden: true}
+                    - {key: srv, ölçü: "sunucular", değer: "—", hidden: true}
+                    - {key: lcu, ölçü: "ALB PeakLCUs", değer: "—", hidden: true}
+            - id: asg
+              row: helpers
+              tables:
+                - name: "Uygulama sunucuları"
+                  cols: [ayar, değer]
+                  rows:
+                    - {key: mm, ayar: "en az · en çok", değer: "2 · 20", hidden: true}
+                    - {key: now, ayar: "çalışan", değer: "2", hidden: true}
+                    - {key: plan, ayar: "planlı işlem", değer: "yok", hidden: true}
+            - id: monitor
+              row: helpers
+              tables:
+                - name: "dbws-cart alarmları"
+                  cols: [alarm, durum]
+                  rows:
+                    - {key: a1, alarm: "sepet-yazma-ret-orani", durum: "OK", hidden: true}
+                    - {key: a2, alarm: "sepet-sicak-anahtar", durum: "OK", hidden: true}
+                    - {key: a3, alarm: "sepet-tavan", durum: "OK", hidden: true}
+                    - {key: a4, alarm: "sepet-warm-80", durum: "OK", hidden: true}
+            - id: budgets
+              row: helpers
+              tables:
+                - name: "bütçe"
+                  cols: [bütçe, durum]
+                  rows:
+                    - {key: b1, bütçe: "dynamodb-yazma · 75 USD/ay", durum: "henüz harcama yok", hidden: true}
+          frames:
+            - phase: 2
+              who: router
+              lit: [router, parts]
+              packet: {at: router, text: "30 Eki 19:30 · describe-table dbws-cart → BillingMode PAY_PER_REQUEST · WarmThroughput 12.000 okuma / 4.000 yazma · ACTIVE"}
+              show: {parts: [p1, p2, p3, p4, p5, p6, p7, p8]}
+              note: {router: "yeni on-demand tablo: hemen 4.000 yazma/sn", parts: "henüz sepet yok"}
+              say: >-
+                30 Eki 19:30 (temsilî). Sepet tablosu Adım 12'deki komutla kuruldu: on-demand. Yeni bir on-demand tablo, hiç
+                ayar yapılmadan saniyede 4.000 yazmayı ve 12.000 okumayı hemen karşılar (warm throughput). Tablo başına hesap
+                kotası 40.000. Partition'lar boş; senin sepetin henüz yok.
+            - phase: 2
+              who: monitor
+              lit: [monitor, router]
+              packet: {at: monitor, text: "put-metric-alarm × 4 · ret oranı IF(n >= 1000, 100 × ret / n, 0) > 1 · KeyRange ret ≥ 10 · MaxOnDemand ret ≥ 1 · yazma/sn > 3.200 (warm 4.000 × 0,8) · Contributor Insights THROTTLED_KEYS"}
+              show: {monitor: [a1, a2, a3, a4]}
+              note: {router: "", parts: "", monitor: "dört alarm hazır · henüz yazma yok"}
+              say: >-
+                Ekip ilk yazmadan önce dört alarm kurdu. Ret oranı: 1 dakikada geri çevrilen yazmalar bütün yazmaların %1'ini
+                geçerse (en az 1.000 yazmada). Sıcak anahtar: partition sınırı yüzünden dakikada 10 ret. Tavan: tavan yüzünden
+                tek bir ret. Warm'ın %80'i: yazma hızı hazır olan hızın %80'ini geçerse. Contributor Insights da sadece geri
+                çevrilen anahtarları izleyecek şekilde açıldı.
+            - phase: 2
+              who: budgets
+              lit: [budgets]
+              show: {budgets: [b1]}
+              note: {monitor: "", budgets: "75 USD/ay (temsilî) · tahmin %80'i geçerse e-posta"}
+              say: >-
+                AWS Budgets'ta yazma birimleri için ikinci bir bütçe: dynamodb-yazma, ayda 75 dolar (temsilî; ayda dört
+                kampanyaya pay bırakılarak). Ay sonu tahmini %80'i (60 dolar) geçerse ekibe e-posta gider.
+            - phase: 2
+              who: asg
+              lit: [asg, alb, web]
+              packet: {at: asg, text: "Auto Scaling grubu · en az 2, en çok 20 · hedef izleme: ortalama işlemci %50 · ALB'nin arkasında 2 sağlıklı sunucu"}
+              show: {asg: [mm, now, plan]}
+              note: {budgets: "", asg: "normal gün: 2 sunucu yeter", alb: "rezervasyon yok: yüke göre büyür"}
+              say: >-
+                Uygulama sunucuları bir Auto Scaling grubunda: en az 2, en çok 20. İşlemci kullanımı ortalama %50'yi geçerse
+                yeni sunucu eklenir; yeni bir sunucunun hazır olması dakikalar sürer. ALB kendi kapasitesini yüke göre ayarlar.
+            - phase: 2
+              who: parts
+              lit: [alb, web, router, parts, monitor]
+              set: {parts: {p1: {"normal yazma/sn": "~4"}, p2: {"normal yazma/sn": "~5"}, p3: {"normal yazma/sn": "~4"}, p4: {"normal yazma/sn": "~5"}, p5: {"normal yazma/sn": "~4"}, p6: {"normal yazma/sn": "~5"}, p7: {"normal yazma/sn": "~4"}, p8: {"normal yazma/sn": "~5"}}}
+              fresh: {parts: [p1, p2, p3, p4, p5, p6, p7, p8]}
+              note: {alb: "", asg: "", router: "önceki tepe 60 yazma/sn · hemen: 4.000 (warm)", parts: "yük eşit dağıldı", monitor: "ret 0"}
+              say: >-
+                T anı: 30 Eki 20:00. Yeni site açıldı; akşam boyunca sepetlere ekleme yapıldı. Tablonun en yoğun dakikası
+                saniyede 60 yazma (önceki tepe; temsilî). Her sepetin kendi pk'si var, yük partition'lara eşit dağıldı: kesitteki
+                her partition saniyede 4–5 yazma alıyor. Geri çevrilen yazma yok.
+            - phase: 3
+              who: loadgen
+              lit: [loadgen, staging]
+              packet: {at: loadgen, text: "31 Eki 01:00 · test hesabı · create-table dbws-cart-yuk (dbws-cart'ın ayarları + --warm-throughput WriteUnitsPerSecond=15000) · 8 test sunucusu"}
+              show: {loadgen: [shape, keys]}
+              set: {parts: {p1: {"normal yazma/sn": "~1"}, p2: {"normal yazma/sn": "~1"}, p3: {"normal yazma/sn": "~1"}, p4: {"normal yazma/sn": "~1"}, p5: {"normal yazma/sn": "~1"}, p6: {"normal yazma/sn": "~1"}, p7: {"normal yazma/sn": "~1"}, p8: {"normal yazma/sn": "~1"}}}
+              note: {router: "", parts: "", monitor: "", loadgen: "prova: kampanyadan 9 saat önce", staging: "aynı sürüm, aynı ayarlar"}
+              say: >-
+                31 Eki 01:00, kampanyadan 9 saat önce. Kapasite planı saniyede 10.000 yazma bekliyor; Ekip 1,5 kat payla 15.000'i
+                deniyor. Test hesabında aynı ayarlarla bir sepet tablosu (dbws-cart-yuk) kuruldu ve 15.000 yazmaya ön ısıtıldı;
+                Uygulama'nın aynı sürümü 8 sunucuda. Yük testi aracı 40.000 sahte sepetle, gerçek sepetler gibi dağınık
+                anahtarlarla dalgayı gönderecek.
+            - phase: 3
+              who: staging
+              lit: [loadgen, staging, monitor]
+              packet: {at: staging, text: "01:05–01:16 · 1 dk'da 0 → 15.000 yazma/sn · 10 dk tutuldu · ret 0 · DynamoDB süresi p99 8 ms · sunucu işlemcisi %85 · PeakLCUs 380"}
+              show: {staging: [rate, thr, srv, lcu]}
+              set: {staging: {rate: {değer: "15.000 yazma/sn"}, thr: {değer: "0"}, srv: {değer: "8 · işlemci %85 → plan 12"}, lcu: {değer: "380 → plan 400"}}}
+              fresh: {staging: [rate, thr, srv, lcu]}
+              note: {loadgen: "", staging: "tablo dayandı · darboğaz sunucular", monitor: "test hesabı: ret oranı 0"}
+              say: >-
+                Dalga 1 dakikada saniyede 15.000 yazmaya çıktı ve 10 dakika tutuldu. Tablo hiçbir yazmayı geri çevirmedi;
+                DynamoDB'nin kendi süresi milisaniyeler. Darboğaz sunuculardı: 8 sunucuda işlemci %85. Plan: kampanyada 12
+                sunucu (işlemci %60'ın altında kalsın) ve ALB'nin ölçtüğü en yüksek kapasiteye (380 LCU) göre 400 LCU.
+            - phase: 3
+              who: staging
+              lit: [loadgen, staging, monitor]
+              packet: {at: staging, text: "01:20 · bilerek: 2 dk boyunca tek pk YUKTEST#SICAK'a saniyede 3.000 yazma → ~2.000/sn geri çevrildi (KeyRange) · alarm 1 dk'da · Contributor Insights: YUKTEST#SICAK"}
+              set: {staging: {thr: {değer: "~2.000/sn (sadece sıcak anahtar)"}}}
+              mark: {staging: {thr: fix}}
+              note: {staging: "tek satır: saniyede en fazla 1.000", monitor: "test hesabı: sepet-sicak-anahtar ALARM · anahtar adıyla"}
+              say: >-
+                Sonra bilerek kötü bir durum denendi: 2 dakika boyunca herkes aynı anahtara yazdı. O anahtarın partition'ı
+                saniyede 1.000 yazmayı geçemedi; fazlası geri çevrildi. boto3 bekleyip yeniden denedi, en yavaş yüzde 1'in süresi
+                (p99) yaklaşık 1 saniyeye çıktı. Sıcak anahtar alarmı 1 dakikada çaldı ve Contributor Insights anahtarın adını
+                gösterdi: alarmlar çalışıyor.
+            - phase: 3
+              who: loadgen
+              lit: [loadgen, staging]
+              packet: {at: loadgen, text: "01:40 · delete-table dbws-cart-yuk · test sunucuları 0 · test hesabı: ön ısıtma ≈ 8,72 + 9,57 milyon yazma ≈ 7,30 ≈ 16,0 USD (temsilî)"}
+              hide: {staging: [rate, thr, srv, lcu]}
+              show: {loadgen: [rapor]}
+              fresh: {loadgen: [rapor]}
+              mark: {staging: {thr: ""}}
+              note: {monitor: "", staging: "silindi · artık ücret yok", loadgen: "rapor: 12 sunucu · 400 LCU · warm 15.000"}
+              say: >-
+                01:40. Prova bitti. Test tablosu silindi, test sunucuları kapandı; artık ücret yazmıyor. Provanın DynamoDB bedeli
+                yaklaşık 16,0 dolar: ön ısıtma (11.000 yazma birimi × 0,000793) ve yaklaşık 9,57 milyon yazma (10 dakikalık dalga, yükseliş dakikası ve sıcak anahtar denemesinin kabul edilen yazmaları; geri çevrilen yazma ücretsiz).
+                Raporda üç sayı var: 12 sunucu, 400 LCU, 15.000 yazma.
+            - phase: 3
+              who: router
+              lit: [router, parts]
+              packet: {at: router, text: "07:00 · update-table dbws-cart --warm-throughput ReadUnitsPerSecond=30000,WriteUnitsPerSecond=15000 --on-demand-throughput MaxReadRequestUnits=36000,MaxWriteRequestUnits=20000"}
+              set: {router: {ww: {değer: "15.000"}, wr: {değer: "30.000"}, st: {değer: "UPDATING"}, max: {değer: "20.000 · 36.000"}}}
+              fresh: {router: [ww, wr, st, max]}
+              note: {loadgen: "", staging: "", router: "tek seferlik ≈ 11,58 USD (temsilî)", parts: "DynamoDB hazırlıyor"}
+              say: >-
+                07:00. Ekip gerçek tabloyu ön ısıttı: saniyede 15.000 yazma ve 30.000 okuma. Ücret bir kez ödenir, sadece
+                farka: (15.000 − 4.000) yazma ve (30.000 − 12.000) okuma birimi, yaklaşık 11,58 dolar. Aynı komutla bir tavan da
+                kondu: saniyede en fazla 20.000 yazma ve 36.000 okuma. Ön ısıtma arka planda sürer; tablo bu sırada normal çalışır.
+            - phase: 3
+              who: router
+              lit: [router, parts, monitor]
+              packet: {at: router, text: "07:35 · describe-table → WarmThroughput 30.000 okuma / 15.000 yazma · Status ACTIVE"}
+              set: {router: {st: {değer: "ACTIVE"}}}
+              fresh: {router: [st]}
+              note: {router: "hazır: hemen 15.000 yazma/sn", parts: "tablo 15.000'e hazır (partition sayısını DynamoDB bilir)", monitor: "warm-80 eşiği 3.200 → 12.000/sn (Ekip)"}
+              say: >-
+                07:35. Ön ısıtma bitti: durum ACTIVE. Tablo artık saniyede 15.000 yazmayı beklemeden karşılar; bu değer bundan
+                sonra düşürülemez ve durduğu için ayrıca para alınmaz. Ekip warm'ın %80'i alarmının eşiğini de 3.200'den
+                12.000'e çekti: CloudWatch warm değerini kendisi bilmez.
+            - phase: 3
+              who: asg
+              lit: [asg, alb]
+              packet: {at: asg, text: "08:00 · put-scheduled-update-group-action --start-time 2026-10-31T06:45:00Z --min-size 12 · ikinci: 08:30:00Z --min-size 2 · modify-capacity-reservation 400 LCU"}
+              set: {asg: {plan: {değer: "09:45 en az 12 · 11:30 en az 2"}}}
+              fresh: {asg: [plan]}
+              note: {router: "", parts: "", monitor: "", asg: "06:45Z = 09:45 Türkiye", alb: "rezervasyon istendi"}
+              say: >-
+                08:00. Ekip sunucular için iki planlı işlem kurdu: 09:45'te en az 12 sunucu, 11:30'da yeniden en az 2. Komuttaki
+                saat UTC'dir: 06:45Z, Türkiye'de 09:45. ALB için 400 LCU'luk rezervasyon istendi (bölgedeki kota önceden
+                artırılmıştı); rezervasyonun hazırlanması bir süre alabildiği için dalgadan iki saat önce.
+            - phase: 4
+              who: alb
+              lit: [alb]
+              set: {alb: {lcu: {değer: "400 LCU · 11:30'a kadar"}}}
+              fresh: {alb: [lcu]}
+              note: {asg: "", alb: "400 LCU hazır"}
+              say: >-
+                09:15. ALB'nin rezervasyonu devrede: dalganın ilk saniyesinde büyümeyi beklemeden en az 400 LCU'luk kapasite
+                hazır. Rezervasyon saat başına ücretlidir; 11:30'da kaldırılacak.
+            - phase: 4
+              who: asg
+              lit: [asg, alb, web]
+              set: {asg: {now: {değer: "12"}}}
+              fresh: {asg: [now]}
+              note: {alb: "", asg: "09:45 planlı işlem → 12 sunucu", web: "12 sunucuda aynı sürüm"}
+              say: >-
+                09:45. Planlı işlem çalıştı: en az 12 sunucu. Yeni sunucular açıldı, ALB onları sağlıklı gördü ve trafiğe kattı.
+                Şu an işlemciler neredeyse boşta; bu bilerek: dalga geldiğinde sunucu açılmasını beklemeye vakit olmayacak.
+            - phase: 4
+              who: web
+              lit: [alb, web, router, parts]
+              packet: {at: router, text: "10:00 · update_item(CART#7f3a… / ITEM#P0001, ADD qty 1 …) (Adım 12) → P3 · 1 WRU · \"tamam\""}
+              mark: {parts: {p3: fix}}
+              set: {parts: {p1: {"normal yazma/sn": "~3"}, p2: {"normal yazma/sn": "~4"}, p3: {"normal yazma/sn": "~3"}, p4: {"normal yazma/sn": "~4"}, p5: {"normal yazma/sn": "~3"}, p6: {"normal yazma/sn": "~4"}, p7: {"normal yazma/sn": "~3"}, p8: {"normal yazma/sn": "~4"}}}
+              note: {asg: "", web: "anahtar: senin sepetin", parts: "P3: senin sepetin · diğer yazmalar başka partition'larda"}
+              say: >-
+                10:00. Adım 12'de Kablosuz Kulaklık'ı sepete ekledin. Uygulama yazmayı senin sepetinin anahtarıyla gönderdi;
+                istek yönlendirici onu senin partition'ına (kesitte P3) yolladı; 1 WRU. Aynı saniyede başka ziyaretçilerin
+                eklemeleri kendi sepetlerinin partition'larına gitti.
+            - phase: 4
+              who: monitor
+              lit: [router, parts, monitor]
+              mark: {parts: {p3: ""}}
+              note: {web: "", parts: "", monitor: "10:00–10:01 · ConsumedWriteCapacityUnits 2.400 → 40/sn (warm'ın %0,3'ü) · ret 0 / 2.400 · dört alarm OK (temsilî)"}
+              say: >-
+                CloudWatch o dakikayı topladı: tabloya 2.400 yazma birimi, yani saniyede 40 (kesitin dışındaki partition'lar
+                dahil). Geri çevrilen yok. Ret oranı alarmının paydası 2.400 (en az 1.000), oranı 0: alarm OK. Hazır
+                hız 15.000; şu anki yük onun binde üçü.
+            - phase: 4
+              who: budgets
+              lit: [budgets]
+              set: {budgets: {b1: {durum: "Kasım tahmini ~30 USD (%40)"}}}
+              fresh: {budgets: [b1]}
+              note: {monitor: "", budgets: "T'den beri (14 saat) yazma ≈ 0,58 USD · Kasım tahmini ~30 USD + kampanyalar · bütçe 75 USD (temsilî)"}
+              say: >-
+                AWS Budgets T anından beri (14 saat) yazma birimlerine yaklaşık 0,58 dolar harcandığını gördü (ortalama saniyede
+                15 yazma, 1 milyonu 0,7625 dolar). Normal bir günde yaklaşık 1 dolar; tam bir ayda (Kasım) yaklaşık 30 dolar,
+                kampanyalar bunun üstüne. Ekim bugün bitiyor; Budgets %80 eşiğini Kasım başından itibaren o ayın tahminiyle
+                kontrol eder.
+            - phase: 5
+              who: router
+              lit: [web, router, parts, monitor]
+              packet: {at: router, text: "olsaydı: ön ısıtma yok · 10:05 dalga 10.000 yazma/sn · hemen karşılanan ~4.000 · fazlası ThrottlingException · ret oranı %60 > %1 → ALARM"}
+              set: {router: {ww: {değer: "4.000"}, wr: {değer: "12.000"}, max: {değer: "yok"}}, parts: {p1: {"dalga yazma/sn": "kısılıyor"}, p2: {"dalga yazma/sn": "kısılıyor"}, p3: {"dalga yazma/sn": "kısılıyor"}, p4: {"dalga yazma/sn": "kısılıyor"}, p5: {"dalga yazma/sn": "kısılıyor"}, p6: {"dalga yazma/sn": "kısılıyor"}, p7: {"dalga yazma/sn": "kısılıyor"}, p8: {"dalga yazma/sn": "kısılıyor"}}, monitor: {a1: {durum: "ALARM"}, a4: {durum: "ALARM"}}}
+              mark: {parts: {p1: fix, p2: fix, p3: fix, p4: fix, p5: fix, p6: fix, p7: fix, p8: fix}, monitor: {a1: fix, a4: fix}}
+              note: {budgets: "", router: "olsaydı: 07:00 komutu yok · warm 4.000, tavan yok", parts: "olsaydı: tablo kendini büyütene kadar ret", web: "olsaydı: 4 deneme · bazı müşterilere \"eklenemedi\"", monitor: "olsaydı: warm-80 ALARM (1 dk) · ret oranı ALARM (2–3 dk)"}
+              say: >-
+                Olsaydı: 07:00 komutu (ön ısıtma ve tavan) unutulsaydı. Dalga saniyede 10.000 yazmayla gelir; tablo hemen sadece 4.000'i karşılar
+                (önceki tepe 60, iki katı 120; warm 4.000). DynamoDB kapasiteyi artırır ama birkaç dakika boyunca yazmaların bir
+                kısmı geri çevrilir. boto3 yeniden dener; dört deneme de geri çevrilen müşteri "şu an eklenemedi" görür. Ret oranı
+                alarmı 2–3 dakikada çalar (son 3 dakikanın 2'si); warm'ın %80'i alarmı ilk dakikada. Ama zarar o dakikalarda olur. Bu yüzden ön ısıtma kampanyadan saatler önce yapıldı.
+            - phase: 5
+              who: parts
+              lit: [web, router, parts, monitor]
+              packet: {at: parts, text: "olsaydı: her eklemede ADD sayi 1 → pk KAMPANYA#SAYAC (tek satır) · P5 saniyede 1.000'de · fazlası ret (KeyRange) · Contributor Insights: KAMPANYA#SAYAC"}
+              set: {router: {ww: {değer: "15.000"}, wr: {değer: "30.000"}, max: {değer: "20.000 · 36.000"}}, parts: {p1: {"dalga yazma/sn": "~670"}, p2: {"dalga yazma/sn": "~670"}, p3: {"dalga yazma/sn": "~670"}, p4: {"dalga yazma/sn": "~670"}, p5: {"dalga yazma/sn": "1.000 (sınır) ✗"}, p6: {"dalga yazma/sn": "~670"}, p7: {"dalga yazma/sn": "~670"}, p8: {"dalga yazma/sn": "~670"}}, monitor: {a1: {durum: "OK"}, a4: {durum: "OK"}, a2: {durum: "ALARM"}}}
+              mark: {parts: {p1: "", p2: "", p3: "", p4: "", p5: fix, p6: "", p7: "", p8: ""}, monitor: {a1: "", a4: "", a2: fix}}
+              note: {web: "olsaydı: her eklemede ikinci bir yazma", router: "", parts: "olsaydı: tek satır · adaptive capacity ve bölme yetmez", monitor: "olsaydı: sicak-anahtar ALARM · anahtar adıyla"}
+              say: >-
+                Olsaydı: biri kampanyada "kaç ekleme oldu?" diye sepet tablosunda tek bir sayaç satırı tutsaydı (pk
+                KAMPANYA#SAYAC). Sepet yazmaları partition'lara dağılır: 15.000 yazmaya hazır bir tabloda en az 15 partition olmalı (her biri en fazla
+                1.000), 10.000 / 15 ≈ 670, sınırın altında; kesitte 8'i görünüyor. Ama sayacın 10.000 yazması tek satıra gider; satırın partition'ı (P5) 1.000'i
+                geçemez, gerisi geri çevrilir. Adaptive capacity ve bölme tek bir satırı hızlandıramaz. Alarm ve Contributor
+                Insights anahtarın adını verir. Onarım: sayaç bellekteki veritabanına (ElastiCache, Adım 17: bir sonraki adım) ya da 10 parçaya.
+            - phase: 5
+              who: router
+              lit: [web, router, monitor, budgets]
+              packet: {at: router, text: "olsaydı: sıradan bir saat · hatalı sürüm her eklemede sepetin bütün satırlarını yeniden yazıyor (her sepet kendi anahtarında) · istek 25.000 yazma/sn > tavan 20.000 → fazlası ret (MaxOnDemand) · sepet-tavan ALARM"}
+              set: {parts: {p1: {"dalga yazma/sn": "0"}, p2: {"dalga yazma/sn": "0"}, p3: {"dalga yazma/sn": "0"}, p4: {"dalga yazma/sn": "0"}, p5: {"dalga yazma/sn": "0"}, p6: {"dalga yazma/sn": "0"}, p7: {"dalga yazma/sn": "0"}, p8: {"dalga yazma/sn": "0"}}, monitor: {a2: {durum: "OK"}, a3: {durum: "ALARM"}}}
+              mark: {parts: {p5: ""}, monitor: {a2: "", a3: fix}}
+              note: {web: "olsaydı: hatalı sürüm · sepeti baştan yazıyor", parts: "", router: "olsaydı: tavan 20.000'de keser", monitor: "olsaydı: sepet-tavan ALARM", budgets: "olsaydı: saatte en fazla ~55 USD (tavansız ~69)"}
+              say: >-
+                Olsaydı: kampanyadan sonra, sıradan bir saatte hatalı bir sürüm her eklemede sepetin bütün satırlarını yeniden yazsaydı ve istek saniyede 25.000'e çıksaydı. Yazmalar
+                yine her sepetin kendi anahtarına gider, partition'lara dağılır; sorun toplam miktar.
+                Tavan 20.000'in üstünü hemen geri çevirir; fatura saatte en fazla yaklaşık 55 dolar olur (20.000 × 3.600 ×
+                0,7625 / 1 milyon), tavansız 69. Tavan alarmı ilk dakikada çalar; Ekip sürümü geri alır (önceki sürümü yeniden yayına çıkarır). Tavan kampanya
+                tahmininin (10.000) iki katı: gerçek müşteriler ona takılmasın.
+            - phase: 5
+              who: asg
+              lit: [alb, web, asg, monitor]
+              packet: {at: asg, text: "olsaydı: planlı işlem yok · 10:05'te 2 sunucu · işlemci %100 · hedef izleme sunucu ekler, hazır olması dakikalar · o arada ALB 5xx (sunucu hatası)"}
+              set: {asg: {now: {değer: "2 → yetişemiyor"}, plan: {değer: "olsaydı: yok"}}, monitor: {a3: {durum: "OK"}}}
+              mark: {asg: {now: fix, plan: fix}, monitor: {a3: ""}}
+              note: {router: "", budgets: "", alb: "olsaydı: sunucular cevap vermiyor", web: "olsaydı: 2 sunucu boğuldu", asg: "olsaydı: yeni sunucular dakikalar sonra", monitor: "olsaydı: işlemci %100 · DynamoDB rahat"}
+              say: >-
+                Olsaydı: sunucular için planlı işlem unutulsaydı. 10:05'te 2 sunucu dalgayı karşılayamaz; işlemciler %100, ALB
+                bazı isteklere sunucu hatası (5xx) döner. Hedef izleme sunucu ekler ama her biri dakikalar sonra hazır olur. Bu sırada
+                DynamoDB'ye istek az gider: darboğaz veritabanı değil, önündeki sunuculardır. Yük testi tam bunu ölçtü.
+            - phase: 5
+              who: router
+              lit: [alb, web, router, parts, asg, monitor, budgets]
+              set: {asg: {now: {değer: "12"}, plan: {değer: "09:45 en az 12 · 11:30 en az 2"}}}
+              mark: {asg: {now: "", plan: ""}}
+              note: {alb: "400 LCU hazır", web: "12 sunucu", router: "warm 15.000 ACTIVE · tavan 20.000", parts: "8 partition'da dalga payı 0", asg: "11:30'da yeniden en az 2", monitor: "dört alarm OK", budgets: "Kasım tahmini bütçenin altında"}
+              say: >-
+                Hazır. "Olsaydı" kareleri yaşanmadı. 10:05: bildirim gidiyor. Tablo saniyede 15.000 yazmaya ısıtılmış, tavan
+                20.000, 12 sunucu ve 400 LCU hazır, dört alarm OK. Kesitteki 8 partition'ın her biri normal yükünü taşıyor;
+                dalganın payı henüz 0. t0'da sayfanın altındaki "Start the simulation" butonu bu dalganın küçük bir örneğini
+                gönderiyor: 200 alıcı, 1.000 yazma; her yazma yeni bir satır (PutItem), anahtarlar burada olduğu gibi dağınık. Dalga bitince: 11:30'da sunucular yeniden en az 2'ye iner, rezervasyon
+                kalkar; warm 15.000'de kalır ve ücret istemez.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Önce kampanya takviminden bir sayı çıkar: saniyede kaç yazma? Sonra bu yükü kimin taşıyacağı sorulur: bir
+              partition'ın sınırı, anahtarların yükü dağıtması, on-demand tablonun ne kadar hızlı büyüdüğü ve ön ısıtma. Sonra
+              maliyetin tavanı, geri çevrilen yazmanın ne olacağı, tablonun önündeki ALB ve sunucular, alarmlar ve dalga bitince
+              ne olacağı.
+            cards:
+              - title: "Kampanya takviminden kapasite planına"
+                text: >-
+                  Pazarlama'nın takviminde: 31 Eki 10:05, "Fırsat saati", 2 milyon müşteriye bildirim. Ekip bunu sayıya çevirir:
+                  bildirim alanların dörtte biri (500.000 kişi) ilk 2 dakikada uygulamayı açar, kişi başı ortalama 2 ekleme; 500.000 × 2 / 120
+                  saniye ≈ 8.300, yuvarlak 10.000 yazma/sn. Pay için 1,5 kat: 15.000. Okumalar: her açılan sayfada sepet sayacı bir kez okunur (0,5 birim: sonunda tutarlı okuma yarı birimdir, Adım 15); kişi başı
+                  ilk 2 dakikada ~10 sayfa: 500.000 × 10 × 0,5 / 120 ≈ 20.800, yuvarlak 20.000; 1,5 katı 30.000. Sayıların hepsi temsilî; yöntem gerçek.
+                map:
+                  cols: [Ne, Değer, Nereden]
+                  rows:
+                    - ["önceki tepe (yazma/sn)", "60", "CloudWatch, 30 Eki akşamı"]
+                    - ["kampanya tahmini (yazma/sn)", "10.000", "Takvim: 2 milyon × ¼ = 500.000 kişi × 2 ekleme / 120 sn"]
+                    - ["ön ısıtma (yazma · okuma /sn)", "15.000 · 30.000", "Tahmin × 1,5"]
+                    - ["tavan (yazma · okuma /sn)", "20.000 · 36.000", "Yazma tahminin 2 katı, okuma 1,8 katı; hesap kotasının (40.000) altında"]
+                    - ["sunucu · LCU", "12 · 400", "Yük testinden (t-1 · 3)"]
+              - title: "Bir partition'ın sınırı ve yükü dağıtan anahtar"
+                text: >-
+                  Bir partition saniyede en fazla 1.000 yazma ve 3.000 okuma birimi taşır. Tablonun 15.000 yazma alabilmesi,
+                  yükün en az 15 partition'a yayılmasına bağlıdır; bunu anahtar sağlar. Sepette pk her ziyaretçide farklı
+                  (CART#<ziyaretçi>): 500.000 farklı sepet, 500.000 farklı anahtar; DynamoDB onları partition'lara dağıtır ve
+                  bir kişinin saniyede birkaç ekleme yaptığı bile olmaz. Herkesin aynı anahtara yazdığı bir tasarım (bir
+                  kampanya sayacı, "bugünün siparişleri") kapasite ne olursa olsun 1.000'de durur. Böyle bir şey gerekirse
+                  anahtar 10 parçaya bölünür (write sharding) ya da sayaç bellekteki bir veritabanına konur (Adım 17: bir sonraki adım).
+                code:
+                  - {code: "pk = 'CART#' + ziyaretci", tag: Uygulamanın içinde, say: "Her sepet ayrı anahtar: yük dağılır."}
+                  - {code: "pk = 'KAMPANYA#SAYAC'", tag: Uygulamanın içinde, say: "Herkes aynı anahtar: tek partition, en fazla 1.000/sn."}
+                  - {code: "pk = f\"KAMPANYA#SAYAC#{random.randint(0, 9)}\"", tag: Uygulamanın içinde, say: "Gerekirse 10 parçaya böl; okurken 10'u topla."}
+              - title: "On-demand ne kadar hızlı büyür, ön ısıtma ne ekler?"
+                text: >-
+                  On-demand tablo önceki tepesinin iki katına kadar yükü hemen karşılar; yeni bir tablo en az 4.000 yazma ve
+                  12.000 okumayla başlar. Önceki tepe 60 olduğu için bugün hemen karşılanabilen 4.000'dir. 10.000'lik bir sıçrama
+                  bunu birkaç saniyede aşar; DynamoDB kapasiteyi artırır, ama artış 30 dakikadan kısa sürede iki katı geçerse
+                  bazı yazmalar geri çevrilebilir. Ön ısıtma bu yüzden yapılır: warm değeri kampanyadan önce 15.000'e çıkar.
+                  Tek seferlik ücret farka göre alınır (AWS'in örneğine göre bir birimin fiyatı, provisioned modda bir birimin bir
+                  saatlik fiyatı kadar; Frankfurt'ta yazma 0,000793, okuma 0,0001586 dolar): 11.000 × 0,000793 + 18.000 ×
+                  0,0001586 ≈ 11,58 dolar. Yükseltilen değer düşürülemez; durduğu için ayrıca ücret yoktur.
+                code:
+                  - {code: "aws dynamodb describe-table --table-name dbws-cart --query 'Table.WarmThroughput'", tag: [Ekip → DynamoDB, DynamoDB → Ekip], say: "Bugün hemen karşılanabilen: 4.000 yazma, 12.000 okuma."}
+                  - {code: "aws dynamodb update-table --table-name dbws-cart \\", tag: Ekip → DynamoDB, say: "Ön ısıtma; tablo bu sırada çalışır."}
+                  - {code: "  --warm-throughput ReadUnitsPerSecond=30000,WriteUnitsPerSecond=15000", tag: DynamoDB'nin içinde, say: "Bir kez ödenir; geri düşürülemez."}
+              - title: "Tavan: yanlışlıkla gelen yük faturayı büyütmesin"
+                text: >-
+                  On-demand'de her yazma ödenir; hatalı bir sürüm ya da bir döngü saniyede on binlerce yazma gönderirse fatura
+                  da büyür. Tavan bunu sınırlar: üstündeki istekler hemen geri çevrilir. Ücretsizdir ve her an değiştirilebilir.
+                  Gerçek müşterilere takılmaması için kampanya tahmininin yaklaşık iki katına konur: 20.000 yazma (2 kat), 36.000 okuma (1,8 kat; kotanın altında kalsın diye). Bir
+                  sınır daha var: hesap kotası, tablo başına 40.000; tavan onun altında kalmalı, kampanya kotayı aşacaksa artış
+                  günler önce istenir. AWS tavanı bir hedef olarak uygular; kısa anlarda biraz aşılabilir.
+                code:
+                  - {code: "aws dynamodb update-table --table-name dbws-cart \\", tag: Ekip → DynamoDB, say: "Ön ısıtmayla aynı komutta da verilebilir."}
+                  - {code: "  --on-demand-throughput MaxReadRequestUnits=36000,MaxWriteRequestUnits=20000", tag: DynamoDB'nin içinde, say: "Üstü hemen geri çevrilir (MaxOnDemand)."}
+              - title: "Geri çevrilen yazma: bekle, yeniden dene, olmazsa söyle"
+                text: >-
+                  Geri çevrilen bir yazma tabloya hiç yazılmamıştır; aynısını yeniden göndermek güvenlidir. boto3 bunu kendisi
+                  yapar: bekleme süresini her denemede katlar ve araya rastgele bir pay koyar. Varsayılan ayarlar SDK'dan
+                  SDK'ya ve sürümden sürüme değişir (AWS, Kasım 2026'dan itibaren SDK'ların varsayılan deneme sayısını ve bekleme sürelerini değiştiriyor); bu yüzden Uygulama ayarı açıkça
+                  yazar: standard mod, ilk deneme dahil en fazla 4. Dört deneme de geri çevrilirse sessizce kaybolmaz: müşteri
+                  "şu an eklenemedi, tekrar dene" görür. Sınırsız yeniden deneme yapılmaz: dalgada binlerce istemcinin
+                  ısrarı yükü katlar.
+                code:
+                  - {code: "Config(retries={'mode': 'standard', 'total_max_attempts': 4})", tag: Uygulamanın içinde, say: "Bekleyerek, rastgele payla, en fazla 4 deneme."}
+                  - {code: "table().update_item(Key=…, UpdateExpression='ADD qty :q …', …)", tag: [Uygulama → DynamoDB, DynamoDB → Uygulama], say: "Yazma (Adım 12, 14); geri çevrilirse boto3 tekrarlar."}
+                  - {code: "except ClientError as e:  # ThrottlingException, 4 deneme sonra", tag: DynamoDB → Uygulama, say: "Dördü de geri çevrildi."}
+                  - {code: "  return hata('Şu an eklenemedi, tekrar dene')", tag: Uygulama → Tarayıcı, say: "Müşteri durumu bilir."}
+              - title: "Önde: ALB ve sunucular da dalgayı karşılamalı"
+                text: >-
+                  Tablo hazır olsa da istek önce ALB'den ve Uygulama sunucularından geçer. İkisi de yüke göre büyür ama
+                  yavaş: ALB beş dakikadan kısa sürede iki katını aşan sıçramalarda geride kalabilir, yeni bir sunucu dakikalar
+                  sonra hazırdır. Bu yüzden ikisi de saatle hazırlanır: sunuculara planlı işlem (09:45'te en az 12), ALB'ye
+                  LCU rezervasyonu (en az 100 LCU; bölgedeki kota varsayılan 0, önceden artırılır). Sayıları yük testi verir.
+                code:
+                  - {code: "aws autoscaling put-scheduled-update-group-action --auto-scaling-group-name magaza-web \\", tag: Ekip → EC2 Auto Scaling, say: "Planlı işlem (grup adı temsilî)."}
+                  - {code: "  --scheduled-action-name firsat-saati --start-time 2026-10-31T06:45:00Z --min-size 12", tag: EC2 Auto Scaling'in içinde, say: "06:45Z = 09:45 Türkiye: en az 12 sunucu."}
+                  - {code: "aws elbv2 modify-capacity-reservation --load-balancer-arn … \\", tag: Ekip → ALB, say: "ALB'ye rezervasyon."}
+                  - {code: "  --minimum-load-balancer-capacity CapacityUnits=400", tag: ALB'nin içinde, say: "En az 400 LCU hazır."}
+              - title: "Ölçü ve alarm: oran, neden ve anahtar"
+                text: >-
+                  "Bu dakikada 30 yazma geri çevrildi" çok mu az mı, bilinmez; alarm bir orana bakar: geri çevrilen / bütün
+                  yazmalar, 1 dakikada. Payda: geri çevrilen + başarılı (başarılı istek sayısını SuccessfulRequestLatency'nin
+                  SampleCount'u verir). Sessiz bir dakikada tek bir ret %100 gibi görünmesin diye en az 1.000 yazma ister; tek
+                  bir kötü dakika yerine son 3 dakikanın 2'sine bakar. Nedenler ayrı ölçülür: partition sınırı (sıcak anahtar)
+                  ve tavan. Dördüncü alarm erken uyarı: yazma hızı warm'ın %80'ini geçerse. Contributor Insights sadece
+                  geri çevrilen anahtarları izler; sorun yoksa ücret yoktur.
+                code:
+                  - {code: "n = ret + basarili   # ThrottledRequests + SuccessfulRequestLatency (SampleCount), 1 dk", tag: CloudWatch'ın içinde, say: "Payda: o dakikanın bütün yazmaları."}
+                  - {code: "oran = IF(n >= 1000, 100 * ret / n, 0)   # eşik 1, son 3 dk'nın 2'si", tag: CloudWatch'ın içinde, say: "Sessiz dakikada 0."}
+                  - {code: "WriteKeyRangeThroughputThrottleEvents >= 10 · WriteMaxOnDemandThroughputThrottleEvents >= 1", tag: CloudWatch'ın içinde, say: "Sıcak anahtar ve tavan, ayrı alarm."}
+                  - {code: "ConsumedWriteCapacityUnits / 60 > 12000   # 1 dk; 0,8 × 15.000", tag: CloudWatch'ın içinde, say: "Hazır hızın %80'i; ön ısıtmada Ekip günceller."}
+              - title: "Dalga bitince: geri dönüş ve maliyet"
+                text: >-
+                  On-demand'de geri dönecek bir kapasite yoktur: yazma azalınca fatura da azalır. Warm değeri 15.000'de kalır;
+                  düşürülemez ama durduğu için ücret alınmaz, bir sonraki kampanyada yeniden ödenmez. Tavan yerinde kalır (ya da
+                  normal güne göre düşürülür). Sunucular 11:30'daki planlı işlemle yeniden en az 2'ye iner, hedef izleme
+                  fazlasını kapatır; ALB rezervasyonu kaldırılır, saatlik ücreti biter. Kampanyanın bedeli sonradan hesaplanır:
+                  örneğin ilk saatte ~3 milyon yazma (ilk 2 dakikada 1 milyon, sonra azalarak) ≈ 2,3 dolar, artı tek seferlik ön ısıtma 11,58 dolar (temsilî).
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              T anında tablo varsayılan değerlerle yayına girer: on-demand, hemen 4.000 yazma. Alarmlar ve bütçe ilk yazmadan
+              önce kurulur; sunucular Auto Scaling grubunda en az 2. İlk akşamın en yoğun dakikası tablonun önceki tepesi olur.
+            cards:
+              - title: "Tablo varsayılan değerlerle"
+                text: >-
+                  Tablo Adım 12'deki komutla kurulur. Ön ısıtma o gün gerekmez: normal günün en yoğun dakikasında saniyede 60 yazma, 4.000'in çok
+                  altında. Ön ısıtma ücretli olduğu için ancak takvimde bir kampanya varken yapılır.
+              - title: "Alarmlar ve Contributor Insights ilk yazmadan önce"
+                text: >-
+                  Dört alarm ve Contributor Insights T'den önce açılır; alarmların gerçekten çalıştığı da kampanyadan önce, yük
+                  testinde denenir (t-1 · 3).
+                code:
+                  - {code: "aws cloudwatch put-metric-alarm --alarm-name sepet-yazma-ret-orani --metrics file://ret.json \\", tag: Ekip → CloudWatch, say: "Formül dosyada: en az 1.000 yazmada ret / n."}
+                  - {code: "  --comparison-operator GreaterThanThreshold --threshold 1 --evaluation-periods 3 --datapoints-to-alarm 2", tag: CloudWatch'ın içinde, say: "%1'i geçerse, 3 dakikanın 2'sinde."}
+                  - {code: "aws dynamodb update-contributor-insights --table-name dbws-cart \\", tag: Ekip → DynamoDB, say: "Anahtar listesi…"}
+                  - {code: "  --contributor-insights-action ENABLE --contributor-insights-mode THROTTLED_KEYS", tag: DynamoDB'nin içinde, say: "…sadece geri çevrilenler."}
+              - title: "Yazma bütçesi"
+                text: >-
+                  Adım 15'teki okuma bütçesinin yanına ikinci bir bütçe: dynamodb-yazma, Frankfurt'taki yazma birimleri, ayda
+                  75 dolar (temsilî; normal ay ~30 dolar artı dört kampanya). Ay sonu tahmini %80'i geçerse e-posta.
+                code:
+                  - {code: "aws budgets create-budget --budget BudgetName=dynamodb-yazma,BudgetType=COST,TimeUnit=MONTHLY,\\", tag: Ekip → AWS Budgets, say: "Aylık maliyet bütçesi…"}
+                  - {code: "  BudgetLimit={Amount=75,Unit=USD},CostFilters={UsageType=[EUC1-WriteRequestUnits]} …", tag: AWS Budgets'ın içinde, say: "…sadece yazma birimleri."}
+              - title: "Sunucular: hedef izlemeyle 2 ile 20 arası"
+                text: >-
+                  Normal günde Auto Scaling grubu işlemci kullanımına bakar: ortalama %50'nin üstünde sunucu ekler, altında
+                  çıkarır. Bu yavaş ve kademeli değişen bir yük için yeter; kampanyadaki gibi bir saniyelik sıçrama için yetmez
+                  (t-1 · 1, "Önde").
+          - n: 3
+            title: "Hazırlık: yük testi ve ön ısıtma"
+            intro: >-
+              Kampanyadan önceki gece aynı dalga bir test ortamında gönderilir; tablo, sunucular ve ALB ölçülür, sıcak anahtar
+              alarmı bilerek çaldırılır. Sonra test ortamı silinir. Sabah gerçek tablo ön ısıtılır ve tavan konur; sunucular ve
+              ALB için saatli hazırlık kurulur.
+            cards:
+              - title: "Prova: aynı dalga, gerçek anahtar dağılımıyla"
+                text: >-
+                  Yük testi gerçek müşterilere dokunmaz: ayrı bir AWS hesabında Uygulama'nın aynı sürümü ve aynı ayarlarla bir
+                  tablo (dbws-cart-yuk). Test tablosu da 15.000'e ön ısıtılır; böylece ön ısıtmanın kendisi de denenir. Sahte
+                  alıcılar gerçek sepetler gibi dağınık anahtarlar kullanır: test, anahtarı herkes için aynı yaparsa
+                  tabloyu değil kendi hatasını ölçer. Dalganın şekli kampanyanınki gibi: 1 dakikada 0'dan 15.000'e, 10 dakika.
+                code:
+                  - {code: "aws dynamodb create-table --table-name dbws-cart-yuk … --warm-throughput WriteUnitsPerSecond=15000", tag: Ekip → DynamoDB (test hesabı), say: "Gerçek tablonun ayarları, aynı warm."}
+                  - {code: "test: 40.000 sahte sepet · 1 dk'da 0 → 15.000 yazma/sn · 10 dk tut", tag: Yük testi aracı → Test ortamı, say: "Kampanya dalgasının kopyası."}
+              - title: "Ne ölçüldü, ne kararlaştırıldı?"
+                text: >-
+                  Tablo 10 dakika boyunca saniyede 15.000 yazmada hiçbir yazmayı geri çevirmedi. Darboğaz sunuculardı: 8
+                  sunucuda işlemci %85; kampanyada 12 sunucu. ALB'nin dakikalık en yüksek kapasite ölçüsü (PeakLCUs) 380;
+                  rezervasyon 400. Sayılar temsilî.
+                map:
+                  cols: [Ölçü, Sonuç, Karar]
+                  rows:
+                    - ["yazma/sn · ret", "15.000 · 0", "Ön ısıtma 15.000 yeterli"]
+                    - ["sunucu işlemcisi", "8 sunucuda %85", "Kampanyada 12 sunucu"]
+                    - ["ALB PeakLCUs", "380", "400 LCU rezervasyon"]
+                    - ["tek anahtara 3.000/sn", "~2.000/sn ret, alarm 1 dk", "Alarm ve Contributor Insights çalışıyor"]
+              - title: "Kötü durum bilerek denenir"
+                text: >-
+                  2 dakika boyunca bütün yazmalar tek bir anahtara gönderildi. O anahtar saniyede 1.000'i geçemedi; fazlası
+                  geri çevrildi, boto3 yeniden denedi, en yavaş yüzde 1'in süresi yaklaşık 1 saniyeye çıktı. Sıcak anahtar
+                  alarmı 1 dakikada çaldı, Contributor Insights anahtarın adını verdi. Böylece alarmın gerçek bir sorunda
+                  çalacağı kampanyadan önce görüldü. Prova bitince test tablosu silindi; bedeli yaklaşık 16,0 dolar (ön ısıtma ≈
+                  8,72 + 9,57 milyon yazma ≈ 7,30, temsilî; geri çevrilen yazmalar ücretsiz).
+              - title: "Sabah: gerçek tablo ön ısıtılır, tavan konur"
+                text: >-
+                  07:00'de Ekip dbws-cart'ı ön ısıttı ve tavanı koydu. Ön ısıtma arka planda sürer; süresi değerlere ve tablonun
+                  boyutuna bağlıdır, bu yüzden kampanyadan saatler önce başlatılır. Durum ACTIVE olunca hazırdır.
+                code:
+                  - {code: "aws dynamodb update-table --table-name dbws-cart \\", tag: Ekip → DynamoDB, say: "Tek komut, iki ayar."}
+                  - {code: "  --warm-throughput ReadUnitsPerSecond=30000,WriteUnitsPerSecond=15000 \\", tag: DynamoDB'nin içinde, say: "Ön ısıtma: ≈ 11,58 USD, bir kez."}
+                  - {code: "  --on-demand-throughput MaxReadRequestUnits=36000,MaxWriteRequestUnits=20000", tag: DynamoDB'nin içinde, say: "Tavan: ücretsiz."}
+                  - {code: "aws dynamodb describe-table --table-name dbws-cart --query 'Table.WarmThroughput.Status'", tag: [Ekip → DynamoDB, DynamoDB → Ekip], say: "UPDATING → ACTIVE (07:35)."}
+              - title: "Sunucular ve ALB saatle hazırlanır"
+                text: >-
+                  08:00'de iki planlı işlem kuruldu: 09:45'te en az 12 sunucu, 11:30'da yeniden en az 2 (komutlarda UTC: 06:45Z
+                  ve 08:30Z). ALB'nin 400 LCU'luk rezervasyonu 09:15'te devrede; 11:30'da kaldırılır. Sunucular dalgadan 20
+                  dakika önce açılır: yeni bir sunucunun hazır olmasını dalganın içinde beklemek olmaz.
+          - n: 4
+            title: Sürekli besleme
+            intro: >-
+              Kampanya sabahı ALB'nin rezervasyonu ve 12 sunucu devreye girer. Normal eklemeler her sepetin kendi partition'ına
+              gider; CloudWatch her dakikayı ölçer, Budgets ayın tahminini tutar.
+            cards:
+              - title: "Her ekleme kendi sepetinin partition'ına"
+                text: >-
+                  Sepete her ekleme bir update_item'dır; anahtarı müşterinin sepetidir (Adım 12). İstek yönlendirici onu o
+                  sepetin partition'ına gönderir. Aynı saniyedeki binlerce ekleme binlerce farklı sepete gider; kesitteki her
+                  partition sabah saniyede 3–4 (dün akşamın en yoğun dakikasında 4–5) yazma alıyor, sınır 1.000.
+                code:
+                  - {code: "table().update_item(Key={'pk': 'CART#7f3a…', 'sk': 'ITEM#P0001'}, UpdateExpression='ADD qty :q …')", tag: [Uygulama → DynamoDB, DynamoDB → Uygulama], say: "10:00, senin eklemen: P3, 1 WRU."}
+              - title: "Her dakika: yük, ret ve hazır hız"
+                text: >-
+                  10:00–10:01: tabloya 2.400 yazma birimi, saniyede 40; geri çevrilen 0. Hazır hız 15.000 olduğu için yük onun
+                  binde üçü; warm'ın %80'i alarmının eşiği 12.000. Sayılar kesitin dışındaki partition'ları da içerir (temsilî).
+                code:
+                  - {code: "SUM(ConsumedWriteCapacityUnits) = 2.400 / 60 sn = 40/sn   ·   ret 0 / 2.400", tag: CloudWatch'ın içinde, say: "Dört alarm OK."}
+              - title: "Bütçe: ayın tahmini"
+                text: >-
+                  T anından beri (14 saat) yazmalara yaklaşık 0,58 dolar (ortalama saniyede 15 yazma). Normal bir ay (Kasım)
+                  yaklaşık 30 dolar; her kampanya bunun üstüne ~2–3 dolar; bütçe daha büyük kampanyalara da pay bırakır. 75 dolarlık bütçenin %80'i 60 dolar; tahmin altında.
+                  Budgets eşiği Kasım başından itibaren o ayın tahminiyle kontrol eder.
+          - n: 5
+            title: Tutarlılık ve onarım
+            intro: >-
+              Ön ısıtma unutulursa, biri tek bir sayaç satırı eklerse, hatalı bir sürüm yük üretirse, sunucular yetişmezse,
+              yeniden denemeler yükü katlarsa ne olur? Her biri için zincirde bir parça var; her parçanın ne zaman çalıştığı,
+              neyi yakalamadığı ve onarımı aşağıda.
+            cards:
+              - title: "Ön ısıtma unutulursa"
+                text: >-
+                  Tablo dalganın ilk dakikalarında sadece 4.000'i hemen karşılar, fazlası geri çevrilir; DynamoDB kapasiteyi
+                  artırana kadar sürer. Ne zaman: ret oranı alarmı 2–3 dakikada; warm'ın %80'i alarmı dalganın ilk dakikasında.
+                  Yakalamadığı: alarm zararı önlemez, sadece haber verir; o dakikalarda bazı müşteriler "eklenemedi" görür.
+                  Onarım: ön ısıtma kampanya takvimindeki her kampanya için kontrol listesindedir ve saatler önce yapılır;
+                  unutulduysa hemen yapılır, arka planda sürer.
+              - title: "Biri tek bir anahtara yazarsa (sıcak anahtar)"
+                text: >-
+                  Ne zaman: sıcak anahtar alarmı (partition sınırı yüzünden dakikada 10 ret) ilk dakikada; Contributor Insights
+                  anahtarın adını verir. Yakalamadığı: ön ısıtma ve tavan bunu çözmez; adaptive capacity ve split for heat tek
+                  bir satırı saniyede 1.000'in üstüne çıkaramaz. Sınırın altında kalan ama artan bir anahtar alarm vermez.
+                  Onarım: sayaç bellekteki bir veritabanına (ElastiCache, Adım 17: bir sonraki adım) ya da 10 parçaya bölünür (write sharding);
+                  kod incelemesinde "sepet tablosunda paylaşılan satır yok" kuralı.
+              - title: "Hatalı bir sürüm yük üretirse"
+                text: >-
+                  Ne zaman: tavan 20.000'in üstünü hemen geri çevirir; tavan alarmı ilk dakikada çalar. Fatura saatte en fazla ~55
+                  dolar (tavansız örnekte 69). Yakalamadığı: tavanın altında kalan hatalı bir yük (ör. 5.000/sn) faturayı sessizce
+                  büyütür; onu Budgets'ın tahmini günler içinde, warm'ın %80'i alarmı da 12.000'i geçerse görür. Onarım: Ekip
+                  sürümü geri alır; tavan gerçek bir kampanyaya takılırsa (alarm ve müşteri şikâyeti birlikte) tavan yükseltilir.
+              - title: "Sunucular yetişmezse"
+                text: >-
+                  Ne zaman: planlı işlem dalgadan 20 dakika önce 12 sunucu açar; hedef izleme fazlası için sunucu ekler.
+                  Yakalamadığı: tahmini aşan bir dalgada yeni sunucular dakikalar sonra hazırdır; o arada ALB bazı isteklere hata
+                  (5xx) döner. DynamoDB bunu görmez: istek ona hiç gelmez. Onarım: grup en çok 20 sunucuya izin verir; Ekip
+                  kampanya sırasında en az sayıyı elle yükseltebilir; sonraki kampanyanın planı bu ölçümle güncellenir.
+              - title: "Yeniden denemeler yükü katlarsa"
+                text: >-
+                  Geri çevrilen her yazmayı binlerce istemci aynı anda ve sınırsız tekrarlasaydı, yük dalganın kendisinden büyük
+                  olurdu. Ne zaman: her geri çevrilmede; boto3 beklemeyi katlar, rastgele pay koyar, en fazla 4 dener; standard
+                  modda bir deneme kotası da vardır, hata sürerse denemeyi keser. Yakalamadığı: cevabı yolda kaybolan (zaman
+                  aşımı) bir ADD yazma aslında yapılmış olabilir; yeniden denenirse adet bir fazla olur. Onarım: müşteri sepette
+                  adedi görür ve düzeltir; adet kuralı (Adım 14) üst sınırı korur; ödemede sepet güçlü okunur (en son yazılanı kesin görür, Adım 15).
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
