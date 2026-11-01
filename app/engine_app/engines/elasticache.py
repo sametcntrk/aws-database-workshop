@@ -14,6 +14,7 @@ from . import table as result_table
 META = catalog.META["elasticache"]
 PAGES = catalog.PAGES["elasticache"]
 DEAL_STOCK = 50
+PROCESSED_TTL = 604800   # a repeat of an order is recognised for 7 days
 
 _client = None
 
@@ -111,10 +112,15 @@ def register(bp):
         body = request.get_json(silent=True) or {}
         ttl = max(10, min(int(body.get("ttl", 1800)), 86400))
         key = f"lm:session:{visitor_id()}"
-        cmd("HSET", f"HSET {key} persona {persona_id()} last_page {body.get('page', '/')}",
-            lambda: r().hset(key, mapping={"persona": persona_id(), "last_page": body.get("page", "/"), "seen_at": int(time.time())}))
-        cmd("EXPIRE", f"EXPIRE {key} {ttl}", lambda: r().expire(key, ttl),
-            note=f"Valkey deletes the session by itself after {ttl} seconds without activity. No clean-up job is necessary.")
+
+        def write_session():
+            c = r()                       # both commands use one key, so one slot: MULTI/EXEC runs on the node of that slot
+            p = c.get_redis_connection(c.get_node_from_key(key)).pipeline(transaction=True)
+            p.hset(key, mapping={"persona": persona_id(), "last_page": body.get("page", "/"), "seen_at": int(time.time())})
+            p.expire(key, ttl)
+            return p.execute()
+        cmd("MULTI/EXEC", f"MULTI\nHSET {key} persona {persona_id()} last_page {body.get('page', '/')}\nEXPIRE {key} {ttl}\nEXEC", write_session,
+            note=f"HSET and EXPIRE run together, so a session never stays without a TTL. Valkey deletes it by itself after {ttl} seconds without activity.")
         cmd("ZADD", f"ZADD lm:active {int(time.time())} {visitor_id()}", lambda: r().zadd("lm:active", {visitor_id(): int(time.time())}))
         return jsonify(trace.payload({"ttl": ttl}))
 
@@ -129,6 +135,11 @@ def register(bp):
     def api_lb_add():
         body = request.get_json(force=True)
         amount = float(body.get("amount", 0))
+        mark = f"processed:{body.get('order_id') or time.time_ns()}"
+        first = cmd("SET NX", f"SET {mark} 1 NX EX {PROCESSED_TTL}", lambda: r().set(mark, 1, nx=True, ex=PROCESSED_TTL),
+                    note="Only the first call for an order can set this key. A repeat gets no answer from SET NX and adds nothing.")
+        if not first:
+            return jsonify(trace.payload({"added": 0}))
         cmd("ZINCRBY", f"ZINCRBY lm:leaderboard {amount} {persona_id()}", lambda: r().zincrby("lm:leaderboard", amount, persona_id()),
             note="The sorted set keeps members ordered by score at every write, so 'top 10' is always ready.")
         cmd("INCR", "INCR lm:orders:today", lambda: r().incr("lm:orders:today"))

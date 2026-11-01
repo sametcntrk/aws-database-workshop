@@ -1,5 +1,6 @@
 """Timestream for InfluxDB - time-series: the operations Report Screen (warehouse sensors and orders per minute)."""
 import json
+import time
 from datetime import datetime, timedelta, timezone
 
 from flask import jsonify, request
@@ -8,6 +9,7 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 
 from .. import catalog, trace
 from ..base import env, secret
+from . import order_ns
 
 META = catalog.META["influxdb"]
 PAGES = catalog.PAGES["influxdb"]
@@ -62,7 +64,8 @@ def register(bp):
     @bp.post("/api/orders-metric")
     def api_orders_metric():
         body = request.get_json(silent=True) or {}
-        p = Point("orders").tag("channel", "workshop").field("count", int(body.get("count", 1))).time(datetime.now(timezone.utc), WritePrecision.S)
+        ts = order_ns(body.get("order_id")) or time.time_ns()   # same order, same tags, same timestamp: a repeat overwrites the point
+        p = Point("orders").tag("channel", "web").field("count", int(body.get("count", 1))).time(ts, WritePrecision.NS)
         with trace.call("write", f"POST /api/v2/write?bucket=metrics\n{p.to_line_protocol()}", {}) as t:
             with client() as c:
                 c.write_api(write_options=SYNCHRONOUS).write(bucket=env("INFLUX_BUCKET", "metrics"), org=env("INFLUX_ORG", "dbws"), record=p)
@@ -90,7 +93,7 @@ def reset_visitors():
     with client() as c:
         c.delete_api().delete(datetime(1970, 1, 1, tzinfo=timezone.utc), datetime.now(timezone.utc),
                               '_measurement="orders" AND channel="workshop"', bucket=env("INFLUX_BUCKET", "metrics"), org=env("INFLUX_ORG", "dbws"))
-    return ["Deleted the order points from workshop checkouts."]
+    return ["Deleted the old channel=workshop points. Order points from checkouts share the series channel=web with the sample data and stay until the next seed."]
 
 
 def status():

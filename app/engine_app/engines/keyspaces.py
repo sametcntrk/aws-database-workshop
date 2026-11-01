@@ -16,7 +16,7 @@ from flask import jsonify, request
 from .. import catalog, simlimit, trace
 from ..base import env, region
 from ..visitor import persona_id, visitor_id
-from . import PRICE_WRITE_RU, table as result_table, usd
+from . import PRICE_WRITE_RU, order_ns, table as result_table, usd
 
 META = catalog.META["keyspaces"]
 PAGES = catalog.PAGES["keyspaces"]
@@ -62,6 +62,17 @@ def register(bp):
     def api_event():
         body = request.get_json(force=True)
         cql = f"INSERT INTO {table()} (user_id, event_time, event_id, event_type, product_id, detail) VALUES (?, ?, ?, ?, ?, ?)"
+        order_id = body.get("order_id")
+        if body.get("type") == "purchase" and order_id:
+            # One order and product is always the same row in both partitions: same event_time, same event_id. A repeat overwrites it.
+            at = datetime.fromtimestamp((order_ns(order_id) or time.time_ns()) // 10**9, timezone.utc)
+            rows = [(uid, at, uuid.uuid5(uuid.NAMESPACE_URL, f"{order_id}/{pid}"), "purchase", pid, body.get("detail", "")[:200])
+                    for pid in body.get("products", []) for uid in (visitor_id(), persona_id())]
+            with trace.call("INSERT", cql, {"user_id": [visitor_id(), persona_id()], "event_type": "purchase", "order_id": order_id}) as t:
+                written, retried = write_all(s().prepare(cql), rows)
+                t.result(items=written, capacity=f"{written + retried} WRU", cost=usd((written + retried) * PRICE_WRITE_RU),
+                         note="One row per product in the partition of this browser and in the partition of the persona, with one event_id.")
+            return jsonify(trace.payload({"stored": True}))
         with trace.call("INSERT", cql, {"user_id": visitor_id(), "event_type": body.get("type")}) as t:
             s().execute(s().prepare(cql), (visitor_id(), datetime.now(timezone.utc), uuid.uuid4(), body.get("type", "view"),
                                            body.get("product_id", ""), body.get("detail", "")[:200]))
@@ -128,7 +139,8 @@ def seed(ds):
 
 
 def reset_visitors():
-    return ["Visitor events expire after 7 days by the table TTL. Keyspaces cannot list partitions cheaply, so no delete runs."]
+    return ["Visitor events and their purchase rows in persona partitions expire after 7 days by the table TTL. "
+            "Keyspaces cannot list partitions cheaply, so no delete runs."]
 
 
 def status():

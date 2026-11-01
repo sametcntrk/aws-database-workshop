@@ -8,6 +8,8 @@ reset_visitors() deletes Visitor data, returns summary lines
 status()        small dict for the Admin Console
 """
 
+import re
+
 # On-demand list prices, EU (Frankfurt), from the AWS Price List API (2026-10).
 PRICE_READ_RU = 0.1525 / 1_000_000    # DynamoDB and Keyspaces, per read request unit
 PRICE_WRITE_RU = 0.7625 / 1_000_000   # DynamoDB and Keyspaces, per write request unit
@@ -19,6 +21,13 @@ def usd(value):
     if value is None:
         return None
     return f"≈ ${value:.10f}".rstrip("0").rstrip(".") if value < 0.01 else f"≈ ${value:.4f}"
+
+
+def order_ns(order_id):
+    """The order's time in nanoseconds, stable for one order. An id is W<epoch seconds><4 hex> (aurora.py): the seconds plus
+    the hex as a few ns, so two orders of one second never share a timestamp. None for any other id."""
+    m = re.fullmatch(r"W(\d{10})([0-9a-f]{4})", order_id or "")
+    return int(m[1]) * 10**9 + int(m[2], 16) if m else None
 
 
 def clean(v):

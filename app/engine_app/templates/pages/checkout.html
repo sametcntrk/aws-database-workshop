@@ -40,15 +40,18 @@
     $("#place").disabled = items.length === 0;
   } catch (e) { lm.errorBox($("#lines"), e); }
 
+  let requestId = null;   // one per click; after a lost answer the next click is a retry and reuses it
   const mark = (step, ok, text) => { const li = document.querySelector(`[data-step="${step}"]`); li.className = ok ? "ok" : "fail"; li.lastElementChild.textContent = text; };
   $("#place").addEventListener("click", async () => {
     $("#place").disabled = true;
     document.querySelectorAll("#steps li").forEach((li) => { li.className = ""; li.lastElementChild.textContent = ""; });
     let order;
+    requestId = requestId || lm.uuid();
     try {
       order = await api("/aurora/api/orders", { body: { items: items.map((i) => ({ product_id: i.product_id, qty: i.qty, unit_price: i.unit_price })),
-        fail_after_stock: $("#exp-fail").checked }, label: "Place the order (Aurora transaction)", source: "#flow" });
+        fail_after_stock: $("#exp-fail").checked, request_id: requestId }, label: "Place the order (Aurora transaction)", source: "#flow" });
     } catch (e) { mark("aurora", false, "error"); lm.errorBox($("#result"), e); $("#place").disabled = false; return; }
+    requestId = null;
     if (order.result !== "committed") {
       mark("aurora", false, "rolled back");
       $("#result").innerHTML = `<div class="notice bad">${esc(order.message)} The transaction rolled back. Nothing else ran, and your cart is unchanged.</div>`;
@@ -59,10 +62,10 @@
     const total = order.total;
     const steps = [
       ["dynamodb", () => api("/dynamodb/api/cart", { method: "DELETE", label: "Empty the cart", source: "#flow" })],
-      ["elasticache", () => api("/elasticache/api/leaderboard/add", { body: { amount: total }, label: "Update the leaderboard", source: "#flow" })],
-      ["keyspaces", () => api("/keyspaces/api/events", { body: { type: "purchase", product_id: items[0].product_id, detail: `Order ${order.order_id} · ${tl(total)}` }, label: "Record the purchase event", source: "#flow" })],
-      ["influxdb", () => api("/influxdb/api/orders-metric", { body: { count: 1 }, label: "Count the order", source: "#flow" })],
-      ["neptune", () => api("/neptune/api/purchase", { body: { order_id: order.order_id, products: items.map((i) => i.product_id) }, label: "Add graph edges", source: "#flow" })],
+      ["elasticache", () => api("/elasticache/api/leaderboard/add", { body: { amount: total, order_id: order.order_id }, label: "Update the leaderboard", source: "#flow" })],
+      ["keyspaces", () => api("/keyspaces/api/events", { body: { type: "purchase", order_id: order.order_id, products: items.map((i) => i.product_id), detail: `Order ${order.order_id} · ${tl(total)}` }, label: "Record the purchase event", source: "#flow" })],
+      ["influxdb", () => api("/influxdb/api/orders-metric", { body: { count: 1, order_id: order.order_id }, label: "Count the order", source: "#flow" })],
+      ["neptune", () => api("/neptune/api/purchase", { body: { order_id: order.order_id, products: items.map((i) => i.product_id), qty: Object.fromEntries(items.map((i) => [i.product_id, i.qty])) }, label: "Add graph edges", source: "#flow" })],
     ];
     for (const [step, fn] of steps) {
       try { await fn(); mark(step, true, "done"); } catch (e) { mark(step, false, "failed"); }

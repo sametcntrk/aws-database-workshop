@@ -200,5 +200,5 @@
     return data;
   }
 
-  window.lm = { api, esc, tl, stars, productCard, segmented, errorBox, setCartCount, addToCart, persona, visitor, u, calls, $ };
+  window.lm = { api, esc, tl, stars, productCard, segmented, errorBox, setCartCount, addToCart, persona, visitor, uuid, u, calls, $ };
 })();

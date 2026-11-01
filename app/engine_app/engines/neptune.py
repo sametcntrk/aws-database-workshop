@@ -80,11 +80,12 @@ RETURN me.name AS me, p.`~id` AS pid, p.name AS pname, p.category AS cat,
     @bp.post("/api/purchase")
     def api_purchase():
         body = request.get_json(force=True)
-        rows = [{"c": persona_id(), "p": pid, "o": body.get("order_id", "web")} for pid in body.get("products", [])]
-        query = "UNWIND $rows AS r MATCH (c {`~id`: r.c}) MATCH (p {`~id`: r.p}) CREATE (c)-[:BOUGHT {order_id: r.o, qty: 1}]->(p)"
+        qty = body.get("qty", {})
+        rows = [{"c": persona_id(), "p": pid, "o": body.get("order_id", "web"), "q": int(qty.get(pid, 1))} for pid in body.get("products", [])]
+        query = "UNWIND $rows AS r MATCH (c {`~id`: r.c}) MATCH (p {`~id`: r.p}) MERGE (c)-[b:BOUGHT {order_id: r.o}]->(p) ON CREATE SET b.qty = r.q"
         with trace.call("openCypher (write)", f"POST /openCypher\n{query}", {"edges": len(rows)}) as t:
             _q(query, {"rows": rows})
-            t.result(items=len(rows), note="New BOUGHT edges change the next recommendation at once. There is no batch rebuild.")
+            t.result(items=len(rows), note="MERGE finds the edge by its order_id or creates it, so a repeat adds no second edge. The next recommendation changes at once.")
         return jsonify(trace.payload({"edges": len(rows)}))
 
 

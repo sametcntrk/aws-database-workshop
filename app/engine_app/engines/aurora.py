@@ -1,6 +1,8 @@
 """Aurora PostgreSQL - relational: checkout (order + stock in one ACID transaction), order history, order report."""
+import json
 import secrets
 import time
+import uuid
 from datetime import datetime, timezone
 
 import psycopg
@@ -14,7 +16,7 @@ from . import table
 META = catalog.META["aurora"]
 PAGES = catalog.PAGES["aurora"]
 
-DDL = """DROP TABLE IF EXISTS order_items, orders, products, customers;
+DDL = """DROP TABLE IF EXISTS outbox, order_items, orders, products, customers;
 CREATE TABLE customers (customer_id text PRIMARY KEY, name text NOT NULL, email text, city text, segment text, created_at timestamptz);
 CREATE TABLE products  (product_id text PRIMARY KEY, name text, category text, price numeric(10,2), stock int NOT NULL CHECK (stock >= 0));
 CREATE TABLE orders    (order_id text PRIMARY KEY, customer_id text REFERENCES customers, visitor_id text,
@@ -23,6 +25,16 @@ CREATE TABLE order_items (order_id text REFERENCES orders ON DELETE CASCADE, pro
                           qty int, unit_price numeric(10,2), PRIMARY KEY (order_id, product_id));
 CREATE INDEX ON orders (customer_id);
 CREATE INDEX ON orders (visitor_id);"""
+
+# Safe to repeat. The live database was made before these existed; each process runs this once, before its first order, and seed
+# runs it after DDL. outbox has a primary key because zero-ETL does not copy a table without one, and no foreign key with ON DELETE.
+ENSURE = """SET LOCAL lock_timeout = '5s';
+SELECT pg_advisory_xact_lock(20261101);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS request_id text;
+CREATE UNIQUE INDEX IF NOT EXISTS orders_request_id_key ON orders (request_id);
+CREATE TABLE IF NOT EXISTS outbox (event_id uuid PRIMARY KEY, order_id text NOT NULL, type text NOT NULL,
+                                   payload jsonb NOT NULL, created_at timestamptz NOT NULL);"""
+_schema_ready = False
 
 
 def conn():
@@ -39,19 +51,42 @@ def sql(cur, op, text, params=None, note=None):
     return cur
 
 
+def ensure_schema():
+    global _schema_ready
+    if not _schema_ready:
+        with conn() as c:
+            c.execute(ENSURE)
+        _schema_ready = True
+
+
+def placed_order(cur, request_id):
+    """The answer for a click that already became an order, or None. It writes nothing."""
+    if not request_id:
+        return None
+    sql(cur, "SELECT (request_id)", "SELECT order_id, total FROM orders WHERE request_id = %(rid)s", {"rid": request_id},
+        note="Did this click already become an order? A retry of the same click gets the same order.")
+    row = cur.fetchone()
+    return {"order_id": row[0], "result": "committed", "message": None, "total": float(row[1])} if row else None
+
+
 def register(bp):
     @bp.post("/api/orders")
     def api_order():
         body = request.get_json(force=True)
-        items = body.get("items", [])
+        items = sorted(body.get("items", []), key=lambda i: i["product_id"])   # one lock order, so two checkouts cannot deadlock
         fail = bool(body.get("fail_after_stock"))
+        request_id = body.get("request_id") or None
         if not items:
             return jsonify(ok=False, error="The cart is empty.", trace=[]), 400
+        ensure_schema()
         order_id = f"W{int(time.time())}{secrets.token_hex(2)}"
         total = round(sum(i["qty"] * float(i["unit_price"]) for i in items), 2)
         result, message = "committed", None
         with conn() as c, c.cursor() as cur:
             c.autocommit = True           # BEGIN / COMMIT / ROLLBACK below are the real statements
+            placed = placed_order(cur, request_id)
+            if placed:
+                return jsonify(trace.payload(placed))
             sql(cur, "BEGIN", "BEGIN;", note="Everything until COMMIT is one transaction: all of it happens, or none of it.")
             try:
                 for i in items:
@@ -61,12 +96,25 @@ def register(bp):
                         raise ValueError(f"Not enough stock for {i['product_id']}.")
                 if fail:
                     raise RuntimeError("Experiment: the payment step failed after the stock update.")
-                sql(cur, "INSERT (order)", "INSERT INTO orders VALUES (%(oid)s, %(cid)s, %(vid)s, now(), 'processing', %(total)s)",
-                    {"oid": order_id, "cid": persona_id(), "vid": visitor_id(), "total": total})
+                sql(cur, "INSERT (order)", "INSERT INTO orders (order_id, customer_id, visitor_id, order_date, status, total, request_id) "
+                    "VALUES (%(oid)s, %(cid)s, %(vid)s, now(), 'processing', %(total)s, %(rid)s)",
+                    {"oid": order_id, "cid": persona_id(), "vid": visitor_id(), "total": total, "rid": request_id})
                 for i in items:
                     sql(cur, "INSERT (order item)", "INSERT INTO order_items VALUES (%(oid)s, %(pid)s, %(qty)s, %(price)s)",
                         {"oid": order_id, "pid": i["product_id"], "qty": i["qty"], "price": i["unit_price"]})
-                sql(cur, "COMMIT", "COMMIT;", note="The order, its items and the stock change are now durable on 6 copies in 3 AZs.")
+                # Nothing consumes outbox in this stack: the browser does the fan-out (checkout.html).
+                sql(cur, "INSERT (outbox)", "INSERT INTO outbox (event_id, order_id, type, payload, created_at) "
+                    "VALUES (%(eid)s, %(oid)s, 'order_placed', %(payload)s::jsonb, now())",
+                    {"eid": str(uuid.uuid4()), "oid": order_id, "payload": json.dumps(
+                        {"order_id": order_id, "customer_id": persona_id(), "visitor_id": visitor_id(), "total": total, "items": items})},
+                    note="The 'order placed' row is written in the same transaction: there is no order without it, and no row without an order.")
+                sql(cur, "COMMIT", "COMMIT;", note="The order, its items, the outbox row and the stock change are now durable on 6 copies in 3 AZs.")
+            except psycopg.errors.UniqueViolation as e:   # a retry of the same click committed first
+                sql(cur, "ROLLBACK (same click)", "ROLLBACK;", note="The other attempt of this click committed first, so this one is undone.")
+                placed = placed_order(cur, request_id)
+                if placed:
+                    return jsonify(trace.payload(placed))
+                result, message = "rolled back", str(e)
             except Exception as e:
                 result, message = "rolled back", str(e)
                 sql(cur, "ROLLBACK", "ROLLBACK;",
@@ -187,6 +235,7 @@ def seed(ds):
     with conn() as c, c.cursor() as cur:
         with trace.call("DDL + COPY", DDL + "\nCOPY ... FROM STDIN  -- 4 tables, one transaction", {}) as t:
             cur.execute(DDL)
+            cur.execute(ENSURE)
             with cur.copy("COPY customers (customer_id, name, email, city, segment, created_at) FROM STDIN") as cp:
                 for x in ds.customers:
                     cp.write_row((x["customer_id"], x["name"], x["email"], x["city"], x["segment"], x["created_at"]))
@@ -208,7 +257,9 @@ def seed(ds):
 
 
 def reset_visitors():
+    ensure_schema()
     with conn() as c, c.cursor() as cur:
+        sql(cur, "DELETE", "DELETE FROM outbox WHERE order_id IN (SELECT order_id FROM orders WHERE visitor_id IS NOT NULL)")
         sql(cur, "DELETE", "DELETE FROM orders WHERE visitor_id IS NOT NULL")
         n = cur.rowcount
     return [f"Deleted {n} Visitor orders (their items go with ON DELETE CASCADE)."]
