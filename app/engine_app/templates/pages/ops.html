@@ -25,16 +25,22 @@
   const COLORS = ["#14213D", "#C8102E", "#1B8A8F", "#B45309", "#5B6472"];
   const charts = {};
   const getWin = segmented($("#exp-win"), load), getRange = segmented($("#exp-range"), load);
-  function draw(id, series) {
+  function draw(id, series, until) {
     charts[id]?.destroy();
     const names = Object.keys(series);
-    const labels = (series[names[0]] || []).map((p) => new Date(p.t).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" }));
+    const labels = (series[names[0]] || []).map((p) => until
+      ? new Date(p.t).toLocaleString("tr-TR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })
+      : new Date(p.t).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" }));
     charts[id] = new Chart($(id), { type: "line", data: { labels, datasets: names.map((n, i) => ({ label: n, data: series[n].map((p) => p.v),
       borderColor: COLORS[i % COLORS.length], pointRadius: 0, tension: .25 })) }, options: { maintainAspectRatio: false, interaction: { mode: "index", intersect: false } } });
   }
   async function one(measure, id, source) {
     try { const d = await api(`/influxdb/api/series?measure=${measure}&window=${getWin()}&range=${getRange()}`, { label: `${measure} per ${getWin()}`, source });
-      draw(id, d.series); } catch (e) { lm.errorBox($(source), e); }
+      draw(id, d.series, d.until);
+      let note = $(source).querySelector(".range-note");
+      if (!note) { note = document.createElement("p"); note.className = "range-note"; $(source).append(note); }
+      note.textContent = d.until ? `No point in the selected range. The chart ends at the newest point: ${new Date(d.until).toLocaleString("tr-TR")}.` : "";
+    } catch (e) { lm.errorBox($(source), e); }
   }
   function load() { one("orders", "#c-orders", "#orders-wrap"); one("temperature", "#c-temp", "#temp-wrap"); one("humidity", "#c-hum", "#hum-wrap"); }
   load();
