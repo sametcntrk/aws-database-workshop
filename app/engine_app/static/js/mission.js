@@ -79,8 +79,18 @@
   const schedule = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; place(); }); };
   addEventListener("scroll", schedule, { passive: true });
   addEventListener("resize", schedule);
-  new ResizeObserver(schedule).observe(document.body);
+  // Parts of the page that load later can push the lit part out of the window: follow it for a few seconds, until the reader scrolls.
+  let followUntil = 0;
+  ["wheel", "touchstart", "keydown", "pointerdown"].forEach((ev) => addEventListener(ev, () => { followUntil = 0; }, { passive: true }));
+  function followLit() {
+    const el = Date.now() < followUntil && lit();
+    if (!el) return;
+    const r = el.getBoundingClientRect(), middle = r.top + r.height / 2;
+    if (middle < 0 || middle > window.innerHeight) el.scrollIntoView({ behavior: "auto", block: "center" });
+  }
+  new ResizeObserver(() => { schedule(); followLit(); }).observe(document.body);
   function scrollToLit() {
+    followUntil = Date.now() + 8000;
     const el = lit();
     if (el) el.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
     setTimeout(place, 450);
