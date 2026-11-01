@@ -25637,52 +25637,627 @@ steps:
           - [Presigned URL, "Belirli bir nesne için, belirli bir süre geçerli, imzalı adres."]
           - [X-Amz-Signature / X-Amz-Expires, "Adresteki imza ve geçerlilik süresi (saniye). Süre bitince adres reddedilir."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde dosya deposu için hazırlık
+      t1:
+        title: Önceden ne vardı? Fotoğraf kovaya nasıl geldi, kapalı kovadan nasıl veriliyor?
         intro: >-
-          Satıcı paneli hiç açılmadan, bucket'ın güvenliği ve dosyaların nasıl dağıtılacağı belirlenir. Aşağıdaki beş adım bu
-          hazırlığın sırasıdır.
-        text:
-          - title: Önce dosyaların soruları yazılır
-            text: >-
-              Kim yükleyecek, kim görecek, ne kadar süre saklanacak? Ürün görselleri herkes tarafından görülür ama kimse doğrudan
-              bucket'ı listelememeli ya da yazmamalı.
-          - title: Bucket herkese kapatılır
-            text: >-
-              Block Public Access'in dört ayarı da açılır; bucket ve nesneler hiçbir zaman herkese açık olmaz. Erişim sadece IAM
-              kimlikleri, imzalı adresler ya da bir CDN üzerinden verilir.
-            code: |-
-              aws s3api put-public-access-block --bucket dbws-images-… --public-access-block-configuration \
-                BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
-          - title: Dağıtım yolu seçilir
-            text: >-
-              Herkesin göreceği görseller için CloudFront + Origin Access Control: CDN dosyayı kullanıcıya yakın yerden verir, bucket
-              kapalı kalır. Kişiye özel dosyalar (fatura, rapor) için kısa süreli imzalı adres.
-            code: |-
-              s3.generate_presigned_url("get_object", Params={"Bucket": b, "Key": "products/P0001.jpg"}, ExpiresIn=300)
-          - title: İmzalayan kimlik sınırlanır
-            text: >-
-              İmzalı adres, imzalayan kimliğin yetkisi kadar geçerlidir. Uygulamanın IAM rolü sadece gereken bucket ve önek (prefix)
-              için s3:GetObject / s3:PutObject izni taşır. Geçici kimlikle imzalanan adres, kimliğin süresi bitince de geçersiz olur.
-          - title: Süre kısa tutulur
-            text: >-
-              Adresin süresi işin gerektirdiği kadardır (dakikalar). Adres paylaşılırsa süre içinde başkası da kullanabilir; bu yüzden
-              uzun süreli imza verilmez.
-      feed:
-        title: Veri nereden geliyor?
-        writes: >-
-          Satıcılar ve içerik ekibi görselleri yükler; büyük sistemlerde tarayıcı dosyayı önceden imzalı bir PUT adresiyle doğrudan
-          S3'e yükler, uygulama sadece adresi imzalar.
-        reads: Mağaza sayfaları (ürün kartları, ürün sayfası, fırsat kutusu) ve satıcı paneli.
-        kind: >-
-          S3 başka bir veritabanından veri çekmez; içine yazılanı saklar. Bir nesne yüklendiğinde olay yayınlayabilir (S3 Event
-          Notifications → Lambda, SQS, EventBridge); küçük görsel üretme gibi işler bu olayla başlar.
-        with: >-
-          Görselin hangi ürüne ait olduğu katalogdadır (DocumentDB); S3'te sadece dosya ve küçük metadata durur. Bu mağazada görsel
-          anahtarı ürün numarasından türetiliyor (products/P0001.jpg); gerçek sistemlerde anahtar ürün dokümanına yazılır.
-        best: >-
-          Dosyalar nesne deposunda, kayıtları veritabanında. Herkese açık bucket yerine özel bucket + CDN (CloudFront, Origin Access
-          Control) ya da süreli imzalı adresler. Sürümleme açık, eski sürümler yaşam döngüsü kuralıyla temizlenir.
+          Sen butona basmadan önce Alpen Kablosuz Kulaklık 1'in (P0001) fotoğrafı zaten S3'te: products/P0001.jpg anahtarında, 48 KB, image/jpeg. Kova herkese kapalı; internetten imzasız gelen isteğe 403 döner. Burada iki soruya cevap var: fotoğraf kovaya nasıl geldi ve kova hiç açılmadan bir tarayıcıya nasıl verilir? Kovayı kim kapattı, Uygulama'nın izni nereden geliyor, imza neyi kapsıyor, üç yoldan hangisi ne zaman doğru, adres sızarsa ne olur? Önce zincirin bileşenleri, sonra bir simülasyon, sonra dört aşama (tasarım, ilk yükleme, sürekli besleme, tutarlılık ve onarım). Bu sayfa indirme tarafını anlatır; yükleme tarafını bir sonraki adımda (Adım 37) kendin deneyeceksin.
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1", "t0'daki \"Presigned URL, straight from S3\" (imzalı adresle, doğrudan S3'ten) tıklamasından önceki zaman. Bu bölüm, fotoğrafın ve kapının o ana kadar nasıl hazırlandığını anlatır."]
+          - ["Ekip, katalog ekibi ve satıcı", "Ekip: mağazanın sistemini kuran ve işleten mühendisler; alarmlara onlar bakar. Katalog ekibi: ürün ve fotoğraf ekleyen çalışanlar; arka ofis ekranını kullanır. Satıcı: ürününü bu mağazada satan firma; satıcı panelini kullanır."]
+          - ["S3, kova (bucket), nesne ve anahtar", "S3, AWS'in dosya deposu. Dosyalar bir kovada durur; her dosya bir nesnedir, tam adı anahtarıdır (products/P0001.jpg). Görsel kovası: ürün fotoğraflarının kovası. Sürüm tutma (versioning) açıksa aynı anahtara yeni dosya gelince eskisi silinmez, eski sürüm olur."]
+          - ["Block Public Access", "Kovanın ana şalteri. Dört ayarı açıkken kimse kovayı ya da nesneleri bir ayarla herkese açamaz; biri denese bile ayar reddedilir ya da etkisiz kalır."]
+          - ["Kova politikası (bucket policy) ve ACL", "Kova politikası: kovanın kapısındaki yazılı kurallar (kim, hangi işi, hangi şartla). Deny \"yasak\" demektir ve her izinden üstündür. ACL: nesne başına izin veren eski yöntem; bu kovada kapalı (BucketOwnerEnforced)."]
+          - ["IAM rolü, oturum ve geçici kimlik", "IAM: AWS'in \"kim neyi yapabilir\" servisi. Rol: bir programa verilen yetki kartı; burada Uygulama'nın rolü dbws-app-s3. Oturum: rolün geçici kullanımı. Geçici kimlik: EC2 sunucusuna verilen, kendiliğinden yenilenen anahtar çifti ve belirteç (token); tipik ömrü 6 saat. Anahtarı ASIA ile başlar."]
+          - ["SigV4 ve imza", "SigV4: AWS'in istek imzalama yöntemi. Uygulama isteğin parçalarını gizli anahtarıyla bir hesaptan geçirir; çıkan 64 karakterlik imza damga gibidir: S3 aynı hesabı yapar, sonuç tutmazsa reddeder. Gizli anahtarın kendisi adreste yoktur."]
+          - ["Önceden imzalı adres (presigned URL)", "Tek bir nesne, tek bir işlem ve bir süre için imzalanmış adres. Taşıyan herkes süre bitene kadar, istediği kadar kullanır: yanında kimlik sorulmayan bir bilet gibi."]
+          - ["Görsel adresi (görsel vekili)", "/s3/api/img/P0001: Uygulama'nın dosyayı S3'ten okuyup tarayıcıya verdiği adres (proxy). Mağazadaki bütün ürün kartları bunu kullanır."]
+          - ["İmza adresi", "/s3/api/presign/P0001: Uygulama'nın imzalı adresi üretip tarayıcıya verdiği adres. İmzalı adres ise onun ürettiği, S3'e giden uzun adrestir."]
+          - ["CDN, CloudFront ve OAC", "CDN: dosyaların kopyasını kullanıcıya yakın sunucularda tutan ağ. CloudFront AWS'in CDN'i. OAC (Origin Access Control): kovanın sadece belirli bir CloudFront dağıtımına açılmasını sağlayan ayar; kova yine herkese kapalı kalır. Bu mağazada CloudFront henüz yok; bekleyen bir karar."]
+          - ["Metadata, Content-Type ve Cache-Control", "Metadata: nesneyle birlikte saklanan küçük bilgiler. Content-Type: dosyanın türü (image/jpeg); tarayıcı buna bakarak dosyayı fotoğraf olarak açar. Cache-Control: \"bunu ne kadar saklayabilirsin\" notu; public, max-age=300 = 5 dakika."]
+          - ["SSE-S3 ve SSE-KMS", "Diskte şifreleme. SSE-S3 (AES256): anahtarı S3 yönetir; bu kovadaki hâli. SSE-KMS: anahtarı AWS KMS tutar, kimin açabileceği ayrıca yazılır ve her kullanım kayda geçer."]
+          - ["Yaşam döngüsü kuralı (lifecycle)", "S3'ün kendisinin uyguladığı temizlik kuralı. expire-old-versions: bir sürüm güncel olmaktan çıktıktan 1 gün sonra silinir."]
+          - ["Sunucu erişim kayıtları (server access logs)", "S3'ün kovaya gelen her isteği yazdığı kayıtlar: zaman, IP, kim, hangi işlem, sonuç, bayt. Başka bir kovaya, çoğu birkaç saat içinde teslim edilir; S3 eksiksiz teslimi garanti etmez."]
+          - ["CloudWatch ve istek ölçümleri", "CloudWatch: AWS'in ölçüm ve alarm servisi. İstek ölçümleri (request metrics): S3'ün önek (ör. products/) başına dakikalık saydığı sayılar: AllRequests (bütün istekler), GetRequests, 4xxErrors (reddedilenler), BytesDownloaded (indirilen bayt)."]
+          - ["IAM Access Analyzer", "Kovaların ayarlarını okuyup \"bu kova internete ya da başka hesaba açık\" diye bulgu üreten AWS servisi."]
+          - ["CloudFormation ve drift", "CloudFormation: kovanın ve rolün ayarlarını kod deposundaki bir şablondan kuran AWS servisi. Drift: gerçek ayarın şablondan farklılaşması (biri konsoldan elle değiştirmiş)."]
+          - ["Çıkış trafiği (egress)", "AWS'ten internete giden veri. GB başına ücretlidir. Aynı bölgede S3'ten EC2'ye ve S3'ten CloudFront'a giden veri ücretsizdir."]
+          - ["Kod kartlarındaki sözcükler", "200: oldu. 403: reddedildi. 404: yok. AccessDenied: izin yok. SignatureDoesNotMatch: imza tutmuyor. NoSuchKey: böyle bir anahtar yok. GET: oku. HEAD: sadece bilgilerini oku. PUT: yaz. ObjectCreated: S3'ün \"yeni dosya geldi\" olayı. Lambda: bir olay gelince kısa bir kodu çalıştıran AWS servisi. ALB: isteği sunucuya dağıtan yük dengeleyici. Athena: S3'teki dosyaları SQL ile okuyan servis. Principal: kuralın kimin için olduğu; \"*\" herkes demek."]
+          - ["Kesit ve temsilî değer", "Kesit: simülasyonda gösterilen kayıtlar; burada satıcı panelinin t0'da listelediği ilk 6 fotoğraf (katalogda 200). Temsilî: canlı sistemden gelmeyen, anlatım için seçilmiş değer; her yerde böyle işaretli."]
+          - ["Rehber adımları", "\"Adım 9\", \"Adım 37\" gibi adlar bu rehberin (mağazadaki 37 adımın) adımlarıdır. Simülasyonun sayacındaki \"Adım 1 / 18\" ise simülasyonun karesidir."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her bileşen bir satır. "Aşama" sütunu onun aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra" sütunu kimden alıp kime verdiğini söyler. "AWS" etiketli bileşenleri AWS çalıştırır; "bizim kodumuz" etiketlileri mağazanın ekibi yazar. Fotoğrafı kovaya koyan bileşenler Adım 1 ve 9'daki zincirin aynısı. Bu sayfada öne çıkanlar: kovayı kapalı tutan ayarlar, imzanın dayandığı IAM rolü, imza adresi ve kapıyı izleyen denetimler. Aynı bileşenler aşağıdaki simülasyonda birer kutu: üstte yazanlar, sonra kova ve kapısı, sonra kimlik, sonra fotoğrafı verenler, altta yandaki işler. CloudFront bu listede yok, çünkü bugün çalışmıyor; ne zaman konacağı 1. aşamada yazıyor.
+        inventory:
+          - id: staging
+            name: S3 (içe aktarma klasörü)
+            kind: aws
+            what: Amazon S3 bucket'ı
+            does: >-
+              Eski katalog sisteminin ürün dosyaları buraya gelir. Yeni dosya gelince S3 olayı içe aktarma işini başlatır. Ürün satırı, fotoğrafın eski sistemdeki yerini de söyler.
+            box: "Eski sistemin dosyası gelir; yeni dosya işi başlatır."
+            phases: [2]
+            before: Eski katalog sistemi
+            after: importer
+          - id: importer
+            name: İçe aktarma işi (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod
+            does: >-
+              İlk yüklemede her fotoğrafı 480×480 JPEG'e çevirir ve görsel kovasına yazar: anahtar ürün numarasından, içerik türü image/jpeg, yanında fotoğrafın adı, kategorisi, sahibi, lisansı ve kaynağı (metadata).
+            box: "Fotoğrafı 480×480 JPEG yapar; anahtar, içerik türü ve lisans bilgisiyle kovaya yazar."
+            phases: [2]
+            before: staging
+            after: [images, monitor]
+          - id: admin
+            name: Katalog yönetim servisi
+            kind: code
+            what: arka ofis programı (ürün ekranlarının arka ucu)
+            does: >-
+              Yeni fotoğraf için S3'e 15 dakika geçerli, tek dosyalık bir yükleme adresi imzalar; katalog ekibinin tarayıcısı dosyayı doğrudan kovaya yükler. Yükleme tarafının mantığını Adım 37'de deneyeceksin.
+            box: "Yeni fotoğrafa 15 dakikalık yükleme adresi verir."
+            phases: [3]
+            before: Katalog ekibi (arka ofis ekranı)
+            after: images
+          - id: images
+            name: S3 (ürün görselleri)
+            kind: aws
+            what: Amazon S3 bucket'ı (görsel kovası; sürüm tutma açık)
+            does: >-
+              Her ürünün fotoğrafı products/<ürün no>.jpg anahtarında. Baytların yanında içerik türü, şifreleme bilgisi ve metadata durur. Her isteğin imzasını, süresini ve iznini kendisi kontrol eder; şifreyi kendisi çözer.
+            box: "products/<ürün no>.jpg; imzayı, süreyi ve izni S3 kontrol eder."
+            phases: [1, 2, 3, 4]
+            before: [importer, admin, imgcheck, lifecycle]
+            after: [imgproxy, "Tarayıcı (imzalı adresle)", imgcheck, accesslog]
+          - id: guard
+            name: Kovanın erişim ayarları
+            kind: aws
+            what: Block Public Access, kova politikası, şifreleme
+            does: >-
+              Block Public Access'in dört ayarı herkese açmayı engeller. ACL'ler kapalı. Kova politikasındaki tek yasak HTTPS olmayan isteği reddeder. Her yeni nesne SSE-S3 ile şifrelenir. İzin vermez; sadece kapatır.
+            box: "Dört Block Public Access ayarı açık; ACL kapalı; HTTP yasak; SSE-S3."
+            phases: [1, 2, 3, 4]
+            before: iac
+            after: images
+          - id: lifecycle
+            name: Yaşam döngüsü kuralı (expire-old-versions)
+            kind: aws
+            what: S3'ün kendi temizlik kuralı
+            does: >-
+              Bir sürüm güncel olmaktan çıktıktan 1 gün sonra onu siler. Kötü fotoğrafı geri almaya bir gün süre bırakır, eski sürümlerin faturasını sınırlar.
+            box: "Eski sürümü 1 gün sonra siler."
+            phases: [1, 2, 3, 4]
+            before: iac
+            after: images
+          - id: iac
+            name: Altyapı şablonu (CloudFormation)
+            kind: aws
+            what: kod deposundaki şablon ve onu uygulayan AWS servisi
+            does: >-
+              Kovayı, erişim ayarlarını, yaşam döngüsü kuralını ve Uygulama'nın rolünü tek bir şablondan kurar. Ayar değişikliği elle değil, gözden geçirilmiş bir şablon değişikliğiyle yapılır. Elle yapılanı drift olarak gösterir.
+            box: "Kovayı, kapıyı ve rolü şablondan kurar; elle değişikliği drift diye gösterir."
+            phases: [1, 2, 4]
+            before: Ekip (gözden geçirilmiş değişiklik)
+            after: [guard, lifecycle, role, images]
+          - id: role
+            name: Uygulama'nın IAM rolü (dbws-app-s3)
+            kind: aws
+            what: EC2 sunucusuna bağlı yetki kartı
+            does: >-
+              Uygulama'ya kovayı listeleme, nesne okuma, yazma ve silme izni verir. Sunucuya kendiliğinden yenilenen geçici kimlik (tipik ömrü 6 saat) gelir. İmzalı adresin gücü bu rolün izninden fazla olamaz; kimlik geçersizleşirse adres de geçersiz olur.
+            box: "Uygulama'nın S3 izinleri ve geçici kimliği (tipik 6 saat)."
+            phases: [1, 2, 3, 4]
+            before: iac
+            after: [imgproxy, signer]
+          - id: imgproxy
+            name: Görsel adresi (/s3/api/img)
+            kind: code
+            what: Uygulama'nın görsel bölümü (görsel vekili)
+            does: >-
+              Mağazadaki kartlar ve ürün sayfası fotoğrafı buradan ister. Rolün kimliğiyle S3'ten okur, "public, max-age=300" notuyla verir. Bayt sunucudan geçer; sayılar CloudWatch'a gider.
+            box: "Kartların yolu: S3'ten okur, \"5 dakika sakla\" notuyla verir."
+            phases: [1, 3, 4]
+            before: ["Tarayıcı (img etiketi)", images, role]
+            after: [Tarayıcı, monitor]
+          - id: signer
+            name: İmza adresi (/s3/api/presign)
+            kind: code
+            what: Uygulama'nın imza bölümü
+            does: >-
+              Satıcı panelinin indirme yolu. Ürün numarasından anahtarı kurar, rolün geçici kimliğiyle GET için 300 saniyelik adresi imzalar ve tarayıcıya verir. S3'e istek göndermez, dosyanın var olup olmadığına bakmaz.
+            box: "Satıcı panelinin yolu: S3'e sormadan 300 saniyelik GET adresi imzalar."
+            phases: [1, 3, 4]
+            before: ["Tarayıcı (satıcı paneli)", role]
+            after: "Tarayıcı (adresle doğrudan S3'e gider)"
+          - id: imgcheck
+            name: Görsel kontrol işi (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod
+            does: >-
+              products/ altına yeni dosya gelince S3 olayıyla başlar. Dosya JPEG mi, 480×480 mi, 100.000 bayttan küçük mü (temsilî sınır), Content-Type image/jpeg mi diye bakar. Uymazsa bir önceki sürümü geri getirir ve alarm verir; önceki sürüm yoksa dosyayı siler, ürün fotoğrafsız sayılır.
+            box: "Yeni fotoğraf: JPEG, 480×480, boyut, Content-Type. Uymazsa önceki sürüm geri gelir."
+            phases: [3, 4]
+            before: images
+            after: [images, monitor]
+          - id: accesslog
+            name: Sunucu erişim kayıtları (S3)
+            kind: aws
+            what: S3'ün özelliği ve kayıtların yazıldığı ayrı kapalı kova
+            does: >-
+              Görsel kovasına gelen her isteği yazar: IP, kim (imzalı adreste müşteri değil, imzalayan rol), yöntem (QueryString imzalı adres demek), sonuç, bayt. Birkaç saat gecikmeli gelir. Ekip Athena ile sorgular.
+            box: "Her istek: IP, rol, yöntem, sonuç, bayt. Saatler sonra gelir."
+            phases: [1, 3, 4]
+            before: images
+            after: "Ekip (Athena ile sorgu)"
+          - id: monitor
+            name: CloudWatch alarmları
+            kind: aws
+            what: AWS'in izleme servisi
+            does: >-
+              products/ öneki için 5 dakikalık reddedilen oranını ve günlük çıkış hacmini izler; görsel adresinin (Adım 9) 404 oranını, görsel kontrol işinin sonucunu ve CloudFront eşiğini (görsel adresine gelen istek) tutar. Eşik aşılınca ekibe haber verir.
+            box: "Reddedilen oranı, günlük çıkış, 404 oranı, görsel kontrolü, CloudFront eşiği."
+            phases: [2, 3, 4]
+            before: [images, imgproxy, imgcheck, indexjob, importer]
+            after: Ekip (alarm)
+          - id: analyzer
+            name: IAM Access Analyzer
+            kind: aws
+            what: kova ayarlarını okuyan AWS denetimi
+            does: >-
+              Hesaptaki kovaların ayarlarını sürekli okur; görsel kovası internete ya da başka bir hesaba açılırsa bulgu üretir. İmzalı adresleri görmez, çünkü onlar bir ayar değil.
+            box: "Kova dışarıya açılırsa bulgu üretir; imzalı adresleri görmez."
+            phases: [2, 4]
+            before: [guard, iac]
+            after: [monitor, Ekip]
+          - id: indexjob
+            name: Index ve plan kontrolü (gece denetimi)
+            kind: code
+            what: dağıtım hattında her gece çalışan kod
+            does: >-
+              Adım 9'daki gece denetimi. Her ürün için kovada fotoğraf var mı diye sayar. Bu sayfada iki kontrolü daha var: imzasız bir GET'in 403 aldığını dener (kapı testi) ve şablonla gerçek ayarları karşılaştırır (drift).
+            box: "Her gece: fotoğrafsız ürün sayısı, imzasız GET → 403 mü, drift."
+            phases: [2, 4]
+            before: [images, iac]
+            after: monitor
+        sim_title: "Simülasyon: fotoğraf kovaya nasıl geldi, kapalı kovadan nasıl veriliyor?"
+        sim:
+          kind: pipeline
+          title: Yazanlar → kova ve kapısı → kimlik → fotoğrafı verenler → yandaki işler
+          caption: >-
+            Erişim kayıtları saatler sonra gelir; kayıt tablosu her isteğin örnek satırını, teslim edildiği zamanki hâliyle hemen gösterir. Görsel kovası kutusunda iki tablo var: satıcı panelinin t0'da listelediği ilk 6 fotoğraf (kesit; katalogda 200) ve P0001'in nesne bilgileri. Önce kova ve kapısı, sonra ilk yükleme; sonra yeni bir fotoğraf ve iki okuma yolu, en sonda tutarlılık ve onarım oynuyor. 4. aşamada "Örnek durum" diye başlayan kareler bu zincirde yaşanmış durumlar; "Olsaydı" diye başlayanlar yaşanmadı, yaşansaydı ne olacağını gösteriyor. Canlı sistemden: anahtarlar, boyutlar, içerik türü, metadata, kovanın ayarları, rolün izinleri, adresin parçaları ve uzunluğu, imzalama süresi, kurcalanan ve imzasız isteklerin 403 cevapları, olmayan dosyanın 404 cevabı. Temsilî: ilk yüklemedeki 52 KB, sürüm adları, istek sayıları ve alarm eşikleri, kayıtlardaki satırlar. Son karede depolar, sen butona basmadan önceki (t0) hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım}
+          rows:
+            - {id: writers, title: "Fotoğrafı kovaya yazanlar"}
+            - {id: stores, title: "Görsel kovası ve kapısı"}
+            - {id: identity, title: "Kim kurdu, kim imzalıyor: şablon ve IAM rolü"}
+            - {id: serve, title: "Fotoğrafı verenler: iki okuma yolu"}
+            - {id: helpers, title: "Yandaki işler: kontrol, kayıt, alarm, denetim", side: true}
+          summary: >-
+            Kova ve kapısı şablondan kuruldu: dört Block Public Access ayarı açık, ACL kapalı, HTTP yasak, SSE-S3. Fotoğraflar içe aktarma işiyle ve katalog yönetim servisinin yükleme adresiyle geldi; içerik türü nesneye yazıldı. Kartlar görsel adresinden, satıcı paneli imzalı adresle okuyor. Kova hiçbir an açılmadı: imzasız istek 403, değiştirilmiş adres 403, süresi dolmuş adres 403. Son durum: products/P0001.jpg, 48 KB, image/jpeg. t0'daki simülasyonun başladığı durum.
+          boxes:
+            - id: staging
+              row: writers
+            - id: importer
+              row: writers
+            - id: admin
+              row: writers
+            - id: images
+              row: stores
+              tables:
+                - name: "görsel kovası (kesit: t0'daki listenin ilk 6 fotoğrafı; katalogda 200)"
+                  cols: [anahtar, boyut, sürüm]
+                  rows:
+                    - {key: P0001, anahtar: products/P0001.jpg, boyut: "52 KB (temsilî)", sürüm: "v1", hidden: true}
+                    - {key: P0002, anahtar: products/P0002.jpg, boyut: "40 KB", sürüm: "v1", hidden: true}
+                    - {key: P0003, anahtar: products/P0003.jpg, boyut: "47 KB", sürüm: "v1", hidden: true}
+                    - {key: P0004, anahtar: products/P0004.jpg, boyut: "66 KB", sürüm: "v1", hidden: true}
+                    - {key: P0005, anahtar: products/P0005.jpg, boyut: "36 KB", sürüm: "v1", hidden: true}
+                    - {key: P0006, anahtar: products/P0006.jpg, boyut: "29 KB", sürüm: "v1", hidden: true}
+                - name: "products/P0001.jpg nesnesinin bilgileri"
+                  cols: [bilgi, değer]
+                  rows:
+                    - {key: m_type, bilgi: Content-Type, değer: image/jpeg, hidden: true}
+                    - {key: m_cache, bilgi: Cache-Control, değer: "yok (nesnede yazmıyor)", hidden: true}
+                    - {key: m_enc, bilgi: şifreleme, değer: "AES256 (SSE-S3)", hidden: true}
+                    - {key: m_class, bilgi: saklama sınıfı, değer: STANDARD, hidden: true}
+                    - {key: m_meta, bilgi: metadata, değer: "name, category, author, license, source", hidden: true}
+            - id: guard
+              row: stores
+              tables:
+                - name: "erişim ayarları (canlı değerler)"
+                  cols: [ayar, değer]
+                  rows:
+                    - {key: b1, ayar: BlockPublicAcls, değer: açık, hidden: true}
+                    - {key: b2, ayar: IgnorePublicAcls, değer: açık, hidden: true}
+                    - {key: b3, ayar: BlockPublicPolicy, değer: açık, hidden: true}
+                    - {key: b4, ayar: RestrictPublicBuckets, değer: açık, hidden: true}
+                    - {key: acl, ayar: ACL, değer: "kapalı (BucketOwnerEnforced)", hidden: true}
+                    - {key: pol, ayar: kova politikası, değer: "tek kural: HTTP yasak", hidden: true}
+                    - {key: enc, ayar: varsayılan şifreleme, değer: "SSE-S3 (AES256)", hidden: true}
+            - id: lifecycle
+              row: stores
+            - id: iac
+              row: identity
+            - id: role
+              row: identity
+              tables:
+                - name: "dbws-app-s3 (kesit: S3 izinleri)"
+                  cols: [izin, nerede]
+                  rows:
+                    - {key: r1, izin: s3:ListBucket, nerede: kovanın kendisi, hidden: true}
+                    - {key: r2, izin: "s3:GetObject, PutObject, DeleteObject", nerede: kovadaki nesneler, hidden: true}
+                    - {key: r3, izin: "geçici kimlik (ASIA…)", nerede: "tipik 6 saat, kendiliğinden yenilenir", hidden: true}
+            - id: imgproxy
+              row: serve
+            - id: signer
+              row: serve
+              tables:
+                - name: "imzanın kapsadığı (her adreste)"
+                  cols: [ne, değer]
+                  rows:
+                    - {key: s_op, ne: işlem, değer: "GET (get_object)", hidden: true}
+                    - {key: s_key, ne: anahtar, değer: "products/<ürün no>.jpg", hidden: true}
+                    - {key: s_exp, ne: süre, değer: "300 saniye", hidden: true}
+                    - {key: s_host, ne: imzalı başlık, değer: "host (kovanın adresi)", hidden: true}
+            - id: imgcheck
+              row: helpers
+            - id: accesslog
+              row: helpers
+              tables:
+                - name: "GET products/P0001.jpg kayıtlarından örnek satırlar (temsilî; biçim gerçek)"
+                  cols: [kim · yöntem, sonuç]
+                  rows:
+                    - {key: l1, kim · yöntem: "rol · AuthHeader", sonuç: "200 · 49.156 B", hidden: true}
+                    - {key: l2, kim · yöntem: "rol · QueryString", sonuç: "200 · 49.156 B", hidden: true}
+                    - {key: l3, kim · yöntem: "rol · QueryString", sonuç: "403 AccessDenied", hidden: true}
+                    - {key: l4, kim · yöntem: "- (imzasız)", sonuç: "403 AccessDenied", hidden: true}
+            - id: monitor
+              row: helpers
+            - id: analyzer
+              row: helpers
+            - id: indexjob
+              row: helpers
+          frames:
+            - phase: 2
+              who: iac
+              lit: [iac, guard, lifecycle, role, images]
+              packet: {at: iac, text: "aws cloudformation deploy → kova (sürüm tutma açık) · 4 Block Public Access ayarı · HTTP yasağı · SSE-S3 · expire-old-versions · rol dbws-app-s3"}
+              show: {guard: [b1, b2, b3, b4, acl, pol, enc], role: [r1, r2, r3]}
+              fresh: {guard: [b1, b2, b3, b4, acl, pol, enc], role: [r1, r2, r3]}
+              note: {images: "boş; önce kapı, sonra dosya", role: "izinler sadece bu kova için"}
+              say: >-
+                Kovada henüz tek dosya yok; önce kapısı kuruluyor. Ekip kovayı, erişim ayarlarını, temizlik kuralını ve Uygulama'nın rolünü tek bir şablondan kurdu. Sıra bilerek böyle: fotoğraflar kova açık bir anda yazılmış olmasın. Şablonda kovaya "herkes okuyabilir" diyen bir satır yok; rolün izni de sadece bu kova için.
+            - phase: 2
+              who: importer
+              lit: [staging, importer, images, monitor]
+              packet: {at: importer, text: "put_object(Key: \"products/P0001.jpg\", ContentType: \"image/jpeg\", Metadata: { name, category, author, license, source })"}
+              show: {images: [P0001, P0002, P0003, P0004, P0005, P0006, m_type, m_cache, m_enc, m_class, m_meta]}
+              fresh: {images: [P0001, P0002, P0003, P0004, P0005, P0006, m_type, m_cache, m_enc, m_class, m_meta]}
+              note: {images: "yazılan: 200 fotoğraf (kesitte 6)", role: "", importer: "200 küçültüldü · 0 hata", monitor: "içe aktarma işi: hata 0"}
+              say: >-
+                Eski sistemin dosyası içe aktarma klasörüne geldi ve içe aktarma işi başladı. İş her fotoğrafı 480×480 JPEG yaptı ve kovaya yazdı. Anahtarla birlikte içerik türünü (image/jpeg) ve fotoğrafın adını, kategorisini, sahibini, lisansını ve kaynağını da yazdı. S3 nesneyi kendiliğinden şifreledi (SSE-S3). Cache-Control yazılmadı; bunun sonucunu birazdan göreceksin.
+            - phase: 2
+              who: indexjob
+              lit: [indexjob, images, guard, analyzer, monitor]
+              packet: {at: indexjob, text: "GET products/P0001.jpg (imzasız) → 403 AccessDenied · GET /?list-type=2 (imzasız) → 403 AccessDenied · fotoğrafsız ürün: 0"}
+              note: {importer: "", images: "", indexjob: "200 ürün = 200 fotoğraf · kapı testi: 2/2 reddedildi", analyzer: "görsel kovası: dışarıya açık bulgu 0", monitor: "alarmlar açıldı: reddedilen oranı · çıkış hacmi · 404 oranı"}
+              say: >-
+                Mağaza açılmadan önce iki kontrol yapıldı. Index ve plan kontrolü her ürün için bir fotoğraf buldu. Sonra kapıyı denedi: kimlik göstermeden fotoğrafı ve kovanın listesini istedi, ikisine de 403 döndü (bu iki cevap canlı kovada ölçüldü). Access Analyzer kovanın dışarıya açık olmadığını yazdı. Mağaza trafiğinin alarmları bu andan sonra açıktır.
+            - phase: 3
+              who: admin
+              lit: [admin, images]
+              packet: {at: images, text: "generate_presigned_url(\"put_object\", Key: \"products/P0001.jpg\", 15 dk) → çalışanın tarayıcısı: PUT products/P0001.jpg (480×480, 49.156 bayt, Content-Type: image/jpeg, aynı metadata)"}
+              set: {images: {P0001: {boyut: "48 KB", sürüm: "v2 (güncel) · v1 saklı"}}}
+              fresh: {images: [P0001]}
+              note: {indexjob: "", analyzer: "", monitor: "", images: "P0001: yeni sürüm v2 · v1 saklı"}
+              say: >-
+                Katalog ekibi daha iyi bir fotoğraf çekti (Adım 9'daki yükleme). Servis 15 dakikalık, tek dosyalık bir yükleme adresi verdi ve dosya doğrudan kovaya gitti. Kova açılmadı; indirmedeki yöntemin aynısı, sadece işlem PUT. Yüklemeyi Adım 37'de deneyeceksin. Anahtar aynı kaldı; eski fotoğraf silinmedi, v1 oldu.
+            - phase: 3
+              who: imgcheck
+              lit: [images, imgcheck, monitor]
+              packet: {at: imgcheck, text: "S3 olayı: ObjectCreated products/P0001.jpg → JPEG ✓ · 480×480 ✓ · 49.156 bayt ≤ 100.000 ✓ · Content-Type: image/jpeg ✓"}
+              note: {admin: "", images: "", imgcheck: "bugün: kontrol edilen 1 · geri alınan 0", monitor: "görsel kontrolü: geri alınan 0 → alarm yok"}
+              say: >-
+                Yeni dosya gelince görsel kontrol işi başladı. Adım 9'daki üç kontrole bir tane daha ekli: nesnede yazan içerik türü. S3 bu bilgiyi dosyanın içinden çıkarmaz, yükleyenin dediğini saklar. Yanlış yazılırsa tarayıcı dosyayı fotoğraf olarak göstermeyebilir. Dört kontrol de geçti.
+            - phase: 3
+              who: lifecycle
+              lit: [lifecycle, images]
+              packet: {at: lifecycle, text: "expire-old-versions: NoncurrentDays 1 → products/P0001.jpg v1 silindi"}
+              set: {images: {P0001: {sürüm: "v2 (güncel)"}}}
+              fresh: {images: [P0001]}
+              note: {imgcheck: "", monitor: "", images: "P0001: tek sürüm kaldı (v2)"}
+              say: >-
+                Bir gün sonra temizlik kuralı v1'i sildi. Adım 9'daki "v1 saklı" ilk günün hâliydi. Biçimi bozuk bir fotoğrafı görsel kontrol işi saniyeler içinde geri alır. Yanlış ürünün fotoğrafını ise katalog ekibi o gün içinde fark edip eski sürümü geri getirebilir. Bedeli: hata bir günden sonra fark edilirse kovada eski sürüm kalmamıştır.
+            - phase: 3
+              who: imgproxy
+              lit: [imgproxy, role, images, monitor]
+              packet: {at: imgproxy, text: "GET /s3/api/img/P0001 → get_object (rolün imzasıyla) → 200 · 49.156 bayt → Cache-Control: public, max-age=300"}
+              show: {accesslog: [l1]}
+              fresh: {accesslog: [l1]}
+              note: {images: "", imgproxy: "son 5 dakika: görsel isteği 1.240 · 404 0 (temsilî)", monitor: "CloudFront eşiği: 5 dakikada 30.000 istek (temsilî); şu an 1.240"}
+              say: >-
+                Birinci okuma yolu. Bir müşteri kategori sayfasını açtı; kart fotoğrafı görsel adresinden istedi. Uygulama dosyayı rolünün kimliğiyle S3'ten okudu, kendisi "5 dakika sakla" notunu ekleyip verdi. Bayt sunucudan geçti. Kova kapalı kaldı, çünkü S3 ile konuşan müşteri değil, izni olan rol.
+            - phase: 3
+              who: signer
+              lit: [signer, role]
+              packet: {at: signer, text: "generate_presigned_url(\"get_object\", Key: \"products/P0001.jpg\", ExpiresIn=300) → https://…s3.amazonaws.com/products/P0001.jpg?X-Amz-Algorithm=AWS4-HMAC-SHA256 &X-Amz-Credential=ASIA…/20261030/eu-central-1/s3/aws4_request &X-Amz-Date=… &X-Amz-Expires=300 &X-Amz-SignedHeaders=host &X-Amz-Security-Token=… &X-Amz-Signature=…"}
+              show: {signer: [s_op, s_key, s_exp, s_host]}
+              fresh: {signer: [s_op, s_key, s_exp, s_host]}
+              note: {imgproxy: "", monitor: "", signer: "ölçüm: imzalama 0,9 ms · adres 1.814 karakter", role: "imzayı atan: rolün o anki geçici kimliği"}
+              say: >-
+                İkinci okuma yolu, senden önce. Dün bir satıcı panelden aynı fotoğrafı istedi. İmza adresi S3'e hiç sormadı; rolün gizli anahtarıyla işlemi, anahtarı, zamanı, süreyi ve kovanın adresini bir hesaptan geçirdi. Çıkan imza adresin sonuna eklendi. Gizli anahtar adreste yok. Adresin uzun olmasının sebebi geçici kimliğin belirteci (bu ölçümde 1.344 karakter).
+            - phase: 3
+              who: images
+              lit: [images, guard, role]
+              packet: {at: images, text: "GET (imzalı adres) → süre ✓ · imza ✓ · oturum ✓ · rolün izni ✓ · HTTPS ✓ → 200 · 49.156 bayt · Content-Type: image/jpeg · x-amz-server-side-encryption: AES256 · Cache-Control yok"}
+              note: {signer: "", role: "", images: "bayt doğrudan S3'ten tarayıcıya gitti"}
+              say: >-
+                Satıcının tarayıcısı adresle doğrudan S3'e gitti. S3 süreye baktı, imzayı kendisi yeniden hesapladı, rolün izni var mı ve yasak var mı diye baktı. Hepsi tamam olunca şifreyi çözüp dosyayı verdi. Block Public Access buna engel olmadı: bu istek herkese açık değil, rol adına imzalı. Cevapta Cache-Control yok; nesnede yazmıyor.
+            - phase: 3
+              who: accesslog
+              lit: [images, accesslog, monitor]
+              show: {accesslog: [l2]}
+              fresh: {accesslog: [l2]}
+              packet: {at: accesslog, text: "REST.GET.OBJECT products/P0001.jpg · Requester: assumed-role/dbws-app-s3/… · Authentication Type: QueryString · SigV4 · 200 · 49156"}
+              note: {images: "", accesslog: "birkaç saat sonra geldi", monitor: "son 5 dakika (products/): 1.246 istek · 4xx 0 · 57 MB (temsilî)"}
+              say: >-
+                Birkaç saat sonra bu istek kayıtlara düştü. Dikkat: "kim" sütununda satıcı değil, adresi imzalayan rol yazıyor; S3 satıcıyı tanımaz. Bir adresi kimin kullandığını sadece IP söyler; kimin istediğini Uygulama'nın kayıtlarındaki satıcı, ürün ve saatten anlarız. CloudWatch'ın sayıları ise dakikalar içinde gelir.
+            - phase: 4
+              who: images
+              lit: [images, signer, accesslog, monitor]
+              packet: {at: images, text: "410. saniyede aynı adres → 403 AccessDenied · \"Request has expired\" → panel yeni adres ister → 200"}
+              show: {accesslog: [l3]}
+              fresh: {accesslog: [l3]}
+              note: {accesslog: "", images: "", signer: "yeni adres 1 ms içinde hazır", monitor: "son 5 dakika: 4xx 1 / 1.248 istek = %0,08 < %1 → alarm yok"}
+              say: >-
+                Örnek durum: satıcı sayfayı açık bırakıp 410 saniye sonra aynı adresi yeniden denedi. S3 süreyi isteğin geldiği anda kontrol ettiği için reddetti; 300. saniyeden önce başlamış bir indirme ise bitene kadar sürer. Zarar yok: panel yeni bir adres ister. Alarm tek bir süre dolumuna çalmaz.
+            - phase: 4
+              who: guard
+              lit: [images, guard, accesslog, monitor]
+              packet: {at: images, text: "başka anahtar → SignatureDoesNotMatch · imzanın 1 harfi → SignatureDoesNotMatch · Expires=3000 → SignatureDoesNotMatch · HEAD → 403 · imzasız → AccessDenied · http:// → AccessDenied"}
+              show: {accesslog: [l4]}
+              fresh: {accesslog: [l4]}
+              note: {signer: "", images: "6 denemenin 6'sı 403 (canlı kovada ölçüldü)", monitor: "son 5 dakika: 4xx 7 / 1.254 istek = %0,56 < %1 → alarm yok", guard: "http:// isteğini kova politikası reddetti"}
+              say: >-
+                Örnek durum: biri aldığı adresi kurcaladı. Anahtarı P0002 yaptı, imzanın bir harfini değiştirdi, süreyi 3000 yaptı, işlemi GET yerine HEAD yaptı, imzayı sildi, https yerine http denedi. Altısı da 403 aldı. İlk üçünde imzanın kapsadığı bir parça değişti, S3'ün hesabı tutmadı. HEAD'de işlem değişti, imza yine tutmadı; bu cevapta gövde olmadığı için hata adı görünmez. İmzasız istekte kimlik yok; http isteğini kova politikası reddetti. Bu altı cevap canlı kovada ölçüldü. Bu kadarı alarm eşiğinin altında kalır; satırları kayıtlarda durur; tabloda bir örneği var.
+            - phase: 4
+              who: guard
+              lit: [iac, guard, analyzer, indexjob, monitor]
+              packet: {at: guard, text: "olsaydı: put-bucket-policy { Principal: \"*\", Action: \"s3:GetObject\" } → 403 AccessDenied (BlockPublicPolicy)"}
+              set: {guard: {b3: {değer: "olsaydı: kapatıldı → drift"}, b4: {değer: "olsaydı: kapatıldı → drift"}}}
+              fresh: {guard: [b3, b4]}
+              note: {images: "", guard: "olsaydı: ayarlar açıkken politika reddedilir; tablo iki ayarın kapatıldığı anı gösteriyor", analyzer: "olsaydı: iki ayar kapatılıp politika yazılırsa → bulgu", indexjob: "olsaydı: gece denetimi: drift 1", monitor: "olsaydı: drift ve bulgu → alarm"}
+              say: >-
+                Olsaydı: biri bir sorunu hızlıca çözmek için kovaya "herkes okuyabilir" politikası yazmaya kalksaydı. BlockPublicPolicy bu yazmayı reddederdi. Tablodaki gibi önce BlockPublicPolicy ve RestrictPublicBuckets ayarlarını kapatıp politikayı yazsaydı kova gerçekten açılırdı; tek ayar yetmez. Access Analyzer dışa açık kovayı, gece denetimi şablonla farkı (drift) yakalardı. Ekip ayarları şablondan geri getirir, kayıtlara bakıp açık kaldığı sürede hangi IP'lerden ne indirilmiş diye sayar.
+            - phase: 4
+              who: signer
+              lit: [signer, role, images]
+              packet: {at: signer, text: "olsaydı: ExpiresIn=604800 (7 gün) → adres imzalanır → rolün oturumu bitince (tipik 6 saat) 403"}
+              set: {guard: {b3: {değer: açık}, b4: {değer: açık}}, signer: {s_exp: {değer: "olsaydı: 7 gün yazıldı; gerçekte oturumla biter"}}}
+              fresh: {signer: [s_exp]}
+              note: {guard: "", analyzer: "", indexjob: "", monitor: "", signer: "olsaydı: yazılan 7 gün · gerçek ömür: kalan oturum süresi", role: "olsaydı: oturum biter, adres de biter"}
+              say: >-
+                Olsaydı: biri süreyi en üst sınır olan 7 güne çıkarsaydı. AWS kütüphanesi (SDK) itiraz etmez, ama adres rolün geçici kimliği bitince geçersiz olurdu (tipik 6 saat içinde). Kısacası bir adresin ömrü iki sürenin kısa olanıdır: yazılan süre ve imzalayan kimliğin kalan süresi. 7 gün sadece uzun ömürlü IAM kullanıcısı anahtarıyla mümkündür; ekip bunu kullanmaz. Süre 300 saniyede kalır.
+            - phase: 4
+              who: images
+              lit: [images, guard, accesslog, monitor]
+              packet: {at: images, text: "olsaydı: sızan adres · 300 saniye · saniyede 50 istek → 15.000 GET · 720 MB · ≈ 0,06 USD çıkış · P0002'ye de PUT'a da izin yok"}
+              set: {signer: {s_exp: {değer: "300 saniye"}}, guard: {pol: {değer: "olsaydı: + s3:signatureAge > 60 sn yasak"}}}
+              fresh: {guard: [pol]}
+              note: {signer: "", role: "", images: "olsaydı: sadece P0001 okundu, sadece süre içinde", accesslog: "olsaydı: saatler sonra: yabancı IP · 15.000 satır", guard: "olsaydı: yeni kural eski adresleri keser", monitor: "olsaydı: günlük çıkış 16 GB → 16,7 GB; sınır 3 katı → alarm yok"}
+              say: >-
+                Olsaydı: adres bir destek talebinin ekran görüntüsünde sızsaydı. Taşıyan herkes 300 saniye boyunca sadece bu fotoğrafı, istediği kadar indirebilirdi; başka dosyayı okuyamaz, yazamaz, silemez. P0001 zaten vitrinde herkese açık, zarar az; çıkış alarmı da çalmaz. Tek bir adresi iptal eden düğme yoktur. Fatura gibi özel bir dosya olsaydı ekip bir kova politikasıyla, belli yaştan eski imzaları topluca reddederdi.
+            - phase: 4
+              who: signer
+              lit: [signer, images, indexjob, monitor]
+              packet: {at: signer, text: "olsaydı: GET /s3/api/presign/P0175 → adres imzalandı (S3'e sorulmadı) → tarayıcı: GET → 404 NoSuchKey"}
+              set: {guard: {pol: {değer: "tek kural: HTTP yasak"}}}
+              note: {guard: "", accesslog: "", images: "olsaydı: 404, çünkü rolün listeleme izni var", indexjob: "olsaydı: bu gece: fotoğrafsız ürün 1", monitor: "olsaydı: gece denetimi: 1 → alarm"}
+              say: >-
+                Olsaydı: fotoğrafı henüz yüklenmemiş bir ürün için adres istenseydi (temsilî: P0175; bugün 200 ürünün hepsinin fotoğrafı var). İmza adresi dosyaya bakmaz, adresi yine üretirdi; tarayıcı S3'ten 404 alırdı. (Olmayan bir numarayla canlıda ölçüldü: adres imzalandı, S3 NoSuchKey dedi.) Gece denetimi ürünü fotoğrafsız diye sayar, katalog ekibi fotoğrafı yükler. Adres her zaman products/ altına ve .jpg ile kurulduğu için başka bir dosyaya gidemez.
+            - phase: 4
+              who: monitor
+              lit: [monitor, imgproxy, role, images]
+              packet: {at: monitor, text: "olsaydı: görsel adresi 5 dakikada 36.000 istek > 30.000 → saniyede ≈ 5,9 MB sunucudan geçiyor → karar: CloudFront + OAC"}
+              set: {guard: {pol: {değer: "olsaydı: + sadece bu CloudFront dağıtımı okur"}}}
+              fresh: {guard: [pol]}
+              note: {signer: "", images: "", indexjob: "", imgproxy: "olsaydı: 36.000 istek / 5 dakika", monitor: "olsaydı: eşik 3 dönem üst üste aşıldı → ekibe haber", guard: "olsaydı: Block Public Access yine açık"}
+              say: >-
+                Olsaydı: bir kampanya günü görsel isteği eşiği geçseydi. Kartların baytı sunucuyu yorardı. Ekip kartların önüne CloudFront koyardı. OAC ile kova politikasına "sadece bu dağıtım okur" yazılır; dört Block Public Access ayarı açık kalır, çünkü bu izin herkese değil, belirli bir dağıtıma. Bugün eşiğin çok altındayız; CloudFront kurulu değil.
+            - phase: 4
+              who: images
+              lit: [images, guard, role, signer]
+              set: {guard: {pol: {değer: "tek kural: HTTP yasak"}}}
+              note: {imgproxy: "", monitor: "", guard: "4 ayar açık · kova kapalı", role: "geçici kimlik geçerli", signer: "hazır; henüz senin için adres imzalanmadı", images: "products/P0001.jpg · 48 KB · image/jpeg"}
+              say: >-
+                Hazır. "Olsaydı" karelerindeki ayarlar yaşanmadı; kova bugünkü hâline döndü. Kova kapalı, P0001'in fotoğrafı 48 KB ve image/jpeg, rolün kimliği geçerli, imza adresi 300 saniyeyle bekliyor. t0'daki simülasyon burada başlıyor: butona bastığında aynı fotoğrafı iki yoldan görecek, sağdaki yolda adresi senin için imzalatacaksın.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Önce "kim görecek, kim yazacak?" sorusu yazılır. Sonra kova kapatılır, sonra kapıdan kimin nasıl geçeceğine karar verilir: rolün izni, üç okuma yolu, imzanın süresi. Dosyanın yanındaki bilgiler, şifreleme, sürümler, kayıtlar ve maliyet aynı kararın parçası.
+            cards:
+              - title: Kova baştan kapalı
+                text: >-
+                  Ürün fotoğraflarını herkes görür, ama bu kovanın herkese açılmasını gerektirmez. Kova açık olsaydı herkes kimlik göstermeden indirirdi: kayıtta kişi değil, sadece IP görünürdü. Tek bir dosyayı kapatmak zorlaşır, aynı kovaya konan başka bir dosya da açığa çıkardı. Bu yüzden şablon kovayı kapalı kurar. Dikkat: dört ayarın "açık" olması, kovanın kapalı olması demektir. Bu ayarlar kimseye izin vermez; izin ayrıca yazılır.
+                map:
+                  cols: [Ayar, Ne yapar, Değer]
+                  rows:
+                    - [BlockPublicAcls, "Herkese açan yeni ACL'yi reddeder", açık]
+                    - [IgnorePublicAcls, "Var olan herkese açık ACL'yi yok sayar", açık]
+                    - [BlockPublicPolicy, "Herkese açan kova politikasını reddeder", açık]
+                    - [RestrictPublicBuckets, "Herkese açık politikası olan kovayı kısıtlar", açık]
+                    - [ObjectOwnership, "ACL'leri tamamen kapatır", BucketOwnerEnforced]
+                    - [DenyInsecureTransport, "HTTPS olmayan isteği reddeder", "kova politikasındaki tek kural"]
+                code_title: Şablondan (kısaltılmış)
+                code:
+                  - {code: "PublicAccessBlockConfiguration: { BlockPublicAcls: true, IgnorePublicAcls: true, BlockPublicPolicy: true, RestrictPublicBuckets: true }", tag: Şablon → S3, say: "Dört ayar da kovayla birlikte kurulur."}
+                  - {code: "{ Effect: Deny, Principal: \"*\", Action: \"s3:*\", Condition: { Bool: { \"aws:SecureTransport\": \"false\" } } }", tag: Şablon → S3, say: "Şifresiz bağlantıyla gelen her istek, kim olursa olsun, reddedilir."}
+              - title: İzin kovada değil, rolde
+                text: >-
+                  Uygulama'nın kodunda şifre yok. EC2 sunucusuna bir IAM rolü bağlı; AWS sunucuya geçici kimlik verir (tipik 6 saat) ve kendiliğinden yeniler. İzinler sadece bu kova için. İmzalı adres bu izinleri aşamaz: S3 adresi kimin taşıdığına değil, imzalayan rolün iznine bakar. Rol GetObject iznini kaybederse o rolün imzaladığı bütün adresler de reddedilir. Rolde yazma ve silme izni de var, çünkü aynı Uygulama satıcı yüklemelerini de yazıyor (Adım 37); bu izinler adrese geçmez, adres sadece imzalanan işi yapar. İçe aktarma işinin, görsel kontrol işinin ve katalog yönetim servisinin de kendi dar rolleri var; şablon onları da kurar.
+                code:
+                  - {code: "{ Effect: Allow, Action: s3:ListBucket, Resource: <kova> }", tag: Şablon → IAM, say: "Listeleme izni. Olmayan dosyaya 403 değil 404 dönmesini de bu sağlar."}
+                  - {code: "{ Effect: Allow, Action: [s3:GetObject, s3:PutObject, s3:DeleteObject], Resource: <kova>/* }", tag: Şablon → IAM, say: "Nesneleri okuma, yazma ve silme izni."}
+              - title: "Üç yol: ne zaman hangisi"
+                text: >-
+                  Kapalı bir kovadan dosya vermenin üç yolu var. Üçünde de kova kapalı kalır; fark, baytın kimden geçtiği. Vitrin kartları görsel adresini kullanır: dosya küçük, tarayıcı 5 dakika saklar, sunucu rahat. Satıcı paneli indirme için imzalı adres kullanır: istek seyrek, baytı sunucudan geçirmeye gerek yok. 48 KB'lık bir fotoğrafta bu kazanç küçüktür; panel aynı yolu fatura, rapor ve video gibi büyük ya da özel dosyalar için de kullandığı için tek yol tutulur. O dosyalarda fark çok büyür. CloudFront'u ekip eşiğe bağladı: görsel adresine 5 dakikada 30.000 istek (temsilî). Şu an 5 dakikada 1.240.
+                map:
+                  cols: [Yol, Bayt nereden geçer, Ne zaman doğru, Bedeli]
+                  rows:
+                    - ["Görsel adresi (proxy)", "S3 → Uygulama → ALB → tarayıcı", "Küçük, sık okunan dosya; Uygulama kontrol etmek ya da not eklemek istiyor", "Her dosya sunucunun belleğinden ve ağından geçer"]
+                    - ["İmzalı adres (presigned)", "S3 → tarayıcı", "Büyük ya da kişiye özel dosya; seyrek indirme", "Her adres yeni, tarayıcı saklayamaz; sızarsa süre bitene kadar geçerli"]
+                    - ["CloudFront + OAC", "S3 → CloudFront → tarayıcı", "Aynı dosyayı çok kişi görüyor; ziyaretçiler uzak", "Yeni bir servis; dosya değişince önbellek temizliği gerekir"]
+              - title: İmza neyi kapsıyor (SigV4)
+                text: >-
+                  Adres yedi parametre taşır. İmza, gizli anahtarla işlem (GET), anahtar (products/P0001.jpg), kovanın adresi ve diğer parametreler üzerinden hesaplanır. Biri değişirse S3'ün kendi hesabı tutmaz; bu yüzden süreyi uzatmak ya da başka dosyaya geçmek işe yaramaz. S3 aynı hesabı yapabilir, çünkü gizli anahtarı AWS bilir; adresi alan bilmez. Adres aynı süre içinde kaç kez olursa kullanılabilir. Bir kez kullanılınca bitmez.
+                map:
+                  cols: [Parametre, Canlı adresteki değer, Ne demek]
+                  rows:
+                    - [X-Amz-Algorithm, AWS4-HMAC-SHA256, İmza yöntemi (SigV4)]
+                    - [X-Amz-Credential, "ASIA…/20261030/eu-central-1/s3/aws4_request", "Hangi kimlik, hangi gün, hangi bölge, hangi servis. ASIA = geçici kimlik"]
+                    - [X-Amz-Date, "20261030T…Z", "İmza zamanı (UTC). Süre buradan başlar"]
+                    - [X-Amz-Expires, "300", "Saniye"]
+                    - [X-Amz-SignedHeaders, host, "İmzaya giren başlık: kovanın adresi"]
+                    - [X-Amz-Security-Token, "1.344 karakter (bu ölçümde)", "Geçici kimliğin belirteci. Adresi uzatan bu"]
+                    - [X-Amz-Signature, "64 karakter", "İmza. Gizli anahtar değil, onunla hesaplanan sonuç"]
+                code_title: Gerçek kod
+                code:
+                  - {code: "key = f\"products/{pid}.jpg\"", tag: Uygulamanın içinde, say: "Anahtar ürün numarasından kurulur."}
+                  - {code: "url = s3().generate_presigned_url(\"get_object\", Params={\"Bucket\": …, \"Key\": key}, ExpiresIn=300)", tag: Uygulamanın içinde, say: "Sadece bir hesap: S3'e istek gitmez."}
+              - title: İmza adresini kim çağırabilir?
+                text: "Kova kapalı olsa da imza adresi geçerli bir bilet üretir; bu yüzden kapısı olmalı. Sadece satıcı paneline giriş yapmış satıcı çağırır. Uygulama imzalamadan önce oturumu ve ürünün o satıcıya ait olduğunu kontrol eder. Anahtarı kendisi products/<ürün no>.jpg diye kurar, satıcının yazdığı bir yolu kullanmaz; böylece başka bir dosyanın bileti çıkmaz."
+              - title: Süre neden 300 saniye
+                text: >-
+                  Adres bir bilet gibi taşınır: ekran görüntüsüne, destek talebine, tarayıcı geçmişine, kayda düşebilir. Süre ne kadar kısaysa zarar o kadar küçük olur. Süre tarayıcının adresi hemen kullanmasına yetmeli; 300 saniye bol bol yeter. S3 süreyi isteğin geldiği anda kontrol ettiği için, 299. saniyede başlayan büyük bir indirme bitene kadar sürer. Gerçek ömür iki sürenin kısa olanıdır.
+                map:
+                  cols: [Kimliğin türü, Adres en çok ne kadar geçerli]
+                  rows:
+                    - ["IAM rolü (EC2 sunucusu); bu Uygulama", "Yazılan süre ya da kimliğin kalan süresi (tipik 6 saat), hangisi kısaysa"]
+                    - ["IAM kullanıcısı (uzun ömürlü anahtar)", "7 güne kadar. Anahtar sunucuda saklanacağı için kullanılmaz"]
+              - title: Nesnenin yanındaki bilgiler
+                text: >-
+                  Content-Type yüklenirken nesneye yazılır, S3 cevaba onu koyar. Cache-Control ise bu nesnelerde yok. Görsel adresi notu kendisi ekler. Doğrudan S3'ten gelen cevapta not yok; olsa da işe yaramazdı, çünkü tarayıcı önbelleği adrese göre tutar ve her imza yeni bir adres üretir (iki imza karşılaştırıldı: farklı). Bu, kartların neden imzalı adres kullanmadığının bir sebebi daha. CloudFront doğrudan kovaya bağlandığında ise nesneye Cache-Control yazılır ya da süre CloudFront ayarından verilir.
+                map:
+                  cols: [Yol, Content-Type, Cache-Control]
+                  rows:
+                    - [Görsel adresi, "image/jpeg (kod yazıyor)", "public, max-age=300 (kod ekliyor)"]
+                    - [İmzalı adres, "image/jpeg (nesneden)", "yok (nesnede yazmıyor)"]
+                code:
+                  - {code: "Response(obj[\"Body\"].read(), mimetype=\"image/jpeg\", headers={\"Cache-Control\": \"public, max-age=300\"})", tag: Görsel adresi → Tarayıcı, say: "Notu görsel adresi ekler; S3'teki nesnede yok."}
+              - title: "Şifreleme: iki ayrı yer"
+                text: >-
+                  Yolda: bağlantı HTTPS (TLS); kova politikası şifresizi reddeder. Diskte: her nesne SSE-S3 ile şifreli (cevapta x-amz-server-side-encryption: AES256). S3 şifreyi okumada kendisi çözer, adresi taşıyan da şifresiz fotoğrafı alır: bu şifreleme diski korur, adresi değil. Vitrindeki fotoğraflar için bu yeter. Fatura gibi özel dosyalarda ekip SSE-KMS seçer: imzalayan rolün o KMS anahtarını kullanma izni de gerekir, CloudFront kullanılacaksa anahtar politikası ona da izin vermelidir, kullanımlar kayda geçer. İstemcinin kendi anahtarını getirdiği SSE-C bu kovada kullanılmaz.
+              - title: "Maliyet: imzalı adres çıkış ücretini düşürmez"
+                text: >-
+                  Fiyatlar eu-central-1, Price List API. Bugünkü hız (5 dakikada 1.240 istek, temsilî) ayda yaklaşık 10,7 milyon istek ve 490 GB eder. Fotoğrafların saklama ücreti ise ayda bir kuruşun altında kalır (200 fotoğraf). Asıl kalem internete çıkış. İmzalı adres bu ücreti düşürmez, sunucunun yükünü alır. CloudFront, önbellekten verdiği kadar S3 isteğini azaltır; kovadan ona giden trafik ücretsizdir, izleyiciye gideni kendi fiyatıyla sayar. Görsel adresinde tarayıcının 5 dakikalık saklaması en büyük kazançtır: hiç gitmeyen istek ücret yazmaz. İmzalı adres sütunu bir varsayımdır: bugün bu yol seyrek kullanılır, tablo aynı trafik buradan gitseydi ne olacağını gösterir.
+                map:
+                  cols: [Kalem, Görsel adresi, İmzalı adres]
+                  rows:
+                    - ["S3 GET (10.000'i 0,0043 USD)", "≈ 4,6 USD", "≈ 4,6 USD"]
+                    - ["S3 → sunucu (aynı bölge)", "ücretsiz", "yok"]
+                    - ["İnternete çıkış (ilk 100 GB ücretsiz, sonra GB'ı 0,09 USD; hesabın bütün servisleri toplamında)", "≈ 35 USD (sunucu ve ALB'den)", "≈ 35 USD (S3'ten)"]
+                    - ["Sunucu ve ALB'nin işi", "her istekte", "sadece imzalama"]
+              - title: Sürümler, temizlik ve kayıtlar
+                text: >-
+                  Sürüm tutma, yanlış fotoğrafı geri getirmek için açık; kural eski sürümü 1 gün sonra siler ki fatura birikmesin. İmzalı adres anahtara bağlı, sürüme değil: 5 dakika içinde fotoğraf değişirse aynı adres yeni hâlini verir. Okumalar S3 olayı üretmez; kimin ne indirdiğini sadece erişim kayıtları söyler. Kayıtlar ayrı, kapalı bir kovaya gider, çünkü isteğin satırı adresi de içerebilir. Aynı sebeple Uygulama imzalı adresin kendisini kayıtlarına yazmaz; satıcıyı, ürünü ve saati yazar.
+                code:
+                  - {code: "NoncurrentVersionExpiration: { NoncurrentDays: 1 }", tag: Şablon → S3, say: "Güncel olmayan sürüm 1 gün sonra silinir."}
+                  - {code: "LoggingConfiguration: { DestinationBucketName: <kayıt kovası>, LogFilePrefix: \"gorsel/\" }", tag: Şablon → S3, say: "Her istek ayrı kovaya kaydedilir."}
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              Mağaza açılmadan önce sıra şöyle: önce kapısı kurulmuş boş kova, sonra fotoğraflar, sonra sayım ve kapı testi.
+            cards:
+              - title: Önce kapı, sonra dosya
+                text: >-
+                  Şablon kovayı kapalı kurar; içine ilk dosya girdiğinde kova hiç açık olmamıştır. Roller de aynı şablonda; elle verilmiş bir izin yoktur. Değişiklik gerekirse şablon değişir ve gözden geçirilir.
+                code:
+                  - {code: "aws cloudformation deploy --template-file altyapi.yaml --stack-name magaza", tag: Ekip → CloudFormation, say: "Kova, kapı, kural ve rol birlikte kurulur."}
+              - title: Fotoğraflar içerik türüyle
+                text: >-
+                  İçe aktarma işi her fotoğrafı 480×480 JPEG yapar ve yazarken içerik türünü de söyler. Söylemeseydi S3 nesneyi genel bir ikili dosya (binary/octet-stream) diye saklardı. Fotoğrafın sahibi ve lisansı da yanına yazılır; satıcı panelinin listesindeki etiketler bunlardır. Görsel kontrol işinin olayı bu yüklemeden sonra açılır; 200 fotoğrafı içe aktarma işi aynı biçimle üretir, sayımı da aşağıda yapılır. Bu bilgiler HTTP başlığı olarak taşındığı için Türkçe harfler sadeleşir (Kulaklik).
+                code:
+                  - {code: "s3.put_object(Bucket=…, Key=f\"products/{no}.jpg\", Body=kucult(foto, 480), ContentType=\"image/jpeg\", Metadata={\"name\": ad, \"license\": lisans, …})", tag: İçe aktarma işi → S3, say: "Anahtar, baytlar, içerik türü ve metadata birlikte yazılır."}
+              - title: Sayım ve kapı testi
+                text: >-
+                  Index ve plan kontrolü kovadaki fotoğraf sayısını ürün sayısıyla karşılaştırır: 200 = 200. Sonra hiç kimlik göstermeden kapıyı dener; beklenen cevap 403. Bu kapıda ters bir testtir: başarı, reddedilmektir. Access Analyzer'ın bulgu listesi de boş olmalıdır.
+                code:
+                  - {code: "GET https://<kova>.s3.amazonaws.com/products/P0001.jpg", tag: Index ve plan kontrolü → S3, say: "İmzasız okuma denemesi."}
+                  - {code: "403 AccessDenied", tag: S3 → Index ve plan kontrolü, say: "Beklenen cevap. 200 gelirse alarm çalar."}
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              Mağaza açıldıktan sonra fotoğraf bir yoldan gelir (katalog yönetim servisi) ve iki yoldan okunur (görsel adresi, imza adresi). Her istek ölçülür ve kaydedilir.
+            cards:
+              - title: Yeni fotoğraf aynı anahtara
+                text: >-
+                  Ekran fotoğrafı küçültür, servis 15 dakikalık yükleme adresi verir, dosya doğrudan kovaya gider. Anahtar aynı kaldığı için kartların ve imzaların kurduğu adres değişmez. Görsel kontrol işi saniyeler içinde bakar. Yükleme tarafını Adım 37'de kendin deneyeceksin; orada satıcı yüklemelerinin ayrı öneki (uploads/) var.
+                code:
+                  - {code: "if nesne.content_type != \"image/jpeg\" or img.format != \"JPEG\" or img.size != (480, 480) or boyut > 100_000: geri_al(onceki_surum)", tag: Görsel kontrol işinin içinde, say: "Uymayan dosyanın yerine önceki sürüm geri gelir."}
+              - title: İki okuma yolu, aynı kapı
+                text: >-
+                  Görsel adresinde S3 ile rol konuşur. İmzalı adreste S3 ile tarayıcı konuşur, ama istek rol adına imzalıdır. S3 açısından ikisi de aynı rolün isteğidir. Fark imzanın nerede durduğu: birinde HTTP başlığında (AuthHeader), diğerinde adresin içinde (QueryString). Kayıtlarda bu yüzden iki farklı değer görürsün.
+                map:
+                  cols: [Soru, Görsel adresi, İmzalı adres]
+                  rows:
+                    - ["Kim S3'e bağlanır", "Uygulama (AWS'in iç ağından)", "Tarayıcı (internet üzerinden)"]
+                    - ["İmza nerede", "Authorization başlığında", "Adresin içinde"]
+                    - ["Okuyan kişi neyi bilir", "Sadece /s3/api/img/P0001", "Kova adını, anahtarı, geçici kimliğin ilk kısmını"]
+                    - ["Sonuç (ölçüm)", "200 · 49.156 bayt", "200 · 49.156 bayt"]
+              - title: İzleme
+                text: >-
+                  İki ölçüm birlikte çalışır. İstek ölçümleri dakikalar içinde gelir, sadece sayı verir; önek filtresiyle açılır ve ayrıca ücretlidir. Erişim kayıtları satır satır detay verir ama saatler sonra gelir, bu yüzden alarma değil, araştırmaya yarar. S3 sayılarında görsel adresinin okumaları da vardır, çünkü o da kovadan okur.
+                map:
+                  cols: [Alarm, Formül, Pencere ve eşik]
+                  rows:
+                    - ["Reddedilen oranı", "IF(AllRequests >= 100, 4xxErrors / AllRequests)", "5 dakika; %1 (temsilî)"]
+                    - ["Çıkış hacmi", "BytesDownloaded (bir günün toplamı)", "son 7 gün ortalamasının 3 katı; bugün günde ≈ 16 GB (temsilî)"]
+                    - ["CloudFront eşiği", "görsel adresine gelen istek", "5 dakikada 30.000, 3 dönem üst üste (temsilî)"]
+                    - ["404 oranı (Adım 9)", "404 / görsel isteği", "5 dakika; %1"]
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              Adresin süresi dolarsa, biri adresi kurcalarsa, adres sızarsa, biri kovayı açmaya kalkarsa, dosya yoksa, kötü bir fotoğraf geç fark edilirse ne olur? Her emniyet için ne zaman çalıştığı, neyi yakalamadığı ve ekibin ne yaptığı aşağıda.
+            cards:
+              - title: Süresi dolan ya da kurcalanan adres
+                text: >-
+                  S3 her istekte süreyi ve imzayı yeniden hesaplar. Ne zaman: her istekte. Yakalamadığı: geçerli bir adresi başkasının kullanması; imza kimin taşıdığını bilmez. Onarım: gerekmez, panel yeni adres ister. Oran %1'i geçerse ekip kayıtlara bakar: panelde süre hatası mı var, biri tarama mı yapıyor?
+                map:
+                  cols: [Canlı kovada deneme, Cevap]
+                  rows:
+                    - ["Geçerli imzalı adres", "200 · 49.156 bayt"]
+                    - ["Anahtar P0002 yapıldı", "403 SignatureDoesNotMatch"]
+                    - ["İmzanın bir harfi değişti", "403 SignatureDoesNotMatch"]
+                    - ["X-Amz-Expires 3000 yapıldı", "403 SignatureDoesNotMatch"]
+                    - ["GET yerine HEAD", "403"]
+                    - ["İmzasız istek", "403 AccessDenied"]
+                    - ["http:// ile", "403 AccessDenied"]
+                    - ["Olmayan dosyanın imzalı adresi", "404 NoSuchKey"]
+              - title: "Sızan adres: ne verir, ne kadar, nasıl kesilir"
+                text: >-
+                  Verdiği: sadece o nesnenin, sadece GET ile, süre bitene kadar, istediği kadar okunması. Vermediği: başka dosya, liste, yazma, silme, rolün gizli anahtarı. Süre: en çok 300 saniye. Tek bir adresi iptal eden düğme yoktur. Ya süre beklenir ya da aşağıdaki üç koldan biri kullanılır; üçü de toplu çalışır. Ürün fotoğrafında ekip süreyi bekler, çünkü fotoğraf vitrinde zaten herkese açık. Yakalamadığı: 5 dakika süren, 48 KB'lık bir dosyanın sızıntısı çıkış alarmını çalmaz (15.000 istek ≈ 720 MB ≈ 0,06 USD). Bunu kayıtlar saatler sonra gösterir: alışılmadık IP, aynı imza.
+                map:
+                  cols: [Kol, Etkisi, Bedeli]
+                  rows:
+                    - ["Süreyi beklemek", "En çok 300 saniyede kendiliğinden biter", "Yok; önce süreyi kısa tutmak gerekir"]
+                    - ["Kova politikası: s3:signatureAge", "Belirli yaştan eski imzalar reddedilir", "O yaştan eski bütün adresler kesilir; daha genç bir adres o yaşa gelene kadar çalışır. Panel yeni adres ister"]
+                    - ["Kova politikası: s3:authType = REST-QUERY-STRING", "Bütün imzalı adresler reddedilir", "İmzalı indirme ve yükleme yolu tamamen durur"]
+                    - ["Rol oturumlarını iptal (AWSRevokeOlderSessions)", "Bu rolün o ana kadarki oturumları, dolayısıyla adresleri geçersiz", "Uygulama da yeni kimlik alana kadar hiçbir AWS isteği yapamaz; son çare"]
+                code:
+                  - {code: "{ Effect: Deny, Principal: \"*\", Action: \"s3:*\", Resource: <kova>/*, Condition: { NumericGreaterThan: { \"s3:signatureAge\": 60000 } } }", tag: Ekip → S3, say: "60 saniyeden (60.000 ms) eski imzalar reddedilir. Acil durumda ekip elle yazar; aynı gün şablona da ekler, yoksa gece denetimi drift der."}
+              - title: Kovayı açma denemesi
+                text: >-
+                  BlockPublicPolicy herkese açan politikayı anında reddeder. RestrictPublicBuckets da açıkken böyle bir politika dışarıya işlemez. İki ayar kapatılıp politika yazılırsa Access Analyzer dışa açık kovayı bulur, gece denetimi şablonla farkı ve imzasız GET'in 200 döndüğünü görür. Yakalamadığı: Access Analyzer imzalı adresleri görmez, çünkü onlar bir ayar değil; gece denetimi gün içindeki kısa bir açılmayı kaçırabilir (Access Analyzer onu daha erken yakalar). Onarım: ayarlar şablondan geri gelir; açık kaldığı süre için kayıtlardan hangi IP'lerden ne indirilmiş diye sayılır.
+                code:
+                  - {code: "aws cloudformation detect-stack-drift --stack-name magaza", tag: Index ve plan kontrolü → CloudFormation, say: "Gerçek ayarları şablonla karşılaştırır."}
+              - title: Olmayan dosya
+                text: >-
+                  İmza adresi dosyaya bakmaz, çünkü bakmak S3'e fazladan bir istek demektir; imzalamanın hızlı olması bundan gelir. Tarayıcı 404 alır, çünkü rolde listeleme izni var. Liste izni olmasaydı S3 "yok" yerine 403 derdi. Ne zaman: gece denetimi her gece sayar; 404 oranı alarmı görsel adresini 5 dakikada izler. Yakalamadığı: tek bir satıcının birkaç kez 404 alması; sayı alarma az gelir. Onarım: katalog ekibi fotoğrafı yükler; tarayıcı 404 cevabını saklamadığı için fotoğraf bir sonraki istekte görünür.
+              - title: Geç fark edilen kötü fotoğraf
+                text: >-
+                  Görsel kontrol işi biçimi kontrol eder, içeriği değil: 480×480 ama yanlış ürünün JPEG'i kontrolden geçer. Bir günden sonra fark edilirse kural eski sürümü çoktan silmiştir. Ne zaman: görsel kontrol işi her yeni dosyada, saniyeler içinde; temizlik kuralı 1 gün sonra. Yakalamadığı: içerik hataları. Onarım: katalog ekibi doğru fotoğrafı yeniden yükler; aynı anahtar değişmediği için kartlar en çok 5 dakikada yeni fotoğrafı gösterir. Bir günden uzun geri dönüş gerekirse ekip kuralın süresini uzatır; bedeli daha çok sürümün faturası.
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
