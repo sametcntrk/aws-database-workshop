@@ -9440,55 +9440,828 @@ steps:
           - ["sk (sort key)", "Aynı partition'daki item'ları ayıran ve sıralayan alan. Burada ITEM#<ürün no>."]
           - [WRU / RRU, "Yazma ve okuma birimleri. On-demand tabloda her istek kullandığı birim kadar ödenir."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde sepet tablosu için hazırlık
+      t1:
+        title: Önceden ne vardı? Sepet satırları tabloya nasıl geldi, fiyatları nereden kopyalandı?
         intro: >-
-          "Sepete ekle" butonuna hiç basılmadan, sepet tablosu sayfaların sorularına göre kurulur. Aşağıdaki beş adım bu
-          hazırlığın sırasıdır.
-        text:
-          - title: Önce erişim kalıpları yazılır
-            text: >-
-              DynamoDB'de tasarım sorulardan başlar: "bu ürünü sepete ekle", "bu ziyaretçinin sepetini getir", "bu ürünü
-              çıkar". Her biri tek bir anahtar işlemi olmalı; tabloyu tarayan (Scan) bir sayfa olmamalı.
-            code: |-
-              UpdateItem  pk = CART#<ziyaretçi>, sk = ITEM#<ürün>   → ekle / artır
-              Query       pk = CART#<ziyaretçi>                    → bütün sepet
-          - title: Anahtar yükü dağıtacak şekilde seçilir
-            text: >-
-              pk her ziyaretçide farklı olduğu için yük binlerce partition'a dağılır. Bir partition saniyede en fazla 3.000 okuma
-              ve 1.000 yazma birimi alır; herkesin aynı pk'ye yazdığı bir tasarım (ör. "SEPETLER") tek partition'ı boğar.
-            code: |-
-              --key-schema AttributeName=pk,KeyType=HASH AttributeName=sk,KeyType=RANGE
-          - title: Kapasite modu trafiğe göre seçilir
-            text: >-
-              Trafik tahmin edilemiyorsa ya da ani zirveler varsa on-demand seçilir: kapasite planlanmaz, istek başına ödenir.
-              Trafik düzgün ve tahmin edilebilirse provisioned + auto scaling daha ucuz olabilir.
-            code: |-
-              --billing-mode PAY_PER_REQUEST
-          - title: Yazma tek komutla yapılır
-            text: >-
-              "Varsa artır, yoksa oluştur" için UpdateItem + ADD kullanılır; önce GetItem sonra PutItem yapılmaz. ADD atomiktir:
-              aynı anda gelen iki ekleme sırayla uygulanır, biri kaybolmaz. Kural varsa (en fazla 5) ConditionExpression olarak
-              aynı komuta eklenir (Adım 14).
-            code: |-
-              UpdateExpression = "ADD qty :q SET #n = :n, unit_price = :p, expires_at = :e"
-          - title: Terk edilen sepet kendiliğinden silinir
-            text: >-
-              Her item'a bir silinme zamanı (expires_at) yazılır ve tabloda TTL açılır. DynamoDB süresi geçen item'ları ek yazma
-              ücreti almadan siler; silme birkaç gün gecikebileceği için okurken expires_at ayrıca kontrol edilir.
-      feed:
-        title: Veri nereden geliyor?
-        writes: Uygulama. Ürün sayfasındaki "sepete ekle", sepet sayfasındaki silme ve adet değiştirme.
-        reads: Uygulama. Sepet sayfası, başlıktaki sepet sayacı ve ödeme adımı.
-        kind: >-
-          Uygulama orkestrasyonu. DynamoDB başka bir veritabanından kendiliğinden veri çekmez. Kendi değişikliklerini ise
-          DynamoDB Streams ile dışarı verebilir.
-        with: >-
-          Sepet tek başına çalışmaz. Ürünün adı ve fiyatı katalogdan (DocumentDB) gelir ve item'a kopya olarak yazılır. Ödeme
-          anında sipariş ilişkisel veritabanına (Aurora) tek bir transaction ile yazılır ve stok orada düşer.
-        best: >-
-          Sepet hızlı ve bağımsız bir anahtar-değer tablosunda durur; fiyat ve stok ödeme anında asıl kayıttan doğrulanır.
-          "Sepetini unuttun" hatırlatması gibi işler için DynamoDB Streams'i bir AWS Lambda fonksiyonu okur.
+          "Add to cart"a basmadan önce dbws-cart tablosu zaten dolu. Her ziyaretçinin sepeti kendi partition'ı (pk =
+          CART#<kimlik>), sepetteki her ürün bir satır (sk = ITEM#<ürün>). Her satırda adet (qty), ürünün adı (name), eklendiği
+          andaki fiyatı (unit_price) ve silinme zamanı (expires_at) var. Burada bu tablonun gerçek bir sistemde nasıl kurulduğunu
+          ve nasıl beslendiğini görüyorsun: tablonun sepet sayfalarının sorularına göre tasarımı, adın ve fiyatın neden katalogdan
+          kopyalandığı ve katalogda fiyat değişince ne olduğu, eski sitenin açık sepetlerinin yeni tabloya bir kez nasıl
+          taşındığı, ödemeden sonra sepetin nasıl boşaldığı, giriş yapan ziyaretçinin iki sepetinin nasıl birleştiği, terk
+          edilen sepetin nasıl kendiliğinden silinip arşive gittiği ve bir şey bozulursa nasıl onarıldığı. Önce zincirin
+          bileşenleri, sonra bir simülasyon, sonra dört aşama (tasarım, ilk yükleme, sürekli besleme, tutarlılık ve onarım).
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1, T anı ve eski site", "t-1: sayfanın açılmasından (t0) önceki zaman. T anı: yeni sitenin ve sepet tablosunun yayına girdiği an; bu bölümde 30 Eki 20:00 (temsilî). Eski site: mağazanın T'den önceki sitesi; sepetleri kendi veritabanında tutuyordu: şifresiz gezenin sepetini aynı lm_visitor çereziyle, giriş yapmış müşterininkini müşteri numarasıyla. Bu bölümde \"şimdi\" (t0) 31 Eki 10:00 (temsilî)."]
+          - ["Ekip", "Mağazanın sistemini kuran ve işleten mühendisler. Bir kez çalışan kurulum komutlarını onlar gönderir, alarmlara onlar bakar."]
+          - ["Ziyaretçi, müşteri ve giriş", "Ziyaretçi: bir tarayıcı; kimliği lm_visitor çerezinde (ör. 7f3a…). Şifresiz gezen ziyaretçinin sepeti tarayıcıya bağlıdır: CART#7f3a…. Müşteri: kayıtlı kişi, numarası C00009 gibi. Ziyaretçi şifreyle giriş yapınca sepeti müşterinin sepetine (CART#C00009) taşınır. Sen bu görevde şifreyle giriş yapmadın; senin sepetin tarayıcına bağlı. Görevin başında seçtiğin müşteri (persona) ikinci bir çerezde, lm_persona'da durur; sipariş o müşteri adına yazılır (ör. C00007), ama sepet yine tarayıcının sepetidir."]
+          - ["Tablo, item, pk ve sk", "DynamoDB'de tablo item'lardan (kayıtlardan) oluşur; burada her item bir sepet satırı: bir sepetteki bir ürün. pk (partition key): satırın hangi partition'da (çekmecede) durduğu, burada sepetin kimliği. sk (sort key): çekmecenin içindeki kartın adı, burada ürün. pk + sk birlikte satırın tam adresidir; aynı adrese ikinci bir satır yazılamaz."]
+          - ["Partition ve sıcak partition", "Partition: tablonun parçalarından biri; DynamoDB satırları pk'ye göre parçalara dağıtır. Bir partition saniyede en fazla 1.000 yazma ve 3.000 okuma birimi alır. Sıcak partition (hot partition): yükün tek bir parçaya yığılması; bütün kasalar boşken tek kasada kuyruk olması gibi."]
+          - ["Index (GSI)", "Global secondary index: tablonun başka bir alana göre dizilmiş ikinci kopyası; kitabın sonundaki dizin gibi. Bu tabloda index yok: her soru sepetin kimliğiyle sorulur. \"Bu ürün hangi sepetlerde?\" sorusu sorulsaydı ürüne göre bir index gerekirdi."]
+          - ["UpdateItem, ADD ve SET", "UpdateItem: tek bir satırı adresiyle (pk + sk) güncelleyen komut; satır yoksa oluşturur. ADD qty 1: adedi 1 artır, satır yoksa 1 ile başlat. SET: bir alana değer yaz (ad, fiyat, silinme zamanı). İkisi tek komutta ve atomik (bölünmez: yarısı olmaz, araya başka yazma giremez): aynı anda gelen iki ekleme ikisi de sayılır."]
+          - ["ConditionExpression (koşul)", "Yazmaya eklenen koşul: koşul tutmazsa DynamoDB hiçbir şey yazmaz ve ConditionalCheckFailed​Exception döner. Kontrol ve yazma tek adımdır. Reddedilen yazma da en az 1 yazma birimi harcar. attribute_not_exists(pk): \"bu adreste satır yoksa\"."]
+          - ["TransactWriteItems", "Birlikte yapılması gereken yazmaların paketi (en fazla 100 satır): ya hepsi olur ya hiçbiri. Paketteki bir koşul tutmazsa paketin tamamı iptal edilir. Her yazma normalin iki katı birim harcar."]
+          - ["Anlık kopya (snapshot)", "Bir bilginin belli bir andaki hâlinin başka bir yere yazılması; rafta etiketin fotoğrafını çekmek gibi. Sepet satırındaki name ve unit_price, ürünün sepete eklendiği andaki adı ve fiyatıdır; katalog sonradan değişirse kopya kendiliğinden değişmez."]
+          - ["TTL ve expires_at", "TTL (time to live): satırın ömrü. expires_at: satırın silinme zamanı, saniye cinsinden bir sayı (Unix zamanı: 1 Ocak 1970'ten beri geçen saniye). Tabloda TTL açıksa DynamoDB zamanı geçen satırı kendiliğinden ve ücretsiz siler; silme genellikle birkaç gün içinde olur, o zamana kadar satır okumalarda görünür. Bu tabloda ömür, satırın son yazıldığı andan 24 saat."]
+          - ["WRU, RRU, on-demand ve warm throughput", "WRU: 1 KB'a kadar bir satırı yazmanın birimi. RRU: 4 KB'a kadar okumanın birimi; güçlü tutarlı (en son yazılanı kesin gören) okuma 1 RRU; sonunda tutarlı (eventually consistent: bir saniye önceki yazmayı kaçırabilen) okuma 0,5 RRU (Adım 15). On-demand: kapasite ayarlamazsın, kullandığın birim kadar ödersin. Warm throughput: tablonun beklemeden karşılayabileceği hız; yeni bir on-demand tablo saniyede 4.000 yazma ve 12.000 okuma birimiyle başlar, ekip büyük bir kampanyadan önce bu değeri yükseltebilir (ön ısıtma, ek ücretli)."]
+          - ["DynamoDB Streams, OLD_IMAGE ve userIdentity", "DynamoDB Streams: tabloda değişen her satırın sırayla tutulan kaydı; 24 saat saklanır. OLD_IMAGE: kayda satırın değişmeden önceki hâli konur; silinen bir satırın içeriği böylece kaybolmaz. userIdentity: kaydı kimin yaptığı; TTL'in sildiği satırda \"Service · dynamodb.amazonaws.com\" yazar, Uygulama'nın sildiğinde bu alan yoktur."]
+          - ["Lambda, olay süzgeci ve DLQ", "Lambda: bir olay gelince kısa bir kodu çalıştıran AWS servisi. Olay süzgeci (event filtering): Lambda'nın sadece kurala uyan kayıtlarla çalışması; örneğin sadece TTL silmeleri. DLQ (hata kuyruğu): işlenemeyen kaydın yerini (akıştaki sıra numarasını) saklayan Amazon SQS kuyruğu."]
+          - ["Sipariş zinciri: COMMIT, outbox, WAL, DMS, Kinesis", "COMMIT: siparişin yazmalarını kalıcı yapan son komut; ya hepsi kaydolur ya hiçbiri. Outbox: siparişle aynı pakette yazılan \"sipariş verildi\" satırı; giden mektup kutusu gibi. WAL: Aurora'nın her değişikliği sırayla yazdığı defter. CDC (change data capture): bu defterdeki değişiklikleri yakalayıp başka bir yere taşımak; AWS DMS bunu yapan servistir, \"CDC görevi\" onun sürekli çalışan işidir. Kinesis Data Streams: olayların sırayla konduğu ve 24 saat saklandığı bant. Akışlar bir olayı kaybetmez ama bazen iki kez verir (en az bir kez teslim)."]
+          - ["Katalog: DocumentDB, shop.products ve ürün dokümanı sözleşmesi", "DocumentDB: ürünlerin durduğu doküman veritabanı (Adım 1, 3, 9). shop.products: ürün dokümanlarının koleksiyonu; her ürün bir doküman (_id = ürün no). Ürün dokümanı sözleşmesi: dokümanda hangi alanların, hangi türde olacağını yazan liste (Adım 9); name metin, price sıfırdan büyük bir sayı. Katalog yönetim servisi: katalog ekibinin ürün ve fiyat ekranlarının arka ucu; dokümanları o yazar. Primary: kataloğun yazılan ana sunucusu; replica: kopyası."]
+          - ["S3: taşıma klasörü ve olay arşivi", "S3: AWS'in dosya deposu; dosyalar bir kovada (bucket) durur. Taşıma klasörü: eski sitenin açık sepetlerini bir kez bıraktığı yer. Olay arşivi (lm-event-archive): mağazanın olaylarının yıllarca saklandığı kova (Adım 10); terk edilen sepet satırları cart-abandoned/ altına yazılır."]
+          - ["CloudWatch ve sürekli yedek (PITR)", "CloudWatch: AWS'in ölçüm ve alarm servisi. Bu bölümdeki ölçü adları: ThrottledRequests (kısılan istek), ConditionalCheckFailed​Requests (koşulu tutmayan yazma), TimeToLive​DeletedItemCount (TTL'in sildiği satır), IteratorAge (tüketicinin akışın ne kadar gerisinde olduğu). PITR (point-in-time recovery): tabloyu son 35 gün içindeki herhangi bir saniyeye, yeni bir tablo olarak geri açabilme."]
+          - ["Kesit, temsilî, Örnek durum ve Olsaydı", "Kesit: simülasyonda gösterilen satırlar; burada t0'daki 5 satır (ve aşamalar sırasında silinen 2 satır). Temsilî: canlı sistemden gelmeyen, anlatım için seçilmiş değer. \"Örnek durum\" diye başlayan kareler bu zincirde yaşanan durumlar, \"Olsaydı\" diye başlayanlar yaşanmayan ama yaşansaydı ne olacağını gösteren durumlar."]
+          - ["Kod kartlarındaki sözcükler", "aws dynamodb create-table: tablo kuran komut; --key-schema anahtarı, HASH partition key'i (DynamoDB değeri karıştırıp (hash) partition'ı seçer), RANGE sort key'i (sıralı aralık), --billing-mode PAY_PER_REQUEST on-demand'i, --stream-specification değişiklik akışını açar. update-time-to-live: TTL'i açar. update-continuous-backups: sürekli yedeği açar. put_item: satırı yaz (aynı adreste varsa üzerine). :q, :n, :p, :e: komuta ayrıca verilen değerlerin yer tutucuları (adet, ad, fiyat, silinme zamanı); #n: name alanının takma adı, çünkü name DynamoDB'nin ayrılmış sözcüklerinden biri. json.loads, base64.b64decode: akıştan gelen paketi okunur hâle getirmek. update_item, delete_item: güncelle, sil. query(pk = …): bir sepetin bütün satırlarını oku. ConsistentRead=True: güçlü tutarlı oku. FilterExpression, Attr('expires_at').gt(now): okunan satırlardan sadece silinme zamanı gelmemiş olanları ver. batch_writer(): çok satırı paket paket silen ya da yazan yardımcı. transact_write_items: iş paketi. find(…, {price: 1}): katalogdan sadece fiyatı oku. BEGIN / COMMIT: Aurora'da iş paketinin başı ve sonu. now(): şu anki zaman (saniye). min(a, b): ikisinden küçüğü. for … in …: listedeki her biri için. Records, OldImage: Lambda'nın akıştan aldığı kayıt paketi ve silinen satırın içeriği. put_object: S3'e dosya yaz."]
+          - ["Diğer adlar", "Uygulama: mağazanın arka uç programı (EC2 sunucusunda); tarayıcıdan gelen isteği alır, veritabanına komutu o gönderir. EC2: AWS'in kiralık sanal sunucusu. Aurora PostgreSQL: siparişlerin ve stoğun asıl kaydının durduğu ilişkisel veritabanı (Adım 22–25, 30, 33). boto3: AWS'in Python kütüphanesi; Uygulama DynamoDB'ye onunla konuşur."]
+          - ["Görev adımları", "\"Adım 14\", \"Adım 25\" gibi adlar bu görevin (mağazadaki 37 adımın) adımlarıdır. Simülasyonun sayacındaki \"Adım 1 / 25\" ise simülasyonun karesidir."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra"
+          sütunu veriyi kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim kodumuz" etiketli
+          parçaları mağazanın ekibi yazar. Sayfaların adına sepet tablosuna yazan program Uygulama'dır (ekle, çıkar, birleştir, ödemeden
+          sonra boşalt); ayrıca iki yardımcı yazar: T anında eski sitenin sepetlerini bir kez taşıyan taşıma işi ve sipariş zincirinden
+          gelen olayla sepeti ikinci kez boşaltan sepet tüketicisi. Satırdaki ad ve fiyat katalogdan (DocumentDB) kopyadır; silinen
+          satırları TTL siler ve değişiklik akışıyla arşive gider. Aynı parçalar aşağıdaki simülasyonda birer kutu: üst sırada
+          yazanlar, sonra katalog ve sepet tablosu, sonra ilk yükleme, sonra sipariş zinciri, sonra arşive giden yol, altta yandaki
+          işler.
+        inventory:
+          - id: web
+            name: Uygulama (mağaza sayfaları)
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucusunda)
+            does: >-
+              Ürün sayfasını DocumentDB'deki ürün dokümanıyla çizer; "sepete ekle"de o dokümandaki ad ve fiyatı satıra kopyalayıp
+              tek UpdateItem ile yazar (ADD adet, SET ad, fiyat, silinme zamanı; en fazla 5 koşuluyla). Sepeti Query ile okur.
+              Girişte iki sepeti birleştirir. Ödemede fiyatı katalogdan yeniden okur, siparişi Aurora'ya yazar, COMMIT'ten sonra
+              sepeti boşaltır.
+            box: "Satırı tek UpdateItem ile yazar; ödemede fiyatı yeniden kontrol eder, sonra sepeti boşaltır."
+            phases: [2, 3, 4]
+            before: [Tarayıcı (ürün ve sepet sayfaları), docdb]
+            after: [dynamodb, aurora]
+          - id: admin
+            name: Katalog yönetim servisi
+            kind: code
+            what: arka ofis programı (ürün ve fiyat ekranlarının arka ucu)
+            does: >-
+              Katalog ekibinin ürün ve fiyat değişikliklerini ürün dokümanı sözleşmesine göre kontrol eder ve shop.products'a yazar
+              (Adım 1, 9). Sepetlere dokunmaz: açık sepetlerdeki kopya fiyat değişmez, ödemede kontrol edilir.
+            box: "Fiyatı ve adı katalogda değiştirir; sepetlere dokunmaz."
+            phases: [3, 4]
+            before: Katalog ekibi (ürün ekranı)
+            after: docdb
+          - id: docdb
+            name: DocumentDB (shop.products)
+            kind: aws
+            what: katalog veritabanı (bir primary, bir replica)
+            does: >-
+              Ürünlerin asıl bilgisi: ad (name) ve fiyat (price) burada, ürün dokümanı sözleşmesine uygun. Sepet satırındaki ad ve
+              fiyatın kaynağı. Ödemede güncel fiyat buradan, primary'den okunur.
+            box: "Ad ve fiyatın asıl yeri; sepetteki kopyanın kaynağı."
+            phases: [1, 3, 4]
+            before: [admin, "İçe aktarma işi (Adım 1)"]
+            after: web
+          - id: dynamodb
+            name: DynamoDB (dbws-cart)
+            kind: aws
+            what: anahtar-değer veritabanı, on-demand
+            does: >-
+              Sepet başına bir partition (pk = CART#<ziyaretçi ya da müşteri>), ürün başına bir satır (sk = ITEM#<ürün>): qty,
+              name, unit_price, expires_at. TTL açık: zamanı geçen satırı kendisi siler. Değişiklik akışı (Streams) ve sürekli
+              yedek (PITR) açık.
+            box: "Sepet başına partition, ürün başına satır; TTL 24 saat."
+            phases: [1, 2, 3, 4]
+            before: [web, migrate, cartcons]
+            after: [streams, pitr, "Sepete ekle ve sepet sayfası (t0)"]
+          - id: staging
+            name: S3 (taşıma klasörü)
+            kind: aws
+            what: Amazon S3 bucket'ı
+            does: >-
+              T anında eski sitenin son 24 saatte değişmiş açık sepetlerini bıraktığı tek dosya burada durur. Taşıma işi buradan
+              okur; dosya iş bitse de silinmez, iş yeniden çalışabilir.
+            box: "Eski sitenin açık sepetleri, T anında tek dosya."
+            phases: [2, 4]
+            before: Eski site (T anında)
+            after: migrate
+          - id: migrate
+            name: Sepet taşıma işi
+            kind: code
+            what: bir kez çalışan program (AWS Lambda)
+            does: >-
+              Dosyadaki her satırı yeni tabloya koşullu PutItem ile yazar: sadece o adreste satır yoksa (canlı satır kazanır).
+              Silinme zamanını satırın eski sitedeki son değişikliğinden sayar; zamanı geçmiş satırı hiç yazmaz. Sayılarını
+              CloudWatch'a yazar.
+            box: "Eski satırları koşullu yazar; kalan ömürle, süresi dolanı atlar."
+            phases: [2, 4]
+            before: staging
+            after: [dynamodb, monitor]
+          - id: aurora
+            name: Aurora PostgreSQL (shop)
+            kind: aws
+            what: sipariş veritabanı
+            does: >-
+              Ödemede sipariş, kalemleri (eklendiği değil, ödeme anındaki fiyatla), stok düşüşü ve "sipariş verildi" satırı
+              (outbox) tek iş paketinde yazılır (Adım 22–25).
+            box: "Sipariş + kalemler + stok + outbox, tek iş paketi."
+            phases: [3]
+            before: web
+            after: wal
+          - id: wal
+            name: Aurora'nın değişiklik kaydı (WAL)
+            kind: aws
+            what: Aurora'nın içinde, bir ayarla açılır
+            does: COMMIT edilen her değişikliği sırayla yazar. DMS bu kaydı okur.
+            box: "Her COMMIT'i sırayla yazar; DMS buradan okur."
+            phases: [3]
+            before: aurora
+            after: dms
+          - id: dms
+            name: AWS DMS (CDC görevi)
+            kind: aws
+            what: AWS'in değişiklik yakalama servisi
+            does: >-
+              Değişiklik kaydından outbox'a eklenen satırları okur ve her birini Kinesis akışına bir kayıt olarak koyar (Adım 10,
+              11, 33'teki yolun aynısı).
+            box: "Outbox'a eklenen her satırı akışa koyar."
+            phases: [3]
+            before: wal
+            after: kinesis
+          - id: kinesis
+            name: Kinesis Data Streams (lm-order-events)
+            kind: aws
+            what: olay akışı
+            does: >-
+              Sipariş olaylarını sırayla saklar (24 saat). Aynı akışı başka tüketiciler de okur (etkinlik, graf, canlı sıralama);
+              her biri kendi hızında.
+            box: "Sipariş olaylarını sırayla saklar; her tüketici kendi hızında."
+            phases: [3, 4]
+            before: dms
+            after: cartcons
+          - id: cartcons
+            name: Sepet tüketicisi (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod
+            does: >-
+              Sipariş olayındaki tarayıcı kimliği (visitor_id) ve ürünlerle sepetteki satırları DeleteItem ile ikinci kez siler.
+              Uygulama sepeti zaten boşalttıysa bir şey değişmez; boşaltma yarım kaldıysa tamamlar.
+            box: "Sipariş olayıyla sepeti ikinci kez boşaltır; iki kez silmek zararsız."
+            phases: [3, 4]
+            before: kinesis
+            after: [dynamodb, dlq]
+          - id: streams
+            name: DynamoDB Streams (dbws-cart)
+            kind: aws
+            what: sepet tablosunun değişiklik akışı (OLD_IMAGE)
+            does: >-
+              Tabloda değişen her satırın kaydını 24 saat saklar; silinen satırın içeriği de kayıtta (OLD_IMAGE). TTL'in sildiği
+              satırın kaydında userIdentity = Service · dynamodb.amazonaws.com yazar. Tablonun kapasitesini kullanmaz.
+            box: "Her değişikliğin kaydı, 24 saat; TTL silmeleri ayrı tanınır."
+            phases: [1, 3, 4]
+            before: dynamodb
+            after: abandon
+          - id: abandon
+            name: Terk edilen sepet tüketicisi (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod, olay süzgeciyle
+            does: >-
+              Süzgeç sayesinde sadece TTL silmeleriyle çalışır; Uygulama'nın sildiği satırlar (ödeme, çıkarma) ona hiç gelmez.
+              Silinen satırın içeriğini (sepet, ürün, adet, fiyat) olay arşivine yazar.
+            box: "Sadece TTL silmeleri: silinen satırı arşive yazar."
+            phases: [3, 4]
+            before: streams
+            after: [archive, dlq]
+          - id: archive
+            name: S3 (olay arşivi)
+            kind: aws
+            what: Amazon S3 bucket'ı (lm-event-archive)
+            does: >-
+              Mağazanın olayları yıllarca burada durur (Adım 10). Terk edilen sepet satırları cart-abandoned/ altına gün gün
+              yazılır; "hangi ürünler sepette kalıp alınmıyor?" raporu buradan okur.
+            box: "Terk edilen sepet satırları, yıllarca."
+            phases: [3, 4]
+            before: abandon
+            after: Raporlar (analiz)
+          - id: dlq
+            name: Hata kuyruğu (SQS DLQ)
+            kind: aws
+            what: Amazon SQS kuyruğu
+            does: >-
+              İki tüketicinin tekrar tekrar işleyemediği bir kaydın yerini (akıştaki sıra numarasını) saklar; akış durmaz, ekip
+              kaydı sonra işler.
+            box: "İşlenemeyen kaydın yerini saklar; akış durmaz."
+            phases: [4]
+            before: [cartcons, abandon]
+            after: Ekip (inceler, yeniden işletir)
+          - id: monitor
+            name: CloudWatch alarmları
+            kind: aws
+            what: AWS'in izleme servisi
+            does: >-
+              Sepet tablosunda kısılan istekleri, koşulu tutmayan yazmaların bütün eklemelere oranını, TTL silmelerini; iki
+              tüketicinin gecikmesini (IteratorAge) ve DLQ'yu; taşıma işinin sayılarını izler. Eşik aşılınca ekibe alarm verir.
+            box: "Kısma, ret oranı, TTL silmeleri, gecikme, DLQ, taşıma sayıları."
+            phases: [2, 4]
+            before: [dynamodb, migrate, cartcons, abandon, dlq]
+            after: Ekip (alarm)
+          - id: pitr
+            name: DynamoDB sürekli yedeği (PITR)
+            kind: aws
+            what: DynamoDB'nin yedekleme özelliği
+            does: >-
+              Tabloyu son 35 gün içindeki herhangi bir saniyeye, yeni bir tablo olarak geri açar. Yanlış bir toplu yazmadan sonra
+              doğru satırlar oradan geri kopyalanır.
+            box: "Tabloyu geçmişteki bir saniyeye yeni bir tablo olarak açar."
+            phases: [1, 4]
+            before: dynamodb
+            after: Ekip (geri yükleme)
+        sim_title: "Simülasyon: sepet satırları tabloya nasıl geldi, fiyatları nereden kopyalandı?"
+        sim:
+          kind: pipeline
+          title: Uygulama → dbws-cart (ad ve fiyat katalogdan) ← eski sitenin sepetleri; ödeme → sipariş zinciri → sepet boşalır; TTL → Streams → arşiv
+          caption: >-
+            DynamoDB kutusundaki ilk tablo kesit: t0'daki 5 satır, üç sepet (09bd…, senin tarayıcın 7f3a…, c41e…); aşamalar
+            sırasında silinen 2 satır da (a812…'in terk edilen satırı ve senin ödediğin Akıllı Saat) bir süre görünüyor. Tabloda
+            binlerce sepet var. İkinci tablo kesitin dışındaki iki sepet: giriş yapan bir ziyaretçinin sepeti müşterinin sepetiyle
+            birleşiyor. Ürün adları t0'daki gibi kısaltılmış (gerçek name alanında "Ege Deri Ceket 105" yazar). expires_at
+            sütunu silinme zamanı; tabloda saniye olarak bir sayıdır, burada okunur hâli. Önce tablonun kurulması ve eski sitenin
+            sepetlerinin taşınması, sonra eklemeler, bir fiyat değişikliği, bir giriş, bir ödeme ve terk edilen bir satır, en
+            sonda tutarlılık ve onarım oynuyor. 4. aşamada "Örnek durum" diye başlayan kareler bu zincirde yaşanan durumlar;
+            "Olsaydı" diye başlayanlar yaşanmadı, yaşansaydı ne olacağını gösteriyor. Canlı sistemden: ürünlerin bugünkü adları
+            ve fiyatları (katalog), tablo ayarları (on-demand, TTL expires_at, PITR), birim bedelleri (bir ekleme 1 WRU, sepetin
+            güçlü okuması 1 RRU). Temsilî: T anı (30 Eki 20:00), şimdi (31 Eki 10:00), sepet kimlikleri, saatler, Deri Ceket'in
+            eski fiyatı (1.549,00), sipariş no O004812 ve müşterisi C00007, müşteri C00009, dosya adları ve sayılar. Son karede
+            tablo, "Add to cart"a bastığın andaki (t0) hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım}
+          rows:
+            - {id: writers, title: "Yazanlar: Uygulama (sepet) ve Katalog yönetim servisi (ad ve fiyat)"}
+            - {id: stores, title: "Katalog (kopyanın kaynağı) ve sayfanın yazdığı sepet tablosu"}
+            - {id: load, title: "İlk yükleme: eski sitenin açık sepetleri", flow: true}
+            - {id: orders, title: "Ödemeden sonra: sipariş zinciri sepeti ikinci kez boşaltır", flow: true}
+            - {id: after, title: "Terk edilen sepet: TTL silmesi → değişiklik akışı → arşiv", flow: true}
+            - {id: helpers, title: "Yandaki işler: hata kuyruğu, izleme, yedek", side: true}
+          summary: >-
+            Tabloyu sepet sayfalarının soruları belirledi: sepet başına partition, ürün başına satır, satır başına 24 saatlik ömür,
+            en fazla 5 adet kuralı. Eski sitenin açık sepetleri T anında bir kez, kalan ömürleriyle ve sadece boş adreslere taşındı.
+            Sonra her eklemede Uygulama ürünün adını ve fiyatını katalogdan kopyaladı; katalogda fiyat değişince kopya değişmedi,
+            ödemede kontrol edilir. Ödenen satırı Uygulama sildi, sipariş zinciri ikinci kez sildi; zamanı geçen satırı TTL sildi
+            ve arşive gitti. Giriş yapan ziyaretçinin satırı müşterinin sepetine tek paketle taşındı (kesitin dışında). Son durum: kesitte 5 satır, t0'daki simülasyonun başladığı durum.
+          boxes:
+            - id: web
+              row: writers
+            - id: admin
+              row: writers
+            - id: docdb
+              row: stores
+              tables:
+                - name: "shop.products (kesit: t0'daki satırların ürünleri; katalogda 200 ürün)"
+                  cols: [_id, name, price]
+                  money: [price]
+                  rows:
+                    - {_id: P0105, name: Deri Ceket, price: 1391.99}
+                    - {_id: P0176, name: Bluetooth Hoparlör, price: 944.01}
+                    - {_id: P0131, name: Mekanik Klavye, price: 3758.21}
+                    - {_id: P0021, name: Akıllı Saat, price: 1050.63}
+                    - {_id: P0066, name: Powerbank, price: 951.92}
+            - id: dynamodb
+              row: stores
+              tables:
+                - name: "dbws-cart (kesit: t0'daki 5 satır, 3 sepet; tabloda binlerce sepet)"
+                  cols: [pk, "sk · name", qty, unit_price, expires_at]
+                  money: [unit_price]
+                  rows:
+                    - {key: b1, pk: "CART#09bd…", "sk · name": "ITEM#P0105 Deri Ceket", qty: 1, unit_price: 1549.00, expires_at: "31 Eki 21:15", hidden: true}
+                    - {key: b2, pk: "CART#09bd…", "sk · name": "ITEM#P0176 Bluetooth Hoparlör", qty: 4, unit_price: 944.01, expires_at: "31 Eki 21:22", hidden: true}
+                    - {key: s0, pk: "CART#7f3a… (sen)", "sk · name": "ITEM#P0021 Akıllı Saat", qty: 1, unit_price: 1050.63, expires_at: "1 Kas 09:40", hidden: true}
+                    - {key: s1, pk: "CART#7f3a… (sen)", "sk · name": "ITEM#P0131 Mekanik Klavye", qty: 2, unit_price: 3758.21, expires_at: "1 Kas 09:52", hidden: true}
+                    - {key: a1, pk: "CART#a812…", "sk · name": "ITEM#P0090 Sırt Çantası", qty: 1, unit_price: 81.52, expires_at: "31 Eki 08:30", hidden: true}
+                    - {key: c1, pk: "CART#c41e…", "sk · name": "ITEM#P0021 Akıllı Saat", qty: 1, unit_price: 1050.63, expires_at: "31 Eki 19:10", hidden: true}
+                    - {key: c2, pk: "CART#c41e…", "sk · name": "ITEM#P0066 Powerbank", qty: 3, unit_price: 951.92, expires_at: "1 Kas 08:40", hidden: true}
+                - name: "kesitin dışında: giriş yapan ziyaretçi 5e21… ve müşteri C00009"
+                  cols: [pk, "sk · name", qty, unit_price, expires_at]
+                  money: [unit_price]
+                  rows:
+                    - {key: m0, pk: "CART#C00009", "sk · name": "ITEM#P0142 Hava Temizleyici", qty: 1, unit_price: 2693.65, expires_at: "31 Eki 18:05", hidden: true}
+                    - {key: m1, pk: "CART#5e21…", "sk · name": "ITEM#P0044 Bulut Mimarisi", qty: 1, unit_price: 2651.39, expires_at: "1 Kas 08:45", hidden: true}
+                    - {key: m2, pk: "CART#C00009", "sk · name": "ITEM#P0044 Bulut Mimarisi", qty: 1, unit_price: 2651.39, expires_at: "1 Kas 09:20", hidden: true}
+            - id: staging
+              row: load
+              tables:
+                - name: "taşıma klasörü (dosya adı temsilî)"
+                  cols: [dosya, içinde]
+                  rows:
+                    - {key: st1, dosya: "eski-site-sepetler/2026-10-30T20-00.json", içinde: "son 24 saatte değişmiş açık sepet satırları", hidden: true}
+            - id: migrate
+              row: load
+            - id: aurora
+              row: orders
+              tables:
+                - name: "orders + outbox (kesit: senin siparişin)"
+                  cols: [order_id, customer_id, visitor_id, "items · unit_price"]
+                  money: []
+                  rows:
+                    - {order_id: O004812, customer_id: C00007, visitor_id: "7f3a…", "items · unit_price": "P0021 × 1 · 1.050,63", hidden: true}
+            - id: wal
+              row: orders
+            - id: dms
+              row: orders
+            - id: kinesis
+              row: orders
+            - id: cartcons
+              row: orders
+            - id: streams
+              row: after
+            - id: abandon
+              row: after
+            - id: archive
+              row: after
+              tables:
+                - name: "olay arşivi (kesit; dosya adı temsilî)"
+                  cols: [dosya, içinde]
+                  rows:
+                    - {key: ar1, dosya: "cart-abandoned/2026/10/31/…json", içinde: "a812… · P0090 Sırt Çantası · 1 adet · 81,52", hidden: true}
+            - id: dlq
+              row: helpers
+            - id: monitor
+              row: helpers
+            - id: pitr
+              row: helpers
+          frames:
+            - phase: 2
+              who: dynamodb
+              lit: [dynamodb, streams, pitr]
+              packet: {at: dynamodb, text: "create-table dbws-cart · key pk (HASH) + sk (RANGE) · PAY_PER_REQUEST · stream OLD_IMAGE · update-time-to-live expires_at · update-continuous-backups PITR"}
+              set: {docdb: {P0105: {price: 1549.00}}}
+              note: {dynamodb: "tablo hazır · 0 satır · on-demand · TTL: expires_at", streams: "açık · OLD_IMAGE", pitr: "açık · 35 gün"}
+              say: >-
+                Tablo henüz yok. Tasarımın (t-1 · 1) sonucu burada kuruluyor: ekip tabloyu sepet sayfalarının sorularına göre kurdu: partition key sepetin kimliği (pk), sort key
+                ürün (sk). Kapasite on-demand. TTL'i expires_at alanıyla açtı: zamanı geçen satırı DynamoDB kendisi silecek.
+                Değişiklik akışını (Streams, silinen satırın içeriğiyle) ve sürekli yedeği (PITR) de açtı.
+            - phase: 2
+              who: web
+              lit: [web, dynamodb, staging]
+              show: {staging: [st1]}
+              fresh: {staging: [st1]}
+              note: {streams: "", pitr: "", dynamodb: "", web: "T'den itibaren sepete yazıyor", staging: "1 dosya · 1.240 satır (temsilî)"}
+              say: >-
+                T anı (30 Eki 20:00, temsilî). Yeni site yayına girdi; bundan sonraki her ekleme Uygulama'dan, yeni tabloya gelecek.
+                Eski site aynı anda sepete yazmayı bıraktı ve son 24 saatte değişmiş açık sepetlerini taşıma klasörüne tek bir dosya
+                olarak bıraktı. Ziyaretçiler aynı lm_visitor çerezini taşıdığı için eski sepet aynı kimlikle bulunur.
+            - phase: 2
+              who: migrate
+              lit: [staging, migrate, dynamodb]
+              packet: {at: dynamodb, text: "put_item(Item={pk: 'CART#c41e…', sk: 'ITEM#P0066', qty: 2, name, unit_price, expires_at: 31 Eki 19:10}, ConditionExpression='attribute_not_exists(pk)')"}
+              show: {dynamodb: [a1, c1, c2, m0]}
+              fresh: {dynamodb: [a1, c1, c2, m0]}
+              set: {dynamodb: {c2: {qty: 2, expires_at: "31 Eki 19:10"}}}
+              note: {web: "", staging: "", migrate: "kesitte: okunan 4 · yazılan 3 · süresi dolmuş, atlanan 1 (29 Eki 18:30'da değişmiş bir satır) · kesitin dışında C00009'un 1 satırı da yazıldı"}
+              say: >-
+                Taşıma işi dosyayı satır satır okudu. Her satırın silinme zamanını, satırın eski sitede son değiştiği andan saydı:
+                c41e…'in sepeti 30 Eki 19:10'da değişmişti, satırları 31 Eki 19:10'a kadar yaşar. Aynı dosyadaki, 29 Eki 18:30'dan
+                beri değişmemiş bir satırın (sepetinin başka bir satırı sonra değiştiği için dosyadaydı) zamanı T'den önce dolmuştu; hiç yazılmadı. Her yazma koşulluydu: "bu adreste satır yoksa". Ziyaretçi T'den
+                sonra aynı ürünü yeni sitede eklediyse onun satırı kazanır.
+            - phase: 2
+              who: monitor
+              lit: [migrate, dynamodb, monitor]
+              note: {staging: "", migrate: "", dynamodb: "kesitte 3 satır · 2 sepet", monitor: "taşıma: okunan 1.240 = yazılan 1.180 + atlanan 52 + zaten vardı 8 · kısma 0 · hata 0 (temsilî)"}
+              say: >-
+                İş okuduğu, yazdığı, atladığı ve "adreste zaten satır vardı" diye yazmadığı satırları CloudWatch'a yazdı: okunan =
+                yazılan + atlanan + zaten vardı. 8 satırda ziyaretçi T'den sonraki ilk dakikalarda, iş o satıra gelmeden aynı ürünü yeni sitede eklemişti. Ekip birkaç sepeti
+                sepet sayfasının sorusunun aynısıyla (Query) okudu ve dosyadakiyle karşılaştırdı: eşit. Kısma olmadı.
+            - phase: 3
+              who: web
+              lit: [docdb, web, dynamodb]
+              packet: {at: dynamodb, text: "update_item(Key={pk: 'CART#09bd…', sk: 'ITEM#P0105'}, UpdateExpression='ADD qty :q SET #n = :n, unit_price = :p, expires_at = :e') · :p = 1549.00 (dokümandan) · 1 WRU"}
+              show: {dynamodb: [b1]}
+              fresh: {dynamodb: [b1]}
+              note: {monitor: "", dynamodb: "", docdb: "P0105: price 1.549,00 (o anki fiyat)"}
+              say: >-
+                30 Eki 21:15. 09bd… Deri Ceket'in sayfasını açtı; Uygulama sayfayı shop.products'taki dokümanla çizdi. "Sepete ekle"de
+                tarayıcı o dokümandaki adı ve fiyatı geri gönderdi; Uygulama ikisini satıra kopyaladı ve tek UpdateItem ile yazdı:
+                satır yoktu, adet 1 ile oluştu. Silinme zamanı yazıldığı andan 24 saat sonra: 31 Eki 21:15.
+            - phase: 3
+              who: web
+              lit: [web, dynamodb]
+              packet: {at: dynamodb, text: "ADD qty 1 (21:20) → qty 1 · ADD qty 3 (21:22) → qty 4 · koşul: qty ≤ 5 − eklenen · her biri 1 WRU"}
+              show: {dynamodb: [b2]}
+              fresh: {dynamodb: [b2]}
+              note: {docdb: ""}
+              say: >-
+                09bd… sonra Bluetooth Hoparlör'ü önce 1, iki dakika sonra 3 adet ekledi. İkinci komut satırı okumadan adedi 3 artırdı
+                ve 4 yaptı; silinme zamanını da yeniledi (31 Eki 21:22). Her yazmada "en fazla 5" koşulu da gitti; 4 + 3 olsaydı
+                DynamoDB yazmazdı (Adım 14).
+            - phase: 3
+              who: admin
+              lit: [admin, docdb, dynamodb]
+              packet: {at: docdb, text: "products.updateOne({ _id: 'P0105' }, { $set: { price: 1391.99 } })"}
+              set: {docdb: {P0105: {price: 1391.99}}}
+              fresh: {docdb: [P0105]}
+              note: {dynamodb: "09bd… · P0105: sepette 1.549,00 (eklendiği anki fiyat) · katalogda artık 1.391,99"}
+              say: >-
+                31 Eki 08:00. Katalog ekibi Deri Ceket'in fiyatını 1.391,99'a indirdi; Katalog yönetim servisi bunu ürün dokümanı
+                sözleşmesine göre kontrol edip shop.products'a yazdı. Sepetlere dokunmadı: 09bd…'in satırındaki fiyat bir kopya,
+                1.549,00 kaldı. Ödemede Uygulama güncel fiyatı yeniden okuyacak (3. ve 4. aşama).
+            - phase: 3
+              who: web
+              lit: [web, dynamodb]
+              packet: {at: dynamodb, text: "update_item(CART#c41e… / ITEM#P0066, ADD qty 1 SET name, unit_price, expires_at = 1 Kas 08:40)"}
+              set: {dynamodb: {c2: {qty: 3, expires_at: "1 Kas 08:40"}}}
+              show: {dynamodb: [m1]}
+              fresh: {dynamodb: [c2, m1]}
+              note: {dynamodb: "c41e… · Akıllı Saat hâlâ 31 Eki 19:10'da silinecek (o satıra dokunulmadı)"}
+              say: >-
+                31 Eki 08:40. c41e… yeni sitede Powerbank'i bir kez daha ekledi. Taşınan satır 2'den 3'e çıktı ve ömrü bu yazmadan
+                yeniden sayıldı: 1 Kas 08:40. Aynı sepetteki Akıllı Saat'e dokunulmadı; onun ömrü değişmedi. Ömür satır satırdır. Kesitin dışında, şifresiz gezen 5e21… de 08:45'te Bulut Mimarisi'ni ekledi.
+            - phase: 3
+              who: dynamodb
+              lit: [dynamodb, streams]
+              hide: {dynamodb: [a1]}
+              packet: {at: streams, text: "kayıt: REMOVE · CART#a812… / ITEM#P0090 · OldImage {qty 1, unit_price 81,52} · userIdentity: Service · dynamodb.amazonaws.com"}
+              note: {dynamodb: "", streams: "son 10 dk: 3 kayıt · 2 Uygulama yazması (08:40, 08:45) · 1 TTL silmesi"}
+              say: >-
+                a812…'in eski siteden taşınan Sırt Çantası satırının zamanı 31 Eki 08:30'da doldu; ziyaretçi geri gelmedi. DynamoDB
+                satırı 08:47'de (temsilî; genellikle birkaç gün içinde) ücretsiz sildi. Değişiklik akışına silinen satırın içeriğiyle
+                bir kayıt düştü; kaydı yapan "Service · dynamodb.amazonaws.com", yani TTL.
+            - phase: 3
+              who: abandon
+              lit: [streams, abandon, archive]
+              packet: {at: archive, text: "put_object('lm-event-archive', 'cart-abandoned/2026/10/31/…json', [a812… · P0090 · 1 · 81,52])"}
+              show: {archive: [ar1]}
+              fresh: {archive: [ar1]}
+              note: {streams: "", abandon: "bu paket: TTL silmesi 1 · arşive 1 · süzgeçte elenen (Uygulama'nın kayıtları) 2"}
+              say: >-
+                Terk edilen sepet tüketicisi sadece TTL silmeleriyle çalışır; süzgeç Uygulama'nın 08:40 ve 08:45'teki eklemelerini ona hiç
+                göndermedi; ödemeden sonraki silmeler de ona gelmeyecek. Silinen satırın içeriğini olay arşivine yazdı. "Hangi ürünler sepette kalıp alınmıyor?" raporu buradan
+                okur; tablo sadece 24 saat tutar, arşiv yıllarca.
+            - phase: 3
+              who: web
+              lit: [web, dynamodb]
+              packet: {at: dynamodb, text: "transact_write_items([Update CART#C00009 / ITEM#P0044 ADD qty 1 …, koşul: satır yok ya da qty ≤ 4 · Delete CART#5e21… / ITEM#P0044, koşul attribute_exists(sk)]) · 2 satır × 2 WRU"}
+              show: {dynamodb: [m2]}
+              hide: {dynamodb: [m1]}
+              fresh: {dynamodb: [m2]}
+              note: {abandon: "", dynamodb: "kesitin dışında: 5e21… boşaldı · C00009'da 2 satır"}
+              say: >-
+                31 Eki 09:20 (kesitin dışında). Tarayıcısı 5e21… olan bir ziyaretçi şifresiyle giriş yaptı; müşteri numarası C00009.
+                Müşterinin eski sitede kalmış bir satırı vardı (Hava Temizleyici). Uygulama tarayıcının sepetindeki Bulut Mimarisi'ni
+                tek bir iş paketiyle taşıdı: müşterinin sepetine ekle ve tarayıcının sepetinden sil. İkisi birlikte oldu; satır ne
+                kayboldu ne ikilendi.
+            - phase: 3
+              who: web
+              lit: [docdb, web, dynamodb]
+              show: {dynamodb: [s0]}
+              fresh: {dynamodb: [s0]}
+              note: {dynamodb: ""}
+              say: >-
+                31 Eki 09:40. Sen (7f3a…) Akıllı Saat'i sepete ekledin. Ad ve fiyat yine o anki dokümandan kopyalandı: 1.050,63.
+                Satır 1 Kas 09:40'a kadar yaşar.
+            - phase: 3
+              who: web
+              lit: [web, dynamodb, docdb, aurora]
+              packet: {at: aurora, text: "Query CART#7f3a… (güçlü) · find({_id: 'P0021'}, {price: 1}) primary'den → 1.050,63 = sepetteki · BEGIN; UPDATE products SET stock …; INSERT orders, order_items (1.050,63), outbox; COMMIT"}
+              show: {aurora: [O004812]}
+              fresh: {aurora: [O004812]}
+              say: >-
+                31 Eki 09:50. Ödemeye geçtin. Uygulama sepeti güçlü tutarlı okudu, her ürünün güncel fiyatını katalogdan (primary'den)
+                yeniden okudu ve sepetteki kopyayla karşılaştırdı: aynı. Siparişi, kalemini ödeme anındaki fiyatla, stok düşüşünü
+                ve "sipariş verildi" satırını tek iş paketiyle Aurora'ya yazdı. Müşteri lm_persona çerezindeki C00007 (temsilî).
+            - phase: 3
+              who: web
+              lit: [web, dynamodb]
+              packet: {at: dynamodb, text: "batch_writer(): delete_item(CART#7f3a… / ITEM#P0021) · 1 WRU"}
+              hide: {dynamodb: [s0]}
+              say: >-
+                COMMIT'ten hemen sonra Uygulama sepetteki ödenmiş satırı sildi; sayfan boş sepeti gösterdi. Sepet asıl kayıt değil:
+                sipariş Aurora'da kesinleştikten sonra boşaltılır, önce değil.
+            - phase: 3
+              who: dms
+              lit: [aurora, wal, dms, kinesis]
+              packet: {at: kinesis, text: "akıştaki kayıt: O004812 · C00007 · visitor_id 7f3a… · [P0021]"}
+              say: >-
+                Aurora değişikliği değişiklik kaydına (WAL) yazdı; DMS outbox'a eklenen satırı gördü ve Kinesis akışına koydu (Adım
+                33'teki yol). Aynı kaydı etkinlik, graf ve sıralama tüketicileri de kendi hızlarında okuyor.
+            - phase: 3
+              who: cartcons
+              lit: [kinesis, cartcons, dynamodb]
+              packet: {at: cartcons, text: "delete_item(Key={pk: 'CART#7f3a…', sk: 'ITEM#P0021'}) → satır zaten yoktu · 1 WRU"}
+              note: {cartcons: "bu olay: silinecek 1 · zaten yoktu 1 · silinen 0"}
+              say: >-
+                09:50, birkaç saniye sonra. Sepet tüketicisi olayı aldı ve olaydaki tarayıcı kimliğiyle aynı satırı bir kez daha sildi. Uygulama onu zaten
+                silmişti; hiçbir şey değişmedi. Bu ikinci yol, Uygulama'nın silmesi yarıda kalırsa sepeti yine de boşaltır.
+            - phase: 3
+              who: web
+              lit: [docdb, web, dynamodb]
+              packet: {at: dynamodb, text: "aynı saniyede iki sekmeden: ADD qty 1 · ADD qty 1 → qty 2 · her biri 1 WRU"}
+              show: {dynamodb: [s1]}
+              fresh: {dynamodb: [s1]}
+              note: {cartcons: ""}
+              say: >-
+                31 Eki 09:52. Sen Mekanik Klavye'yi iki ayrı sekmeden aynı anda ekledin. İki UpdateItem de "adede 1 ekle" dedi;
+                DynamoDB onları sırayla uyguladı, adet 2 oldu, hiçbiri kaybolmadı. Satır 1 Kas 09:52'ye kadar yaşar.
+            - phase: 4
+              who: migrate
+              lit: [staging, migrate, dynamodb]
+              packet: {at: dynamodb, text: "put_item(CART#c41e… / ITEM#P0066, qty 2, …, ConditionExpression='attribute_not_exists(pk)') → ConditionalCheckFailedException · 1 WRU"}
+              mark: {dynamodb: {c1: dup, c2: dup}}
+              note: {abandon: "", migrate: "2. çalışma, kesitte: okunan 4 · yazılan 0 · zaten vardı 2 (c41e…) · süresi dolmuş 2 (a812… ve 29 Eki satırı)"}
+              say: >-
+                Örnek durum: 31 Eki 09:30'da ekip taşıma işinin bir dosya parçasını yarıda bıraktığını gördü ve işi bütün dosyayla
+                yeniden çalıştırdı. c41e…'in iki satırı zaten vardı; koşul tutmadı, yazılmadı. Koşul olmasaydı Powerbank 3'ten 2'ye
+                geri düşer, ömrü de eski zamana dönerdi. a812…'in satırı artık süresi dolmuş sayıldığı için yeniden canlanmadı.
+            - phase: 4
+              who: cartcons
+              lit: [kinesis, cartcons, dynamodb]
+              packet: {at: cartcons, text: "aynı kayıt yine geldi: O004812 · 7f3a… · [P0021] → delete_item(CART#7f3a… / ITEM#P0021) → yoktu"}
+              mark: {dynamodb: {c1: "", c2: ""}}
+              note: {migrate: "", cartcons: "bu kayıt 2. kez: silinen 0 · sepetteki diğer satırlar etkilenmedi"}
+              say: >-
+                Örnek durum: 09:51'de akış sipariş olayını ikinci kez verdi (en az bir kez teslim). Tüketici aynı satırı yine silmeye çalıştı;
+                satır yoktu, bir şey değişmedi. Silme sadece olaydaki ürünlerin satırlarına gider; senin Mekanik Klavye satırına
+                dokunmaz.
+            - phase: 4
+              who: web
+              lit: [web, dynamodb]
+              packet: {at: web, text: "olsaydı: ADD qty 1 → cevap kayboldu → SDK yeniden denedi → ADD qty 1 → qty 3"}
+              note: {cartcons: "", web: "olsaydı: Mekanik Klavye 2 yerine 3 · koşul 5'te durdurur · sen sepette görür, düzeltirsin"}
+              say: >-
+                Olsaydı: bir eklemenin cevabı yolda kaybolsaydı. AWS kütüphanesi isteği kendiliğinden yeniden gönderebilir; ADD
+                "1 ekle" dediği için ikinci gönderme de sayılır ve adet bir fazla olur. Sepette bu kabul edilir: adet sepet sayfasında
+                görünür ve düzeltilebilir, en fazla 5 kuralı fazlayı sınırlar, ödeme adedi gösterir. Siparişte böyle bir fazlalık kabul
+                edilmez (Adım 23).
+            - phase: 4
+              who: web
+              lit: [web, dynamodb, docdb]
+              packet: {at: web, text: "olsaydı: 09bd… ödemede · sepette P0105 1.549,00 · katalogda 1.391,99 → \"fiyat değişti\" · update_item SET unit_price = 1391.99 · sipariş 1.391,99 ile"}
+              note: {web: "", dynamodb: "olsaydı: 09bd… · P0105 satırı yeni fiyatla güncellenir, sonra sipariş"}
+              say: >-
+                Olsaydı: 09bd… şimdi ödemeye geçseydi. Uygulama Deri Ceket'in güncel fiyatını katalogdan okur, sepetteki 1.549,00 ile
+                farklı olduğunu görür ve siparişi yazmadan önce 09bd…'e yeni fiyatı gösterir; satırın fiyatını da günceller. Sipariş
+                her zaman ödeme anındaki katalog fiyatıyla yazılır; sepetteki kopya sadece gösterim içindir.
+            - phase: 4
+              who: dlq
+              lit: [abandon, cartcons, dlq]
+              note: {dynamodb: "", dlq: "olsaydı: 1 mesaj · akış dbws-cart · sıra no …", abandon: "olsaydı: 3 deneme · arşive yazılamadı"}
+              say: >-
+                Olsaydı: arşive yazma her denemede hata verseydi (ör. kovanın izni yanlış ayarlanmış). Lambda birkaç denemeden sonra
+                kaydı bırakır ve yerini hata kuyruğuna yazardı; arkadaki kayıtlar beklemezdi. Akış kaydı 24 saat sakladığı için ekip
+                o süre içinde sorunu düzeltip kaydı yeniden işletir. Sepet tüketicisinin hataları da aynı kuyruğa düşer.
+            - phase: 4
+              who: monitor
+              lit: [dynamodb, cartcons, abandon, dlq, monitor]
+              note: {dlq: "", abandon: "", monitor: "son 5 dk: kısma 0 · ret 41 / ekleme 6.200 = %0,7 (alarm %5) · IteratorAge ≈ 1 sn · DLQ 0 · son 1 sa: TTL silmesi 312 = arşive 312 (temsilî)"}
+              say: >-
+                Örnek durum: CloudWatch her 5 dakikada bakar. Kısılan istek yok. Koşulu tutmayan yazmaları (en fazla 5 reddi) bütün
+                eklemelere böler: 6.200'de 41, yani %0,7; birden %5'i geçerse Uygulama'nın yeni yayınlanan bir sürümü (yeni kodu) kuralı yanlış uyguluyor olabilir. İki tüketici
+                akışın 1 saniye gerisinde, DLQ boş. Son bir saatte TTL'in sildiği satır sayısı arşive yazılanla eşit (sayılar
+                temsilî).
+            - phase: 4
+              who: pitr
+              lit: [dynamodb, pitr]
+              packet: {at: pitr, text: "olsaydı: restore-table-to-point-in-time --source-table-name dbws-cart --target-table-name dbws-cart-geri --restore-date-time <hatadan 1 sn önce>"}
+              note: {monitor: "", pitr: "olsaydı: yeni tablo · TTL, Streams ve alarmlar elle yeniden açılır", dynamodb: "olsaydı: hatalı sürüm 09:30–09:35 arası unit_price = 0 yazdı"}
+              say: >-
+                Olsaydı: hatalı bir sürüm beş dakika boyunca sepet satırlarına fiyatı 0 yazsaydı. Ekip sürekli yedekle tabloyu
+                hatadan bir saniye önceki hâliyle yeni bir tablo olarak açar ve etkilenen satırların doğru fiyatını oradan ana tabloya
+                geri kopyalar. Ödeme fiyatı zaten katalogdan okuduğu için bu arada yanlış fiyatla sipariş yazılmaz.
+            - phase: 4
+              who: dynamodb
+              lit: [dynamodb]
+              note: {pitr: "", dynamodb: "kesitte 5 satır · 3 sepet · t0 ile aynı"}
+              say: >-
+                Hazır. "Olsaydı" karelerindeki kaybolan cevap, fiyat kontrolü, hata ve yanlış yazma yaşanmadı. Kesitte 5 satır:
+                09bd…'in 2, senin 1 (Mekanik Klavye × 2), c41e…'in 2 satırı. "Add to cart"a basınca (t0) Uygulama senin sepetine
+                "Alpen Kablosuz Kulaklık 1" ürününün (P0001) satırını 1 adetle yazacak ve sepetini okuyacak.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              DynamoDB'de tablo sorudan başlar: önce sepet sayfalarının soruları yazılır, sonra anahtar bu sorulara göre seçilir.
+              Sonradan başka bir soru gelirse yeni bir index ya da tablo gerekir. Burada ayrıca satırın hangi bilgileri taşıyacağına,
+              fiyatın neden kopyalandığına, kuralın, ömrün ve girişte birleştirmenin nasıl olacağına karar verilir.
+            cards:
+              - title: Sepet sayfalarının soruları
+                text: >-
+                  Sepetin bütün işleri tek bir sepetin içinde olur: bir ürünü ekle, sepeti getir, bir ürünü çıkar, girişte iki
+                  sepeti birleştir, ödemeden sonra boşalt. Her biri sepetin kimliğini bilir; bu yüzden tabloyu baştan sona tarayan
+                  (Scan) bir sayfa yoktur. "Bu ürün hangi sepetlerde?" diye soran bir sayfa da yoktur; bu yüzden index de yoktur.
+                code:
+                  - {code: "update_item(pk = 'CART#7f3a…', sk = 'ITEM#P0001', ADD qty 1 …)", tag: Uygulama → DynamoDB, say: "Sepete ekle (bu sayfa, t0)."}
+                  - {code: "query(pk = 'CART#7f3a…')", tag: [Uygulama → DynamoDB, DynamoDB → Uygulama], say: "Sepet sayfası, başlıktaki sayaç ve ödeme (Adım 15)."}
+                  - {code: "delete_item(pk = 'CART#7f3a…', sk = 'ITEM#P0021')", tag: Uygulama → DynamoDB, say: "Bir ürünü çıkar; ödemeden sonra boşalt."}
+                  - {code: "transact_write_items([Update CART#C00009 …, Delete CART#5e21… …])", tag: Uygulama → DynamoDB, say: "Girişte tarayıcının sepetini müşterinin sepetine taşı."}
+              - title: Tablo bu sorulara göre kurulur
+                text: >-
+                  pk sepetin kimliği: bir sepetin bütün satırları aynı partition'da, tek Query ile gelir. sk ürün: aynı ürün aynı
+                  sepette ikinci bir satır açamaz, eklemeler aynı satırın adedini artırır. Ömür, değişiklik akışı ve yedek de tablonun
+                  ayarıdır.
+                code:
+                  - {code: "aws dynamodb create-table --table-name dbws-cart --billing-mode PAY_PER_REQUEST \\", tag: Ekip → DynamoDB, say: "On-demand: kapasite ayarı yok."}
+                  - {code: "  --key-schema AttributeName=pk,KeyType=HASH AttributeName=sk,KeyType=RANGE \\", tag: DynamoDB'nin içinde, say: "Partition sepet, satır ürün."}
+                  - {code: "  --stream-specification StreamEnabled=true,StreamViewType=OLD_IMAGE", tag: DynamoDB'nin içinde, say: "Değişiklik akışı; silinen satırın içeriğiyle."}
+                  - {code: "aws dynamodb update-time-to-live --table-name dbws-cart --time-to-live-specification Enabled=true,AttributeName=expires_at", tag: Ekip → DynamoDB, say: "Zamanı geçen satırı DynamoDB silsin."}
+                  - {code: "aws dynamodb update-continuous-backups --table-name dbws-cart --point-in-time-recovery-specification PointInTimeRecoveryEnabled=true", tag: Ekip → DynamoDB, say: "Sürekli yedek: son 35 gün."}
+              - title: Kaynaktan hedefe alan alan
+                text: >-
+                  Satırın her alanı nereden gelir? DynamoDB'de JOIN yoktur: sepet sayfası çizilirken katalog yeniden sorulmasın
+                  diye ürünün adı ve fiyatı satıra yazılırken kopyalanır. Kopyanın kaynağı shop.products'taki ürün dokümanıdır;
+                  ürün dokümanı sözleşmesi orada name'in metin, price'ın sıfırdan büyük bir sayı olduğunu garanti eder.
+                map:
+                  cols: [Kaynak, Hedef, Kural]
+                  rows:
+                    - ["lm_visitor çerezi (tarayıcı) ya da giriş yapan müşterinin numarası", "pk = CART#7f3a… · CART#C00009", "Şifresiz gezen ziyaretçinin sepeti tarayıcıya, giriş yapanınki müşteriye bağlı."]
+                    - ["ürün no (ürün sayfası)", "sk = ITEM#P0001", "Bir sepette bir ürüne bir satır."]
+                    - ["\"Add to cart\" ve adet kutusu", "qty (ADD :q)", "Okumadan artırılır; en fazla 5 koşuluyla."]
+                    - ["ürün dokümanı (DocumentDB shop.products: name, price)", "name, unit_price (SET)", "Eklendiği andaki kopya; katalog değişince kendiliğinden değişmez. Her yeni eklemede yenilenir."]
+                    - ["yazma anı (Uygulama'nın saati)", "expires_at = şimdi + 86.400 sn", "Satırın son yazılmasından 24 saat; sayı (Unix saniyesi)."]
+                    - ["eski sitenin açık sepeti (S3 taşıma klasörü)", "aynı alanlar, aynı pk (ya da CART#<müşteri no>)", "Sadece adres boşsa; ad ve fiyat eski sitedeki kopyadır, ödemede yine katalogdan kontrol edilir; expires_at = eski sitedeki son değişiklik + 24 saat."]
+              - title: Fiyat neden kopyalanır, katalogda değişince ne olur?
+                text: >-
+                  Sepet sayfası sık okunur ve hızlı olmalı; her satır için kataloğa ayrıca sormak hem yavaş hem pahalı olurdu.
+                  Kopya ayrıca bir bilgi taşır: müşterinin "eklediğimde kaç liraydı?" sorusunun cevabı. Ama kopya bağlayıcı
+                  değildir; fiyat tarayıcıdan geldiği için değiştirilmiş bile olabilir: ödemede Uygulama her ürünün güncel fiyatını katalogdan (primary'den, en son yazılanı gören sunucudan)
+                  yeniden okur, fark varsa müşteriye gösterir ve sipariş Aurora'ya ödeme anındaki fiyatla yazılır.
+                  Seçilmeyen yol: katalogdaki her fiyat değişikliğinde açık sepetleri bir değişiklik akışıyla güncellemek. Bunun
+                  için "bu ürün hangi sepetlerde?" index'i gerekirdi; çok satılan bir ürünün binlerce sepeti tek bir anahtarda
+                  toplanır (sıcak partition). Her değişiklik binlerce yazma demektir ve yine de ödeme anında kontrol gerekirdi:
+                  fiyat güncelleme ile tıklama arasında da değişebilir. Sepet satırı zaten son yazılmasından 24 saat sonra silinir.
+              - title: "Adet kuralı: bir üründen en fazla 5"
+                text: >-
+                  Kural okumadan sonra Uygulama'da kontrol edilmez; yazmanın içine koşul olarak konur ve DynamoDB kontrolle yazmayı
+                  tek adımda yapar. Böylece iki sekme aynı anda eklese de kural aşılamaz. Bu sayfada ekleme 1 adet olduğu için koşul
+                  tutar; kuralın bozulmaya çalışıldığı yazmayı Adım 13 ve 14'te deneyeceksin.
+                code:
+                  - {code: "ConditionExpression = \"attribute_not_exists(qty) OR qty <= :max\"", tag: Uygulamanın içinde, say: "Satır yoksa ya da adet sınırın altındaysa yaz."}
+                  - {code: ":max = 5 - eklenen_adet", tag: Uygulamanın içinde, say: "1 adet eklenecekse mevcut adet en fazla 4 olabilir."}
+              - title: "Ömür (TTL): her satır kendi son yazılmasından 24 saat"
+                text: >-
+                  Terk edilen sepeti silen bir iş yazılmaz. Her yazmada expires_at yeniden hesaplanır; ömür satır satırdır, aynı
+                  sepetteki başka bir ürünü eklemek bu satırın ömrünü uzatmaz. DynamoDB zamanı geçen satırı yazma birimi harcamadan
+                  siler, ama genellikle birkaç gün içinde; o arada satır okumalarda görünür. Bu yüzden sepeti okuyan sayfalar
+                  expires_at'i geçmiş satırı göstermez (okumaya "expires_at > şimdi" süzgeci eklenir). TTL'in sildiği satır
+                  değişiklik akışına "servis silmesi" olarak düşer; terk edilen sepetler oradan arşive gider.
+                code:
+                  - {code: "expires = int(time.time()) + CART_TTL        # CART_TTL = 24 * 3600", tag: Uygulamanın içinde, say: "Silinme zamanı: şimdi + 24 saat, saniye olarak."}
+                  - {code: "FilterExpression = \"expires_at > :now\"", tag: Uygulama → DynamoDB, say: "Okurken: zamanı geçmiş ama henüz silinmemiş satırı ayıkla."}
+              - title: "Ziyaretçi giriş yapınca: iki sepet birleşir"
+                text: >-
+                  Şifresiz gezen ziyaretçinin sepeti tarayıcıya bağlıdır. Giriş yapınca o tarayıcının satırları müşterinin sepetine
+                  taşınır; başka bir cihazdan eklediği ürünler de orada. Aynı ürün iki sepette varsa adetler toplanır, en fazla 5'te
+                  kalır. Her satırın taşınması bir iş paketidir: "hedefe ekle" ve "kaynaktan sil" ya birlikte olur ya hiç. Kaynaktaki
+                  silmenin koşulu "satır hâlâ orada" olduğu için birleştirme iki kez çalışsa bile bir satır iki kez eklenmez.
+              - title: Yük dağılımı ve kapasite
+                text: >-
+                  Bir partition saniyede en fazla 1.000 yazma ve 3.000 okuma birimi alır. pk her sepette farklı olduğu için yük
+                  binlerce partition'a dağılır; bir kişi saniyede birkaç ekleme bile yapmaz. Bir satır 1 KB'ın altında: her ekleme 1
+                  WRU, sepetin güçlü okuması 1 RRU, sonunda tutarlı okuması 0,5 RRU (canlı tablodaki ölçüm). Kapasite on-demand:
+                  sepet trafiği gün içinde ve kampanyalarda çok dalgalı (Adım 16). Yeni bir on-demand tablo saniyede 4.000 yazma
+                  birimini beklemeden karşılar ve daha önceki en yüksek trafiğin iki katına kadar anında çıkar; ekip bilinen büyük bir
+                  kampanyadan önce tabloyu ön ısıtır.
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              Yeni tablo yayına girdiğinde açık sepetler kaybolmamalı: dün akşam sepetine ürün koyan ziyaretçi bu sabah aynı sepeti
+              görmeli. Geçmiş sepetlerin hepsi değil, sadece hâlâ yaşayanlar bir kez taşınır. Sıra bilerek böyledir: önce tablo,
+              sonra canlı yazma, sonra taşıma.
+            cards:
+              - title: "T anı: önce canlı yazma, sonra eski sepetler"
+                text: >-
+                  T anında yeni site yayına girer ve sepete Uygulama yazmaya başlar; eski site sepete yazmayı bırakır ve açık
+                  sepetlerini taşıma klasörüne tek dosya olarak bırakır. Sadece son 24 saatte değişmiş sepetler, bütün satırlarıyla dosyaya girer;
+                  bir satırın kendisi daha eski olabilir. Ziyaretçiler aynı lm_visitor çerezini taşıdığı için eski sepet yeni
+                  tabloda aynı pk ile bulunur. Taşıma birkaç dakika sürer; o arada bir ziyaretçi aynı ürünü yeni sitede eklerse
+                  yeni satır kazanır.
+              - title: "Taşıma işi: sadece boş adrese, kalan ömürle"
+                text: >-
+                  İş her satırı koşullu PutItem ile yazar: "bu adreste satır yoksa". Koşulsuz yazsaydı ziyaretçinin T'den sonra
+                  eklediği satırın üzerine eski adedi yazardı. Ömrü satırın eski sitede son değiştiği andan sayar; zamanı geçmiş
+                  satırı hiç yazmaz. Böylece iş yarıda kalıp yeniden çalışsa da aynı sonucu verir. Koşulu tutmayan yazma da 1 WRU
+                  harcar; birkaç bin satır için önemsiz.
+                code_title: Taşıma işinden (kısaltılmış)
+                code:
+                  - {code: "for s in json.load(s3.get_object(Bucket=…, Key='eski-site-sepetler/…')['Body']):", tag: S3 → Taşıma işi, say: "Dosyadaki her sepet satırı."}
+                  - {code: "  exp = s['updated_at'] + 24 * 3600", tag: Taşıma işinin içinde, say: "Ömür eski sitedeki son değişiklikten sayılır."}
+                  - {code: "  if exp <= now(): skipped += 1; continue", tag: Taşıma işinin içinde, say: "Zamanı geçmiş satır hiç yazılmaz."}
+                  - {code: "  table.put_item(Item={…, 'expires_at': exp}, ConditionExpression='attribute_not_exists(pk)')", tag: Taşıma işi → DynamoDB, say: "Sadece adres boşsa; canlı satır kazanır."}
+              - title: Yükleme kontrol edilir
+                text: >-
+                  İş okunan, yazılan, atlanan ve "zaten vardı" diye yazılmayan satırları CloudWatch'a yazar; okunan = yazılan + atlanan
+                  + zaten vardı olmalı, kısma ve hata sıfır kalmalı. Ekip birkaç sepeti sepet sayfasının sorusunun aynısıyla okur ve
+                  dosyadakiyle karşılaştırır. Birkaç bin satırlık bir yükleme yeni tablonun beklemeden karşıladığı hızın çok altında;
+                  ön ısıtma gerekmez.
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              T anından sonra sepet tablosuna Uygulama yazar: ekleme, çıkarma, girişte birleştirme, ödemeden sonra boşaltma. Sipariş
+              zinciri sepeti ikinci kez boşaltır. Ad ve fiyat her eklemede katalogdan kopyalanır. Zamanı geçen satırı TTL siler ve
+              değişiklik akışıyla arşive gider.
+            cards:
+              - title: "Sepete ekle: ad ve fiyat katalogdan, tek komut"
+                text: >-
+                  Ürün sayfası shop.products'taki dokümanla çizilir; "sepete ekle"de tarayıcı o dokümandaki adı ve fiyatı geri
+                  gönderir. Uygulama ikisini satıra kopyalar ve satırı okumadan tek UpdateItem ile yazar: yoksa oluştur, varsa
+                  artır. Uygulama'nın gerçek kodu t0'daki kod kartında.
+                code:
+                  - {code: "UpdateExpression = \"ADD qty :q SET #n = :n, unit_price = :p, expires_at = :e\"", tag: Uygulamanın içinde, say: "Adede ekle; adı, fiyatı ve silinme zamanını yaz."}
+                  - {code: "table().update_item(Key={'pk': pk, 'sk': sk}, …, ConditionExpression=…)", tag: [Uygulama → DynamoDB, DynamoDB → Uygulama], say: "Tek komut; en fazla 5 koşuluyla. 1 WRU."}
+              - title: "Ödeme: fiyat yeniden okunur, sipariş Aurora'da kesinleşir"
+                text: >-
+                  Ödeme sepeti güçlü tutarlı okur (Adım 15) ve her ürünün güncel fiyatını katalogdan yeniden okur. Fark varsa siparişi
+                  yazmadan önce müşteriye gösterir ve satırın fiyatını günceller. Sipariş, kalemleri ödeme anındaki fiyatla, stok
+                  düşüşü ve outbox satırı tek iş paketinde Aurora'ya yazılır (Adım 22–25). Sepet ancak COMMIT'ten sonra boşaltılır.
+                code:
+                  - {code: "items = table().query(KeyConditionExpression=Key('pk').eq(pk), FilterExpression=Attr('expires_at').gt(now), ConsistentRead=True)['Items']", tag: [Uygulama → DynamoDB, DynamoDB → Uygulama], say: "Sepetin en son hâli."}
+                  - {code: "now = {d['_id']: d['price'] for d in products.find({'_id': {'$in': pids}}, {'price': 1})}", tag: [Uygulama → DocumentDB, DocumentDB → Uygulama], say: "Güncel fiyatlar, primary'den."}
+                  - {code: "changed = [i for i in items if i['unit_price'] != now[pid(i)]]   # varsa önce göster", tag: Uygulamanın içinde, say: "Kopya ile güncel fiyat aynı mı?"}
+                  - {code: "BEGIN; UPDATE products SET stock …; INSERT INTO orders …, order_items …, outbox …; COMMIT;", tag: Uygulama → Aurora, say: "Sipariş ödeme anındaki fiyatla, tek paket."}
+                  - {code: "with table().batch_writer() as bw: [bw.delete_item(Key=…) for each line]", tag: Uygulama → DynamoDB, say: "COMMIT'ten sonra sepet boşalır."}
+              - title: Sipariş zinciri sepeti ikinci kez boşaltır
+                text: >-
+                  Uygulama'nın silmesi COMMIT'ten sonra ayrı bir istektir; sunucu tam o anda dursa satırlar kalır ve müşteri ödediği
+                  ürünü sepette görür. Bu yüzden sepet tüketicisi sipariş olayını (Adım 33'teki outbox → DMS → Kinesis yolu) alır ve
+                  olaydaki ürünlerin satırlarını bir kez daha siler. Bir satırı iki kez silmek zararsızdır.
+                code:
+                  - {code: "for rec in event['Records']: e = json.loads(base64.b64decode(rec['kinesis']['data']))['data']", tag: Kinesis → Sepet tüketicisi, say: "Lambda akıştan bir paket olay alır."}
+                  - {code: "  for pid in e['items']: table.delete_item(Key={'pk': f\"CART#{e['visitor_id']}\", 'sk': f'ITEM#{pid}'})", tag: Sepet tüketicisi → DynamoDB, say: "Olaydaki tarayıcının sepetinden, olaydaki ürünler."}
+              - title: Girişte birleştirme
+                text: >-
+                  Uygulama giriş anında tarayıcının sepetini okur ve her satır için ayrı bir iş paketi gönderir: müşterinin sepetine ekle
+                  ve tarayıcının sepetinden sil (2 yazma; bir paket en fazla 100 yazma alabilir). Paketteki her yazma 2 WRU harcar.
+                code:
+                  - {code: "for it in table().query(KeyConditionExpression=Key('pk').eq('CART#5e21…'))['Items']:", tag: [Uygulama → DynamoDB, DynamoDB → Uygulama], say: "Tarayıcının sepetindeki satırlar."}
+                  - {code: "  q = min(it['qty'], 5 - hedefteki_adet)", tag: Uygulamanın içinde, say: "Toplam en fazla 5."}
+                  - {code: "  transact_write_items([Update(CART#C00009, sk, ADD qty :q …, koşul attribute_not_exists(qty) OR qty <= 5 - :q),", tag: Uygulama → DynamoDB, say: "Müşterinin sepetine ekle…"}
+                  - {code: "                        Delete(CART#5e21…, sk, koşul attribute_exists(sk))])", tag: Uygulama → DynamoDB, say: "…ve tarayıcının sepetinden sil; ya ikisi ya hiçbiri."}
+              - title: "Terk edilen sepet: TTL → değişiklik akışı → arşiv"
+                text: >-
+                  TTL'in sildiği her satır değişiklik akışına içeriğiyle düşer ve kaydı yapan "Service · dynamodb.amazonaws.com"
+                  olarak görünür. Terk edilen sepet tüketicisinin olay süzgeci sadece bu kayıtları geçirir; Uygulama'nın silmeleri ve
+                  eklemeler ona hiç gelmez. Lambda'nın akışı okuması ücretsizdir; tablonun kapasitesi harcanmaz.
+                code:
+                  - {code: "FilterCriteria: {\"userIdentity\": {\"type\": [\"Service\"], \"principalId\": [\"dynamodb.amazonaws.com\"]}}", tag: Ekip → Lambda, say: "Sadece TTL silmeleri."}
+                  - {code: "rows = [r['dynamodb']['OldImage'] for r in event['Records']]", tag: Streams → Terk edilen sepet tüketicisi, say: "Silinen satırların içeriği."}
+                  - {code: "s3.put_object(Bucket='lm-event-archive', Key='cart-abandoned/2026/10/31/…json', Body=…)", tag: Terk edilen sepet tüketicisi → S3, say: "Arşive, gün gün."}
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              Taşıma işi iki kez çalışırsa, bir ekleme iki kez sayılırsa, sipariş olayı iki kez gelirse, katalogda fiyat değişirse,
+              zamanı geçen satır silinmeden okunursa, bir kayıt işlenemezse, zincir geride kalırsa ya da yanlış bir toplu yazma
+              olursa ne olur? Her biri için zincirde bir parça var; her parçanın ne zaman çalıştığı, neyi yakalamadığı ve ekibin ne
+              yaptığı aşağıda.
+            cards:
+              - title: Taşıma işi iki kez çalışırsa
+                text: >-
+                  Her yazmanın koşulu "adres boşsa" olduğu için ikinci çalışma var olan satırlara dokunmaz; ömrü dolmuş satırları da
+                  yeniden canlandırmaz. Ne zaman: her yazmada. Yakalamadığı: eski sitedeki adet yeni sitede eklenen adede eklenmez;
+                  T'den sonra aynı ürünü ekleyen ziyaretçinin eski adedi kaybolur (bilerek: canlı satır kazanır). Onarım: gerekmez;
+                  sayıları "zaten vardı" olarak raporlanır.
+              - title: Bir ekleme iki kez sayılırsa
+                text: >-
+                  ADD "1 ekle" der; cevabı kaybolan bir istek AWS kütüphanesi ya da tarayıcı tarafından yeniden gönderilirse adet bir
+                  fazla olur. Sepette bu bilerek kabul edilir: adet görünür ve düzeltilebilir, en fazla 5 kuralı fazlayı sınırlar.
+                  Ne zaman: yazma anında. Yakalamadığı: kural sınırın altındaki fazlalığı durdurmaz. Onarım: müşteri sepet sayfasında
+                  adedi düzeltir; ödeme adetleri gösterir. Tam tek seferlik gerekseydi TransactWriteItems'ın ClientRequestToken'ı (isteğe verilen
+                  tek seferlik numara) kullanılırdı: aynı numarayla 10 dakika içinde gelen istek bir kez sayılır; bedeli iki kat birim.
+              - title: Sipariş olayı iki kez gelirse ya da sepet boşalmazsa
+                text: >-
+                  Akış bir olayı en az bir kez verir; tüketici aynı satırı ikinci kez silmeye çalışır, satır yoktur, bir şey
+                  değişmez. Uygulama'nın silmesi yarıda kaldıysa tüketici tamamlar. Ne zaman: siparişten birkaç saniye sonra.
+                  Yakalamadığı: müşteri ödemeden hemen sonra, olay gelmeden aynı ürünü yeniden eklerse tüketici o yeni satırı da
+                  siler. Onarım: müşteri ürünü yeniden ekler; tüketici sadece olaydaki ürünlere dokunur.
+              - title: Katalogda fiyat değişirse
+                text: >-
+                  Sepetteki fiyat eklendiği andaki kopyadır ve değişmez. Ödeme güncel fiyatı katalogdan yeniden okur, farkı müşteriye
+                  gösterir, satırı günceller ve siparişi güncel fiyatla yazar. Ne zaman: ödeme anında. Yakalamadığı: sepet sayfası
+                  ödemeye kadar eski fiyatı gösterir. Onarım: gerekmez; sepet satırı son yazılmasından 24 saat sonra silinir, bir sonraki
+                  eklemede fiyat da yenilenir.
+              - title: Zamanı geçen satır silinmeden okunursa
+                text: >-
+                  TTL silmesi birkaç güne kadar gecikebilir; o arada satır okumalarda görünür. Okuma "expires_at > şimdi" süzgeciyle
+                  onu ayıklar. Ne zaman: her okumada. Yakalamadığı: zamanı geçmiş ama silinmemiş bir satıra yeni bir ekleme yazılırsa
+                  satır yeni ömürle yeniden canlanır ve eski adet de geri gelir. Onarım: ekip bu durumu ekleme koşuluna "zamanı
+                  geçmişse adedi baştan say" diye ekleyebilir; ölçü olarak TimeToLive​DeletedItemCount izlenir.
+              - title: Bir kayıt işlenemezse
+                text: >-
+                  Bir kayıt her denemede hata verirse Lambda birkaç denemeden sonra onu bırakır ve yerini hata kuyruğuna yazar;
+                  arkadaki kayıtlar beklemez. Ne zaman: birkaç saniye içinde. Yakalamadığı: hata vermeyen ama yanlış olan işlem (ör.
+                  yanlış klasöre yazılan arşiv dosyası). Onarım: ekip sorunu düzeltip kaydı yeniden işletir; Kinesis ve DynamoDB
+                  Streams kayıtları 24 saat saklar, ekip bu süre içinde bakmalıdır.
+              - title: Zincir geride kalırsa
+                text: >-
+                  CloudWatch her 5 dakikada bakar: sepet tablosunda kısılan istekler (ThrottledRequests), koşulu tutmayan yazmaların
+                  bütün eklemelere oranı (5 dakikada, alarm %5), iki tüketicinin gecikmesi (IteratorAge), DLQ'daki mesajlar. Saatte
+                  bir: TTL'in sildiği satır sayısı arşive yazılanla eşit mi? Ne zaman: en geç 5 dakikada. Yakalamadığı: sessizce
+                  yanlış yazılan değerler (ör. boş name). Onarım: gecikmede tüketici hızlandırılır; kayıtlar 24 saat saklandığı için
+                  bu sürede hiçbir şey kaybolmaz.
+              - title: Yanlış bir toplu yazma olursa
+                text: >-
+                  Sürekli yedek tabloyu son 35 gün içindeki bir saniyeye yeni bir tablo olarak açar; ana tabloya dokunmaz. Ekip
+                  etkilenen satırların doğru değerlerini oradan ana tabloya geri kopyalar. Ne zaman: ekip fark edince. Yakalamadığı:
+                  geri dönülen saniyeden sonra yazılan doğru satırlar yedekte yoktur; onlar ana tabloda kalır, kopyalama onları
+                  silmez. Yeni tabloda TTL, değişiklik akışı ve alarmlar kendiliğinden açılmaz; ekip onları elle açar.
+                code:
+                  - {code: "aws dynamodb restore-table-to-point-in-time --source-table-name dbws-cart \\", tag: Ekip → DynamoDB, say: "Yedekten yeni bir tablo…"}
+                  - {code: "  --target-table-name dbws-cart-geri --restore-date-time 2026-10-31T06:29:59Z", tag: DynamoDB'nin içinde, say: "…hatadan bir saniye önceki hâliyle: Türkiye saatiyle 09:29:59; komut UTC (Z) ister, 3 saat geri (temsilî)."}
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
