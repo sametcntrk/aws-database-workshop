@@ -15046,54 +15046,753 @@ steps:
           - [EXPIRE, "Bir anahtara saniye cinsinden yaşam süresi verir."]
           - [Sorted set (ZADD), "Her üyesinin bir puanı olan, puana göre sıralı küme. Burada üye ziyaretçi, puan son görülme zamanı."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde oturum deposu için hazırlık
+      t1:
+        title: Önceden ne vardı? Oturumun bellekte nasıl doğduğu, her sayfada nasıl uzadığı ve nasıl bittiği
         intro: >-
-          Oturum ilk kez yazılmadan, nerede ve ne kadar süre tutulacağı belirlenir. Aşağıdaki beş adım bu hazırlığın sırasıdır.
-        text:
-          - title: Önce oturumun soruları yazılır
-            text: >-
-              Her istekte "bu ziyaretçi kim, hangi persona, en son nerede?" sorulur; ayrıca "son 5 dakikada kaç kişi aktif?".
-              Birincisi tek bir anahtarla, ikincisi zamana göre sıralı bir kümeyle cevaplanır.
-            code: |-
-              HGETALL lm:session:<ziyaretçi>                         → oturum
-              ZCOUNT  lm:active <şimdi − 300> +inf                     → son 5 dakikada aktif olanlar
-          - title: Oturum uygulama sunucusunda değil, ortak bir yerde tutulur
-            text: >-
-              Ziyaretçinin istekleri farklı uygulama sunucularına düşebilir. Oturum sunucunun belleğinde tutulursa diğer sunucu
-              onu bilmez; bu yüzden hepsinin eriştiği ortak bir bellek deposuna (ElastiCache) yazılır.
-          - title: Süre yazmayla birlikte verilir
-            text: >-
-              Her yazmada süre yeniden başlatılır; böylece aktif ziyaretçinin oturumu yaşar, gidenin oturumu kendiliğinden düşer.
-              Yazma ve süre tek bir transaction'da (MULTI) ya da tek komutta gönderilirse arada süresiz bir anahtar kalmaz.
-            code: |-
-              MULTI
-                HSET   lm:session:<ziyaretçi> persona C00001 last_page /deals seen_at 1793395000
-                EXPIRE lm:session:<ziyaretçi> 1800
-              EXEC
-          - title: Bellek dolarsa ne olacağı bilinir
-            text: >-
-              Süresi dolan anahtarlar silinir; ama bellek dolarsa ElastiCache tahliye (eviction) kuralına göre başka anahtarları
-              da silebilir. Oturum kaybı kabul edilebilir bir veri olduğu için bu sorun değildir; kalıcı olması gereken veri burada
-              tutulmaz.
-          - title: Aktiflik kümesi de temizlenir
-            text: >-
-              Sorted set'in üyelerinin ayrı ayrı süresi yoktur. "Aktif ziyaretçiler" kümesinden eski üyeler düzenli olarak puana
-              göre silinir; aksi hâlde küme sonsuz büyür.
-            code: |-
-              ZREMRANGEBYSCORE lm:active -inf <şimdi − 3600>
-      feed:
-        title: Veri nereden geliyor?
-        writes: Uygulama, her sayfa açılışında arka planda (ve bu adımda senin butonunla).
-        reads: Uygulama, oturum bilgisi gereken her istekte; ayrıca canlı ekranlardaki "aktif ziyaretçi" sayısı için.
-        kind: >-
-          Uygulama orkestrasyonu. ElastiCache başka bir veritabanından kendiliğinden veri çekmez; oturumu uygulama yazar ve okur.
-        with: >-
-          Oturum, ziyaretçinin kimliğini (lm_visitor çerezi) diğer veritabanlarıyla paylaşır: aynı kimlik DynamoDB'de sepetin
-          anahtarı, Keyspaces'te olay geçmişinin partition'ıdır. Oturum kısa ömürlü bir kopya; kalıcı kayıtlar o veritabanlarında.
-        best: >-
-          Oturum ve önbellek gibi kaybı kabul edilebilir, sık okunan ve süreli veri bellekte, TTL ile tutulur. Kaybı kabul
-          edilemeyen veri (sipariş, ödeme) kalıcı bir veritabanına yazılır.
+          Sen "Refresh the session" butonuna basmadan önce bellekte (ElastiCache) senin oturumun zaten duruyor:
+          lm:session:7f3a… adlı bir hash (persona C00001, last_page /deals, seen_at) ve 30 dakikalık bir ömür. Yanında aktif
+          ziyaretçiler kümesi lm:active var; senin puanın orada da yazılı. Oturumun her sayfada yazıldığını Adım 1, 2 ve 17
+          kısaca söyledi. Bu bölüm oturumun kendi sorularını anlatıyor: oturumda ne durur, ne asla durmaz; oturumun adı
+          (çerezdeki değer) nasıl seçilir ve nasıl korunur; süre neden her sayfada baştan başlar, neden bir de kesin sınır
+          vardır; giriş yapınca ve çıkınca ne olur; aktif ziyaretçiler nasıl sayılır ve küme nasıl temizlenir; bellek
+          dolarsa oturumlar neden ilk silinenler olur ve bu nasıl önlenir; bellek tamamen kaybolursa ne kaybolur, ne
+          kaybolmaz; bütün bunlar nasıl izlenir. Fırsat sayacı, liderlik tablosu ve siparişler başka zincirler; burada
+          sadece aynı belleği paylaştıkları yerde anılıyorlar. Önce zincirin bileşenleri, sonra bir simülasyon, sonra dört
+          aşama (tasarım, ilk yükleme, sürekli besleme, tutarlılık ve onarım).
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1, t0 ve zaman", "t0: senin \"Refresh the session\" tıklaman. t-1: ondan önceki zaman. Hazırlık günleri tarihle (29 Eki, 30 Eki 20:00), senin gezintin t0'a göre farkla yazılır: \"t0 − 100 sn\" senin tıklamandan 100 saniye önce demek. Saatler Türkiye saatidir. Ziyaretçi kimlikleri, sayfalar, bellek ve istek sayıları temsilîdir."]
+          - ["Unix zamanı (seen_at ve puanlar)", "Bellekte zaman, 1 Ocak 1970'ten bu yana geçen saniye olarak yazılır (ör. 1793394900). Bu bölümün sayıları t0'daki simülasyonla aynı: 1793395000 = t0, 1793394900 = t0 − 100 sn, 1793394600 = t0 − 400 sn. Bir sayıdan ötekini çıkarınca aradaki saniyeyi bulursun."]
+          - ["T anı", "Yeni sitenin yayına girdiği an: 30 Eki 20:00 (Adım 12). Eski sitenin sepetleri o an DynamoDB'ye taşındı; oturumlar taşınmadı."]
+          - ["Ekip", "Mağazanın sistemini kuran ve işleten mühendisler; alarmlara onlar bakar."]
+          - ["Valkey, ElastiCache Serverless ve node-based", "Valkey: ElastiCache'in kullandığı, Redis ile aynı komutları anlayan bellek veritabanı; veriyi diskte değil bellekte (RAM) tuttuğu için cevabı milisaniyenin altında verir. Serverless: sunucu sayısını ve boyunu AWS'in kendisinin ayarladığı ElastiCache türü; mağazanın belleği bu türde. Node-based: sunucularını ve sayısını Ekip'in seçtiği ElastiCache türü."]
+          - ["İstek, GET ve POST", "Tarayıcının Uygulama'ya gönderdiği her mesaj bir istektir. GET /deals: \"Fırsatlar sayfasını ver\" (adresin / ile başlayan kısmı sayfanın yolu). POST /elasticache/api/session: \"oturumumu yaz\"; sayfa açılınca sayfanın kodu bu ikinci, küçük isteği gönderir (t0'daki istek de bu). Sayfanın kendisi önbellekten gelebildiği için oturum ayrı bir istekle yazılır."]
+          - ["Oturum (session)", "Mağazanın bir ziyaretçiyi sayfadan sayfaya hatırlamak için tuttuğu kısa not: kim (persona), en son nerede (last_page), en son ne zaman (seen_at). Otel resepsiyonundaki misafir kartı gibi: misafir otelden ayrılınca kart çöpe gider; asıl kayıtlar (fatura, rezervasyon) başka yerdedir."]
+          - ["Oturum kimliği ve lm_visitor çerezi", "Oturumun adı, tarayıcıdaki lm_visitor çerezinin değeridir (ör. 7f3a…); bellekteki anahtar lm:session:<bu değer>. Değer tahmin edilemeyen rastgele bir sayıdır (UUID: 32 harf ve rakam; 122 biti rastgele). Vestiyer fişi gibi: fişi taşıyan paltoyu alır; bu yüzden fişin numarası sırayla verilmez ve başkasına gösterilmez."]
+          - ["Çerez ve bayrakları (HttpOnly, Secure, SameSite)", "Çerez: tarayıcının bir site için sakladığı küçük not; her istekte siteye kendiliğinden geri gönderilir. Uygulama çerezi Set-Cookie satırıyla verir. HttpOnly: sayfadaki kod çerezi okuyamaz; sayfaya sızmış kötü bir kod (XSS) onu çalamaz. Secure: çerez sadece şifreli bağlantıda (HTTPS) gider. SameSite=Lax: başka bir sitenin gizlice gönderdiği isteklere (ör. bir form) çerez eklenmez; kullanıcı mağazanın bağlantısına tıklayınca yine eklenir. Max-Age: çerezin tarayıcıda kaç saniye kalacağı; Max-Age=0: çerezi hemen sil. Path=/: çerez sitenin bütün sayfalarına gönderilir."]
+          - ["Ziyaretçi, persona, müşteri ve giriş", "Ziyaretçi: bir tarayıcı (lm_visitor çerezi). Persona: ziyaretçinin hangi müşteri olarak gezdiği; sen görevin başında, ilk sayfada açılan pencereden C00001'i (Ayşe Yılmaz) seçtin; sayfa seçimini lm_persona çerezine yazdı ve oturum isteği onu taşır. Persona seçmeden gezen de olabilir. Sen şifreyle giriş yapmadın. Mağazada şifreyle giriş yapan kayıtlı müşteriler de var (ör. C00009); onların oturumunda giriş zamanı (login_at) da durur. Çıkış (logout): müşterinin \"oturumu kapat\" demesi."]
+          - ["Hash ve sorted set", "Hash: tek anahtar altında birkaç alan (bir kartın satırları gibi); oturum böyle durur. Sorted set (sıralı küme): her üyesinin bir puanı olan, puana göre sıralı küme; lm:active'de üye ziyaretçi, puan son görülme zamanı."]
+          - ["TTL, EXPIRE, kayan süre ve kesin sınır", "TTL: anahtarın kalan ömrü (saniye); −1 \"ömrü yok\", −2 \"böyle bir anahtar yok\". EXPIRE anahtara yeni bir ömür verir ve sayacı baştan başlatır. Kayan süre (sliding expiry): her istekte EXPIRE 1800 gönderilir; 30 dakika hiç gelmeyenin oturumu biter, otoparkta her girişte yenilenen bilet gibi. Kesin sınır (absolute expiry): ne kadar aktif olursa olsun, girişten belli bir süre sonra (burada 12 saat) oturum biter ve şifre yeniden istenir."]
+          - ["DEL", "Anahtarı hemen sil. Çıkışta ve girişte eski oturum için kullanılır; süre dolmasını beklemez."]
+          - ["MULTI … EXEC ve tek paket (pipeline)", "MULTI ile EXEC arasındaki komutlar bellekte birlikte, araya başka komut girmeden çalışır. Tek paket (pipeline): birkaç komutun tek seferde gönderilip cevaplarının birlikte gelmesi; ağda bir gidiş-dönüş."]
+          - ["Hash slot ve CROSSSLOT", "Bellek her anahtarı adından hesaplanan 0–16383 arası bir numaraya (slot) koyar; slotlar belleğin bölümlerine (shard) dağıtılır (Adım 2, 17). Aynı anahtarın komutları hep aynı slottadır. Farklı slottaki anahtarlar tek bir MULTI'de birlikte değiştirilemez (CROSSSLOT hatası). lm:active 542. slotta; her oturum anahtarının slotu kendi adından çıkar."]
+          - ["ZADD, ZREM, ZCOUNT, ZCARD ve ZREMRANGEBYSCORE", "ZADD: kümeye üye ekle ya da puanını güncelle. ZREM: bir üyeyi çıkar. ZCOUNT anahtar a b: puanı a ile b arasında olan üye sayısı (+inf: sonsuz, üst sınır yok). ZCARD: kümedeki üye sayısı. ZREMRANGEBYSCORE anahtar -inf b: puanı b'ye kadar olan bütün üyeleri sil (-inf: eksi sonsuz, alt sınır yok)."]
+          - ["Tahliye (eviction) ve maksimum veri depolama", "Maksimum veri depolama: Ekip'in serverless belleğe koyduğu üst sınır (burada 5 GB, temsilî; harcamayı sınırlar). AWS belgelerine göre bellek bu sınıra gelince ElastiCache ömrü (TTL) olan anahtarlar arasından en uzun süredir dokunulmayanları siler (LRU: least recently used, en uzun süredir kullanılmayan); silinecek anahtar kalmazsa yeni yazmalar Out Of Memory (bellek yok) hatası alır. Buna tahliye denir; dolu bir dolaptan en eski kutuyu atmak gibi. Node-based bellekte bu kural maxmemory-policy ayarıyla seçilir: volatile-lru (varsayılan) sadece ömrü olanlardan, allkeys-lru bütün anahtarlardan siler; noeviction hiçbir şey silmez, yeni yazmayı reddeder."]
+          - ["Yük dengeleyici (ALB) ve yapışkan oturum", "ALB: tarayıcıdan gelen istekleri Uygulama sunucuları arasında paylaştıran AWS servisi; HTTPS şifresini o çözer. Hedef grubu: ALB'nin istek gönderdiği sunucuların listesi ve ayarları. Yapışkan oturum (sticky session): ALB'nin bir ziyaretçiyi hep aynı sunucuya göndermesi; hedef grubunun bir ayarıdır. Varsayılan olarak kapalıdır; bu mağazada da kapalı, çünkü oturum hiçbir sunucunun kendi belleğinde değil."]
+          - ["DynamoDB'deki sepet", "Sepet oturumda değil, DynamoDB'de durur: şifresiz gezenin sepeti CART#<ziyaretçi> (ör. CART#7f3a…), giriş yapanınki CART#<müşteri> (ör. CART#C00009). Giriş yapınca sepet müşterinin sepetine taşınır (Adım 12). Bellek kaybolsa da sepet kalır. Siparişler ise Aurora'da (tablolu, ilişkisel bir veritabanı) durur."]
+          - ["Temizlik işi, Lambda ve EventBridge Scheduler", "Temizlik işi: AWS Lambda'da (kısa kodu olay gelince çalıştıran AWS servisi) çalışan kodumuz. EventBridge Scheduler (AWS'in zamanlayıcısı) onu her dakika çalıştırır. lm:active'ten bir saatten eski üyeleri siler ve iki sayıyı CloudWatch'a yazar."]
+          - ["CloudWatch, ölçü ve alarm", "AWS'in ölçüm ve alarm servisi. ElastiCache'in kendi ölçüleri: BytesUsedForCache (verinin kapladığı bayt), Evictions (tahliye edilen anahtar), CurrConnections (açık bağlantı), CurrItems (anahtar sayısı), CurrVolatileItems (ömrü olan anahtar sayısı). Bizim ölçülerimiz (Shop/Session): ActiveVisitors (son 5 dakikada görülen), ActiveSetSize (kümedeki üye), SessionRequests (çerezli istek) ve SessionMiss (çerez var ama oturum bellekte yok)."]
+          - ["Oturum sabitleme (session fixation)", "Saldırganın bildiği bir kimliği kurbanın tarayıcısına yerleştirip, kurban giriş yapınca o kimlikle onun hesabına girmesi. Önlem: girişte kimlik hep yenilenir; eski değer hiçbir şeye yaramaz."]
+          - ["Kesit, temsilî ve Olsaydı", "Kesit: simülasyonda t0'da önemli olan iki anahtar (senin oturumun ve lm:active); başka ziyaretçilerin oturumları \"kesitin dışında\" tablosunda. lm:active'in bu örnekteki bütün üyeleri ayrı bir tabloda (gerçek mağazada binlerce). Temsilî: canlı sistemden gelmeyen, anlatım için seçilmiş değer. \"Olsaydı\" kareleri yaşanmadı; her biri ayrı bir durumdur ve birbirine eklenmez."]
+          - ["Kod kartlarındaki sözcükler", "r: Uygulama'nın belleğe bağlantısı (redis-py, Python'un Redis/Valkey kütüphanesi). p = r.pipeline(): tek paket aç; transaction=True: paketi MULTI … EXEC içine al; p.execute(): paketi gönder. r.hset(k, mapping={…}): hash'in alanlarını yaz. r.expire(k, 1800): 1800 saniye ömür. r.zadd(\"lm:active\", {kimlik: şimdi}): üye ekle ya da puanını güncelle. r.delete / r.zrem / r.zcount / r.zcard / r.zremrangebyscore / r.hgetall: DEL, ZREM, ZCOUNT, ZCARD, ZREMRANGEBYSCORE, HGETALL. uuid.uuid4(): rastgele yeni kimlik. now / simdi: şu anki Unix zamanı. k, eski, yeni: anahtar adı, eski ve yeni kimlik. resp.set_cookie(…): Set-Cookie satırını yaz; httponly, secure, samesite: çerezin bayrakları; max_age: çerezin ömrü (2592000 sn = 30 gün). put_metric_data: CloudWatch'a ölçü yaz. time.time(): şu anki Unix zamanı. boyut, aktif: ZCARD ve ZCOUNT'un cevabı. s: okunan oturum; s.get(\"login_at\"): oturumdaki giriş zamanı (yoksa boş). metrik(…): Uygulama'nın bir sayıyı CloudWatch'a eklemesi. yeni_oturum(…): yeni oturumu yazan yardımcı (HSET, EXPIRE, ZADD). giris_iste(): şifre sayfasına gönder. cerez: testin okuduğu Set-Cookie satırı; assert: \"bu doğru olmalı\", değilse test kalır. Erişim dizesi: on açık, ~lm:* sadece lm: anahtarları, -@all önce bütün komutlar kapalı, +@read +@write okuma ve yazma açık, -@dangerous tehlikeli komutlar kapalı. UpdateItem pk=… sk=…: DynamoDB'de bir sepet satırını yaz; pk sepetin adı (CART#…), sk ürünün adı (ITEM#…) (Adım 12). aws elasticache update-serverless-cache: belleğin ayarını değiştir. aws elbv2 modify-target-group-attributes: ALB'nin hedef grubunun ayarı. Alarm satırlarında Sum/Maximum: 5 dakikanın toplamı / en büyük değeri; ≥: eşik ya da üstü. # ve -- sonrası açıklama; … kısaltılmış kısım."]
+          - ["Diğer adlar", "Uygulama: mağazanın arka uç programı (EC2 sunucularında: AWS'in kiralık sanal sunucuları; bu bölümde iki tanesi, A ve B); tarayıcıdan gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar. Mağaza sayfaları: tarayıcında çalışan sayfa kodu. Derleme hattı: her kod değişikliğinde testleri kendiliğinden çalıştıran sistem (Adım 19); bir test kalırsa değişiklik canlıya çıkmaz. \"Adım 1\", \"Adım 12\" gibi adlar bu görevin (mağazadaki 37 adımın) adımlarıdır; simülasyonun sayacındaki \"Adım 1 / 20\" ise simülasyonun karesidir. 09bd…, 2e6b…, 5b8e…, c41e…, d17c…: başka ziyaretçilerin kimlikleri (temsilî)."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra"
+          sütunu isteği ya da bilgiyi kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim
+          kodumuz" etiketli parçaları mağazanın ekibi yazar. Her sayfa açılışı tarayıcıdaki sayfadan ALB'ye, oradan
+          sunuculardan birindeki Uygulama'ya gider; Uygulama oturumu ElastiCache'te yazar ve aktif ziyaretçiler kümesini
+          günceller. Sepet DynamoDB'de durur. EventBridge Scheduler her dakika temizlik işini başlatır; iş kümeyi temizler ve sayar; CloudWatch belleği ve
+          oturumları izler. Aynı parçalar aşağıdaki simülasyonda birer kutu: üstte isteğin yolu, ortada depolar, altta
+          yandaki işler.
+        inventory:
+          - id: page
+            name: Mağaza sayfaları (tarayıcıdaki kod)
+            kind: code
+            what: sayfanın tarayıcında çalışan kodu
+            does: >-
+              Her sayfa açılışında, sayfa yüklenince Uygulama'ya ayrı ve küçük bir "oturumumu yaz" isteği (POST …/api/session) gönderir, açılan sayfanın adresiyle (ör. /deals).
+              lm_visitor çerezini kendisi okuyamaz (HttpOnly); tarayıcı onu her isteğe kendiliğinden ekler.
+            box: "Her sayfada \"oturumu yaz\" isteği; çerezi tarayıcı ekler."
+            phases: [1, 2, 3, 4]
+            before: Ziyaretçi (sayfa açar, giriş ya da çıkış yapar)
+            after: alb
+          - id: alb
+            name: Yük dengeleyici (ALB)
+            kind: aws
+            what: AWS'in yük dengeleme servisi
+            does: >-
+              HTTPS bağlantısını karşılar ve şifreyi çözer. Her isteği o an sıradaki Uygulama sunucusuna gönderir; yapışkan
+              oturum kapalı, yani aynı ziyaretçinin istekleri farklı sunuculara düşebilir.
+            box: "İstekleri sunuculara paylaştırır; yapışkan oturum kapalı."
+            phases: [1, 2, 3, 4]
+            before: page
+            after: web
+          - id: web
+            name: Uygulama (oturum kodu)
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucularında, A ve B)
+            does: >-
+              Çerezsiz gelen tarayıcıya rastgele bir kimlik verir (Set-Cookie: HttpOnly, Secure, SameSite=Lax). Her istekte
+              oturumu tek pakette yazar: HSET + EXPIRE 1800 (MULTI … EXEC), ayrıca ZADD lm:active. Girişte kimliği yeniler ve
+              eski oturumu siler; çıkışta oturumu siler; giriş yapmış oturuma 12 saatlik kesin sınır koyar. Oturumun
+              kaybolduğu istekleri sayar (SessionMiss).
+            box: "Kimlik verir; her istekte HSET + EXPIRE 1800 + ZADD; girişte yeni kimlik, çıkışta DEL."
+            phases: [1, 2, 3, 4]
+            before: [alb, "Ekip (ayarlar)"]
+            after: [cache, ddb, monitor, "Tarayıcı (Set-Cookie)"]
+          - id: cache
+            name: ElastiCache (Valkey, canlı bellek)
+            kind: aws
+            what: bellekte çalışan veritabanı (Serverless)
+            does: >-
+              Oturumları (lm:session:<kimlik>, hash, 30 dakika kayan ömür) ve aktif ziyaretçiler kümesini (lm:active, ömürsüz)
+              tutar. Ömrü dolan anahtarı kendisi siler. Maksimum veri depolama sınırına gelirse ömrü olan anahtarları tahliye
+              eder. Veriyi birden fazla Availability Zone'da (ayrı veri merkezleri) tutar.
+            box: "lm:session:… (30 dk kayan ömür) ve lm:active; ömrü dolanı kendisi siler."
+            phases: [1, 2, 3, 4]
+            before: [web, cleaner]
+            after: [web, "Canlı ekran (Adım 33)", "Oturum kutusu (t0)"]
+          - id: ddb
+            name: DynamoDB (sepetler)
+            kind: aws
+            what: anahtar-değer veritabanı, kalıcı
+            does: >-
+              Sepetlerin asıl kaydı: şifresiz gezenin sepeti CART#<ziyaretçi>, giriş yapanınki CART#<müşteri>. Oturum sepeti
+              taşımaz; bellek kaybolsa da sepet burada kalır. Girişte Uygulama sepeti müşterinin sepetine taşır (Adım 12).
+            box: "Sepetler: CART#<ziyaretçi> ya da CART#<müşteri>; kalıcı."
+            phases: [1, 2, 3, 4]
+            before: web
+            after: "Sepet sayfası (Adım 15)"
+          - id: scheduler
+            name: EventBridge Scheduler
+            kind: aws
+            what: AWS'in zamanlayıcı servisi
+            does: >-
+              Temizlik işini her dakika bir kez çalıştırır (rate(1 minute)); çalıştıramazsa yeniden dener.
+            box: "Her dakika temizlik işini başlatır."
+            phases: [1, 2, 3, 4]
+            before: "Ekip (görev)"
+            after: cleaner
+          - id: cleaner
+            name: Temizlik işi (Lambda, her dakika)
+            kind: code
+            what: AWS Lambda'da çalışan kod
+            does: >-
+              lm:active'ten son görülmesi bir saatten eski üyeleri siler (ZREMRANGEBYSCORE). Sonra kümeyi sayar: son 5
+              dakikada görülen (ZCOUNT) ve toplam üye (ZCARD); iki sayıyı CloudWatch'a yazar.
+            box: "Her dakika: 1 saatten eski üyeleri sil, say, CloudWatch'a yaz."
+            phases: [1, 2, 3, 4]
+            before: [scheduler, cache]
+            after: [cache, monitor]
+          - id: monitor
+            name: CloudWatch alarmları
+            kind: aws
+            what: AWS'in izleme servisi
+            does: >-
+              Üç alarm: oturum-bellek (BytesUsedForCache, sınırın %75'i), oturum-tahliye (Evictions, 5 dakikada 1 ya da üstü),
+              oturum-kayip-orani (SessionMiss ÷ SessionRequests, 5 dakikada %20'nin üstü, en az 200 istekle). Ayrıca
+              ActiveVisitors, ActiveSetSize, CurrConnections, CurrItems ve CurrVolatileItems'ı panoda gösterir.
+            box: "Bellek %75, tahliye ≥ 1, oturum kaybı > %20 (en az 200 istek)."
+            phases: [1, 2, 3, 4]
+            before: [cache, web, cleaner]
+            after: Ekip (alarm)
+        sim_title: "Simülasyon: senin oturumun ve aktif ziyaretçiler kümesi t0'a nasıl geldi?"
+        sim:
+          kind: pipeline
+          title: Sayfa → ALB → Uygulama → ElastiCache ve DynamoDB; yanda her dakikalık temizlik ve alarmlar
+          caption: >-
+            Canlı belleğin ilk tablosu kesit: t0'daki simülasyonun iki anahtarı (senin oturumun ve lm:active). İkinci tablo
+            lm:active'in bu örnekteki bütün üyelerini, üçüncüsü kesitin dışındaki başka ziyaretçilerin oturumlarını
+            gösteriyor. Önce hazırlık (29 Eki) ve yeni sitenin açılışı (30 Eki 20:00), sonra ilk ziyaretler ve senin ilk
+            gelişin, sonra her sayfada yenilenen süre, ömrü dolan oturumlar, bir giriş, bir çıkış ve her dakikalık temizlik;
+            en sonda "Olsaydı" kareleri (süresi dolmuş oturumla dönen ziyaretçi, dolan bellek, kaybolan bellek). "Olsaydı"
+            kareleri yaşanmadı, her biri ayrı bir durum. Canlı sistemden: anahtar adları, alanlar (persona, last_page,
+            seen_at), 1800 saniyelik ömür, 5 dakikalık pencere ve lm:active'in slotu (542). Temsilî ama t0'daki simülasyonla
+            aynı: puanlar ve seen_at. Temsilî:
+            tarihler, ziyaretçi kimlikleri, sayfalar, bellek ve istek sayıları. Son karede her şey senin tıklamandan (t0)
+            hemen önceki hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım}
+          rows:
+            - {id: req, title: "Her istek: sayfa → ALB → Uygulama", flow: true}
+            - {id: stores, title: "Depolar: bellek (oturumlar) ve kalıcı sepet"}
+            - {id: helpers, title: "Yandaki işler: her dakikalık temizlik ve alarmlar", side: true}
+          summary: >-
+            29 Eki'de belleğe 5 GB'lık bir üst sınır, Uygulama'nın kullanıcısına dar bir izin, ALB'ye "yapışkan oturum yok",
+            temizlik işine her dakikalık bir görev ve üç alarm kuruldu. 30 Eki 20:00'de yeni site oturumsuz açıldı. Sen t0 −
+            50 dk'da geldin: Uygulama sana rastgele bir kimlik (7f3a…) verdi ve oturumunu 1800 saniyelik ömürle yazdı. Her
+            sayfada ömür baştan başladı; isteklerin iki ayrı sunucuya düştü ama oturum aynı kaldı. 09bd… ve 2e6b…'nin
+            oturumları kendiliğinden bitti, 5b8e… giriş yapınca d17c… oldu ve sonra çıktı, temizlik işi bir saatten eski
+            üyeyi sildi. Son durum: oturumun persona C00001, last_page /deals, seen_at 1793394900; lm:active'te 3 üye (7f3a…
+            1793394900, c41e… 1793394600, 2e6b… 1793391800); üç alarm OK.
+          boxes:
+            - id: page
+              row: req
+            - id: alb
+              row: req
+            - id: web
+              row: req
+            - id: cache
+              row: stores
+              tables:
+                - name: "kesit: t0'daki 2 anahtar"
+                  cols: [anahtar, değer, ömür]
+                  rows:
+                    - {key: sess, anahtar: "lm:session:7f3a…", değer: "persona C00001 · last_page / · seen_at 1793392000", ömür: "1800 sn", hidden: true}
+                    - {key: act, anahtar: "lm:active (slot 542)", değer: "0 üye", ömür: "yok (üyeleri temizlik işi siler)", hidden: true}
+                - name: "lm:active üyeleri (puan: son görülme)"
+                  cols: [üye, puan]
+                  rows:
+                    - {key: m09bd, üye: "09bd…", puan: "1793391300", hidden: true}
+                    - {key: m2e6b, üye: "2e6b…", puan: "1793391800", hidden: true}
+                    - {key: m7f3a, üye: "7f3a… (sen)", puan: "1793392000", hidden: true}
+                    - {key: m5b8e, üye: "5b8e…", puan: "1793392300", hidden: true}
+                    - {key: md17c, üye: "d17c…", puan: "1793393800", hidden: true}
+                    - {key: mc41e, üye: "c41e…", puan: "1793394600", hidden: true}
+                - name: "kesitin dışında: başka oturumlar"
+                  cols: [anahtar, değer, ömür]
+                  rows:
+                    - {key: s09bd, anahtar: "lm:session:09bd…", değer: "persona C00005 · last_page /", ömür: "1800 sn", hidden: true}
+                    - {key: s2e6b, anahtar: "lm:session:2e6b…", değer: "persona C00006 · last_page /deals", ömür: "1800 sn", hidden: true}
+                    - {key: s5b8e, anahtar: "lm:session:5b8e…", değer: "persona yok · last_page /cart", ömür: "1800 sn", hidden: true}
+                    - {key: sd17c, anahtar: "lm:session:d17c…", değer: "persona C00009 · login_at ve seen_at 1793393800", ömür: "1800 sn · en çok 12 sa", hidden: true}
+                    - {key: sc41e, anahtar: "lm:session:c41e…", değer: "persona C00003 · last_page /cart", ömür: "1800 sn", hidden: true}
+            - id: ddb
+              row: stores
+              tables:
+                - name: "sepetler (kesit)"
+                  cols: [pk, durum]
+                  rows:
+                    - {key: cc41e, pk: "CART#c41e…", durum: "T anında eski siteden taşındı", hidden: true}
+                    - {key: c5b8e, pk: "CART#5b8e…", durum: "2 satır", hidden: true}
+                    - {key: c7f3a, pk: "CART#7f3a…", durum: "senin satırların (Adım 12)", hidden: true}
+                    - {key: cC9, pk: "CART#C00009", durum: "—", hidden: true}
+            - id: scheduler
+              row: helpers
+            - id: cleaner
+              row: helpers
+              tables:
+                - name: "son çalışma"
+                  cols: [ölçü, değer]
+                  rows:
+                    - {key: at, ölçü: "çalıştı", değer: "—", hidden: true}
+                    - {key: cut, ölçü: "silme sınırı (şimdi − 3600)", değer: "—", hidden: true}
+                    - {key: del, ölçü: "silinen üye", değer: "—", hidden: true}
+                    - {key: size, ölçü: "ActiveSetSize (ZCARD)", değer: "—", hidden: true}
+                    - {key: act5, ölçü: "ActiveVisitors (son 5 dk)", değer: "—", hidden: true}
+            - id: monitor
+              row: helpers
+              tables:
+                - name: "oturum alarmları"
+                  cols: [alarm, durum]
+                  rows:
+                    - {key: a1, alarm: "oturum-bellek", durum: OK, hidden: true}
+                    - {key: a2, alarm: "oturum-tahliye", durum: OK, hidden: true}
+                    - {key: a3, alarm: "oturum-kayip-orani", durum: OK, hidden: true}
+          frames:
+            - phase: 2
+              who: cache
+              lit: [cache, monitor]
+              packet: {at: cache, text: "29 Eki · update-serverless-cache --cache-usage-limits DataStorage={Maximum=5,Unit=GB} · Uygulama'nın kullanıcısı: \"on ~lm:* … -@dangerous\" · 3 alarm"}
+              show: {monitor: [a1, a2, a3]}
+              fresh: {monitor: [a1, a2, a3]}
+              note: {cache: "sınır 5 GB · oturum yok", monitor: "üç alarm kuruldu: OK"}
+              say: >-
+                29 Eki (temsilî). Ekip canlı belleğe bir üst sınır koydu: en çok 5 GB veri (bugünkü kullanımın çok üstünde;
+                sınır harcamayı korur). Uygulama'nın belleğe bağlandığı kullanıcının izni sadece lm: ile başlayan anahtarlar;
+                bütün belleği silen komutlar (FLUSHALL gibi) kapalı. CloudWatch'a üç alarm kuruldu: bellek, tahliye, oturum
+                kaybı.
+            - phase: 2
+              who: web
+              lit: [alb, web, scheduler, cleaner]
+              packet: {at: alb, text: "29 Eki · hedef grubu: stickiness.enabled=false · Uygulama: Set-Cookie … HttpOnly; Secure; SameSite=Lax · temizlik işi: rate(1 minute)"}
+              show: {cleaner: [at, cut, del, size, act5]}
+              note: {cache: "", monitor: "", alb: "yapışkan oturum kapalı", web: "A ve B sunucuları · aynı kod", scheduler: "görev: rate(1 minute)", cleaner: "her dakika çalışacak"}
+              say: >-
+                Aynı gün ALB'nin hedef grubunda yapışkan oturum kapalı bırakıldı: istekler A ve B sunucularına sırayla gider.
+                Uygulama çerezi HttpOnly, Secure ve SameSite=Lax bayraklarıyla verecek. EventBridge Scheduler'a temizlik
+                işini her dakika çalıştıran bir görev kuruldu.
+            - phase: 2
+              who: web
+              lit: [web, cache, ddb]
+              packet: {at: web, text: "30 Eki 20:00 · T: yeni site açıldı · eski sitenin oturumları taşınmadı · sepetler taşındı (Adım 12)"}
+              show: {ddb: [cc41e]}
+              fresh: {ddb: [cc41e]}
+              note: {alb: "", scheduler: "", cleaner: "", web: "ilk istek oturumu kurar", cache: "oturum yok · lm:active henüz yok", ddb: "taşınan sepetler (kesit: 1)"}
+              say: >-
+                30 Eki 20:00, T anı: yeni site açıldı (Adım 12). Bellekte hiç oturum yok ve eski sitenin oturumları taşınmadı (eski site de aynı adlı çerezi aynı bayraklarla kullanıyordu): oturum kısa ömürlü bir nottur, ziyaretçinin bir sonraki isteği onu yeniden kurar. Kalıcı olan sepetler
+                ise DynamoDB'ye taşındı (ör. CART#c41e…). lm:active ilk ZADD'de doğacak.
+            - phase: 2
+              who: web
+              lit: [page, alb, web, cache]
+              packet: {at: cache, text: "t0 − 3700 sn · MULTI · HSET lm:session:09bd… … · EXPIRE … 1800 · EXEC · ZADD lm:active 1793391300 09bd… · t0 − 3200 sn: aynısı 2e6b… için"}
+              show: {cache: [act, m09bd, m2e6b, s09bd, s2e6b]}
+              set: {cache: {act: {değer: "2 üye"}}}
+              fresh: {cache: [m09bd, m2e6b, s09bd, s2e6b, act]}
+              note: {ddb: "", web: "2 yeni oturum", cache: "lm:active doğdu: 2 üye", page: "her sayfada \"oturumu yaz\""}
+              say: >-
+                t0'dan 3.700 ve 3.200 saniye önce iki ziyaretçi geldi (09bd… ve 2e6b…). Her biri için Uygulama oturumu tek
+                pakette yazdı (HSET ve EXPIRE 1800) ve kümeye puanıyla ekledi. İlk ZADD lm:active'i kurdu; kümenin kendisinin
+                ömrü yok, üyelerini temizlik işi siler.
+            - phase: 2
+              who: web
+              lit: [page, alb, web, cache]
+              packet: {at: web, text: "t0 − 3000 sn · sunucu A · çerez yok → uuid4 → 7f3a… · Set-Cookie: lm_visitor=7f3a…; Path=/; Max-Age=2592000; HttpOnly; Secure; SameSite=Lax · MULTI HSET … EXPIRE 1800 EXEC · ZADD lm:active 1793392000 7f3a…"}
+              show: {cache: [sess, m7f3a]}
+              set: {cache: {act: {değer: "3 üye"}}}
+              fresh: {cache: [sess, m7f3a, act]}
+              note: {page: "ilk sayfa: /", web: "yeni kimlik: 7f3a… (rastgele)", cache: "senin oturumun doğdu: 1800 sn"}
+              say: >-
+                t0 − 50 dk. Sen ilk kez geldin; tarayıcında lm_visitor çerezi yoktu. Uygulama rastgele yeni bir kimlik üretti
+                (7f3a…) ve cevabına Set-Cookie satırıyla ekledi; istek A sunucusuna düşmüştü. İlk sayfada persona olarak C00001'i (Ayşe Yılmaz) seçtin;
+                sayfanın "oturumumu yaz" isteği bu seçimi taşıdı ve Uygulama oturumunu yazdı: persona C00001, last_page /, seen_at 1793392000, ömür 1800 saniye; kümeye de girdin.
+            - phase: 3
+              who: web
+              lit: [page, alb, web, cache, ddb]
+              packet: {at: ddb, text: "t0 − 2700 sn · 5b8e… (şifresiz, persona seçmedi) · MULTI HSET lm:session:5b8e… … EXPIRE 1800 EXEC · ZADD 1793392300 5b8e… · sepete 2 ürün → CART#5b8e…"}
+              show: {cache: [m5b8e, s5b8e], ddb: [c5b8e]}
+              set: {cache: {act: {değer: "4 üye"}}}
+              fresh: {cache: [m5b8e, s5b8e, act], ddb: [c5b8e]}
+              note: {page: "", web: "", cache: "4 oturum · 4 üye", ddb: "sepet DynamoDB'de, oturumda değil"}
+              say: >-
+                t0 − 45 dk. Başka bir ziyaretçi (5b8e…) şifresiz gezdi ve sepetine 2 ürün ekledi. Oturumuna sadece kim ve
+                nerede yazıldı; sepet DynamoDB'ye, tarayıcının kimliğiyle (CART#5b8e…) gitti.
+            - phase: 3
+              who: alb
+              lit: [page, alb, web, cache]
+              packet: {at: alb, text: "t0 − 2100 sn · GET /p/P0131, sonra POST …/api/session · 7f3a… → sunucu B (önceki istek A'ya gitmişti) · B: MULTI HSET last_page /p/P0131 seen_at 1793392900 · EXPIRE 1800 · EXEC · ZADD"}
+              set: {cache: {sess: {değer: "persona C00001 · last_page /p/P0131 · seen_at 1793392900", ömür: "1800 sn (baştan)"}, m7f3a: {puan: "1793392900"}}}
+              fresh: {cache: [sess, m7f3a]}
+              note: {ddb: "", web: "B sunucusu aynı oturumu yazdı", alb: "bu kez B sunucusu", cache: "ömür yine 1800 sn"}
+              say: >-
+                t0 − 35 dk. Bir ürün sayfası açtın. ALB isteği bu kez B sunucusuna gönderdi; ilk isteğin A'ya gitmişti. B
+                oturumu aynı anahtarda buldu ve güncelledi: oturum sunucuda değil, ortak bellekte. EXPIRE ömrü yeniden 1800
+                saniyeye çekti: kayan süre.
+            - phase: 3
+              who: web
+              lit: [web, ddb]
+              packet: {at: ddb, text: "t0 − 2050 sn · sepete ekle (Adım 12) · UpdateItem pk=CART#7f3a… sk=ITEM#P0131 · oturuma dokunulmadı"}
+              show: {ddb: [c7f3a]}
+              fresh: {ddb: [c7f3a]}
+              note: {alb: "", cache: "", web: "sepet: DynamoDB", ddb: "senin sepetin: CART#7f3a…"}
+              say: >-
+                Ürünü sepete ekledin (Adım 12). Uygulama satırı DynamoDB'ye, CART#7f3a… sepetine yazdı. Oturumda sepet yok:
+                bellek bir gün kaybolsa da sepetin burada kalır. Sepete ekleme isteği oturumu yazmaz; oturumu sayfa
+                açılışları canlı tutar.
+            - phase: 3
+              who: cache
+              lit: [cache]
+              packet: {at: cache, text: "t0 − 1900 sn · lm:session:09bd… ömrü doldu → silindi · t0 − 1400 sn · lm:session:2e6b… → silindi · üyeleri kümede duruyor"}
+              hide: {cache: [s09bd, s2e6b]}
+              mark: {cache: {m09bd: fix, m2e6b: fix}}
+              note: {web: "", ddb: "", cache: "2 oturum kendiliğinden silindi · 2 eski üye kümede"}
+              say: >-
+                09bd… ve 2e6b… 30 dakika boyunca hiç sayfa açmadı. Ömürleri dolunca ElastiCache iki oturumu kendisi sildi;
+                hiçbir komut gönderilmedi. Kümedeki üyelerinin ise ayrı bir ömrü yok, hâlâ duruyorlar. Bu yüzden "aktif kaç kişi?"
+                sorusu kümenin bütününe (ZCARD) değil, son 5 dakikaya (ZCOUNT) sorulur.
+            - phase: 3
+              who: web
+              lit: [page, alb, web, cache]
+              packet: {at: web, text: "t0 − 1200 sn · 5b8e… giriş: C00009 · uuid4 → d17c… · MULTI HSET lm:session:d17c… persona C00009 login_at 1793393800 seen_at 1793393800 EXPIRE 1800 EXEC · DEL lm:session:5b8e… · ZREM 5b8e… · ZADD 1793393800 d17c… · Set-Cookie: lm_visitor=d17c…"}
+              show: {cache: [sd17c, md17c]}
+              hide: {cache: [s5b8e, m5b8e]}
+              mark: {cache: {m09bd: "", m2e6b: ""}}
+              fresh: {cache: [sd17c, md17c]}
+              note: {cache: "eski kimlik silindi, yeni kimlik yazıldı", web: "girişte kimlik yenilendi"}
+              say: >-
+                t0 − 20 dk. 5b8e… şifresiyle müşteri C00009 olarak giriş yaptı. Uygulama şifreyi kontrol ettikten sonra yeni
+                bir rastgele kimlik verdi (d17c…), yeni oturuma müşteriyi ve giriş zamanını yazdı, eski oturumu ve eski
+                üyeyi hemen sildi. Girişten önce birinin bildiği eski değer artık hiçbir şeye yaramaz.
+            - phase: 3
+              who: web
+              lit: [web, ddb]
+              packet: {at: ddb, text: "CART#5b8e… (2 satır) → CART#C00009 · eski sepet silindi (Adım 12)"}
+              hide: {ddb: [c5b8e]}
+              show: {ddb: [cC9]}
+              set: {ddb: {cC9: {durum: "2 satır (5b8e…'den)"}}}
+              fresh: {ddb: [cC9]}
+              note: {page: "", alb: "", cache: "", ddb: "sepet müşteriye taşındı"}
+              say: >-
+                Aynı istekte Uygulama şifresiz sepeti müşterinin sepetine taşıdı: 2 satır CART#C00009'a geçti (Adım 12).
+                Kimlik değişti ama sepet kaybolmadı, çünkü sepet oturumda değil.
+            - phase: 3
+              who: web
+              lit: [page, alb, web, cache]
+              packet: {at: alb, text: "t0 − 1100 sn · GET /cart, sonra POST …/api/session · 7f3a… → sunucu A · MULTI HSET last_page /cart seen_at 1793393900 · EXPIRE 1800 · EXEC · ZADD 1793393900 7f3a…"}
+              set: {cache: {sess: {değer: "persona C00001 · last_page /cart · seen_at 1793393900"}, m7f3a: {puan: "1793393900"}}}
+              fresh: {cache: [sess, m7f3a]}
+              note: {ddb: "", alb: "yine A sunucusu", web: "", cache: "ömür yine 1800 sn"}
+              say: >-
+                t0 − 1100 sn. Sepetine baktın. İstek A sunucusuna düştü; oturum yine aynı anahtarda güncellendi ve ömrü yine
+                1800 saniyeden başladı. Önceki yazmadan bu yana 1.000 saniye geçmişti; 1.800'ü geçmediği için oturum hiç
+                bitmedi.
+            - phase: 3
+              who: web
+              lit: [page, alb, web, cache, ddb]
+              packet: {at: web, text: "t0 − 800 sn · d17c… çıkış · DEL lm:session:d17c… · ZREM lm:active d17c… · Set-Cookie: lm_visitor=…; Max-Age=0 · CART#C00009 duruyor"}
+              hide: {cache: [sd17c, md17c]}
+              set: {cache: {act: {değer: "3 üye"}}}
+              fresh: {cache: [act]}
+              note: {alb: "", cache: "oturum hemen silindi", web: "çıkış: DEL, çerez silindi", ddb: "müşterinin sepeti kalıcı"}
+              say: >-
+                t0 − 800 sn. Müşteri C00009 "oturumu kapat" dedi. Uygulama süre dolmasını beklemedi: oturumu DEL ile hemen
+                sildi, kümeden çıkardı ve tarayıcıya çerezi silmesini söyledi (Max-Age=0). Müşterinin sepeti DynamoDB'de
+                kaldı; bir sonraki girişte orada olacak.
+            - phase: 3
+              who: web
+              lit: [page, alb, web, cache]
+              packet: {at: cache, text: "t0 − 400 sn · c41e… (sepeti T'de taşınmıştı) · MULTI HSET lm:session:c41e… … EXPIRE 1800 EXEC · ZADD lm:active 1793394600 c41e…"}
+              show: {cache: [sc41e, mc41e]}
+              set: {cache: {act: {değer: "4 üye"}}}
+              fresh: {cache: [sc41e, mc41e, act]}
+              note: {ddb: "", web: "SessionMiss +1 (normal: uzun ara)", cache: "yeni oturum: c41e…"}
+              say: >-
+                t0 − 400 sn. c41e… (sepeti T anında eski siteden taşınmıştı) mağazaya döndü ve sepetine baktı. Bellekte
+                oturumu yoktu (son gelişinden bu yana 30 dakikadan çok geçmişti); Uygulama bu isteği oturum kaybı (SessionMiss) olarak saydı,
+                yeni oturumu yazdı ve kümeye 1793394600 puanıyla ekledi. Bu puanı t0'daki simülasyonda da göreceksin.
+            - phase: 3
+              who: web
+              lit: [page, alb, web, cache]
+              packet: {at: web, text: "t0 − 100 sn · GET /deals, sonra POST …/api/session · MULTI HSET lm:session:7f3a… persona C00001 last_page /deals seen_at 1793394900 · EXPIRE 1800 · EXEC · ZADD lm:active 1793394900 7f3a…"}
+              set: {cache: {sess: {değer: "persona C00001 · last_page /deals · seen_at 1793394900"}, m7f3a: {puan: "1793394900"}}}
+              fresh: {cache: [sess, m7f3a]}
+              note: {page: "Fırsatlar sayfası", web: "oturum bulundu: kayıp yok", cache: "senin oturumun: /deals, 1800 sn"}
+              say: >-
+                t0 − 100 sn. Fırsatlar sayfasını açtın. Sayfa yine "oturumumu yaz" isteğini gönderdi: last_page /deals,
+                seen_at 1793394900, ömür baştan 1800 saniye; kümede puanın 1793394900. Sonra sayfadaki TTL (ömür) listesinden 30 saniyeyi seçtin (görevin Adım 20'si); o seçim istek göndermedi.
+            - phase: 3
+              who: cleaner
+              lit: [scheduler, cleaner, cache, monitor]
+              packet: {at: cleaner, text: "t0 − 60 sn · ZREMRANGEBYSCORE lm:active -inf 1793391340 → 1 · ZCARD → 3 · ZCOUNT lm:active 1793394640 +inf → 1 · put_metric_data ActiveSetSize 3, ActiveVisitors 1"}
+              hide: {cache: [m09bd]}
+              set: {cache: {act: {değer: "3 üye"}}, cleaner: {at: {değer: "t0 − 60 sn (1793394940)"}, cut: {değer: "1793391340"}, del: {değer: "1 (09bd…)"}, size: {değer: "3"}, act5: {değer: "1 (7f3a…)"}}}
+              fresh: {cache: [act], cleaner: [at, cut, del, size, act5]}
+              note: {page: "", alb: "", web: "", cache: "3 üye kaldı", cleaner: "bu çalışma: silinen 1 · üye 3 · son 5 dk 1", monitor: "son 5 dk (kesitte): çerezli istek 1 · oturum kaybı 0 · 200 istekten az: oran bakılmaz · tahliye 0 · üç alarm OK", scheduler: "t0 − 60 sn: işi başlattı"}
+              say: >-
+                t0 − 60 sn. Temizlik işi çalıştı: bir saatten (3.600 saniye) eski üyeleri sildi; sadece 09bd… o sınırın
+                altındaydı. Kümede 3 üye kaldı. Son 5 dakikada görülen sadece sen varsın (c41e… 340 saniye önce görüldü).
+                İki sayı CloudWatch'a gitti; alarmların üçü de OK. Sayılar kesitteki ziyaretçilerden; gerçek mağazada çok daha fazlası var.
+            - phase: 4
+              who: web
+              lit: [page, alb, web, cache, monitor]
+              packet: {at: web, text: "olsaydı: 2e6b… döndü · HGETALL lm:session:2e6b… → boş · SessionMiss +1 · MULTI HSET … persona C00006 (lm_persona çerezinden) … EXPIRE 1800 EXEC · ZADD"}
+              show: {cache: [s2e6b]}
+              set: {cache: {s2e6b: {değer: "olsaydı: yeniden yazıldı · persona C00006", ömür: "1800 sn"}, m2e6b: {puan: "olsaydı: 1793394970"}}}
+              mark: {cache: {s2e6b: fix, m2e6b: fix}}
+              fresh: {cache: [s2e6b, m2e6b]}
+              note: {scheduler: "", cleaner: "", web: "olsaydı: oturum yok → yeni oturum", cache: "olsaydı: 2e6b… yeniden", monitor: "SessionMiss +1: normal bir kayıp"}
+              say: >-
+                Olsaydı: 2e6b… son gelişinden 53 dakika sonra (t0 − 30 sn) geri gelseydi. Çerezi tarayıcısında duruyor ama oturumu bellekte yok (HGETALL
+                boş döner). Uygulama bunu hata saymaz: aynı kimlikle yeni bir oturum yazar, personayı lm_persona çerezinden
+                alır; şifresiz sepet DynamoDB'de bu kimlikle durduğu için kaybolmaz. Giriş yapmış biri olsaydı şifresini yeniden
+                girerdi. Uygulama bu isteği SessionMiss olarak sayar.
+            - phase: 4
+              who: cache
+              lit: [cache, web, monitor]
+              packet: {at: cache, text: "olsaydı: BytesUsedForCache 3,75 GB → oturum-bellek ALARM · Ekip müdahale etmeseydi: 5 GB → ömrü olanlardan en uzun süredir dokunulmayan silinir → lm:session:c41e… tahliye · Evictions 1 → oturum-tahliye ALARM"}
+              hide: {cache: [s2e6b]}
+              set: {cache: {s2e6b: {değer: "persona C00006 · last_page /deals", ömür: "1800 sn"}, m2e6b: {puan: "1793391800"}, sc41e: {değer: "olsaydı: tahliye edildi", ömür: "—"}}, monitor: {a1: {durum: ALARM}, a2: {durum: ALARM}}}
+              mark: {cache: {s2e6b: "", m2e6b: "", sc41e: fix}, monitor: {a1: fix, a2: fix}}
+              note: {page: "", alb: "", web: "olsaydı: c41e…'in bir sonraki isteği SessionMiss", cache: "olsaydı: c41e…'in oturumu tahliye edildi · lm:active ömürsüz: tahliye edilmez", monitor: "olsaydı: önce bellek %75, sonra tahliye"}
+              say: >-
+                Olsaydı (ayrı bir durum; önceki karenin değişiklikleri geri alındı): bir hata yüzünden bellek dolsaydı. %75'te
+                (3,75 GB) bellek alarmı çalar ve Ekip sınırı kesinti olmadan yükseltir. Kimse bakmasaydı, 5 GB'ta ElastiCache
+                ömrü olan anahtarlardan en uzun süredir dokunulmayanı siler: tam da oturumlar. c41e…'in oturumu giderdi;
+                ömrü olmayan lm:active ise silinmez. Tahliye alarmı ilk silmede çalar.
+            - phase: 4
+              who: cache
+              lit: [web, cache, ddb, scheduler, cleaner, monitor]
+              packet: {at: web, text: "olsaydı, sakin bir akşam saatinde: bellek boş · her ziyaretçinin ilk isteği: HGETALL → boş · ilk 5 dk: SessionMiss / SessionRequests = 1.180 / 1.240 (%95) → oturum-kayip-orani ALARM · yeni oturumlar yazılıyor · sepetler DynamoDB'de"}
+              hide: {cache: [act, sess, s2e6b, m2e6b, m7f3a, mc41e, sc41e]}
+              set: { monitor: {a1: {durum: OK}, a2: {durum: OK}, a3: {durum: ALARM}}, cleaner: {at: {değer: "olsaydı: kayıptan 1 dk sonra"}, del: {değer: "0 (küme yok)"}, size: {değer: "0"}, act5: {değer: "0"}}}
+              mark: {cache: {sc41e: ""}, monitor: {a1: "", a2: "", a3: fix}}
+              fresh: {cleaner: [del, size, act5]}
+              note: {web: "olsaydı: her ziyaretçiye yeni oturum", cache: "olsaydı: bütün anahtarlar gitti (lm:active de)", scheduler: "her dakika yine çalışır", ddb: "sepetler yerinde: hiçbir ürün kaybolmaz", cleaner: "olsaydı: küme boş, sayı 0", monitor: "olsaydı: oturum kaybı %95 → ALARM"}
+              say: >-
+                Olsaydı (ayrı bir durum): bellek tamamen kaybolsaydı (ör. Ekip yönetim yetkisiyle yanlış belleği silip yeniden kursaydı). Bütün oturumlar ve lm:active gider.
+                Her ziyaretçinin bir sonraki isteği oturumu yeniden yazar; şifresiz gezenler bir şey fark etmez, giriş yapmış
+                olanlar şifrelerini yeniden girer. Sepetler DynamoDB'de, siparişler Aurora'da: önemli hiçbir şey kaybolmaz.
+                Sakin bir akşam saatinde 5 dakikada 1.240 çerezli istekten 1.180'i oturumsuz gelir (temsilî): her ziyaretçinin ilk isteği. Canlı ekrandaki aktif sayısı en çok 5 dakika düşük görünür. Oturum kaybı alarmı Ekip'e haber verir.
+            - phase: 4
+              who: cache
+              lit: [page, alb, web, cache, ddb, scheduler, cleaner, monitor]
+              show: {cache: [act, sess, m7f3a, mc41e, m2e6b, sc41e]}
+              set: {cache: {act: {değer: "3 üye"}, sc41e: {değer: "persona C00003 · last_page /cart", ömür: "1800 sn"}}, monitor: {a3: {durum: OK}}, cleaner: {at: {değer: "t0 − 60 sn (1793394940)"}, del: {değer: "1 (09bd…)"}, size: {değer: "3"}, act5: {değer: "1 (7f3a…)"}}}
+              mark: {cache: {act: ""}, monitor: {a3: ""}}
+              fresh: {cache: [sess, act]}
+              note: {page: "Fırsatlar sayfası açık", alb: "", web: "", cache: "kesit: oturumun /deals · lm:active 3 üye", ddb: "sepetin CART#7f3a…'de", scheduler: "her dakika", cleaner: "son çalışma t0 − 60 sn", monitor: "üç alarm OK"}
+              say: >-
+                Hazır. "Olsaydı" kareleri yaşanmadı. Oturumun: persona C00001, last_page /deals, seen_at 1793394900; 1800
+                saniyelik ömürle t0 − 100 sn'de yazıldı, yani t0'da yaklaşık 1.700 saniyesi kaldı. lm:active'te 3 üye: sen
+                (1793394900), c41e… (1793394600) ve 2e6b… (1793391800; oturumu bitti; 1793391800 + 3600 = t0 + 400 sn, t0 + 400 sn'den sonraki ilk temizlik (yaklaşık t0 + 420 sn) onu silecek).
+                t0'da "Refresh the session" deyince Uygulama aynı üç komutu gönderecek, bu kez EXPIRE 30 ile.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Önce oturumun soruları ve içinde ne olacağı, sonra adının (çerezin) nasıl seçilip korunacağı, neden ortak bir
+              bellekte durduğu, ne kadar yaşayacağı, komutların hangi pakette gideceği, aktif ziyaretçilerin nasıl sayılacağı ve
+              belleğin ne kadar büyük olacağı. Kural baştan: oturum kaybolabilir bir nottur; kaybolunca zarar vermeyecek kadar
+              az şey taşır.
+            cards:
+              - title: "Oturumun soruları"
+                text: >-
+                  Mağazanın her isteği iki şey bilmek ister: "bu ziyaretçi kim ve en son nerede?" ve canlı ekran için "son 5
+                  dakikada kaç kişi aktif?". Birincisi adı bilinen tek bir anahtarla, ikincisi zamana göre sıralı bir kümeyle,
+                  arama yapmadan cevaplanır.
+                code:
+                  - {code: "HGETALL lm:session:<kimlik>", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Oturumun bütün alanları; yoksa boş."}
+                  - {code: "ZCOUNT lm:active <şimdi − 300> +inf", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Son 5 dakikada görülen ziyaretçi sayısı (Adım 33)."}
+              - title: "Oturumda ne var, ne yok"
+                text: >-
+                  Oturum, sayfadan sayfaya taşınması gereken en az bilgiyi tutar. Şifre, kart numarası, adres ya da başka bir
+                  servisin anahtarı (token) asla oturuma yazılmaz: bellek çok sayıda sunucunun okuduğu ortak bir yerdir ve
+                  oturum kaybolabilir. Kaybolunca para ya da ürün kaybettirecek bir şey (sepet, sipariş) de burada durmaz.
+                map:
+                  cols: [Alan, Örnek, Neden]
+                  rows:
+                    - ["persona", "C00001", "Sayfalar seni bu müşteri olarak gösterir."]
+                    - ["last_page", "/deals", "Son açılan sayfa; ziyaretçi nerede kaldı?"]
+                    - ["seen_at", "1793394900", "Son istek zamanı; kümedeki puan da aynı istekte yazılır."]
+                    - ["login_at (sadece giriş yapanda)", "1793393800", "12 saatlik kesin sınır buradan hesaplanır."]
+                    - ["YOK: sepet", "CART#7f3a… (DynamoDB)", "Kalıcı olmalı; bellek kaybolsa da durur."]
+                    - ["YOK: şifre, kart, adres, token", "—", "Gizli bilgi kaybolabilir bir notta durmaz."]
+              - title: "Oturumun adı: rastgele bir çerez değeri"
+                text: >-
+                  Anahtarın adı lm:session:<lm_visitor çerezinin değeri>. Değeri sadece Uygulama üretir, güvenli bir rastgele
+                  sayı üreticisiyle (UUID: 122 biti rastgele); müşteri numarasından ya da saatten türetilmez, böylece tahmin
+                  edilemez. Çerez Set-Cookie ile ve üç bayrakla verilir: HttpOnly (sayfadaki kod okuyamaz), Secure (sadece
+                  HTTPS), SameSite=Lax (başka sitenin gizli isteklerine eklenmez). Çerez tarayıcıda 30 gün kalır; oturum ise 30
+                  dakika hareketsizlikte biter. Çerez kalsa da oturum bitebilir; o zaman bir sonraki istek yenisini yazar.
+                code:
+                  - {code: "kimlik = str(uuid.uuid4())   # ör. 7f3a…", tag: Uygulamanın içinde, say: "Tahmin edilemeyen yeni kimlik."}
+                  - {code: "resp.set_cookie(\"lm_visitor\", kimlik, max_age=2592000, path=\"/\",", tag: Uygulama → Tarayıcı, say: "Çerez 30 gün kalır…"}
+                  - {code: "    httponly=True, secure=True, samesite=\"Lax\")", tag: Uygulama → Tarayıcı, say: "…üç bayrakla."}
+              - title: "Neden ortak bir bellek?"
+                text: >-
+                  Mağazanın birden fazla Uygulama sunucusu var ve ALB her isteği ayrı ayrı, sıradaki sunucuya gönderir.
+                  Oturum bir sunucunun kendi belleğinde dursaydı öteki sunucu seni tanımazdı; yapışkan oturumla hep aynı
+                  sunucuya gitmek de o sunucu yeniden başlarken ya da yeni sürüm yüklenirken oturumu kaybettirirdi. Bu yüzden
+                  oturum bütün sunucuların eriştiği ElastiCache'te durur ve yapışkan oturum kapalıdır.
+              - title: "Kayan süre, kesin sınır, giriş ve çıkış"
+                text: >-
+                  Her sayfa açılışında EXPIRE 1800: aktif olanın oturumu yaşar, 30 dakika gelmeyeninki kendiliğinden biter (kayan süre).
+                  Giriş yapmış bir oturumun bir de kesin sınırı var: girişten 12 saat sonra, ne kadar aktif olursa olsun,
+                  Uygulama oturumu siler ve şifre ister; çalınmış bir çerez sonsuza kadar işe yaramaz. Girişte kimlik yenilenir,
+                  çıkışta oturum hemen silinir.
+                map:
+                  cols: [Olay, Komut, "Neyi önler?"]
+                  rows:
+                    - ["her sayfa açılışı", "EXPIRE … 1800", "Giden ziyaretçinin oturumu bellekte kalmaz."]
+                    - ["girişten 12 saat sonra", "DEL lm:session:<kimlik>", "Hep aktif tutulan çalıntı bir çerez sonsuza kadar çalışmaz."]
+                    - ["giriş", "yeni kimlik + DEL eski", "Önceden bilinen bir kimlik girişten sonra işe yaramaz (sabitleme)."]
+                    - ["çıkış", "DEL + Max-Age=0", "Ortak bir bilgisayarda sonraki kişi oturuma giremez."]
+              - title: "Hangi komut hangi pakette? (slotlar)"
+                text: >-
+                  HSET ve EXPIRE aynı anahtara gider, dolayısıyla aynı slota: ikisi tek bir MULTI … EXEC içinde birlikte
+                  çalışır ve ömürsüz bir oturum hiç oluşmaz (yeni bir oturumun ilk HSET'i anahtarı ömürsüz kurar; ömrü hemen
+                  ardından gelen EXPIRE verir). lm:active ise başka bir slotta (542); onu aynı MULTI'ye koymak CROSSSLOT hatası
+                  verirdi. Bu yüzden ZADD paketten hemen sonra, ayrı bir komut olarak gider.
+                code:
+                  - {code: "p = r.pipeline(transaction=True)", tag: Uygulamanın içinde, say: "MULTI … EXEC paketi."}
+                  - {code: "p.hset(k, mapping={\"persona\": persona, \"last_page\": sayfa, \"seen_at\": now})", tag: Uygulama → ElastiCache, say: "Oturumun alanları."}
+                  - {code: "p.expire(k, 1800); p.execute()", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Ömür, aynı pakette."}
+                  - {code: "r.zadd(\"lm:active\", {kimlik: now})", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Kümede puan; ayrı slot, ayrı komut."}
+              - title: "Aktif ziyaretçiler kümesi"
+                text: >-
+                  Her istekte ZADD ziyaretçinin puanını o anki zamana çeker; üye zaten varsa yeni bir satır açılmaz. "Son 5
+                  dakikada kaç kişi?" ZCOUNT ile tek komutta cevaplanır. Kümenin üyelerinin ayrı ayrı ömrü olamaz; bu yüzden
+                  temizlik işi her dakika bir saatten eski üyeleri siler. Bir saat, 5 dakikalık sayımın çok üstünde bir paydır;
+                  küme de büyümez. Kümenin kendisine ömür verilmez: ömürlü olsaydı bütün üyeler bir anda silinir, canlı ekran 0
+                  gösterirdi. Oturumlar için böyle bir iş gerekmez, çünkü her oturumun kendi ömrü var; binlerce oturumu tek tek silen bir
+                  program yazılmaz. Küme ise tek bir anahtar: onu temizlemek dakikada tek bir komuttur.
+                code:
+                  - {code: "ZADD lm:active <şimdi> <kimlik>", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Son görülme zamanı."}
+                  - {code: "ZREMRANGEBYSCORE lm:active -inf <şimdi − 3600>", tag: [Temizlik işi → ElastiCache, ElastiCache → Temizlik işi], say: "Bir saatten eski üyeleri sil."}
+              - title: "Bellek boyu ve tahliye"
+                text: >-
+                  Bir oturum küçük: üç kısa alan, yaklaşık 200 bayt (temsilî). Serverless bellekte bir anahtarın boyunu soran
+                  komut (MEMORY USAGE) yoktur; Ekip bunu kampanya provasının (Adım 16) boş belleğinde, sadece oturumlar
+                  varken BytesUsedForCache ÷ CurrItems ile ölçer. Kampanya gününde 30 dakikada 60.000 ziyaretçi gelse
+                  oturumlar 60.000 × 200 B = 12 MB tutar. Küme üyeleri bir saat kalır: 120.000 üye × yaklaşık 100 B = 12 MB
+                  (temsilî). Asıl tehlike
+                  boyut değil kuraldır: AWS belgelerine göre serverless bellek üst sınırına gelince ömrü olan anahtarları siler;
+                  oturumların hepsinin ömrü var, yani ilk onlar gider. Bu yüzden sınır bolca yüksek tutulur ve %75'te alarm
+                  çalar. Sunucularını Ekip'in seçtiği bir kümede bu kural maxmemory-policy ile seçilirdi (varsayılan
+                  volatile-lru); allkeys-lru ömürsüz lm:active'i de silebilirdi.
+                map:
+                  cols: [Kural, "Ne siler?", "Oturum için"]
+                  rows:
+                    - ["serverless (sabit)", "ömrü olanlardan en uzun süredir dokunulmayanı", "Oturumlar ilk adaydır: sınıra hiç yaklaşma."]
+                    - ["volatile-lru (node-based varsayılan)", "aynısı", "Aynı risk; bellek payı bırak."]
+                    - ["allkeys-lru", "hangi anahtar olursa", "lm:active ve liderlik tablosu da gidebilir."]
+                    - ["noeviction", "hiçbirini; yazma reddedilir", "Yeni oturum yazılamaz: ziyaretçi hata görür."]
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              Bu zincirde büyük bir dosya yüklenmez: 29 Eki'de bellek, ALB, Uygulama, temizlik işi ve alarmlar hazırlanır; 30
+              Eki 20:00'de yeni site oturumsuz açılır. Her oturum ziyaretçinin ilk isteğinde doğar; seninki t0 − 50 dk'da.
+            cards:
+              - title: "Bellek: üst sınır ve dar izin (29 Eki)"
+                text: >-
+                  Canlı bellek ElastiCache Serverless; veriyi kendiliğinden birden fazla Availability Zone'da tutar. Ekip ona
+                  en çok 5 GB veri sınırı koyar (temsilî); bu ayar kesinti olmadan değiştirilebilir. Uygulama'nın bağlandığı
+                  kullanıcı sadece lm: anahtarlarına dokunabilir ve bütün belleği silen komutlar ona kapalıdır; bir koddaki
+                  yanlışlık bütün oturumları silemez.
+                code:
+                  - {code: "aws elasticache update-serverless-cache --serverless-cache-name <canlı bellek> \\", tag: Ekip → ElastiCache, say: "Canlı belleğin ayarı…"}
+                  - {code: "  --cache-usage-limits 'DataStorage={Maximum=5,Unit=GB}'", tag: ElastiCache'in içinde, say: "…en çok 5 GB veri."}
+                  - {code: "erişim dizesi: on ~lm:* -@all +@read +@write -@dangerous", tag: ElastiCache'in içinde, say: "Uygulama'nın izni: lm: anahtarları; FLUSHALL gibi komutlar kapalı."}
+              - title: "ALB ve çerez ayarı (29 Eki)"
+                text: >-
+                  ALB'nin hedef grubunda yapışkan oturum kapalı kalır (varsayılan da budur). Uygulama'nın her sürümünde aynı
+                  çerez ayarı var; bir test her derlemede Set-Cookie satırında HttpOnly, Secure ve SameSite bayraklarını arar.
+                code:
+                  - {code: "aws elbv2 modify-target-group-attributes … Key=stickiness.enabled,Value=false", tag: Ekip → ALB, say: "Her istek sıradaki sunucuya."}
+                  - {code: "assert \"HttpOnly\" in cerez and \"Secure\" in cerez and \"SameSite=Lax\" in cerez", tag: Derleme hattının içinde, say: "Bayraklardan biri düşerse derleme kırmızı."}
+              - title: "Temizlik işi ve alarmlar (29 Eki)"
+                text: >-
+                  EventBridge Scheduler temizlik işini her dakika çalıştırır. Üç alarm kurulur. Oturum kaybı alarmı bir oran:
+                  çerezle gelip oturumu bulunamayan isteklerin, çerezle gelen bütün isteklere oranı; 5 dakikalık pencerede ve
+                  en az 200 istek varken bakılır (gece 3 istekten 1'i kayıp olsa %33 eder ama bir şey bozulmuş değildir). Normal
+                  günde bu oran düşüktür (30 dakikadan uzun ara verip dönenler).
+                code:
+                  - {code: "CreateSchedule(Name=\"aktif-temizlik\", ScheduleExpression=\"rate(1 minute)\", Target=<temizlik işi>)", tag: Ekip → EventBridge Scheduler, say: "Her dakika."}
+                  - {code: "oturum-bellek: Maximum(BytesUsedForCache) ≥ 3,75 GB (sınırın %75'i), 5 dk", tag: CloudWatch → Ekip, say: "Bellek dolmadan haber."}
+                  - {code: "oturum-tahliye: Sum(Evictions) ≥ 1, 5 dk", tag: CloudWatch → Ekip, say: "İlk tahliyede haber."}
+                  - {code: "oturum-kayip-orani: Sum(SessionMiss) / Sum(SessionRequests) > 0,2 VE Sum(SessionRequests) ≥ 200, 5 dk", tag: CloudWatch → Ekip, say: "Oturumlar toplu kaybolursa haber."}
+              - title: "Oturumlar taşınmaz (30 Eki 20:00, T)"
+                text: >-
+                  Yeni site açılırken eski sitenin oturumları taşınmaz: oturum kısa ömürlü bir nottur, ziyaretçinin bir sonraki
+                  isteği onu yeniden kurar. Sepetler ise taşınır, çünkü kalıcıdırlar (Adım 12). Ziyaretçiler aynı lm_visitor
+                  çerezini taşıdığı için taşınan sepet aynı kimlikle bulunur.
+              - title: "Bir oturumun doğuşu (senin ilk gelişin, t0 − 50 dk)"
+                text: >-
+                  Tarayıcında çerez yoktu. Uygulama yeni bir kimlik üretti, Set-Cookie ile verdi ve aynı cevapta oturumu yazdı.
+                  Simülasyonda 2. aşamanın son karesi bu anı gösteriyor.
+                code:
+                  - {code: "Set-Cookie: lm_visitor=7f3a…; Path=/; Max-Age=2592000; HttpOnly; Secure; SameSite=Lax", tag: Uygulama → Tarayıcı, say: "Senin kimliğin."}
+                  - {code: "MULTI · HSET lm:session:7f3a… persona C00001 last_page / seen_at 1793392000", tag: Uygulama → ElastiCache, say: "Oturumun ilk alanları…"}
+                  - {code: "EXPIRE lm:session:7f3a… 1800 · EXEC", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "…ve ömrü, birlikte."}
+                  - {code: "ZADD lm:active 1793392000 7f3a…", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Kümeye girdin."}
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              Her istek oturumu yeniden yazar ve ömrünü baştan başlatır; istek hangi sunucuya düşerse düşsün. Gelmeyenin
+              oturumu kendiliğinden biter. Giriş kimliği yeniler, çıkış oturumu siler. Temizlik işi her dakika kümeyi
+              temizler ve sayar. Senin son isteğin t0 − 100 sn'de: /deals.
+            cards:
+              - title: "Her istekte: kayan süre"
+                text: >-
+                  Sayfa her açılışta "oturumumu yaz" der; Uygulama alanları ve seen_at'i günceller, EXPIRE ömrü yeniden 1800
+                  saniyeye çeker, ZADD puanı yeniler. Senin yazmaların arasındaki en uzun ara 1.000 saniyeydi (ör. t0 − 2100 sn'den t0
+                  − 1100 sn'ye); 1.800'ü hiç geçmediği için oturumun hiç bitmedi.
+                code:
+                  - {code: "HSET lm:session:7f3a… last_page /deals seen_at 1793394900", tag: Uygulama → ElastiCache, say: "Nerede ve ne zaman."}
+                  - {code: "EXPIRE lm:session:7f3a… 1800", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Ömür baştan."}
+                  - {code: "ZADD lm:active 1793394900 7f3a…", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Puan güncellendi (0: yeni üye yok)."}
+              - title: "Sunucu değişir, oturum aynı kalır"
+                text: >-
+                  İlk isteğin A'ya, ürün sayfası B'ye, sepet yine A'ya düştü. Her sunucu oturumu aynı anahtardan okudu ve
+                  yazdı. Bir sunucu kapansa ya da yeni sürüm yüklense de kimsenin oturumu kaybolmaz.
+              - title: "Sepet oturumda değil"
+                text: >-
+                  Sepete eklediğin ürün DynamoDB'ye (CART#7f3a…) yazıldı; oturuma hiçbir şey eklenmedi. Oturum ne kadar kısa
+                  yaşarsa yaşasın sepet kalıcıdır.
+                code:
+                  - {code: "UpdateItem pk=CART#7f3a… sk=ITEM#P0131 …", tag: Uygulama → DynamoDB, say: "Sepetin satırı kalıcı depoda (Adım 12)."}
+              - title: "Ömrü dolan oturumlar"
+                text: >-
+                  30 dakika gelmeyen ziyaretçinin oturumunu ElastiCache kendisi siler; ömrü dolmuş bir anahtar bir daha hiçbir
+                  okumaya verilmez (TTL −2, HGETALL boş). Silme için ayrı bir iş yazılmaz. Kümedeki üye ise kalır; ZCOUNT'un
+                  5 dakikalık penceresi onu zaten saymaz, temizlik işi bir saat dolunca siler.
+              - title: "Giriş: yeni kimlik"
+                text: >-
+                  Şifre doğrulanınca Uygulama yeni bir rastgele kimlik üretir (yeni oturumda persona, giriş yapan müşteri olur), yeni oturumu yazar, eski oturumu ve eski üyeyi
+                  siler ve yeni çerezi verir. Şifresiz sepet müşterinin sepetine taşınır (Adım 12).
+                code:
+                  - {code: "yeni = str(uuid.uuid4())   # d17c…", tag: Uygulamanın içinde, say: "Girişte hep yeni kimlik."}
+                  - {code: "MULTI · HSET lm:session:d17c… persona C00009 login_at 1793393800 seen_at … · EXPIRE … 1800 · EXEC", tag: Uygulama → ElastiCache, say: "Giriş yapmış oturum."}
+                  - {code: "DEL lm:session:5b8e… · ZREM lm:active 5b8e… · ZADD lm:active 1793393800 d17c…", tag: Uygulama → ElastiCache, say: "Eski kimlik silinir (Uygulama tam burada çökerse en geç 30 dakikada kendiliğinden biter)."}
+                  - {code: "Set-Cookie: lm_visitor=d17c…; …; HttpOnly; Secure; SameSite=Lax", tag: Uygulama → Tarayıcı, say: "Tarayıcı yeni kimliği taşır."}
+              - title: "Çıkış: hemen sil"
+                text: >-
+                  Çıkışta süre dolması beklenmez: oturum ve üye hemen silinir, tarayıcıya çerezi silmesi söylenir. Sepet
+                  DynamoDB'de kalır.
+                code:
+                  - {code: "DEL lm:session:d17c… · ZREM lm:active d17c…", tag: Uygulama → ElastiCache, say: "Oturum bitti."}
+                  - {code: "Set-Cookie: lm_visitor=; Max-Age=0", tag: Uygulama → Tarayıcı, say: "Çerez silinsin."}
+              - title: "Her dakika: temizlik ve sayım"
+                text: >-
+                  Temizlik işi t0 − 60 sn'de (1793394940) çalıştı. Silme sınırı 1793394940 − 3600 = 1793391340: altında sadece
+                  09bd… (1793391300) vardı, silindi. Sayım sınırı 1793394940 − 300 = 1793394640: üstünde sadece sen
+                  (1793394900). Sonuç: üye 3, son 5 dakikada 1. Panodaki gerçek sayı bütün ziyaretçileri sayar; t0'da ve Adım
+                  33'te canlı sayıyı görürsün.
+                code:
+                  - {code: "now = int(time.time())   # 1793394940", tag: Temizlik işinin içinde, say: "Şimdi."}
+                  - {code: "r.zremrangebyscore(\"lm:active\", \"-inf\", now - 3600)   # → 1", tag: [Temizlik işi → ElastiCache, ElastiCache → Temizlik işi], say: "Bir saatten eskiler silindi."}
+                  - {code: "boyut = r.zcard(\"lm:active\"); aktif = r.zcount(\"lm:active\", now - 300, \"+inf\")   # 3, 1", tag: [Temizlik işi → ElastiCache, ElastiCache → Temizlik işi], say: "Kaç üye, kaçı son 5 dakikada?"}
+                  - {code: "cloudwatch.put_metric_data(Namespace=\"Shop/Session\", MetricData=[ActiveSetSize, ActiveVisitors])", tag: Temizlik işi → CloudWatch, say: "İki sayı panoya."}
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              Süresi dolmuş oturumla dönen ziyaretçi, dolan bellek, kaybolan bellek, ömürsüz kalan bir oturum, önceden
+              yerleştirilmiş bir kimlik ve hep aktif tutulan çalıntı bir çerez. İlk üçü simülasyonda "Olsaydı" kareleri;
+              hepsi için zincirde bir emniyet var. Her birinin ne zaman çalıştığı, neyi yakalamadığı ve onarımı aşağıda.
+            cards:
+              - title: "Süresi dolmuş oturumla dönen ziyaretçi"
+                text: >-
+                  Ne zaman: her sayfa açılışında; HGETALL boş dönerse Uygulama aynı kimlikle yeni bir oturum yazar ve isteği SessionMiss
+                  sayar. Şifresiz gezen bir şey fark etmez, sepeti DynamoDB'de; giriş yapmış olan şifresini yeniden girer.
+                  Yakalamadığı: oturumda kalan son sayfa (last_page) kaybolur; önemsiz olduğu için oturumdadır. Onarım:
+                  gerekmez.
+                code:
+                  - {code: "s = r.hgetall(k)", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Oturum var mı?"}
+                  - {code: "if not s: metrik(\"SessionMiss\", 1); s = yeni_oturum(kimlik)", tag: [Uygulamanın içinde, Uygulama → ElastiCache], say: "Yoksa say ve yenisini yaz."}
+              - title: "Bellek sınıra yaklaşırsa"
+                text: >-
+                  Ne zaman: BytesUsedForCache sınırın %75'ine (3,75 GB) gelince oturum-bellek alarmı çalar; AWS de alarmı
+                  sınırın altında, %75 civarında kurmayı önerir. Ekip sınırı kesinti olmadan yükseltir ve büyümenin sebebine
+                  bakar (ör. ömürsüz yazılan bir anahtar türü). Yakalamadığı: çok hızlı bir dolma alarmdan önce sınıra
+                  varabilir; o zaman ömrü olan anahtarlar, yani oturumlar, tahliye edilir. İkinci emniyet oturum-tahliye
+                  alarmıdır: ilk tahliyede çalar. Onarım: sınırı yükselt; tahliye edilen ziyaretçilerin oturumu bir sonraki
+                  istekte yeniden yazılır.
+              - title: "Bellek tamamen kaybolursa"
+                text: >-
+                  Ne zaman: ElastiCache veriyi birden fazla Availability Zone'da tuttuğu için bir veri merkezinin çökmesi
+                  oturumları kaybettirmez. Yine de hepsi giderse (ör. Ekip yönetim yetkisiyle yanlış belleği silerse; Uygulama'nın kullanıcısı bunu yapamaz), oturum kaybı
+                  oranı ilk 5 dakikalık pencerede %20'yi geçer ve alarm çalar. Yakalamadığı: alarm kaybı önlemez; giriş yapmış müşteriler şifrelerini yeniden
+                  girer, canlı ekrandaki aktif sayısı 5 dakika boyunca düşük görünür. Onarım: geri yükleme gerekmez. Oturumlar
+                  ziyaretçilerin bir sonraki isteğiyle, küme sayfa açılışlarıyla kendiliğinden dolar. Sepetler DynamoDB'de,
+                  siparişler Aurora'da kalır; bellekten alınmış eski bir yedeğe dönmek, bitmiş oturumları geri getirirdi.
+              - title: "Ömürsüz kalan bir oturum"
+                text: >-
+                  Ne zaman: HSET ile EXPIRE aynı MULTI … EXEC içinde gittiği için yeni bir oturum hiç ömürsüz kalmaz; Uygulama
+                  ikisinin arasında çökse de ya ikisi birden çalışır ya hiçbiri. Yakalamadığı: biri bu paketi bozan bir kod
+                  yazarsa ömürsüz oturumlar birikir; bunlar ne kendiliğinden biter ne tahliye edilir. Onarım: CloudWatch'taki
+                  CurrItems − CurrVolatileItems (ömrü olmayan anahtar sayısı) panoda izlenir; oturumlar arttıkça bu sayı
+                  artmamalı.
+                code:
+                  - {code: "TTL lm:session:7f3a…   → 1700 civarı (−1 olsaydı: ömür yok)", tag: [Ekip → ElastiCache, ElastiCache → Ekip], say: "Bir oturumun ömrü var mı?"}
+              - title: "Önceden yerleştirilmiş kimlik (sabitleme)"
+                text: >-
+                  Ne zaman: her girişte. Saldırgan kurbanın tarayıcısına bildiği bir lm_visitor değeri yerleştirse bile kurban
+                  giriş yapınca Uygulama yeni bir kimlik verir ve eskisini siler; saldırganın elindeki değer en çok şifresiz, boş bir oturum açar; müşterinin hesabına çıkmaz. Yakalamadığı: girişten sonra çalınan bir çerez (ör. açık bırakılmış bir bilgisayar).
+                  Onarım: HttpOnly ve Secure çalmayı zorlaştırır; 12 saatlik kesin sınır ve çıkıştaki DEL çalınmış çerezin
+                  ömrünü sınırlar.
+              - title: "Hep aktif tutulan çalıntı çerez"
+                text: >-
+                  Ne zaman: giriş yapmış oturumun her isteğinde Uygulama şimdi − login_at'e bakar; 43.200 saniyeyi (12 saat)
+                  geçtiyse oturumu siler ve şifre ister. Kayan süre tek başına yetmezdi: çerezi çalan biri her 29 dakikada bir
+                  sayfa açarak oturumu sonsuza kadar yaşatabilirdi. Yakalamadığı: o 12 saatin içindeki kullanım. Onarım:
+                  müşteri şifresini değiştirince Uygulama o müşterinin oturumlarını siler.
+                code:
+                  - {code: "if s.get(\"login_at\") and now - int(s[\"login_at\"]) > 43200:", tag: Uygulamanın içinde, say: "Girişten 12 saat geçti mi?"}
+                  - {code: "    r.delete(k); return giris_iste()", tag: Uygulama → ElastiCache, say: "Oturumu sil, şifre iste."}
+              - title: "Emniyetler bir bakışta"
+                text: >-
+                  Her emniyet bir öncekinin kaçırdığını arar; oturumdaki hiçbir şeyin kaybı para ya da ürün kaybettirmez,
+                  çünkü kalıcı olan her şey başka bir veritabanındadır.
+                map:
+                  cols: [Emniyet, Ne zaman, Yakalamadığı]
+                  rows:
+                    - ["kayan süre (EXPIRE 1800)", "her istek", "hep aktif tutulan çalıntı çerez"]
+                    - ["12 saatlik kesin sınır", "giriş yapmış oturumun her isteği", "12 saatin içindeki kullanım"]
+                    - ["girişte yeni kimlik", "her giriş", "girişten sonra çalınan çerez"]
+                    - ["MULTI … EXEC", "her yazma", "paketi bozan yeni bir kod (CurrItems − CurrVolatileItems)"]
+                    - ["bellek alarmı (%75)", "5 dakikalık pencerede", "çok hızlı dolma (tahliye alarmı)"]
+                    - ["oturum kaybı oranı", "5 dk, en az 200 istek", "kaybı önlemez, haber verir"]
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
