@@ -20707,46 +20707,919 @@ steps:
           - [LOCAL_ONE, "Tek kopyaya sorar. Yarı maliyet; çok yeni bir yazmayı kaçırabilir."]
           - [Replica (kopya), "Aynı satırın farklı Availability Zone'lardaki kopyaları."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde tutarlılık seviyesi için hazırlık
-        intro: >-
-          Liste hiç okunmadan, her ekranın hangi tutarlılıkla okuyacağı belirlenir. Aşağıdaki beş adım bu hazırlığın sırasıdır.
-        text:
-          - title: Önce her okumanın ihtiyacı yazılır
-            text: >-
-              "Bir an önceki bir yazmayı kaçırmak sorun olur mu?" Kullanıcının kendi işleminden hemen sonra gösterilen liste için
-              olur; arka plandaki raporlar ve öneriler için olmaz.
-          - title: Yazma tutarlılığı sabittir
-            text: >-
-              Keyspaces'te yazmalar her zaman LOCAL_QUORUM'dur: üç kopyadan ikisi onaylamadan yazma tamamlanmaz. Bu yüzden
-              LOCAL_QUORUM okuma, onaylanmış her yazmayı görür (2 + 2 > 3).
-          - title: Okuma seviyesi her komutta seçilir
-            text: >-
-              Tutarlılık tablo ayarı değil, komutun parametresidir. Sürücüde varsayılan bir seviye tanımlanır, gereken komutlarda
-              değiştirilir.
-            code: |-
-              SimpleStatement(cql, consistency_level=ConsistencyLevel.LOCAL_ONE)
-          - title: Maliyet ve hız hesaplanır
-            text: >-
-              LOCAL_ONE okuma, LOCAL_QUORUM okumanın yarı birimini harcar. Çok okunan, gecikmeye dayanıklı ekranlarda okuma
-              faturası yarıya iner. Süre farkı küçüktür ve ağ koşullarına göre değişir.
-          - title: Kendi yazdığını görme kuralı korunur
-            text: >-
-              Kullanıcının az önce yaptığı işlemi göstermesi gereken ekran LOCAL_QUORUM'da kalır. LOCAL_ONE sadece gecikmenin fark
-              edilmeyeceği yerlerde kullanılır.
-      feed:
-        title: Veri nereden geliyor?
-        writes: Uygulama. Ürün sayfası açılınca "view", sipariş verilince "purchase" ve benzeri olaylar.
-        reads: Uygulama, "My activity" (hareketlerim) sayfası ve "son baktıkların" şeridi için.
-        kind: >-
-          Uygulama orkestrasyonu: Keyspaces'e yazan da ondan okuyan da uygulamadır. Kopyalama Keyspaces'in kendi içindedir: her
-          satırı üç kopya olarak kendisi tutar.
-        with: >-
-          Hareketler sayfasındaki ürün adları satırların detail alanında, yazıldıkları anki kopyalarıyla durur (katalogdan,
-          DocumentDB). Satın alma olayının asıl siparişi ilişkisel veritabanındadır (Aurora).
-        best: >-
-          Yoğun yazılan ve kişiye göre okunan olaylar geniş sütunlu bir tabloda, kişi başına partition'larla tutulur. Trafik çok
-          büyüyünce olaylar önce bir akışa (Kinesis, MSK) yazılır ve oradan tabloya aktarılır.
+      t1:
+        title: Önceden ne vardı? Ayşe'nin defterinin üç kopyası nasıl doldu, hangi ekran kaç kopyaya sorarak okuyor?
+        intro: '"LOCAL_ONE" butonuna basmadan önce (31 Eki 10:36) Ayşe Yılmaz''ın (C00001) defteri, yani dbws.activity_by_user tablosundaki
+          partition''ı, Keyspaces''te üç kopya hâlinde duruyor. Üç kopyada da aynı satırlar var; en üstte 10:25''te verdiğin siparişin satın
+          alma satırları. Tablonun nasıl kurulduğunu ve beslendiğini Adım 10, sayfanın onu tek bir defterden nasıl okuduğunu Adım 27 anlattı.
+          Bu bölüm başka bir soruyu anlatıyor: bir satır üç kopyaya nasıl ve hangi sırayla gider; LOCAL_QUORUM ve LOCAL_ONE okuma kaç kopyaya
+          sorar ve neden yarı fiyatına okuyan okuma en yeni satırı kaçırabilir; mağazanın hangi ekranı ve hangi işi hangi seviyeyle okur ve
+          bu karar nerede yazılıdır; farkın parası ekran ekran nasıl ölçülür ve ay ay nasıl bütçelenir; LOCAL_ONE neyi değiştirmez (yazmalar,
+          satırın ömrü, büyük bir defterin maliyeti); bir kopya ya da bir veri merkezi giderse ne olur. Adım 27''deki diğer parçalar (sipariş
+          zincirinin ilk halkaları, CDC akışı, arşiv, Athena) çalışmaya devam ediyor; okuma seviyesini etkilemedikleri için burada sadece
+          adlarıyla geçiyorlar. Önce bileşenler, sonra bir simülasyon, sonra dört aşama (tasarım, ilk yükleme, sürekli besleme, tutarlılık
+          ve onarım).'
+        terms_title: Bu bölümün terimleri
+        terms:
+        - ['t-1, t0, T anı ve saatler', 't0: "LOCAL_ONE" butonuna basman, 31 Eki 10:36 (temsilî; Adım 27''de "My activity" sayfasını 10:35''te
+            açtın). t-1: ondan önceki zaman. T anı: mağazanın bu sistemle açıldığı an, 1 Eki 03:00 (Adım 25, 27). Saatler Türkiye saatidir.
+            Ayşe''nin 30 Eki 15:13''e kadarki satırlarının zamanı, türü ve ürünü canlı tablodan; 30 Eki 22:05''ten sonraki satırlar (ilk siparişin,
+            bakmaların, 10:25''teki siparişin W1793396741) bu görevin hikâyesinden, Adım 25–27''deki gibi, temsilî; okuma birimlerinin bedeli
+            ve birim fiyatı AWS''in belgelerinden; T anı, süreler, istek sayıları ve bütçe temsilîdir.']
+        - ['Ekip, Ayşe ve tarayıcılar', 'Ekip: mağazanın sistemini kuran ve işleten mühendisler. Bu görevde sen Ayşe''sin (persona C00001):
+            "Ayşe telefonunda …" diye anlatılanları da sen yaptın, başka bir cihazdan. Bu tarayıcı (7f3a…) senin bilgisayarın; Ayşe''nin telefonundaki
+            tarayıcının ayrı bir kimliği var (d9e4…, temsilî). İkisi de C00001''e bağlı; Uygulama bağlı bir tarayıcının her olayını iki deftere
+            yazar: tarayıcınınkine ve Ayşe''ninkine (Adım 27). Yani "senin defterin" (7f3a…, bu bilgisayarda yaptıkların) ile "Ayşe''nin defteri"
+            (C00001, bütün cihazların) iki ayrı defter. Son baktıkların şeridi tarayıcının defterini okur: bu cihazda baktıkların (Adım 10).']
+        - [Partition (defter) ve kopya (replica), 'Partition: bir kişinin satırlarının durduğu defter; partition key (user_id) hangi defter
+            olduğunu söyler. Keyspaces her defteri üç kopya hâlinde tutar; aynı defterin üç ayrı şubede duran üç nüshası gibi. Üç kopyanın
+            hepsi aynı AWS bölgesinde (Frankfurt, eu-central-1), bölgenin birden çok veri merkezine dağılmış hâlde durur. Kopyaları ekip kurmaz,
+            görmez, sayısını değiştiremez.']
+        - [Availability Zone (AZ), 'Bir AWS bölgesinin içindeki birbirinden ayrı veri merkezleri; ayrı binalar, ayrı elektrik. Bir bina giderse
+            diğer kopyalar kalır. Bu bölümde kopyaların yerini AZ-a, AZ-b, AZ-c diye anıyoruz (temsilî; AWS hangi kopyanın nerede durduğunu
+            göstermez).']
+        - ['Tutarlılık seviyesi, LOCAL_QUORUM ve LOCAL_ONE', 'Tutarlılık seviyesi: komutla birlikte giden "kaç kopyanın cevabı yeter?" ayarı.
+            LOCAL: bu bölge. QUORUM: çoğunluk, üç kopyadan en az ikisi. Keyspaces''te her yazma LOCAL_QUORUM''dur: en az iki kopya kaydetmeden
+            "tamam" dönmez. LOCAL_QUORUM okuma en az iki kopyanın cevabını bekler; "tamam" almış her yazmayı görür. LOCAL_ONE okuma ilk cevap
+            veren kopyanın cevabını verir; yarı fiyatınadır, ama o kopya çok yeni bir yazmayı henüz almamış olabilir. Üç arkadaştan ikisine
+            sorup en güncel cevabı almak ya da ilk cevap verene güvenmek gibi.']
+        - [Kaçırma penceresi, Bir yazmanın "tamam" aldığı an ile üçüncü kopyanın onu kaydettiği an arasındaki kısa süre. Genellikle milisaniyelerdir
+            (temsilî; AWS Keyspaces için bir süre yayımlamaz). Bu arada bir LOCAL_ONE okuma geride kalan kopyaya denk gelirse yeni satırı
+            göstermez; pencere kapanınca her okuma gösterir.]
+        - ['RRU, WRU, satır boyutu ve fiyat', 'On-demand: kapasite önceden ayarlanmaz, kullanılan birim kadar ödenir. RRU (read request unit):
+            okumanın birimi; LOCAL_QUORUM ile 4 KB''a kadar okuma 1 RRU, LOCAL_ONE ile 0,5 RRU. Bir okumada okunan satırların toplam boyutu
+            sayılır ve 4 KB''ın katına yuvarlanır: Hareketler''in 20 satırı yaklaşık 3 KB (satır başına yaklaşık 150 bayt, temsilî) → 1 ya
+            da 0,5 RRU; şeridin 40 satırı yaklaşık 6 KB → 2 ya da 1 RRU. WRU (write request unit): yazmanın birimi; 1 KB''a kadar bir satır
+            1 WRU, seviye seçilmez. Frankfurt''ta 1 milyon RRU 0,1525 dolar (AWS fiyat listesi). Bir partition saniyede en fazla 3.000 RRU
+            ve 1.000 WRU alır.']
+        - [Ekranlar ve okuma seviyesi tablosu (OKUMA_SEVIYESI), 'Uygulama''nın kodunda duran kısa bir liste: Ayşe''nin defterini okuyan her
+            ekranın adı ve seviyesi. hareketler: "My activity" (Hareketler) sayfasının ilk sayfası; "My persona" sekmesi Ayşe''nin defterini,
+            "This browser" sekmesi bu tarayıcınınkini okur, ikisi de hareketler ekranıdır. hareketler_eski: aynı sayfanın "Daha eski" düğmesiyle
+            gelen sonraki sayfaları (Adım 27). son_baktiklar: ürün sayfasındaki "son baktıkların" şeridi (Adım 10). Defteri okuyan her ekran
+            tek bir fonksiyondan (aktivite_oku) geçer; fonksiyon seviyeyi bu listeden alır. Lokantadaki "hangi masa hangi garsonun" listesi
+            gibi: karar bir kez yazılır, herkes ona bakar. Tabloyu okuyan işler (geri doldurma, gece karşılaştırması, silme talebi) seviyeyi
+            kendi kodlarında yazar. Bu mağazada t0''daki "LOCAL_QUORUM / LOCAL_ONE" düğmesi bir denemedir: seviyeyi düğme seçer, tablo değil;
+            gerçek sistemde sayfada böyle bir düğme yoktur.']
+        - [Sayfa boyu (fetch_size), 'Keyspaces''in bir istekte diskten en fazla kaç satır okuyacağı (Adım 27). LIMIT kaç satırın döneceğini,
+            sayfa boyu diskten kaç satırın okunacağını söyler. Keyspaces önce okur, LIMIT''i sonra uygular (AWS belgesi). Sayfa boyu verilmezse
+            Keyspaces bir istekte 1 MB''a kadar okuyabilir ve LIMIT''i ondan sonra uygular: LIMIT 20 olsa da okunan veri 20 satırdan çok olur
+            ve birim okunan veriye göre sayılır. Bu yüzden her okuma LIMIT''i kadar bir sayfa boyuyla gider.']
+        - [İzleme sözcükleri, 'CloudWatch: AWS''in ölçüm ve alarm servisi. ConsumedReadCapacityUnits: Keyspaces''in tablo başına saydığı harcanan
+            okuma birimi; Sum toplam, Average istek başına, SampleCount istek sayısı. OkumaBirimi ve Okuma: Uygulama''nın kendi yazdığı iki
+            sayaç (adlar temsilî), her biri ekranın adıyla (Ekran): harcanan birim ve okuma sayısı. StoragePartitionThroughputCapacityExceeded:
+            bir defterin hız sınırını aşan istek sayısı. Tabloyu okuyan işler (geri doldurma kontrolü, gece karşılaştırması, silme doğrulaması)
+            aynı iki sayaca yazar; Ekran yerine işin adı gider (ör. Ekran=gece_karsilastirma). Adım 27''deki 4 alarm: Hareketler isteğinin
+            süresi, hata oranı, okuma başına RRU ve kısılan okumalar.']
+        - [AWS Budgets, 'Aylık harcama için bir sınır koyan ve sınıra yaklaşınca e-posta gönderen AWS servisi. Bütçe bir harcama türüne daraltılır:
+            burada servis Amazon Keyspaces ve harcama türü EUC1-ReadRequestUnits (Frankfurt''taki okuma birimleri). DynamoDB''nin okuma birimleri
+            de aynı adı taşır (Adım 15); bu yüzden servis de seçilir. Tahmin (forecast): ayın sonunda ne kadar olacağının AWS hesabı. Bütçe
+            faturadan beslenir; günde birkaç kez güncellenir.']
+        - ['Kesit, temsilî, Örnek durum ve Olsaydı', 'Kesit: simülasyonda gösterilen satırlar; burada Ayşe''nin defterinin üç kopyasında t0''daki
+            simülasyonun gösterdiği satır (30 Eki 15:13 search P0084) ve 1 Eki''de geri doldurulan bir satır. t0''daki simülasyon bu satırı
+            "en yeni olay" diye gösterir; defterde ondan yeni altı satır var (Adım 27): bugün 10:25''teki iki satın alma, 09:58 ve 09:50''deki
+            iki bakma, dün akşam 22:10''daki satın alma ve 22:05''teki bakma. İlk üçü "kesitin dışında" tablosunda. Canlı tablodaki en yeni
+            satır gerçekten 15:13''teki aramadır; bugünkü satırlar bu anlatımın temsilî satırlarıdır (senin siparişin ve bakmaların, Adım
+            25–27). Defterde son 7 günün 38 satırı var (Adım 27). Temsilî: canlı sistemden gelmeyen, anlatım için seçilmiş değer. "Örnek durum"
+            kareleri bu zincirde yaşanan durumlar; "Olsaydı" kareleri yaşanmadı, her biri ayrı bir durumdur ve bir sonraki karede geri alınır.
+            4. aşamanın kareleri zaman sırasında değil; belli bir anı olan karenin başında tarihi yazar.']
+        - [Kod kartlarındaki sözcükler, 'CQL: SELECT … FROM … WHERE user_id = ? LIMIT 20 bu defterden en fazla 20 satır oku; ? komuta ayrıca
+            verilen değerin yeri; INSERT INTO … VALUES satır yaz; USING TTL 585600 bu satırın ömrü, saniye olarak (6 gün 18 sa 40 dk). Python:
+            OKUMA_SEVIYESI = {…} okuma seviyesi tablosu; def aktivite_oku(ekran) defteri okuyan tek fonksiyon; SimpleStatement(…, consistency_level=…,
+            fetch_size=20) seviyesi ve sayfa boyu verilmiş komut; ConsistencyLevel.LOCAL_ONE seviyenin sürücüdeki adı; s().execute(…) komutu
+            Keyspaces''e gönder; paging_state=isaret kaldığı yerden devam et (Adım 27); rs.current_rows bu sayfanın satırları; sum(len(r.detail)
+            + 120 for r in …) her satırın yaklaşık bayt sayısını topla; ceil yukarı yuvarla; set(A) == set(B) iki listede aynı adlar var mı;
+            EKRANLAR mağazanın defteri okuyan ekranlarının listesi; metrics.add(ad, sayı, Ekran=…) Uygulama''nın sayacına ekle (yardımcı adı
+            temsilî); assert "şu doğru olmalı" diyen test satırı, yanlışsa yayın durur. CloudWatch: SUM toplam; ≟ eşit mi; FORECASTED tahmin;
+            IF(SampleCount >= 20, a, 0) o 5 dakikada en az 20 okuma varsa a, yoksa 0 (alarm çalmaz). aws budgets create-budget bütçe kur;
+            \ satırın devam ettiği yer. → sonrası sonuç; # sonrası açıklama; … kısaltılmış kısım.']
+        - [Diğer adlar, 'Uygulama: mağazanın arka uç programı (EC2 sunucularında, AWS''in kiralık sanal sunucuları); isteği alır, veritabanına
+            komutu o gönderir, cevabı o hazırlar. cassandra-driver: Uygulama''nın Keyspaces''le konuştuğu kütüphane; seviyesi verilmeyen komutu
+            LOCAL_QUORUM ile gönderir. Sipariş zinciri: Aurora''daki outbox satırı → AWS DMS → Kinesis akışı lm-order-events → etkinlik tüketicisi
+            (Adım 25, 27). AWS Lambda, AWS Glue, Step Functions, EventBridge Scheduler: kısa kodu çalıştıran, büyük dosyayı işleyen, adım
+            adım iş yürüten ve işi belli saatte başlatan AWS servisleri (Adım 27). event_id: olayın 36 karakterlik numarası (uuid); uuid5(…):
+            aynı girdiden hep aynı numara (Adım 27). İşaret (paging state): "buradan devam et" ayracı (Adım 27). Geniş sütunlu veritabanı:
+            satırları partition''lara (defterlere) bölüp her defterin içini sıralı tutan veritabanı türü; Keyspaces Cassandra uyumludur. W1793396741:
+            10:25''teki siparişinin numarası. C00950: bir şirketin ortak hesabı; çok kişi aynı numarayla alışveriş yapar, bu yüzden defteri
+            çok büyür (temsilî). Outbox: siparişle aynı pakette yazılan "sipariş verildi" satırı; AWS DMS onu okuyup Kinesis''e (olayları
+            sırayla tutan akış) koyar. CDC akışı: tabloya yazılan her satırın kaydı; PITR (sürekli yedek): tabloyu son 35 günün herhangi bir
+            saniyesine geri açabilme (Adım 27). "Adım 15" gibi adlar bu görevin (mağazadaki 37 adımın) adımlarıdır: Adım 10 tablonun kurulduğu
+            adım, Adım 15 aynı fikrin DynamoDB''deki sepeti, Adım 27 bir önceki adım. Simülasyonun sayacındaki "Adım 1 / 25" ise simülasyonun
+            karesidir.']
+        inventory_title: Bileşenler
+        inventory_intro: İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra"
+          sütunu isteği kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim kodumuz" etiketli parçaları mağazanın
+          ekibi yazar. Okuma seviyesini seçen Uygulama'dır (kodundaki okuma seviyesi tablosuyla); kaç kopyanın cevabını bekleyeceğini ve hangi
+          kopyaya soracağını Keyspaces seçer. Üç kopya aynı satırları üç ayrı yerde tutar. Deftere yazan iki parça (Uygulama ve etkinlik tüketicisi)
+          her zaman LOCAL_QUORUM yazar. Defteri okuyan üç iş daha var (geri doldurma kontrolü, gece karşılaştırması, silme doğrulaması); seviyeyi
+          kendileri seçer. CloudWatch ve AWS Budgets harcanan birimi ölçer. Aynı parçalar aşağıdaki simülasyonda birer kutu.
+        inventory:
+        - id: pages
+          name: Mağaza sayfaları (tarayıcıdaki kod)
+          kind: code
+          what: '"My activity" sayfası ve ürün sayfasındaki şerit'
+          phases: [1, 3, 4]
+          does: '"My activity" sayfası açılınca ve "Daha eski" düğmesine basılınca, ürün sayfası açılınca da "son baktıkların" şeridi için
+            Uygulama''ya istek gönderir; gelen satırlardan listeyi ve şeridi çizer. Hangi seviyeyle okunacağını sayfa seçmez.'
+          box: İstek gönderir; listeyi ve şeridi çizer. Seviyeyi seçmez.
+          before: Müşteri (sayfayı açar, düğmeye basar)
+          after: web
+        - id: web
+          name: Uygulama (okuma seviyesi tablosu)
+          kind: code
+          what: mağazanın arka uç programı (EC2 sunucularında)
+          phases: [1, 2, 3, 4]
+          does: Defteri okuyan her ekran aktivite_oku fonksiyonundan geçer; fonksiyon seviyeyi okuma seviyesi tablosundan alır ve komutla
+            birlikte, LIMIT kadar sayfa boyuyla Keyspaces'e gönderir. Okumanın birimini dönen satırların boyutundan hesaplar ve ekranın adıyla
+            CloudWatch'a yazar. Seviyeyi sayfa seçmez; bu mağazadaki t0 düğmesi bir denemedir. Bakma, arama, sepet ve istek listesi olaylarını
+            deftere yazar (Adım 27).
+          box: Seviyeyi ekrana göre seçer; birimi ekran ekran yazar; olay yazar.
+          before: pages
+          after: [ks, monitor, pages]
+        - id: ks
+          name: Keyspaces (dbws.activity_by_user)
+          kind: aws
+          what: geniş sütunlu veritabanı (Cassandra uyumlu), on-demand
+          phases: [1, 2, 3, 4]
+          does: Komutu alır ve defterin üç kopyasına iletir. Yazmada en az iki kopya kaydedince "tamam" der. LOCAL_QUORUM okumada en az iki
+            kopyanın cevabını bekler ve en yenisini verir; LOCAL_ONE okumada ilk cevap veren kopyanınkini. Birimi okunan veriden sayar (ConsumedReadCapacityUnits).
+            Kopyaları kendisi kurar ve yönetir; bunu nasıl yaptığını AWS ayrıntısıyla yayımlamaz.
+          box: 'Yazma: 2 kopya → "tamam". Okuma: QUORUM en az 2 kopya, ONE ilk cevap.'
+          before: [web, actcons, backfill, reconcile, erase]
+          after: [k1, k2, k3, web, monitor]
+        - id: k1
+          name: Kopya 1 (AZ-a)
+          kind: aws
+          what: Ayşe'nin defterinin bir kopyası (Keyspaces işletir)
+          phases: [1, 2, 3, 4]
+          does: Yazmayı kaydeder; kendisine sorulan okumaya o anki satırlarıyla cevap verir.
+          box: Yazmayı kaydeder; okumaya cevap verir.
+          before: ks
+          after: ks
+        - id: k2
+          name: Kopya 2 (AZ-b)
+          kind: aws
+          what: Ayşe'nin defterinin ikinci kopyası
+          phases: [1, 2, 3, 4]
+          does: Yazmayı kaydeder; okumaya cevap verir. "Tamam" için hangi iki kopyanın yeteceği her yazmada değişebilir.
+          box: Yazmayı kaydeder; okumaya cevap verir.
+          before: ks
+          after: ks
+        - id: k3
+          name: Kopya 3 (AZ-c)
+          kind: aws
+          what: Ayşe'nin defterinin üçüncü kopyası
+          phases: [1, 2, 3, 4]
+          does: Aynı yazmayı bazen öbür ikisinden biraz sonra alır (genellikle milisaniyeler). Arada bir LOCAL_ONE okuma ona denk gelirse
+            en yeni satırı göstermez. Hangi kopyanın geride kaldığı her yazmada değişebilir; bu simülasyonda hep AZ-c (temsilî).
+          box: Yazmayı bazen biraz sonra alır; arada eski hâli verebilir.
+          before: ks
+          after: ks
+        - id: actcons
+          name: Etkinlik tüketicisi (Lambda)
+          kind: code
+          what: AWS Lambda'da çalışan kod
+          phases: [3]
+          does: Sipariş zincirinden gelen her kalem için bir purchase satırını müşterinin ve siparişi veren tarayıcının defterine yazar (Adım
+            27). Yazması her zaman LOCAL_QUORUM; defteri hiç okumaz.
+          box: 'Kalem başına purchase: müşteri + tarayıcı defteri.'
+          before: Kinesis akışı lm-order-events (Adım 25)
+          after: ks
+        - id: backfill
+          name: Geri doldurma işi (AWS Glue)
+          kind: code
+          what: AWS Glue'da çalışan iş (büyük dosyaları birçok makinede birden işler)
+          phases: [2]
+          does: 'T anında arşivden son 7 günün olaylarını kalan ömürleriyle müşterilerin defterine yazdı (Adım 10, 27). Sonra birkaç defterin
+            en yeni 20 satırını LOCAL_QUORUM ile okuyup arşivdeki aynı 20 olayla karşılaştırdı: az önce yazdığı satırları kesin görmeliydi.'
+          box: 'T''de bir kez: yazar, sonra LOCAL_QUORUM ile kontrol eder.'
+          before: S3 olay arşivi
+          after: [ks, monitor]
+        - id: reconcile
+          name: Gece karşılaştırma işi
+          kind: code
+          what: her gece çalışan program (EventBridge Scheduler + Lambda)
+          phases: [4]
+          does: Son 7 günde sipariş veren her müşterinin defterini baştan sona okur ve Aurora'daki sipariş kalemleriyle karşılaştırır (Adım
+            27). Son 10 dakikanın siparişlerine bakmaz (temsilî); okuduğu satırlar en az dakikalar önce yazıldığı için LOCAL_ONE ile okur.
+          box: Bütün defteri LOCAL_ONE ile okur; Aurora ile karşılaştırır.
+          before: [Aurora (sipariş kalemleri), ks]
+          after: [ks, Ekip (fark raporu), monitor]
+        - id: erase
+          name: Silme talebi işi (Step Functions)
+          kind: code
+          what: AWS Step Functions'ta adım adım çalışan iş
+          phases: [4]
+          does: 'Silinmek isteyen müşterinin defterlerini siler (Adım 27) ve silindiğini LOCAL_QUORUM ile okuyarak doğrular: cevap tek bir
+            kopyanın o anki hâline bağlı kalmasın. Silme kaydı bir yasal sözün kanıtıdır.'
+          box: Siler; silindiğini LOCAL_QUORUM ile doğrular.
+          before: Müşteri hizmetleri (talep)
+          after: [ks, monitor]
+        - id: monitor
+          name: CloudWatch (pano ve alarmlar)
+          kind: aws
+          what: AWS'in izleme servisi
+          phases: [1, 2, 3, 4]
+          does: Uygulama'nın iki sayacını (OkumaBirimi, Okuma; ekran ekran) ve Keyspaces'in ConsumedReadCapacityUnits ölçüsünü saat saat toplar;
+            tabloyu okuyan işler de aynı sayaçlara kendi adlarıyla yazar, iki toplam tutmalıdır. Adım 27'deki 4 alarm burada.
+          box: Birim ekran ekran; Uygulama'nın toplamı = tablonun toplamı mı? 4 alarm.
+          before: [web, ks, backfill, reconcile, erase]
+          after: Ekip (alarm)
+        - id: budgets
+          name: AWS Budgets (keyspaces-okuma)
+          kind: aws
+          what: AWS'in bütçe servisi
+          phases: [1, 2, 3, 4]
+          does: Keyspaces okuma birimlerinin aylık harcamasını izler; ay sonu tahmini bütçenin %80'ini geçerse ekibe e-posta gönderir. Faturadan
+            beslenir; günde birkaç kez güncellenir.
+          box: Aylık okuma bütçesi; tahmin %80'i geçerse e-posta.
+          before: AWS faturası (okuma birimleri)
+          after: Ekip (e-posta)
+        sim_title: 'Simülasyon: Ayşe''nin defterinin üç kopyası nasıl doldu, her ekran kaç kopyaya sordu?'
+        sim:
+          kind: pipeline
+          title: Sayfalar → Uygulama (okuma seviyesi tablosu) → Keyspaces → üç kopya · deftere yazan ve okuyan işler · ölçü ve bütçe
+          tick_ms: 2800
+          phases: {'1': Tasarım, '2': İlk yükleme, '3': Sürekli besleme, '4': Tutarlılık ve onarım}
+          rows:
+          - {id: ask, title: 'Okuyan ve yazan: sayfa ister, Uygulama seviyeyi seçer, Keyspaces kopyaları', flow: true}
+          - {id: copies, title: Ayşe'nin defterinin (C00001) üç kopyası}
+          - {id: jobs, title: Deftere yazan ve defteri okuyan diğer işler}
+          - {id: helpers, title: 'Yandaki işler: harcanan birimin ölçüsü, alarmlar ve bütçe', side: true}
+          summary: 'Keyspaces Ayşe''nin defterini üç kopya olarak tuttu. Her yazma en az iki kopya kaydedince "tamam" aldı; üçüncü kopya bazen
+            milisaniyeler sonra aldı. Okuma seviyesini Uygulama ekran ekran seçti: Hareketler''in ilk sayfası LOCAL_QUORUM (1 RRU; az önceki
+            sipariş kesin görünsün), "Daha eski" sayfaları ve son baktıkların şeridi LOCAL_ONE (yarı birim). Tabloyu okuyan işler de kendi
+            seviyesini seçti: geri doldurma kontrolü ve silme doğrulaması LOCAL_QUORUM, gece karşılaştırması LOCAL_ONE. Karar kodda tek bir
+            tabloda yazılı ve testle korunuyor; birim ekran ekran ölçüldü, tablonun ölçüsüyle karşılaştırıldı ve aylık bütçeyle izlendi. LOCAL_ONE
+            yazmaları, satırın ömrünü ve fazla okuyan bir komutun maliyetini değiştirmedi. Son durum: üç kopyada aynı satırlar; kesitte 30
+            Eki 15:13''teki arama, kesitin dışında bugünkü üç satır, defterde toplam 38 satır. t0 buradan başlar.'
+          caption: 'Üç kopya kutusundaki tablolar Ayşe''nin defterinin (C00001) aynı satırları. Alttaki tablo kesit: t0''daki simülasyonun
+            gösterdiği satır (30 Eki 15:13 search P0084) ve 1 Eki''de geri doldurulan bir satır (ömrü 7 Eki''de dolar). Üstteki tablo aynı
+            defterin ondan yeni satırlarından üçü (kesitin dışında); t0''daki kısa kesitte görünmezler ama canlı okuma onları da en üstte
+            verir. Önce tasarım, sonra açılıştan önceki yayın ve 1 Eki''deki geri doldurma, sonra Ayşe''nin olayları, siparişin, her ekranın
+            okuması ve ölçüm, en sonda "Örnek durum" ve "Olsaydı" kareleri. Canlı sistemden: Ayşe''nin satırları (zaman, tür, ürün), birim
+            bedelleri (4 KB''a kadar LOCAL_QUORUM 1, LOCAL_ONE 0,5 RRU) ve birim fiyatı (1 milyon RRU 0,1525 dolar). Temsilî: saatler, AZ
+            adları, hangi kopyanın geride kaldığı, gecikmeler, istek sayıları ve bütçe. Son karede üç kopya, "LOCAL_ONE" butonuna basacağın
+            andaki (t0) hâlde.'
+          boxes:
+          - {id: pages, row: ask}
+          - id: web
+            row: ask
+            tables:
+            - name: OKUMA_SEVIYESI (kodda)
+              rows:
+              - {key: s1, ekran: hareketler, hidden: true, seviye: LOCAL_QUORUM}
+              - {key: s2, ekran: hareketler_eski, hidden: true, seviye: LOCAL_ONE}
+              - {key: s3, ekran: son_baktiklar, hidden: true, seviye: LOCAL_ONE}
+              cols: [ekran, seviye]
+          - {id: ks, row: ask}
+          - id: k1
+            row: copies
+            tables:
+            - name: daha yeni satırlar (kesitin dışında)
+              rows:
+              - {key: x1, event_time: '31 Eki 10:25', hidden: true, olay · ürün: purchase P0131}
+              - {key: x2, event_time: '31 Eki 10:25', hidden: true, olay · ürün: purchase P0001}
+              - {key: x4, event_time: '31 Eki 09:58', hidden: true, olay · ürün: view P0001}
+              cols: [event_time, olay · ürün]
+            - name: 'kesit: t0''da gösterilen satır'
+              rows:
+              - {key: a1, event_time: '30 Eki 15:13', hidden: true, olay · ürün: search P0084}
+              - {key: b1, event_time: '30 Eyl 21:40', hidden: true, olay · ürün: view P0131}
+              cols: [event_time, olay · ürün]
+          - id: k2
+            row: copies
+            tables:
+            - name: daha yeni satırlar (kesitin dışında)
+              rows:
+              - {key: x1, event_time: '31 Eki 10:25', hidden: true, olay · ürün: purchase P0131}
+              - {key: x2, event_time: '31 Eki 10:25', hidden: true, olay · ürün: purchase P0001}
+              - {key: x4, event_time: '31 Eki 09:58', hidden: true, olay · ürün: view P0001}
+              cols: [event_time, olay · ürün]
+            - name: 'kesit: t0''da gösterilen satır'
+              rows:
+              - {key: a1, event_time: '30 Eki 15:13', hidden: true, olay · ürün: search P0084}
+              - {key: b1, event_time: '30 Eyl 21:40', hidden: true, olay · ürün: view P0131}
+              cols: [event_time, olay · ürün]
+          - id: k3
+            row: copies
+            tables:
+            - name: daha yeni satırlar (kesitin dışında)
+              rows:
+              - {key: x1, event_time: '31 Eki 10:25', hidden: true, olay · ürün: purchase P0131}
+              - {key: x2, event_time: '31 Eki 10:25', hidden: true, olay · ürün: purchase P0001}
+              - {key: x4, event_time: '31 Eki 09:58', hidden: true, olay · ürün: view P0001}
+              cols: [event_time, olay · ürün]
+            - name: 'kesit: t0''da gösterilen satır'
+              rows:
+              - {key: a1, event_time: '30 Eki 15:13', hidden: true, olay · ürün: search P0084}
+              - {key: b1, event_time: '30 Eyl 21:40', hidden: true, olay · ürün: view P0131}
+              cols: [event_time, olay · ürün]
+          - {id: actcons, row: jobs}
+          - {id: backfill, row: jobs}
+          - {id: reconcile, row: jobs}
+          - {id: erase, row: jobs}
+          - id: monitor
+            row: helpers
+            tables:
+            - name: pano (09:00–10:00, ekran ekran)
+              rows:
+              - {key: w1, değer: —, hidden: true, ölçü: son_baktiklar}
+              - {key: w2, değer: —, hidden: true, ölçü: hareketler}
+              - {key: w3, değer: —, hidden: true, ölçü: hareketler_eski}
+              - {key: w4, değer: —, hidden: true, ölçü: 'toplam = tablo?'}
+              - {key: w5, değer: —, hidden: true, ölçü: alarmlar}
+              cols: [ölçü, değer]
+          - id: budgets
+            row: helpers
+            tables:
+            - name: keyspaces-okuma
+              rows:
+              - {key: g1, değer: —, hidden: true, ölçü: bütçe}
+              - {key: g2, değer: —, hidden: true, ölçü: ay sonu tahmini}
+              cols: [ölçü, değer]
+          frames:
+          - phase: 1
+            who: ks
+            lit: [ks, k1, k2, k3]
+            packet: {at: ks, text: 28 Eyl · dbws.activity_by_user (Adım 10) · CREATE TABLE'da kopya sayısı ya da AZ yok · Keyspaces her defteri
+                kendiliğinden üç kopyayla tutar · yazma her zaman LOCAL_QUORUM}
+            note: {k1: boş, k2: boş, k3: boş, ks: kopya ayarı yok}
+            say: '28 Eyl, açılıştan üç gün önce. Tablo Adım 10''daki komutla kuruldu. Komutta kopya sayısı ya da veri merkezi yazmaz: Keyspaces
+              her defteri kendiliğinden üç kopya olarak, bölgenin farklı veri merkezlerinde tutar. Yazmanın seviyesi de seçilmez; her yazma
+              LOCAL_QUORUM''dur. Ayşe''nin defteri henüz boş.'
+          - phase: 1
+            who: web
+            lit: [pages, web, ks]
+            show:
+              web: [s1, s2, s3]
+            fresh:
+              web: [s1, s2, s3]
+            packet: {at: web, text: 'OKUMA_SEVIYESI = {hareketler: LOCAL_QUORUM, hareketler_eski: LOCAL_ONE, son_baktiklar: LOCAL_ONE} · aktivite_oku(ekran)
+                · seviye her komutla ayrı gider'}
+            note: {k1: '', k2: '', k3: '', ks: seviyeyi komuttan okur, pages: seviyeyi sayfa seçmez, web: karar kodda tek bir tabloda}
+            say: 'Ekip her ekran için tek soruyu sordu: "bir an önceki bir yazmayı kaçırmak sorun olur mu?". Hareketler''in ilk sayfasında
+              olur: müşteri az önceki siparişini görmeli. "Daha eski" sayfalarında ve son baktıkların şeridinde olmaz. Cevaplar Uygulama''nın
+              kodunda tek bir tabloya yazıldı. Seviye tablonun ayarı değil, her komutun yanında giden bir alan; aynı defter bir ekranda LOCAL_QUORUM,
+              ötekinde LOCAL_ONE okunur.'
+          - phase: 1
+            who: web
+            lit: [web, ks, monitor, budgets]
+            packet: {at: monitor, text: 'ölçü tasarımı · birim = yukarı yuvarla(bayt / 4 KB) × (1 ya da 0,5) · OkumaBirimi, Okuma (Ekran=…)
+                · saatlik SUM(OkumaBirimi) ile ConsumedReadCapacityUnits Sum karşılaştırılır · bütçe: Amazon Keyspaces + EUC1-ReadRequestUnits'}
+            note: {budgets: sadece Keyspaces okuma birimleri, ks: '', monitor: ekran ekran birim · tablo toplamıyla, pages: '', web: her okumanın
+                birimini hesaplar}
+            say: 'Fark ölçülmezse tasarruf da bilinmez. Uygulama her okumanın birimini dönen satırların boyutundan kendisi hesaplar ve ekranın
+              adıyla CloudWatch''a yazar: hangi ekran ne harcıyor görülür. Keyspaces''in kendi ölçüsü (ConsumedReadCapacityUnits) tablonun
+              bütün okumalarını sayar; ikisinin saatlik toplamı tutmalıdır. Aylık toplamı AWS Budgets izler.'
+          - phase: 2
+            who: web
+            lit: [web]
+            packet: {at: web, text: '30 Eyl 17:00 · yeni sürüm · test: OKUMA_SEVIYESI[''hareketler''] == LOCAL_QUORUM ✓ · tablodaki her ekranın
+                bir seviyesi var ✓ · yayın'}
+            note: {budgets: '', ks: '', monitor: '', web: test geçti · yayında}
+            say: 30 Eyl 17:00 (temsilî). Ekip Uygulama'nın yeni sürümünü yayına çıkardı; okuma seviyesi tablosu ve aktivite_oku içinde. Yayından
+              önce bir test Hareketler'in ilk sayfasının LOCAL_QUORUM okuduğunu kontrol etti. Test geçmeseydi sürüm yayına çıkmazdı.
+          - phase: 2
+            who: monitor
+            lit: [monitor, budgets]
+            show:
+              budgets: [g1, g2]
+              monitor: [w1, w2, w3, w4, w5]
+            set:
+              budgets:
+                g1: {değer: 40 USD/ay · eşik %80 = 32}
+                g2: {değer: henüz harcama yok}
+              monitor:
+                w5: {değer: 4 alarm · henüz veri yok}
+            fresh:
+              budgets: [g1, g2]
+              monitor: [w5]
+            packet: {at: budgets, text: '30 Eyl · pano: OkumaBirimi ve Okuma ekran ekran · Adım 27''deki 4 alarm 28 Eyl''den beri kurulu ·
+                create-budget keyspaces-okuma · 40 USD/ay · tahmin %80''i geçerse e-posta'}
+            note: {budgets: 40 USD/ay (temsilî) · henüz harcama yok, monitor: pano hazır · henüz okuma yok, web: ''}
+            say: 'Ölçü ilk günden önce hazır. Panoya ekran ekran birim ve okuma sayısı eklendi; Adım 27''deki 4 alarm 28 Eyl''den beri kurulu.
+              AWS Budgets''ta Keyspaces okuma birimleri için aylık 40 dolarlık bir bütçe kuruldu: ay sonu tahmini %80''i (32 dolar) geçerse
+              ekibe e-posta.'
+          - phase: 2
+            who: backfill
+            lit: [backfill, ks, k1, k2, k3]
+            show:
+              k1: [b1]
+              k2: [b1]
+              k3: [b1]
+            fresh:
+              k1: [b1]
+              k2: [b1]
+              k3: [b1]
+            packet: {at: ks, text: '1 Eki 03:00 = T · INSERT … (''C00001'', ''2026-09-30 21:40'', uuid5(…), ''view'', ''P0131'', …) USING
+                TTL 585600 · LOCAL_QUORUM · kopya 1 ve 2 kaydetti → "tamam" · kopya 3 hemen ardından'}
+            note: {backfill: 'yazılan 38.600 satır (bütün müşteriler, temsilî)', budgets: '', k1: '', k2: '', k3: '', ks: 2 kopya → "tamam",
+              monitor: ''}
+            say: '1 Eki 03:00, T anı. Geri doldurma işi eski sitenin son 7 gününü arşivden müşterilerin defterlerine yazdı (Adım 10, 27);
+              Ayşe''nin 30 Eyl 21:40''taki bakması da (temsilî) aralarında. Her yazma LOCAL_QUORUM: iki kopya kaydedince "tamam" döndü, üçüncü
+              kopya hemen ardından aldı. Satırın ömrü 7 gün − 5 sa 20 dk; 7 Eki 21:40''ta dolacak.'
+          - phase: 2
+            who: backfill
+            lit: [backfill, ks, k1, k2, monitor]
+            packet: {at: ks, text: 'kontrol: SELECT … WHERE user_id = ''C00001'' LIMIT 20 · LOCAL_QUORUM → kopya 1 ve 2 cevap verdi → arşivdeki
+                en yeni 20 olayla aynı ✓'}
+            note: {backfill: kontrol okuması LOCAL_QUORUM, ks: en az 2 kopyanın cevabı, monitor: 'geri doldurmanın satır sayıları: okunan
+                41.000 = yazılan 38.600 + 7 günden eski, atlanan 2.400'}
+            say: 'İş bitince birkaç defteri sayfanın kendi sorusuyla okudu ve arşivdeki aynı müşterinin en yeni 20 olayıyla karşılaştırdı
+              (Adım 27). Kontrol LOCAL_QUORUM: son saniyede yazdığı satırları henüz almamış bir kopyaya denk gelen bir LOCAL_ONE okuma "eksik
+              yüklendi" deyip boş yere alarm verdirebilirdi. Bir kez çalışan bu okumada yarım birim tasarruf önemsiz.'
+          - phase: 3
+            who: ks
+            lit: [ks, k1, k2, k3]
+            hide:
+              k1: [b1]
+              k2: [b1]
+              k3: [b1]
+            packet: {at: ks, text: '7 Eki 21:40 · 30 Eyl 21:40 view P0131 · ömrü doldu · üç kopyada da hiçbir okumada dönmez · LOCAL_ONE da
+                LOCAL_QUORUM da göremez'}
+            note: {backfill: '', ks: ömür seviyeden bağımsız, monitor: ''}
+            say: '7 Eki 21:40. Geri doldurulan satırın ömrü doldu; Keyspaces onu üç kopyanın hiçbirinden vermez. Ömür okumanın seviyesine
+              bağlı değildir: LOCAL_ONE eski bir kopyaya denk gelse de ömrü dolmuş satırı göstermez. 8 Eki''den beri defterdeki her satır
+              T''den sonra canlı yazıldı.'
+          - phase: 3
+            who: web
+            lit: [pages, web, ks, k1, k2]
+            show:
+              k1: [a1]
+              k2: [a1]
+            fresh:
+              k1: [a1]
+              k2: [a1]
+            packet: {at: ks, text: '30 Eki 15:13:11 · Ayşe''nin telefonu · INSERT … (''C00001'', ''2026-10-30 15:13'', <uuid>, ''search'',
+                ''P0084'', …) + aynı event_id ile ''d9e4…'' · kopya 1 ve 2 kaydetti → "tamam" · 1 WRU'}
+            note: {k3: henüz almadı, ks: 2 kopya → "tamam", web: olay → telefon + Ayşe defteri}
+            say: '30 Eki 15:13. Ayşe (yani sen) telefonundan P0084 için arama yaptı. Uygulama olayı iki deftere yazdı: telefonun ve Ayşe''nin
+              (Adım 27). Ayşe''nin defterinde kopya 1 ve kopya 2 satırı kaydetti; iki kopya yeter, Uygulama "tamam" aldı. Bu anı yakalıyoruz:
+              kopya 3 satırı henüz almadı. Kaçırma penceresi bu.'
+          - phase: 3
+            who: k3
+            lit: [ks, k3]
+            show:
+              k3: [a1]
+            fresh:
+              k3: [a1]
+            note: {k3: birkaç milisaniye sonra aldı, ks: '', pages: '', web: ''}
+            say: Birkaç milisaniye sonra kopya 3 de satırı aldı; üç kopya yine aynı. Pencere bu kadar kısadır, ama sıfır değildir. Bu arada
+              gelen bir LOCAL_ONE okuma kopya 3'e denk gelseydi 15:13'teki aramayı göstermezdi; LOCAL_QUORUM okuma en az iki kopyaya sorduğu
+              için birinden mutlaka görürdü.
+          - phase: 3
+            who: web
+            lit: [pages, web, ks, k1, k2, k3]
+            show:
+              k1: [x4]
+              k2: [x4]
+              k3: [x4]
+            fresh:
+              k1: [x4]
+              k2: [x4]
+              k3: [x4]
+            packet: {at: ks, text: '31 Eki 09:58 · view P0001 · ''7f3a…'' + ''C00001'' (aynı event_id) · LOCAL_QUORUM · 2 kopya → "tamam"
+                · kopya 3 hemen ardından'}
+            note: {k3: '', ks: 2 kopya → "tamam", web: olay → bu tarayıcı + Ayşe defteri}
+            say: '31 Eki 09:58. Sen bu tarayıcıyla P0001''e baktın. Tarayıcın C00001''e bağlı; Uygulama bakmayı senin defterine ve Ayşe''ninkine
+              yazdı. Yol aynı: iki kopya kaydetti, "tamam", üçüncü kopya hemen ardından.'
+          - phase: 3
+            who: web
+            lit: [pages, web, ks]
+            packet: {at: ks, text: '09:58 · ürün sayfası P0001 · aktivite_oku(''son_baktiklar'') → LOCAL_ONE · ''7f3a…'' defteri (kesitin
+                dışında) · 4 satır < 4 KB → 0,5 RRU'}
+            note: {ks: ilk cevap veren kopya, pages: şerit çizildi, web: son_baktiklar → LOCAL_ONE}
+            say: 'Aynı sayfada son baktıkların şeridi senin defterini istedi (Ayşe''ninkini değil; o defterin de kendi üç kopyası var, kesitin
+              dışında). Tablo "son_baktiklar: LOCAL_ONE" der: Keyspaces ilk cevap veren kopyanın satırlarını verdi, 0,5 RRU. Şerit mağazanın
+              en çok yapılan okumasıdır, her ürün sayfasında çalışır; yarım birim burada büyük paradır.'
+          - phase: 3
+            who: actcons
+            lit: [actcons, ks, k1, k2, k3]
+            show:
+              k1: [x1, x2]
+              k2: [x1, x2]
+              k3: [x1, x2]
+            fresh:
+              k1: [x1, x2]
+              k2: [x1, x2]
+              k3: [x1, x2]
+            packet: {at: actcons, text: '10:25:01,5 · W1793396741 · purchase P0001, P0131 · Ayşe + bu tarayıcı · LOCAL_QUORUM · 4 satır, her
+                biri 2 kopya → "tamam"'}
+            note: {actcons: 2 kalem × 2 defter = 4 satır, ks: 2 kopya → "tamam", pages: '', web: ''}
+            say: '10:25. Siparişini verdin (W1793396741). Satın alma satırlarını Uygulama değil sipariş zinciri yazdı (Adım 25, 27): etkinlik
+              tüketicisi yaklaşık 1,5 saniye sonra iki satırı Ayşe''nin, ikisini senin defterine yazdı. Tüketicinin de seviye seçeneği yok:
+              her yazma LOCAL_QUORUM. Defterin en üstünde artık siparişin var.'
+          - phase: 3
+            who: web
+            lit: [pages, web, ks, k1, monitor]
+            packet: {at: ks, text: '10:32 (temsilî) · Ayşe''nin telefonu · "Daha eski" · aktivite_oku(''hareketler_eski'', işaret) → LOCAL_ONE
+                · ilk cevap kopya 1''den · 18 satır ≈ 2,7 KB → 0,5 RRU'}
+            note: {actcons: '', k1: 21.–38. satırları verdi, ks: ilk cevap veren kopya, monitor: 'Ekran=hareketler_eski · Okuma +1 · OkumaBirimi
+                +0,5', web: hareketler_eski → LOCAL_ONE}
+            say: '10:32 (temsilî). Ayşe (sen) telefonunda "My activity"yi açtı ve "Daha eski" düğmesine bastı. İlk sayfa LOCAL_QUORUM okundu;
+              ikinci sayfa LOCAL_ONE. Bu sayfanın satırları ilk 20''nin altındakiler: Ayşe''de en az dünkü, yeni bir olay defterin en üstüne
+              girer, ikinci sayfaya değil; yeni bir olay defterin en üstüne girer, buraya değil. Kaçırılacak en yeni satır burada yok; yarım
+              birim yeter.'
+          - phase: 3
+            who: web
+            lit: [pages, web, ks, k2, k3, monitor]
+            packet: {at: ks, text: '10:35 · "My persona" sekmesi (Adım 27) · aktivite_oku(''hareketler'') → LOCAL_QUORUM · kopya 2 ve 3 cevap
+                verdi → en üstte 10:25''teki iki satın alma · 20 satır ≈ 3 KB → 1 RRU'}
+            note: {k1: '', ks: en az 2 kopya · en yenisi, monitor: Ekran=hareketler · Okuma +1 · OkumaBirimi +1, web: hareketler → LOCAL_QUORUM}
+            say: '10:35. Sen "My activity" sayfasını açtın ve "My persona" sekmesine bastın (Adım 27, t0''daki sol şerit). Hareketler''in
+              ilk sayfası LOCAL_QUORUM: Keyspaces en az iki kopyanın cevabını bekledi ve en yenisini verdi. Siparişinin satırları en üstte;
+              "tamam" almış her yazma bu okumada kesin görünür. Bedel 1 RRU. Sayfayı açmak deftere olay yazmaz.'
+          - phase: 3
+            who: monitor
+            lit: [monitor, web, ks]
+            set:
+              monitor:
+                w1: {değer: 900.000 okuma · 900.000 RRU}
+                w2: {değer: 30.000 okuma · 30.000 RRU}
+                w3: {değer: 6.000 okuma · 3.000 RRU}
+                w4: {değer: 933.000 = 933.000 ✓}
+                w5: {değer: 4 alarm OK}
+            fresh:
+              monitor: [w1, w2, w3, w4, w5]
+            packet: {at: monitor, text: '09:00–10:00 · son_baktiklar 900.000 × 1 · hareketler 30.000 × 1 · hareketler_eski 6.000 × 0,5 · SUM(OkumaBirimi)
+                933.000 · ConsumedReadCapacityUnits Sum 933.000 · hepsi LOCAL_QUORUM olsaydı 1.836.000 (temsilî)'}
+            note: {k2: '', k3: '', ks: tablo ölçüsü 933.000 RRU, monitor: iki toplam tutuyor · sayaçsız okuyan yok, pages: '', web: kendi
+                toplamı 933.000}
+            say: '10:36''da pano son tam saati (09:00–10:00, yoğun bir saat, temsilî) gösteriyor. Şerit 900.000 kez okundu; çoğu ziyaretçinin
+              şeridi 40 satırla dolu (temsilî; senin 4 satırlık defterin 0,5 RRU idi): 40 satır yaklaşık 6 KB, LOCAL_ONE ile 1 RRU (LOCAL_QUORUM''da
+              2 olurdu). Hareketler 30.000 kez, 1 RRU; "Daha eski" 6.000 kez, 0,5 RRU. Toplam 933.000 RRU; Keyspaces''in kendi ölçüsü de 933.000:
+              iki toplam tutuyor, sayaca yazmadan okuyan yok. Hepsi LOCAL_QUORUM olsaydı 1.836.000 RRU olurdu.'
+          - phase: 3
+            who: budgets
+            lit: [budgets]
+            set:
+              budgets:
+                g2: {değer: Kasım (30 gün) ≈ 30 USD (%74) · eşik 32}
+            fresh:
+              budgets: [g2]
+            packet: {at: budgets, text: 'Ekim · gün ortalaması ≈ 6.500.000 RRU × 0,1525 USD / 1 milyon ≈ 0,99 USD/gün · Kasım tahmini (30
+                gün) ≈ 30 USD · bütçe 40 · eşik 32 (temsilî)'}
+            note: {budgets: 'Ekim: günde ≈ 0,99 USD · Kasım ≈ 30 USD', ks: '', monitor: '', web: ''}
+            say: 'AWS Budgets faturaya bakıyor. Yoğun bir saat yaklaşık 0,14 dolar (933.000 RRU; hepsi LOCAL_QUORUM olsaydı 0,28); gece saatleri
+              çok daha ucuz, Ekim''in gün ortalaması 6.500.000 RRU, günde yaklaşık 0,99 dolar (temsilî). Ekim bugün bitiyor ve bu ay için
+              tahmin yerine fatura var; 30 günlük Kasım''ın tahmini yaklaşık 30 dolar: 40 dolarlık bütçenin %74''ü, 32 dolarlık eşiğin altında.'
+          - phase: 4
+            who: web
+            lit: [pages, web, ks]
+            packet: {at: ks, text: 'örnek durum · 31 Eki 09:58:00 · aynı anda iki istek: bakma INSERT (LOCAL_QUORUM) ve şerit SELECT (LOCAL_ONE)
+                · şeridin cevabında P0001 bakması bazen var, bazen yok'}
+            note: {budgets: '', ks: iki istek aynı anda, pages: 'şerit: P0001 belki yok', web: 'şerit: LOCAL_ONE'}
+            say: 'Örnek durum (31 Eki 09:58): ürün sayfası açılınca bakma yazması ile şeridin okuması aynı anda gider. LOCAL_ONE okuma yazmadan
+              önce ya da yazmayı henüz almamış bir kopyaya denk gelirse şeritte P0001 görünmez. Zararı yok: zaten P0001''in sayfasındasın
+              ve bir sonraki sayfada şerit onu gösterir. Bu yüzden şerit LOCAL_ONE okur.'
+          - phase: 4
+            who: web
+            lit: [pages, web, ks, k3]
+            set:
+              web:
+                s1: {seviye: LOCAL_ONE (olsaydı)}
+            mark:
+              k3: {x1: fix, x2: fix}
+              web: {s1: fix}
+            packet: {at: web, text: 'olsaydı: OKUMA_SEVIYESI[''hareketler''] = LOCAL_ONE · 10:25:01,503 (yazmadan 3 ms sonra) liste → ilk
+                cevap kopya 3''ten → satın alma satırları henüz yok · test: assert … == LOCAL_QUORUM ✗ → yayın durur'}
+            note: {k3: 'olsaydı: 10:25 satırları henüz yok', ks: '', pages: 'olsaydı: sipariş listede yok', web: 'olsaydı: test yayını durdurur'}
+            say: 'Olsaydı: biri tasarruf için Hareketler''in ilk sayfasını da LOCAL_ONE yapsaydı. Ayşe satın alma satırları yazıldıktan birkaç
+              milisaniye sonra listeye baksa (nadir, ama müşterinin en dikkatli baktığı an) cevap, satın alma satırlarını henüz almamış kopya
+              3''ten gelebilir ve "siparişim nerede?" diye sorardı. Yayından önceki test bu değişikliği yakalar; sürüm yayına çıkmaz. Ödenen
+              yarım birim burada müşterinin güveninin bedeli; Hareketler toplam okumaların sadece %3''ü.'
+          - phase: 4
+            who: reconcile
+            lit: [reconcile, ks, k1]
+            set:
+              web:
+                s1: {seviye: LOCAL_QUORUM}
+            mark:
+              k3: {x1: '', x2: ''}
+              web: {s1: ''}
+            packet: {at: reconcile, text: 'örnek durum · 31 Eki 02:00 · son 7 günde sipariş veren 12.000 müşteri (temsilî) · her defter baştan
+                sona · LOCAL_ONE · defter başına ≈ 6 KB → 1 RRU · toplam ≈ 12.000 RRU (LOCAL_QUORUM''da 24.000) · son 10 dk hariç · eksik
+                0'}
+            note: {k1: Ayşe'nin defterini verdi, k3: '', ks: ilk cevap veren kopya, pages: '', reconcile: '02:00: eksik 0 · sayaca Ekran=gece_karsilastirma',
+              web: ''}
+            say: 'Örnek durum (geriye dönüş: bu gece, 31 Eki 02:00): gece karşılaştırma işi Aurora''daki kalemleri defterlerle karşılaştırdı
+              (Adım 27). Son 10 dakikanın siparişlerine bakmadığı için okuduğu satırlar dakikalarca önce yazılmış; LOCAL_ONE yeter ve okuma
+              yarıya iner. Nadiren bir satırı kaçırsa bile zarar yok: iş eksik sandığı satırı aynı event_id ile yazar, aynı satırın üzerine
+              düşer.'
+          - phase: 4
+            who: erase
+            lit: [erase, ks]
+            packet: {at: ks, text: 'örnek durum · 20 Eki 09:05 (temsilî) · C00388 · DELETE … WHERE user_id = ''C00388'' · doğrulama: SELECT
+                … LIMIT 1 · LOCAL_QUORUM → 0 satır → silme tamam'}
+            note: {erase: doğrulama LOCAL_QUORUM, k1: '', ks: C00388'in defteri (kesitin dışında), reconcile: ''}
+            say: 'Örnek durum (geriye dönüş: 20 Eki): müşteri C00388 (temsilî) verilerinin silinmesini istedi (Adım 27). Silme işi defterleri
+              sildi ve silindiğini LOCAL_QUORUM ile okuyarak doğruladı: cevap, silmeyi "tamam" almış kopyaların çoğunluğundan gelir; tek bir
+              kopyanın o anki hâline bağlı kalmaz. Bu kayıt bir yasal sözün kanıtı; burada yarım birim aranmaz.'
+          - phase: 4
+            who: monitor
+            lit: [web, ks, monitor, budgets]
+            set:
+              budgets:
+                g2: {değer: 'olsaydı: Kasım ≈ 58 USD > 32 · e-posta'}
+              monitor:
+                w1: {değer: 'olsaydı: 900.000 · 1.800.000 RRU'}
+                w4: {değer: 'olsaydı: 1.836.000 = 1.836.000'}
+            mark:
+              budgets: {g2: fix}
+              monitor: {w1: fix}
+            packet: {at: monitor, text: 'olsaydı: bütün ekranlar LOCAL_QUORUM · saatte 933.000 → 1.836.000 RRU · okuma başına RRU 1,0 → 1,96
+                (alarm eşiği 3, çalmaz) · Kasım tahmini 30 → ≈ 58 USD > 32 → e-posta'}
+            note: {budgets: 'olsaydı: tahmin eşiği geçer', erase: '', ks: '', monitor: 'olsaydı: şeridin birimi 2 katı', web: 'olsaydı: her
+                okuma LOCAL_QUORUM'}
+            say: 'Olsaydı: biri tablodaki her ekranı LOCAL_QUORUM yapsaydı. Sayfalar doğru görünmeye devam ederdi; tek fark para: saatte 933.000
+              yerine 1.836.000 RRU. Okuma başına RRU 1,96''ya çıkar; Adım 27''deki alarmın eşiği 3, alarm çalmaz. Farkı pano gösterir (şeridin
+              satırı iki katı) ve AWS Budgets''ın Kasım tahmini birkaç gün içinde 58 dolara çıkıp 32 dolarlık eşiği geçer; ekibe e-posta gider,
+              sürüm geri alınır.'
+          - phase: 4
+            who: ks
+            lit: [web, ks, monitor]
+            set:
+              budgets:
+                g2: {değer: Kasım (30 gün) ≈ 30 USD (%74) · eşik 32}
+              monitor:
+                w1: {değer: 900.000 okuma · 900.000 RRU}
+                w4: {değer: 'olsaydı: 933.000 < ≈ 963.000'}
+            mark:
+              budgets: {g2: ''}
+              monitor: {w1: '', w4: fix}
+            packet: {at: ks, text: 'olsaydı: hareketler komutundan fetch_size silindi · LIMIT 20 ama Keyspaces 1 MB''a kadar okur · Ayşe (38
+                satır ≈ 5,7 KB) 1 → 2 RRU · C00950 (60.000 satır, temsilî) 1 → 256 RRU · LOCAL_ONE''da 128 · Uygulama''nın hesabı aynı'}
+            note: {budgets: '', ks: 'olsaydı: LIMIT 20, okunan 1 MB', monitor: 'olsaydı: tablo toplamı > Uygulama''nınki', web: 'olsaydı:
+                sayfa boyu yok · hesabı yine 1'}
+            say: 'Olsaydı: biri Hareketler komutundan sayfa boyunu silseydi. LIMIT 20 kalır, ama Keyspaces LIMIT''i okuduktan sonra uygular:
+              Ayşe''nin 38 satırlık defteri bütün olarak okunur (yaklaşık 5,7 KB, 2 RRU; bütün defterler böyle olsaydı saatte yaklaşık 30.000
+              RRU fazla), 60.000 satırlık kurumsal bir defterden (C00950, temsilî) her istekte 1 MB (256 RRU). LOCAL_ONE bunu sadece yarıya
+              indirir (128); hata hata olarak kalır. Uygulama dönen 20 satıra bakıp yine 1 hesaplar; panoda tablonun toplamı Uygulama''nınkini
+              geçer. Fark fazla okumanın izidir.'
+          - phase: 4
+            who: ks
+            lit: [ks, k1, k2, k3]
+            set:
+              monitor:
+                w4: {değer: 933.000 = 933.000 ✓}
+            mark:
+              k3: {a1: fix, x1: fix, x2: fix, x4: fix}
+              monitor: {w4: ''}
+            packet: {at: ks, text: 'olsaydı: AZ-c erişilemez · yazma: kopya 1 + 2 → "tamam" · LOCAL_QUORUM: kopya 1 + 2 · LOCAL_ONE: ilk cevap
+                kopya 1 ya da 2 · iki AZ birden gitseydi: LOCAL_QUORUM hata, LOCAL_ONE cevap verir'}
+            note: {k1: cevap veriyor, k2: cevap veriyor, k3: 'olsaydı: erişilemez', ks: 'olsaydı: 2 kopya yeter', monitor: '', web: ''}
+            say: 'Olsaydı: AZ-c''deki bina bir süre erişilemez olsaydı. Yazmalar ve LOCAL_QUORUM okumalar kalan iki kopyayla sürer; LOCAL_ONE
+              ilk cevap veren kopyadan okur. Aynı anda iki kopyaya birden ulaşılamasaydı LOCAL_QUORUM okuma ve yazma hata alırdı, LOCAL_ONE
+              okuma tek kopyayla cevap verebilirdi; AWS LOCAL_ONE''ı bu yüzden "hız ve erişilebilirlik için" diye anlatır. Kopyaları Keyspaces
+              kendisi onarır; ekibin işi yok.'
+          - phase: 4
+            who: ks
+            lit: [pages, web, ks, k1, k2, k3]
+            mark:
+              k3: {a1: '', x1: '', x2: '', x4: ''}
+            note: {k1: Ayşe'nin defteri · 38 satır, k2: aynı 38 satır, k3: aynı 38 satır, ks: üç kopya aynı, pages: '"LOCAL_ONE" butonuna
+                basılmak üzere', web: ''}
+            say: 'Hazır. "Olsaydı" kareleri yaşanmadı. 31 Eki 10:36, butona basmadan hemen önce: Ayşe''nin defterinin üç kopyasında aynı 38
+              satır var; en üstte 10:25''teki satın almalar, kesitte 30 Eki 15:13''teki arama. Defterin öteki satırları (24–30 Eki) aynı iki
+              yazardan, aynı yolla geldi (Adım 27). t0''da seviyeyi tablo değil, mağazadaki deneme düğmesi seçer: önce LOCAL_QUORUM, sonra
+              senin tıklamanla LOCAL_ONE. Canlı tablodaki en yeni satır 15:13''teki aramadır; t0''daki simülasyon bu arama satırını "en yeni
+              olay" diye kullanır ve üstüne bir "ya şöyle olsaydı" ekler: bir an önce Ayşe''nin telefonundan P0021''e bakılmış, iki kopya
+              kaydetmiş, kopya 3 henüz almamış. Gerçek denemende deftere son anda kimse yazmadı.'
+        phases:
+        - n: 1
+          title: Tasarım
+          intro: 'Önce Keyspaces''in bir defteri nasıl sakladığı bilinir; tabloya bunun için bir ayar eklenmez. Sonra iki seviyenin neye mal
+            olduğu ve en yeni satırı ne zaman kaçırabileceği, sonra her ekran için tek soru: "bir an önceki bir yazmayı kaçırmak sorun olur
+            mu?". Cevaplar kodda tek bir tabloya yazılır, fark ekran ekran ölçülür ve ay ay bütçelenir. En sonda LOCAL_ONE''ın değiştirmediği
+            şeyler.'
+          cards:
+          - title: Bir defter, üç kopya
+            text: 'Keyspaces her defteri üç kopya olarak, bölgenin birden çok veri merkezine dağıtarak tutar. Her yazma LOCAL_QUORUM''dur:
+              en az iki kopya kaydedince Uygulama''ya "tamam" denir; üçüncü kopya onu hemen ya da biraz sonra alır. Bunu ekip kurmaz, ayarlamaz:
+              tablonun kurulum komutunda kopya ya da veri merkezi yazmaz. Kopyaların iç düzenini AWS ayrıntısıyla yayımlamaz; "üç kopya, yazma
+              LOCAL_QUORUM" belgelerde yazılıdır.'
+            code:
+            - {say: Yazmanın seviyesi seçilmez; LOCAL_QUORUM., code: 'INSERT INTO dbws.activity_by_user (…) VALUES (''C00001'', …)', tag: Uygulama
+                → Keyspaces}
+            - {say: İki kopya yeter., code: → kopya 1 ve kopya 2 kaydetti → "tamam", tag: Keyspaces'in içinde}
+            - {say: Arada kopya 3'te satır henüz yok., code: → kopya 3 hemen ya da biraz sonra, tag: Keyspaces'in içinde}
+          - title: 'İki okuma seviyesi: kaç kopyaya sorulur, ne ödenir?'
+            text: 'LOCAL_QUORUM okuma en az iki kopyanın cevabını bekler ve en yenisini verir. Yazma da en az iki kopyaya gittiği için iki
+              grup en az bir kopyada buluşur (2 + 2 > 3): yazmayı kaydeden iki kopya ile okumaya cevap veren iki kopyadan en az biri aynı
+              kopyadır. O kopya yeni satırı bilir ve Keyspaces cevaplardan en yenisini seçer (Cassandra''nın kuralıyla her yazma bir zaman
+              damgası taşır; zamanı en yeni olan kazanır); "tamam" almış her yazma görünür. LOCAL_ONE okuma ilk cevap veren kopyanınkini verir;
+              o kopya en yeni yazmayı henüz almamış olabilir. Seviye her komutla ayrı gider; tablonun ayarı değildir. Bedel: 4 KB''a kadar
+              1 ve 0,5 RRU. Süre farkı küçüktür: canlı sistemde Ayşe''nin 20 satırı iki seviyeyle de çoğunlukla 8–25 ms sürdü.'
+            code:
+            - say: En az iki kopya; 1 RRU (20 satır ≈ 3 KB).
+              code: SimpleStatement(cql, consistency_level=ConsistencyLevel.LOCAL_QUORUM, fetch_size=20)
+              tag: [Uygulama → Keyspaces, Keyspaces → Uygulama]
+            - say: İlk cevap veren kopya; 0,5 RRU.
+              code: SimpleStatement(cql, consistency_level=ConsistencyLevel.LOCAL_ONE, fetch_size=20)
+              tag: [Uygulama → Keyspaces, Keyspaces → Uygulama]
+          - title: 'En yeni satırı kaçırma penceresi: ne zaman açılır, ne kadar sürer?'
+            text: 'Pencere bir yazmanın "tamam" aldığı an açılır ve üçüncü kopya onu kaydedince kapanır; genellikle milisaniyeler (temsilî;
+              AWS Keyspaces için bir süre yayımlamaz). Sadece bu arada ve sadece LOCAL_ONE okuma geride kalan kopyaya denk gelirse yeni satır
+              görünmez. Pencere sadece en yeni satırları ilgilendirir: dakikalar önce yazılmış satırlar çoktan üç kopyadadır. Bir şeyi hiçbir
+              seviye çözmez: henüz yazılmamış satır. Satın alma satırları siparişten yaklaşık 1,5 saniye sonra yazılır (Adım 27); o arada
+              LOCAL_QUORUM bile siparişi göstermez.'
+            code:
+            - {say: Pencere açıldı., code: '15:13:11,000  kopya 1 ve 2 kaydetti → "tamam"', tag: Keyspaces'in içinde}
+            - {say: 'Sadece bu arada, sadece kopya 3''e denk gelirse.', code: '15:13:11,00x  LOCAL_ONE → kopya 3 → aramayı göstermez', tag: Keyspaces
+                → Uygulama}
+            - {say: Pencere kapandı; her okuma gösterir., code: '15:13:11,00y  kopya 3 kaydetti', tag: Keyspaces'in içinde}
+          - title: 'Ekran ekran: bir an önceki satırı kaçırmak sorun olur mu?'
+            text: 'Her ekran ve her iş için bu soru sorulur. Müşterinin kendi işleminden hemen sonra baktığı ekran ve bir sözün kanıtı olan
+              okuma LOCAL_QUORUM''da kalır; satırları zaten eski olan ya da bir an eksik olsa zararı olmayan okuma LOCAL_ONE''a iner. Ayşe''nin
+              defterini okuyanlar: hareketler, hareketler_eski ve üç iş; şerit her tarayıcının kendi defterini okur. En çok okunan ekran (şerit)
+              LOCAL_ONE olduğu için tasarrufun neredeyse hepsi oradan gelir.'
+            map:
+              rows:
+              - ['hareketler (My activity, 1. sayfa)', LOCAL_QUORUM · 1 RRU, Müşteri az önceki siparişini ve bakmasını hemen görmeli.]
+              - [hareketler_eski ("Daha eski"), 'LOCAL_ONE · 0,5 RRU', 'Satırlar ilk 20''nin altında; yeni olay defterin en üstüne girer,
+                  buraya değil.']
+              - [son_baktiklar (ürün sayfasındaki şerit), 'LOCAL_ONE · 1 RRU (dolu şerit, 40 satır)', En çok okunan; bir an eksik şerit zararsız.]
+              - [gece karşılaştırması, LOCAL_ONE · 1 RRU (defter başına), Son 10 dakikaya bakmaz; kaçırırsa aynı event_id ile yazar.]
+              - [geri doldurma kontrolü (T'de bir kez), LOCAL_QUORUM, Az önce yazdığını kesin görmeli; yoksa boş yere alarm.]
+              - [silme doğrulaması, LOCAL_QUORUM, Bir yasal sözün kanıtı; tek kopyaya bağlı kalmasın.]
+              - [Arşivdeki hareketler, Athena (Keyspaces değil), 7 günden eskisi arşivde (Adım 27).]
+              cols: [Ekran ya da iş, Seviye, Neden]
+          - title: Karar kodda tek bir tabloda yazılır
+            text: Seviye her ekranın kendi satırında yazılsaydı, yeni bir ekran onu unutur ve sürücünün varsayılanıyla (LOCAL_QUORUM) okurdu;
+              tasarruf sessizce kaybolurdu. Ya da biri tasarruf için yanlış ekranı LOCAL_ONE yapardı. Bu yüzden defteri okuyan her ekran aynı
+              fonksiyondan geçer; fonksiyon seviyeyi tablodan alır, sayfa boyunu LIMIT kadar verir. Bir test Hareketler'in LOCAL_QUORUM okuduğunu
+              her yayından önce kontrol eder.
+            code:
+            - {say: Ekran → seviye., code: 'OKUMA_SEVIYESI = {''hareketler'': LOCAL_QUORUM, ''hareketler_eski'': LOCAL_ONE, ''son_baktiklar'':
+                LOCAL_ONE}', tag: Uygulamanın içinde}
+            - {say: Defteri okuyan tek fonksiyon., code: 'def aktivite_oku(ekran, uid, n, isaret=None):', tag: Uygulamanın içinde}
+            - {say: Seviye tablodan; sayfa boyu LIMIT kadar., code: '  st = SimpleStatement(cql, consistency_level=OKUMA_SEVIYESI[ekran],
+                fetch_size=n)', tag: Uygulamanın içinde}
+            - say: Tek okuma yolu.
+              code: '  rs = s().execute(st, (uid,), paging_state=isaret)'
+              tag: [Uygulama → Keyspaces, Keyspaces → Uygulama]
+            - {say: 'Yayın öncesi test: Hareketler hep çoğunluk.', code: 'assert OKUMA_SEVIYESI[''hareketler''] == ConsistencyLevel.LOCAL_QUORUM',
+              tag: Uygulamanın içinde}
+          - title: 'Fark ölçülür: ekran ekran ve tablo tablo'
+            text: 'Uygulama her okumanın birimini dönen satırların boyutundan hesaplar: toplam bayt 4 KB''ın katına yuvarlanır, LOCAL_QUORUM''da
+              1, LOCAL_ONE''da 0,5 ile çarpılır. Bunu ve okuma sayısını ekranın adıyla CloudWatch''a yazar. Keyspaces''in kendi ölçüsü ConsumedReadCapacityUnits
+              tablonun bütün okumalarını, okunan veriye göre sayar. Tabloyu okuyan işler de aynı sayaca kendi adlarıyla (ör. Ekran=gece_karsilastirma)
+              yazar. İkisinin saatlik toplamı tutmalıdır; tablonunki büyükse ya Uygulama''dan geçmeyen bir okuyan var ya da bir komut döndürdüğünden
+              fazlasını okuyor (4. aşama).'
+            code:
+            - {say: Dönen satırların yaklaşık boyutu., code: 'bayt = sum(len(r.detail) + 120 for r in rs.current_rows)   # 120: diğer alanlar,
+                temsilî', tag: Uygulamanın içinde}
+            - {say: Belgedeki kural., code: birim = ceil(bayt / 4096) * (1 if seviye == LOCAL_QUORUM else 0.5), tag: Uygulamanın içinde}
+            - {say: 'Birim ve okuma sayısı, ekran ekran.', code: 'metrics.add(''OkumaBirimi'', birim, Ekran=ekran); metrics.add(''Okuma'',
+                1, Ekran=ekran)', tag: Uygulama → CloudWatch}
+            - {say: İki toplam tutmalı., code: 'SUM(OkumaBirimi) ≟ SUM(ConsumedReadCapacityUnits)   # 1 saat', tag: CloudWatch'ın içinde}
+          - title: 'Bütçe: Keyspaces okuma birimlerine ayrı bir sınır'
+            text: 'Fatura LOCAL_ONE okumayı ayrı bir satır olarak göstermez; ikisi de okuma birimidir (yarım ya da tam). Bu yüzden bütçe birime
+              konur: AWS Budgets''ta Amazon Keyspaces servisinin EUC1-ReadRequestUnits harcama türüne aylık 40 dolar (temsilî). Ay sonu tahmini
+              %80''i (32 dolar) geçerse ekibe e-posta gider. Bütçe faturadan beslendiği için saatler gecikir; hızlı bakış panonun, aylık toplam
+              bütçenin işidir. LOCAL_ONE''ın kazandırdığını fatura ayrı göstermez; ekran ekran pano gösterir.'
+            code:
+            - {say: Aylık bir maliyet bütçesi…, code: 'aws budgets create-budget --budget BudgetName=keyspaces-okuma,BudgetType=COST,TimeUnit=MONTHLY,\',
+              tag: Ekip → AWS Budgets}
+            - {say: …sadece Keyspaces'in Frankfurt'taki okuma birimleri., code: '  BudgetLimit={Amount=40,Unit=USD},CostFilters={Service=[Amazon
+                Keyspaces],UsageType=[EUC1-ReadRequestUnits]} …', tag: AWS Budgets'ın içinde}
+            - {say: Tahmin %80'i geçerse e-posta., code: '  --notifications-with-subscribers NotificationType=FORECASTED,Threshold=80 …',
+              tag: AWS Budgets'ın içinde}
+          - title: LOCAL_ONE neyi değiştirmez?
+            text: ['Yazmaları: her yazma LOCAL_QUORUM ve 1 KB''a kadar 1 WRU; okumanın seviyesi yazmanın bedelini ve hızını değiştirmez. Satırın
+                ömrünü: ömrü dolan satır hiçbir seviyede dönmez. Sürekli yedeği (PITR) ve CDC akışını (Adım 27): ikisi de okuma seviyesinden
+                bağımsızdır.', 'Fazla okuyan bir komutun maliyetini: birim okunan veriye göre sayılır. Sayfa boyu verilmeyen LIMIT 20 bir
+                istekte 1 MB''a kadar okuyabilir (256 RRU; LOCAL_ONE ile 128). LOCAL_ONE hatayı yarıya indirir, düzeltmez; düzelten sayfa
+                boyudur. Defterin hız sınırını da değiştirmez: saniyede 3.000 RRU; LOCAL_ONE okumalar yarım birim olduğu için aynı sınıra
+                iki kat okuma sığar.']
+        - n: 2
+          title: İlk yükleme
+          intro: 'Mağaza açılmadan önce okuma seviyesi tablosu yayında, pano ve bütçe kurulu olmalı; ilk günün okumaları da ölçülsün. Sıra:
+            Uygulama''nın sürümü (tablo ve testiyle), sonra pano ve bütçe, en sonda T anında geri doldurma ve onun LOCAL_QUORUM kontrolü.
+            Kopyaları Keyspaces kendisi kurar; ekibin göreceği bir şey yoktur.'
+          cards:
+          - title: Okuma seviyesi tablosu yayından önce, testle
+            text: Ekip Uygulama'nın sürümünü T'den önce yayına çıkarır (30 Eyl 17:00, temsilî). Yayın hattındaki test, Hareketler'in LOCAL_QUORUM
+              okuduğunu ve tablodaki her ekranın bir seviyesi olduğunu kontrol eder; test geçmezse sürüm yayına çıkmaz.
+            code:
+            - {say: Müşterinin kendi işlemini gördüğü ekran., code: 'assert OKUMA_SEVIYESI[''hareketler''] == ConsistencyLevel.LOCAL_QUORUM',
+              tag: Uygulamanın içinde}
+            - {say: Seviyesiz ekran yok., code: assert set(OKUMA_SEVIYESI) == set(EKRANLAR), tag: Uygulamanın içinde}
+          - {title: Pano ve bütçe ilk günden önce, text: 'Panoya ekran ekran birim ve okuma sayısı eklenir; Adım 27''deki 4 alarm 28 Eyl''den
+              beri kuruludur. Bütçe yayının ilk saatinden sayar: aylık 40 dolar, tahmin %80''i geçerse e-posta (temsilî).'}
+          - title: Geri doldurma LOCAL_QUORUM yazar ve LOCAL_QUORUM kontrol eder
+            text: 'T anında (1 Eki 03:00) geri doldurma işi arşivden son 7 günü yazar (Adım 10, 27). Bitince birkaç defteri sayfanın sorusuyla
+              (en yeni 20 satır) okuyup arşivdeki aynı 20 olayla karşılaştırır. Kontrol LOCAL_QUORUM''dur: son saniyede yazdığı satırları
+              henüz almamış bir kopyaya denk gelen bir LOCAL_ONE okuma "eksik yüklendi" diyebilirdi. Bir kez çalışan bu okumada yarım birim
+              tasarruf önemsiz; boş yere çalan bir alarm pahalıdır.'
+            code:
+            - say: Az önce yazılanlar kesin görünür.
+              code: SELECT … FROM dbws.activity_by_user WHERE user_id = 'C00001' LIMIT 20   -- LOCAL_QUORUM
+              tag: [Geri doldurma işi → Keyspaces, Keyspaces → Geri doldurma işi]
+            - {say: Sayılar CloudWatch'a., code: → arşivdeki en yeni 20 olayla aynı ✓ · okunan 41.000 = yazılan 38.600 + 7 günden eski 2.400,
+              tag: Geri doldurma işinin içinde}
+        - n: 3
+          title: Sürekli besleme
+          intro: Açılıştan sonra deftere iki yazar yazar (Uygulama ve etkinlik tüketicisi), ikisi de LOCAL_QUORUM. Her okumada ekran seviyesini
+            tablodan alır. Aşağıda yazmanın yolu, Ayşe'nin defterindeki satırları kimin yazdığı, üç ekranın bugünkü okumaları ve bir saatin
+            ve bir ayın sayıları.
+          cards:
+          - title: 'Her yazma: iki kopyada "tamam", üçüncüsü az sonra'
+            text: 'Bakma, arama, sepet ve istek listesi olaylarını Uygulama, satın almaları etkinlik tüketicisi yazar (Adım 27). Yazmanın
+              yolu ikisinde de aynıdır: iki kopya kaydedince "tamam", üçüncü kopya hemen ya da biraz sonra. 30 Eki 15:13''teki aramada bu
+              anı yakaladık: kopya 3 birkaç milisaniye geride kaldı. Defterdeki sıra event_time''a göredir (olayın zamanı; satın almada siparişin
+              zamanı 10:25:00, yazıldığı an 10:25:01,5 değil). Zamanı aynı iki satın almanın arasındaki sırayı event_id belirler.'
+            code:
+            - {say: 'Telefonun ve Ayşe''nin defterine, aynı event_id.', code: '15:13 · INSERT … (''C00001'', ''2026-10-30 15:13'', …, ''search'',
+                ''P0084'', …)', tag: Uygulama → Keyspaces}
+            - {say: 'Kalem başına bir satır, iki deftere.', code: '10:25:01,5 · INSERT … (''C00001'', ''2026-10-31 10:25:00'', …, ''purchase'',
+                ''P0131'', …)', tag: Etkinlik tüketicisi → Keyspaces}
+          - title: Ayşe'nin defterindeki 38 satırı kim yazdı?
+            text: Her satırı tek bir yazar yaratır ve en az iki kopya kaydedince "tamam" alır; üçüncü kopya hemen ya da biraz sonra alır.
+              Defterdeki satırların hepsi bu iki canlı yazardan geldi; 1 Eki'de geri doldurulanların ömrü 8 Eki'ye kadar doldu.
+            map:
+              rows:
+              - ['24–30 Eki: bakma, arama, sepet, istek listesi', Uygulama, 'Ayşe''nin telefonundan (30 Eki 22:10''dan sonra bu tarayıcıdan
+                  da); tarayıcının defterine ve Ayşe''ninkine.']
+              - ['24–30 Eki: satın almalar (ör. 30 Eki 06:34 P0147)', etkinlik tüketicisi, Sipariş zincirinden; müşterinin ve tarayıcının
+                  defterine.]
+              - ['30 Eki 22:05 view P0066', Uygulama, 'Tarayıcı 22:10''da Ayşe''ye bağlanınca bir kez kopyalandı (Adım 27).']
+              - ['30 Eki 22:10 purchase P0066', etkinlik tüketicisi, Bu tarayıcıdan verilen ilk sipariş (Adım 26).]
+              - ['31 Eki 09:50 ve 09:58 bakmalar', Uygulama, Bu tarayıcıdan; iki deftere.]
+              - ['31 Eki 10:25 purchase P0131, P0001', etkinlik tüketicisi, Senin siparişin; iki deftere.]
+              - ['30 Eyl 21:40 view P0131 (artık yok)', geri doldurma işi, 1 Eki'de arşivden; ömrü 7 Eki'de doldu.]
+              cols: [Satırlar, Yazan, Nasıl]
+          - title: 'Her okuma: ekran → tablo → seviye'
+            text: 'Ürün sayfası şeridi (09:58, senin defterin) LOCAL_ONE okudu, 0,5 RRU. Ayşe''nin telefonundaki "Daha eski" (10:32, temsilî)
+              LOCAL_ONE okudu: 18 satır, 0,5 RRU. Senin 10:35''teki "My persona" okuman LOCAL_QUORUM''du: en az iki kopya, en yenisi siparişin,
+              1 RRU. Hangi kopyanın cevap vereceğini Keyspaces seçer; Uygulama bunu bilmez ve seçemez.'
+            code:
+            - say: Şerit.
+              code: aktivite_oku('son_baktiklar', '7f3a…', 40)   → LOCAL_ONE · 4 satır · 0,5 RRU
+              tag: [Uygulama → Keyspaces, Keyspaces → Uygulama]
+            - say: Daha eski sayfa.
+              code: aktivite_oku('hareketler_eski', 'C00001', 20, isaret)   → LOCAL_ONE · 18 satır · 0,5 RRU
+              tag: [Uygulama → Keyspaces, Keyspaces → Uygulama]
+            - say: İlk sayfa; siparişin en üstte.
+              code: aktivite_oku('hareketler', 'C00001', 20)   → LOCAL_QUORUM · 20 satır · 1 RRU
+              tag: [Uygulama → Keyspaces, Keyspaces → Uygulama]
+          - title: Bir saatin ve bir ayın sayıları
+            text: 'Pano, 09:00–10:00 (yoğun saat, temsilî): şerit 900.000 okuma, her biri 1 RRU (40 satır ≈ 6 KB; LOCAL_QUORUM''da 2); Hareketler
+              30.000 okuma, 1 RRU; "Daha eski" 6.000 okuma, 0,5 RRU. Toplam 900.000 + 30.000 + 3.000 = 933.000 RRU; tablonun ölçüsü de 933.000:
+              sayaca yazmadan okuyan yok. Çoğu ziyaretçinin şeridi 40 satırla dolu varsayıldı (temsilî). Hepsi LOCAL_QUORUM olsaydı 1.836.000
+              RRU. Bütçe: Ekim''in gün ortalaması 6.500.000 RRU, günde yaklaşık 0,99 dolar; Kasım tahmini yaklaşık 30 dolar, 40 dolarlık bütçenin
+              %74''ü.'
+            code:
+            - {say: Bir saatin toplamı; şerit belirler., code: '900.000 × 1 + 30.000 × 1 + 6.000 × 0,5 = 933.000 RRU   (hepsi QUORUM 1.836.000)',
+              tag: CloudWatch'ın içinde}
+            - {say: O saatin parası., code: '933.000 × 0,1525 USD / 1.000.000 ≈ 0,14 USD   (hepsi QUORUM ≈ 0,28)', tag: CloudWatch'ın içinde}
+            - {say: Kasım tahmini., code: '6.500.000 × 0,1525 / 1.000.000 × 30 gün ≈ 30 USD / ay   (bütçe 40)', tag: AWS Budgets'ın içinde}
+        - n: 4
+          title: Tutarlılık ve onarım
+          intro: Bir LOCAL_ONE okuma en yeni satırı kaçırırsa, biri seviyeyi yanlış değiştirirse, bedel birden artarsa, bir komut fazla okursa,
+            bir veri merkezi giderse ne olur? Üçü yaşanan "Örnek durum" (şeritteki yarış, gece karşılaştırması, silme doğrulaması), dördü
+            "Olsaydı" (Hareketler LOCAL_ONE, her ekran LOCAL_QUORUM, sayfa boyu silinmiş komut, bir AZ'nin gitmesi). Her biri için zincirde
+            bir parça (emniyet) var; ne zaman çalıştığı, neyi yakalamadığı ve onarımı aşağıda.
+          cards:
+          - {title: Şerit en yeni bakmayı kaçırırsa, text: 'Ne zaman: ürün sayfası açılınca bakma yazması ile şeridin LOCAL_ONE okuması aynı
+              anda gider (31 Eki 09:58). Emniyet: gerekmez; şerit açık olan ürünü zaten gösterir, bir sonraki sayfa bakmayı gösterir. Yakalamadığı:
+              başka bir cihazdan az önce bakılan ürün de şeritte bir sayfa geç görünebilir. Onarım: gerekmez.'}
+          - {title: Biri Hareketler'i LOCAL_ONE yaparsa, text: 'Siparişten hemen sonra açılan liste siparişi göstermeyebilirdi. Ne zaman yakalanır:
+              yayından önceki test tablodaki hareketler satırını kontrol eder ve sürümü durdurur. Yakalamadığı: aktivite_oku''yu kullanmadan
+              kendi komutunu gönderen yeni bir kod; seviyeyi o kod seçer. Onarım: kod incelemesinde "defteri sadece aktivite_oku okur" kuralı;
+              panoda Uygulama''nın toplamı ile tablonunki arasındaki fark böyle bir okuyanı gösterir.'}
+          - {title: Gece karşılaştırması bir satırı kaçırırsa, text: 'Ne zaman: her gece (31 Eki 02:00); iş LOCAL_ONE okur. Emniyet: son 10
+              dakikaya bakmaz; okuduğu satırlar çoktan üç kopyadadır. Yakalamadığı: yine de kaçırırsa satırı eksik sanar. Onarım: eksik sandığı
+              satırı aynı event_id ile yazar; aynı satırın üzerine düşer, zarar yok (Adım 27). C00950 gibi büyük bir defter (60.000 satır
+              ≈ 9 MB) gecede bir kez yaklaşık 1.100 RRU tutar (LOCAL_QUORUM''da 2.200).'}
+          - {title: Silme doğrulanırken, text: 'Ne zaman: bir silme talebinde (C00388, 20 Eki, temsilî). Emniyet: doğrulama LOCAL_QUORUM;
+              cevap silmeyi almış kopyaların çoğunluğundan gelir. Yakalamadığı: bir defterin bütün satırlarını silen komut "tamam" aldıktan
+              sonra da Keyspaces satırları arka planda kaldırır (Adım 27); bu sürede doğrulama "henüz boş değil" diyebilir. İş bekler ve yeniden
+              okur. Onarım: her adım silme kaydına yazılır (Adım 27).'}
+          - title: Bedel birden artarsa
+            text: 'Biri her ekranı LOCAL_QUORUM yaparsa sayfalar doğru görünür; fark sadece faturada (saatte 933.000 yerine 1.836.000 RRU).
+              Ne zaman: pano bir saat içinde gösterir (şeridin birimi iki katı); Budgets tahmini günler içinde eşiği geçer. Yakalamadığı:
+              Adım 27''deki okuma başına RRU alarmı (eşik 3) çalmaz; okuma başına birim aynı kalıp okuma sayısı artarsa (ör. şeridi her saniye
+              yeniden okuyan hatalı bir sayfa) oran değişmez; bunu panodaki okuma sayısı ve bütçe yakalar. Onarım: ekip ekran ekran OkumaBirimi''ne
+              bakar, sorumlu sürümü geri alır.'
+            code:
+            - {say: '1,0 → 1,96: çalmaz.', code: 'IF(SampleCount >= 20, ConsumedReadCapacityUnits Average, 0) > 3   # 5 dk (Adım 27)', tag: CloudWatch'ın
+                içinde}
+            - {say: Tahmin eşiği geçer; e-posta., code: FORECASTED > %80 × 40 USD   → ≈ 58 > 32, tag: AWS Budgets'ın içinde}
+          - title: Bir komut döndürdüğünden fazlasını okursa
+            text: 'Ne zaman: biri komuttan sayfa boyunu silerse; Keyspaces LIMIT''i okuduktan sonra uygular. Emniyet: panoda tablonun toplamı
+              ile Uygulama''nınki karşılaştırılır; Uygulama dönen satırları sayar, Keyspaces okunanı. Yakalamadığı: Adım 27''deki okuma başına
+              RRU alarmı tablonun ortalamasına bakar; saatte 900.000 şerit okumasının yanında büyük bir defterin (C00950, temsilî) 256 RRU''luk
+              okumaları ortalamayı 3''ün üstüne çıkarmaz, alarm çalmaz. Fark sadece panodaki iki toplamda görünür. Onarım: sayfa boyu geri
+              konur; aktivite_oku onu hep LIMIT kadar verir.'
+            code:
+            - {say: 1 MB'a kadar okunur., code: SELECT … WHERE user_id = 'C00950' LIMIT 20   -- fetch_size yok, tag: Uygulama → Keyspaces}
+            - {say: Birim okunana göre., code: → 20 satır döner · okunan 1 MB → 256 RRU (LOCAL_ONE 128), tag: Keyspaces → Uygulama}
+          - {title: Bir veri merkezi giderse, text: 'Ne zaman: kendiliğinden; ekip bir şey yapmaz. Emniyet: üç kopyadan ikisi yeter; yazmalar
+              ve LOCAL_QUORUM okumalar sürer, LOCAL_ONE ilk cevap veren kopyadan okur. Yakalamadığı: iki kopyaya birden ulaşılamazsa LOCAL_QUORUM
+              okuma ve yazma hata alır; LOCAL_ONE okuma tek kopyayla cevap verebilir. Onarım: geri gelen ya da yeni kurulan kopyayı Keyspaces
+              kendisi tamamlar (nasıl yaptığını AWS yayımlamaz); Uygulama hata alan isteği yeniden dener. Bölgenin tamamı giderse sürekli
+              yedek (PITR) başka bir planın işidir.'}
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
