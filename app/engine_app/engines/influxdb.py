@@ -3,7 +3,7 @@ import json
 import time
 from datetime import datetime, timedelta, timezone
 
-from flask import jsonify, request
+from flask import g, jsonify, request
 from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 
@@ -15,6 +15,8 @@ META = catalog.META["influxdb"]
 PAGES = catalog.PAGES["influxdb"]
 WINDOWS = {"1m", "5m", "15m", "1h"}
 RANGES = {"-1h", "-6h", "-24h"}
+RANGE_HOURS = {"-1h": 1, "-6h": 6, "-24h": 24}
+LOOK_BACK = "-365d"
 
 
 def client():
@@ -30,6 +32,21 @@ def flux(op, query, note=None):
         n = sum(len(tb.records) for tb in tables)
         t.result(items=n, note=note)
     return tables
+
+
+def at_newest(q, rng, note):
+    """The range holds no point: ask for the newest point of the same series and run the query on the range that ends there.
+    Returns the tables and the time of the newest point. Reads only, so the chart never shows a value that was not measured."""
+    last = q.rsplit("\n", 1)[0].replace(f"range(start: {rng})", f"range(start: {LOOK_BACK})") + "\n  |> last()"
+    times = [rec.get_time() for tb in flux("Flux query (newest point)", last) for rec in tb.records]
+    if not times:
+        return [], None
+    newest = max(times)
+    start = (newest - timedelta(hours=RANGE_HOURS[rng])).strftime("%Y-%m-%dT%H:%M:%SZ")
+    stop = (newest + timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    tables = flux("Flux query", q.replace(f"range(start: {rng})", f"range(start: {start}, stop: {stop})"), note=note)
+    g.trace.insert(0, g.trace.pop())    # the query that filled the chart comes first: the Perde arkası page measures the first entry
+    return tables, newest.isoformat()
 
 
 def register(bp):
@@ -52,14 +69,17 @@ def register(bp):
   |> filter(fn: (r) => r._measurement == "warehouse_env" and r.sensor == "{'humidity' if measure == 'humidity' else 'temperature'}")
   |> aggregateWindow(every: {window}, fn: mean, createEmpty: false)'''
             group = "warehouse"
-        tables = flux("Flux query", q, note=f"aggregateWindow turns raw points into one value per {window}. "
-                      "A wider window returns fewer points for the same time range.")
+        note = f"aggregateWindow turns raw points into one value per {window}. A wider window returns fewer points for the same time range."
+        tables = flux("Flux query", q, note=note)
+        until = None
+        if not any(tb.records for tb in tables):
+            tables, until = at_newest(q, rng, note)
         series = {}
         for tb in tables:
             for rec in tb.records:
                 series.setdefault(rec.values.get(group) or "all", []).append(
                     {"t": rec.get_time().isoformat(), "v": round(rec.get_value() or 0, 2)})
-        return jsonify(trace.payload({"series": series, "window": window, "range": rng}))
+        return jsonify(trace.payload({"series": series, "window": window, "range": rng, "until": until}))
 
     @bp.post("/api/orders-metric")
     def api_orders_metric():

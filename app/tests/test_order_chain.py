@@ -3,6 +3,7 @@ import os
 import sqlite3
 import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -360,6 +361,39 @@ class MetricTest(unittest.TestCase):
         influxdb.flux = lambda op, q, note=None: [SimpleNamespace(records=[rec])]
         d = self.c.get("/api/series?measure=orders").get_json()
         self.assertEqual(d["data"]["series"], {"web": [{"t": "t", "v": 3}]})
+
+    def test_empty_range_is_anchored_at_the_newest_point(self):
+        newest = datetime(2026, 10, 30, 22, 23, 11, tzinfo=timezone.utc)
+        rec = SimpleNamespace(values={"warehouse": "IST-1"}, get_time=lambda: newest, get_value=lambda: 21.5)
+        queries = []
+
+        def fake(op, q, note=None):
+            queries.append(q)
+            trace.g.trace.append({"op": op, "request": q})
+            return [] if len(queries) == 1 else [SimpleNamespace(records=[rec])]
+        influxdb.flux = fake
+        d = self.c.get("/api/series?measure=temperature&window=1h&range=-6h").get_json()
+        self.assertEqual(len(queries), 3)
+        self.assertIn("range(start: -6h)", queries[0])
+        self.assertIn("|> last()", queries[1])
+        self.assertIn("range(start: 2026-10-30T16:23:11Z, stop: 2026-10-30T22:23:12Z)", queries[2])
+        self.assertEqual(d["data"]["until"], newest.isoformat())
+        self.assertEqual(list(d["data"]["series"]), ["IST-1"])
+        self.assertEqual(d["trace"][0]["request"], queries[2])     # the Perde arkası page measures the first entry
+
+    def test_range_with_points_runs_one_query(self):
+        rec = SimpleNamespace(values={"warehouse": "IST-1"}, get_time=lambda: SimpleNamespace(isoformat=lambda: "t"), get_value=lambda: 21.5)
+        queries = []
+        influxdb.flux = lambda op, q, note=None: (queries.append(q), [SimpleNamespace(records=[rec])])[1]
+        d = self.c.get("/api/series?measure=temperature").get_json()
+        self.assertEqual(len(queries), 1)
+        self.assertIsNone(d["data"]["until"])
+
+    def test_no_point_at_all_stays_empty(self):
+        influxdb.flux = lambda op, q, note=None: []
+        d = self.c.get("/api/series?measure=humidity").get_json()
+        self.assertEqual(d["data"]["series"], {})
+        self.assertIsNone(d["data"]["until"])
 
 
 class OrderTimeTest(unittest.TestCase):
