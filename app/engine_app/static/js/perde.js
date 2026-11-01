@@ -283,7 +283,7 @@
         ${P.sim ? `<section class="gp-sec">${h("Simülasyon")}<div class="gp-sim"></div></section>` : ""}
         <section class="gp-sec pa-route">${h("İstek nereden geçti?")}<p>${step.action === "look" ? "Sayfa açılırken giden" : "Senin tıklamanla giden"}
           istek, veritabanına ulaşana kadar bu duraklardan geçti. Bilgiler isteğin kendi kaydından geliyor.</p><div class="pa-path-box"></div>
-          <h4 class="gq-cards-title">Yoldaki paketler</h4><p>Aynı yolculuk, ağın gördüğü hâliyle: her durakta bir paket. "gerçek" yazan değerler senin isteğinden ve bu kurulumdan,
+          <h4 class="gq-cards-title">Yoldaki paketler</h4><p>Aynı yolculuk, ağın gördüğü hâliyle: her durakta bir paket. "gerçek" yazan değerler senin isteğinden ve bu sistemden,
           "örnek" yazanlar uygulamanın göremediği ama gerçekte buna benzeyen değerler.</p><div class="pa-pkts-box"></div></section>
         ${PA.code ? `<section class="gp-sec">${h(P.code_title || "Uygulamanın içinde: gerçek koddan kısa bir kesit")}<p>${esc(P.code_intro || "")}</p>
           <div class="${PA.code.length > 1 ? "gq-two" : "gq-one"}">${codeHtml(PA.code)}</div></section>` : ""}

@@ -43,7 +43,7 @@ def register(bp):
         if measure == "orders":
             q = f'''from(bucket: "metrics")
   |> range(start: {rng})
-  |> filter(fn: (r) => r._measurement == "orders")
+  |> filter(fn: (r) => r._measurement == "orders" and r._field == "count")
   |> aggregateWindow(every: {window}, fn: sum, createEmpty: false)'''
             group = "channel"
         else:

@@ -2578,7 +2578,7 @@ steps:
             kind: code
             what: dağıtım hattında (CI/CD) çalışan kod
             does: >-
-              Her yayından önce ve ayrıca her gece çalışır. Doğrulama kuralını sözlükten üretip koleksiyona koyar (ilk kurulumda
+              Her yayından önce ve ayrıca her gece çalışır. Doğrulama kuralını sözlükten üretip koleksiyona koyar (ilk seferde
               createCollection, sonra collMod) ve gereken index'leri kurar; canlı koleksiyonda arka planda. Sayfaların her
               sorusunu explain ile dener. Gece ayrıca kurala uymayan eski dokümanları sayar. Sonucu CloudWatch'a yazar.
             box: "Kuralı sözlükten üretir, index'leri kurar; her soruyu explain ile dener, gece kurala uymayanları sayar."
@@ -7936,7 +7936,7 @@ steps:
                   cols: [dosya, içinde]
                   rows:
                     - {key: ar1, dosya: "clickstream/2026/10/…", içinde: "eski sitenin olay kayıtları (search, view, …)"}
-                    - {key: ar2, dosya: "orders/2026-10-30.parquet", içinde: "Aurora'dan dökülen sipariş kalemleri (purchase)", hidden: true}
+                    - {key: ar2, dosya: "orders/2026-10-30.csv", içinde: "Aurora'dan dökülen sipariş kalemleri (purchase)", hidden: true}
                     - {key: ar3, dosya: "cdc/2026/10/31/…parquet", içinde: "tablodan gelen yeni satırlar (7f3a… view, purchase)", hidden: true}
             - id: backfill
               row: load
@@ -8000,7 +8000,7 @@ steps:
             - phase: 2
               who: aurora
               lit: [aurora, archive]
-              packet: {at: aurora, text: "aws_s3.query_export_to_s3('SELECT o.customer_id, o.created_at, o.order_id, i.product_id, p.name … WHERE o.created_at >= T − 7 gün AND o.created_at < T', 'orders/2026-10-30.parquet')"}
+              packet: {at: aurora, text: "aws_s3.query_export_to_s3('SELECT o.customer_id, o.created_at, o.order_id, i.product_id, p.name … WHERE o.created_at >= T − 7 gün AND o.created_at < T', 'orders/2026-10-30.csv')"}
               show: {archive: [ar2]}
               fresh: {archive: [ar2]}
               note: {dms: "", actcons: "", web: "", archive: "clickstream/ zaten vardı · orders/ eklendi"}
@@ -8509,7 +8509,7 @@ steps:
           sub: Hemen ardından gelen istek.
           lines:
             - {match: '@bp.get("/api/recent")', say: "\"Son baktıkların\" şeridi için gelen istek buraya gelir.", tag: [Tarayıcı → Uygulama]}
-            - {match: 'rows = list(s().execute(cql', say: "SELECT komutu gönderilir. Keyspaces senin partition'ından en fazla 40 satırı olduğu gibi geri verir.", tag: [Uygulama → Keyspaces, Keyspaces → Uygulama], hl: where}
+            - {match: 'rows = list(s().execute(SimpleStatement(cql, consistency_level=ConsistencyLevel.LOCAL_ONE', say: "SELECT komutu gönderilir. Keyspaces senin partition'ından en fazla 40 satırı olduğu gibi geri verir.", tag: [Uygulama → Keyspaces, Keyspaces → Uygulama], hl: where}
             - {match: 'for r in rows:', say: Gelen satırlar tek tek ele alınır., tag: [Uygulamanın içinde], hl: app}
             - {match: 'if r.event_type == "view" and r.product_id not in seen:', say: "Sadece \"view\" satırları ve listede henüz olmayan ürünler geçer. add_to_cart, purchase ve tekrarlar burada elenir.", tag: [Uygulamanın içinde], hl: type}
             - {match: 'recent.append(', say: Geçen ürün listeye eklenir., tag: [Uygulamanın içinde], hl: app}
@@ -9284,7 +9284,7 @@ steps:
             metrics: [[Önerilen ürün, items], [Süre, ms]]
         reading: >-
           İki sorgu da en fazla 6 öneri döndürdü. Sağdaki bir hop daha uzun: daha çok kenar takip eder, bu yüzden genelde
-          daha uzun sürer. Bu kurulumda Neptune Serverless çalışıyor (en az 1 NCU) ve yük artınca kapasitesini kendisi
+          daha uzun sürer. Bu sistemde Neptune Serverless çalışıyor (en az 1 NCU) ve yük artınca kapasitesini kendisi
           büyütüyor. Bir süre sorulmayan bir sorgunun ilk çalışması birkaç saniye sürebilir, çünkü veri henüz bellekte değildir;
           sonraki çalıştırmalar hızlanır. Ekrandaki puanlar (örn. "71 shared customers") ortak müşteri sayısıdır:
           simülasyondaki küçük sayıların gerçek grafta büyümüş hâli.
@@ -17111,7 +17111,7 @@ steps:
           - text: >-
               "Place the order" butonuna bastın. Tarayıcın uygulamaya sepetteki ürünleri, "ödeme başarısız olsun" bilgisini ve bu
               tıklamanın istek numarasını (request_id) gönderdi. Uygulama Aurora'ya bir bağlantı açtı, önce bu numarayla bir
-              sipariş var mı diye baktı (yoktu) ve transaction'ı başlattı (BEGIN).
+              sipariş var mı diye baktı (yoktu) ve transaction'ı başlattı (BEGIN). Bu istek doğrudan yazma sunucusuna gidiyor; yoğun bir üretim sisteminde arada RDS Proxy olur.
             engines: [aurora]
           - text: >-
               Stok düşürüldü (UPDATE); satır kilitlendi. Sepette birden çok ürün varsa uygulama onları ürün numarası sırasıyla
@@ -17336,7 +17336,7 @@ steps:
         terms:
           - [Asıl kayıt (source of truth), "Bir bilginin doğru kabul edilen tek yeri. Sipariş için Aurora."]
           - [Fan-out, "Bir olayın birden fazla sisteme yayılması."]
-          - [Outbox, "Siparişle aynı transaction'da yazılan \"haber verilecek olaylar\" tablosu; bir program onu okuyup dağıtır. Bu kurulumda satır yazılıyor ama okuyan program yok: haber vermeyi tarayıcıdaki sayfa yapıyor."]
+          - [Outbox, "Siparişle aynı transaction'da yazılan \"haber verilecek olaylar\" tablosu; bir program onu okuyup dağıtır. Bu mağazada satır yazılıyor ama okuyan program yok: haber vermeyi tarayıcıdaki sayfa yapıyor."]
           - [Uygulama, "Mağazanın arka uç programı. Her veritabanı için ayrı bir uygulama sunucusu var; tarayıcı her birine ayrı istek gönderir."]
       t1:
         title: Önceden ne vardı? Bir sipariş beş depoya nasıl yayılıyor, depolar bu sabahki hâllerine nasıl geldi?
@@ -17892,7 +17892,7 @@ steps:
               who: zetl
               lit: [aurora, wal, zetl, redshift]
               packet: {at: zetl, text: "zero-ETL: orders, order_items, products, customers → aurora_live (ilk kopya) · sonra değişiklik kaydından sürekli"}
-              note: {initial: "", cache: "", keyspaces: "", influx: "", neptune: "", zetl: "ilk kopya bitti → değişiklikleri izliyor", redshift: "4 tablo kopyalandı"}
+              note: {initial: "", cache: "", keyspaces: "", influx: "", neptune: "", zetl: "ilk kopya bitti → değişiklikleri izliyor", redshift: "5 tablo kopyalandı"}
               say: >-
                 Redshift'in kopyasını zero-ETL kendisi kurdu: önce dört tabloyu bir kez kopyaladı, sonra değişiklik kaydını
                 okumaya geçti (Adım 30). Bu yol akışı ve tüketicileri hiç kullanmaz; aynı defterin ikinci okuyucusu.
@@ -18014,10 +18014,10 @@ steps:
             - phase: 3
               who: zetl
               lit: [wal, zetl, redshift]
-              packet: {at: zetl, text: "08:53:47 · zero-ETL: orders + order_items değişikliği → aurora_live · gecikme ≈ 20 sn (temsilî)"}
+              packet: {at: zetl, text: "08:53:57 · zero-ETL: orders + order_items değişikliği → aurora_live · gecikme ≈ 30 sn (ölçülen)"}
               show: {redshift: [r2]}
               fresh: {redshift: [r2]}
-              note: {graphcons: "", neptune: "", kinesis: "", zetl: "≈ 20 sn sonra", redshift: "İrem'in siparişi kopyada"}
+              note: {graphcons: "", neptune: "", kinesis: "", zetl: "≈ 30 sn sonra", redshift: "İrem'in siparişi kopyada"}
               say: >-
                 Yaklaşık 20 saniye sonra zero-ETL aynı COMMIT'i değişiklik kaydından okuyup Redshift'e uyguladı; raporlar
                 sayfası İrem'in siparişini artık sayıyor (Adım 30). Bu yol akıştan bağımsız; akış dursa da çalışır.
@@ -18430,7 +18430,7 @@ steps:
                     - ["My activity", "Keyspaces", "≈ 1 sn"]
                     - ["Operasyon ekranı", "InfluxDB", "≈ 1 sn"]
                     - ["Öneriler", "Neptune", "≈ 2 sn"]
-                    - ["Raporlar", "Redshift", "≈ 20 sn"]
+                    - ["Raporlar", "Redshift", "≈ 30 sn"]
               - title: "Kendi siparişini hemen görmek"
                 text: >-
                   Bir müşteri siparişini verdikten hemen sonra "Orders" sayfasını açarsa siparişini görmeli; görmezse ikinci kez
@@ -18590,7 +18590,7 @@ steps:
             say: Aurora'da siparişi tek transaction'da yaz,
             code: "SELECT … WHERE request_id = …; BEGIN; UPDATE products …; INSERT INTO orders …; INSERT INTO order_items …; INSERT INTO outbox …; COMMIT;"
             name: 1. Asıl kayıt
-            note: "Önce bu tıklamanın siparişi aranır. Stok (ürün numarası sırasıyla), sipariş, kalemler ve outbox satırı birlikte: ya hepsi ya hiçbiri (Adım 23). Outbox'ı bu kurulumda okuyan program yok."
+            note: "Önce bu tıklamanın siparişi aranır. Stok (ürün numarası sırasıyla), sipariş, kalemler ve outbox satırı birlikte: ya hepsi ya hiçbiri (Adım 23). Outbox'ı bu mağazada okuyan program yok."
             hl: app
           - id: dd
             say: DynamoDB'de sepeti boşalt,
@@ -18646,7 +18646,7 @@ steps:
           - who: Aurora → Redshift
             text: >-
               Yaklaşık yarım dakika içinde zero-ETL siparişi Redshift'e kopyaladı; raporlar sayfası onu gösterecek (Adım 30, 31). Bu,
-              workshop'taki tek motor-motor bağlantısı.
+              mağazanın kodundaki tek motor-motor bağlantısı.
           - who: Sonra
             text: >-
               Siparişin "Orders" sayfasında (Aurora, Adım 26), "My activity"nin iki sekmesinde (Keyspaces), canlı sıralamada (ElastiCache) ve
@@ -19510,7 +19510,7 @@ steps:
             engines: [elasticache]
           - text: >-
               Sayfa siparişlerini istedi; uygulama Aurora'ya tek bir SELECT gönderdi. Bu SELECT üç tabloyu anahtarlarıyla
-              birleştirip her sipariş için tek bir satır üretti. Simülasyon bu SELECT'i adım adım gösteriyor.
+              birleştirip her sipariş için tek bir satır üretti. Simülasyon bu SELECT'i adım adım gösteriyor. Bu istek doğrudan yazma sunucusuna gidiyor; yoğun bir üretim sisteminde arada RDS Proxy olur.
             engines: [aurora]
           - text: >-
               Liste çizildi: sipariş numarası, tarih, durum ("processing"), ürün adları ve toplam. Hiç siparişin yoksa liste boş
@@ -19661,7 +19661,7 @@ steps:
       önce verdiğin sipariş. Bu liste de ürün sayfasındaki şerit gibi Keyspaces'ten geliyor. Şimdi persona'nın daha
       uzun geçmişini isteyeceksin; aynı soru başka bir kişi için nasıl cevaplanıyor?
     do: >-
-      "My persona (seeded)" (persona'm, hazır yüklü) butonuna tıkla.
+      "My persona" (persona'm) butonuna tıkla.
     done: >-
       Liste değişti: artık persona'nın hareketleri görünüyor, en yenisi üstte.
     after: >-
@@ -20506,7 +20506,7 @@ steps:
               SELECT gönderdi. Baktığın ürünler ve verdiğin sipariş listelendi. Simülasyonun ilk okuması bu.
             engines: [keyspaces]
           - text: >-
-              Sonra "My persona (seeded)" butonuna bastın. Tarayıcın aynı isteği who=persona ile gönderdi; uygulama bu kez seçtiğin
+              Sonra "My persona" butonuna bastın. Tarayıcın aynı isteği who=persona ile gönderdi; uygulama bu kez seçtiğin
               müşterinin numarasıyla (ör. C00001) okudu. Simülasyonun ikinci okuması bu.
             engines: [keyspaces]
           - text: >-
@@ -20600,8 +20600,8 @@ steps:
             trigger: true
             metrics: [[Okunan satır, items], [Süre, ms]]
         reading: >-
-          Bu tarayıcının partition'ında sadece senin bu oturumdaki hareketlerin var; persona'nın partition'ında kurulumdan gelen
-          uzun bir geçmiş ve bu müşteriyle verilen siparişlerin satın alma satırları var, okuma 20 satırda durdu. Persona'nın örnek geçmişi 7 gün sonra TTL ile silinir; o zaman liste
+          Bu tarayıcının partition'ında sadece senin bu oturumdaki hareketlerin var; persona'nın partition'ında eskiden gelen
+          uzun bir geçmiş ve bu müşteriyle verilen siparişlerin satın alma satırları var, okuma 20 satırda durdu. Persona'nın geçmişi 7 gün sonra TTL ile silinir; o zaman liste
           kısalır. Süre her istekte biraz değişir.
       query:
         title: Uygulama Keyspaces'e ne dedi?
@@ -20698,8 +20698,8 @@ steps:
       concept:
         term: Tutarlılık seviyesi (LOCAL_QUORUM ve LOCAL_ONE)
         text: >-
-          Keyspaces her satırı bir bölgenin üç farklı veri merkezinde (Availability Zone) üç kopya olarak tutar. Yazma her zaman
-          en az iki kopyaya ulaşınca onaylanır (LOCAL_QUORUM). Okurken seçersin: LOCAL_QUORUM iki kopyaya sorar ve en yenisini
+          Keyspaces her satırı bir bölgenin üç ayrı Availability Zone'unda üç kopya olarak tutar. Yazma her zaman
+          en az iki kopyaya ulaşınca onaylanır (LOCAL_QUORUM). Okurken seçersin: LOCAL_QUORUM en az iki kopyaya sorar ve en yenisini
           alır, bu yüzden onaylanmış her yazmayı görür; LOCAL_ONE tek bir kopyaya sorar, yarı fiyatına okur ama çok yeni bir
           yazmayı kaçırabilir. Üç arkadaştan ikisine sorup en güncel cevabı almak ya da birine sorup geçmek gibi.
         terms:
@@ -21627,7 +21627,7 @@ steps:
           veritabanları var.
         steps:
           - text: >-
-              Bir önceki adımda persona'nın geçmişini LOCAL_QUORUM ile okudun (sayfadaki varsayılan). Bu, simülasyonun sol şeridi.
+              Bir önceki adımda persona'nın geçmişini LOCAL_QUORUM ile okudun (sayfadaki deneme butonlarının başlangıç seçimi). Bu, simülasyonun sol şeridi.
             engines: [keyspaces]
           - text: >-
               "LOCAL_ONE" butonuna bastın. Tarayıcın aynı isteği consistency=LOCAL_ONE ile gönderdi; uygulama aynı SELECT'i tek
@@ -21792,7 +21792,7 @@ steps:
       Grafik ve tablo değişti: satışlar artık ay ay değil, şehir şehir toplanıyor.
     after: >-
       Redshift veriyi satır satır değil, sütun sütun saklıyor; bu sorgu sadece kullandığı şehir, adet ve tutar
-      sütunlarını okudu. Bu rapor görevden önce yüklenmiş örnek satış geçmişini okuyor. Sıradaki adımda aynı raporu,
+      sütunlarını okudu. Bu rapor kapanmış günlerin satış geçmişini okuyor. Sıradaki adımda aynı raporu,
       siparişlerin gerçekten yazıldığı veritabanının canlı kopyasından isteyeceksin.
     target: "#exp-dim [data-value=city]"
     action: click
@@ -22523,7 +22523,7 @@ steps:
               "Reports" (raporlar) sayfasını açtın. Açılırken oturumun güncellendi.
             engines: [elasticache]
           - text: >-
-              Sayfa "History (seeded)" ve "Month" seçiliyken raporu istedi; uygulama Redshift'e aya göre gruplayan bir sorgu
+              Sayfa "History" ve "Month" seçiliyken raporu istedi; uygulama Redshift'e aya göre gruplayan bir sorgu
               gönderdi ve grafik çizildi.
             engines: [redshift]
           - text: >-
@@ -22667,7 +22667,7 @@ steps:
             text: Grafiği ve tabloyu şehirlerle yeniden çizdi.
           - who: Sonra
             text: >-
-              Bu rapor kurulumda yüklenen geçmişi okuyor. Bir sonraki adımda Aurora'nın canlı kopyasını okuyacaksın; senin siparişin
+              Bu rapor kapanmış günlerin geçmişini okuyor. Bir sonraki adımda Aurora'nın canlı kopyasını okuyacaksın; senin siparişin
               de orada.
       remember: >-
         Çok satırı okuyup az sütunu toplayan sorgular sütun bazlı bir analiz deposunda çalışır: sorgu sadece kullandığı sütunları
@@ -22683,7 +22683,7 @@ steps:
     use_case: Zero-ETL
     title: Aurora'nın canlı kopyasını oku
     why: >-
-      Rapor şehir şehir toplandı, ama görevden önce yüklenmiş örnek satış geçmişinden. Siparişler ise Aurora'ya
+      Rapor şehir şehir toplandı, ama kapanmış günlerin satış geçmişinden. Siparişler ise Aurora'ya
       yazılıyor ve ağır raporları orada çalıştırmak ödeme sayfasını yavaşlatırdı. Bu yüzden Aurora'nın bir kopyası
       sürekli Redshift'e akıyor; şimdi raporu o canlı kopyadan isteyeceksin.
     do: >-
@@ -22707,7 +22707,7 @@ steps:
       concept:
         term: Zero-ETL entegrasyonu
         text: >-
-          Zero-ETL, Aurora'daki her değişikliği (yeni sipariş, güncellenen stok) Redshift'e kendiliğinden ve kısa bir gecikmeyle (bu workshop'ta yaklaşık 30 saniye)
+          Zero-ETL, Aurora'daki her değişikliği (yeni sipariş, güncellenen stok) Redshift'e kendiliğinden ve kısa bir gecikmeyle (ölçülen: yaklaşık 30 saniye)
           taşır. Aurora değişiklikleri zaten bir kayıt defterine (log) yazar; entegrasyon bu defteri okur ve Redshift'teki kopyaya
           uygular. Bir mağazanın satış fişlerinin kopyasının otomatik olarak muhasebeye gitmesi gibi: kasada kimse ekstra bir şey
           yapmaz.
@@ -23093,7 +23093,7 @@ steps:
           sub: Adresteki source=live sorguyu aurora_live tablolarına yönlendirir.
           lines:
             - {match: '@bp.get("/api/report")', say: "Rapor isteği buraya gelir.", tag: Tarayıcı → Uygulama}
-            - {match: 'source = request.args.get("source", "history")', say: "Kaynak: kurulumdaki geçmiş mi, Aurora'nın canlı kopyası mı?", tag: Uygulamanın içinde}
+            - {match: 'source = request.args.get("source", "history")', say: "Kaynak: kapanmış günlerin geçmişi mi, Aurora'nın canlı kopyası mı?", tag: Uygulamanın içinde}
             - {match: 'if source == "live":', say: "Canlıysa sorgu aurora_live veritabanındaki tablolara yazılır.", tag: Uygulamanın içinde}
             - {match: 'FROM {LIVE_DB}.public.orders o', say: "Kopyalanan orders tablosu (Aurora'nın shop.orders tablosunun kopyası).", tag: Uygulamanın içinde, hl: dst}
             - {match: 'cols, rows = run("SELECT (report)", q, note)', say: "Sorgu Redshift'e gider; Aurora'ya hiçbir şey gitmez.", tag: [Uygulama → Redshift, Redshift → Uygulama]}
@@ -23107,7 +23107,7 @@ steps:
             metrics: [[Dönen satır, items], [İlk satır, data.rows.0.0], [İlk satırın cirosu, data.rows.0.3], [Süre, ms]]
         reading: >-
           Canlı sorgu dört kopyalanmış tabloyu JOIN'lediği için geçmiş tablosuna göre daha uzun sürer (bir iki saniye). Sayılar
-          geçmiş raporundakilere yakındır, çünkü kurulumdaki siparişler Aurora'da da var; fark, sonradan verilen siparişlerdir
+          geçmiş raporundakilere yakındır, çünkü geçmişteki siparişler Aurora'da da var; fark, sonradan verilen siparişlerdir
           (seninki dahil). Süre her istekte değişir.
       query:
         title: Uygulama Redshift'e ne dedi?
@@ -23177,7 +23177,7 @@ steps:
     after: >-
       Kopyalamanın sağlıklı olup olmadığını, kaç tablonun kopyalandığını ve hata olup olmadığını Redshift'in kendisi
       söyledi. Kutudaki zamanı siparişini verdiğin zamanla karşılaştır: aradaki fark, raporun ne kadar geride olduğunu
-      gösterir. Bu workshop'ta ölçtüğümüz fark yaklaşık 30 saniye. Şimdi sipariş raporuna geçeceğiz ve Aurora'nın bir
+      gösterir. Ölçülen fark yaklaşık 30 saniye. Şimdi sipariş raporuna geçeceğiz ve Aurora'nın bir
       raporu nasıl hesapladığını okuyacağız.
     target: "#repl"
     action: look
@@ -24008,7 +24008,7 @@ steps:
           rows:
             - {order_id: W1793380550, order_date: "10:12:04", total: 951.92}
         dst: {label: Redshift (aurora_live.orders)}
-        row: {order_id: W1793396741, order_date: "10:25:41", total: 3373.84}
+        row: {order_id: W1793396741, order_date: "10:25:41", total: 10890.26}
         lag_s: 30
         write_say: "Sipariş Aurora'da 10:25:41'de COMMIT edildi."
         log_entry: "INSERT orders W1793396741 (10:25:41)"
@@ -24081,7 +24081,7 @@ steps:
             say: ve kopyadaki en yeni ziyaretçi siparişinin kaç saniye önce olduğunu hesapla.
             code: "SELECT max(order_date), datediff(second, max(order_date)::timestamp, getdate()) FROM aurora_live.public.orders WHERE visitor_id IS NOT NULL"
             name: Ne kadar güncel?
-            note: Kurulumdaki siparişlerin ziyaretçi kimliği yok; sadece mağazada verilen siparişler sayılır.
+            note: Eski siteden gelen siparişlerin ziyaretçi kimliği yok; sadece mağazada verilen siparişler sayılır.
             hl: dst
         columns:
           - label: Durum ve tazelik
@@ -25565,7 +25565,7 @@ steps:
         steps:
           - text: >-
               "Order report" (sipariş raporu) sayfasını açtın. Sayfa raporu istedi; uygulama Aurora'ya segment raporunu ve
-              workshop siparişlerinin saatlik özetini sordu. Tablolar çizildi.
+              mağazada verilen siparişlerin saatlik özetini sordu. Tablolar çizildi.
             engines: [aurora]
           - text: >-
               "Show the query plan" kutusunu işaretledin. Tarayıcın raporu explain=on ile yeniden istedi; uygulama aynı sorguyu bir
@@ -25633,8 +25633,8 @@ steps:
             - {match: 'sql(cur, "SELECT (report)", q,', say: "Segment raporunu Aurora'ya gönderir.", tag: [Uygulama → Aurora, Aurora → Uygulama]}
             - {match: 'sql(cur, "EXPLAIN ANALYZE", "EXPLAIN ANALYZE " + q)', say: "Plan istendiyse aynı sorguyu EXPLAIN ANALYZE ile bir kez daha çalıştırır.", tag: [Uygulama → Aurora, Aurora → Uygulama]}
             - {match: 'plan = "\n".join(r[0] for r in cur.fetchall())', say: Planın satırlarını tek bir metinde birleştirir., tag: Uygulamanın içinde}
-            - {match: 'sql(cur, "SELECT (workshop orders)", today)', say: "Üçüncü sorgu: mağazada verilen siparişlerin saatlik özeti.", tag: [Uygulama → Aurora, Aurora → Uygulama]}
-            - {match: 'return jsonify(trace.payload({"segments": seg, "workshop": hours, "plan": plan}))', say: Rapor, özet ve plan tarayıcıya gider., tag: Uygulama → Tarayıcı}
+            - {match: 'sql(cur, "SELECT (store orders per hour)", today)', say: "Üçüncü sorgu: mağazada verilen siparişlerin saatlik özeti.", tag: [Uygulama → Aurora, Aurora → Uygulama]}
+            - {match: 'return jsonify(trace.payload({"segments": seg, "hourly": hours, "plan": plan}))', say: Rapor, özet ve plan tarayıcıya gider., tag: Uygulama → Tarayıcı}
       live:
         title: Gerçek veritabanında ne oldu?
         intro: Senin işaretlemenle Aurora'ya giden üç gerçek sorgu.
@@ -26354,7 +26354,7 @@ steps:
     result: The Flux query has range, filter and aggregateWindow.
     panel:
       need: >-
-        Depolardaki sensörler her 5 dakikada bir ölçüm gönderiyor; sipariş sayısı her dakika yazılıyor. Bir günde binlerce nokta
+        Depolardaki sensörler her 5 dakikada bir ölçüm gönderiyor; her sipariş de bir nokta olarak yazılıyor. Bir günde binlerce nokta
         birikir. Ekran bunların hepsini çizmek yerine seçilen aralığı (ör. son 6 saat) seçilen pencerelere (15 dakika, 1 saat)
         bölüp her pencere için tek bir ortalama göstermeli. Bu hesap verinin durduğu yerde yapılmalı.
       concept:
@@ -26366,7 +26366,7 @@ steps:
           ortalaması 22,1" diye özetlemek gibi.
         terms:
           - [Nokta (point), "Tek bir ölçüm: zaman + ölçüm adı + etiketler + değer."]
-          - [Etiket (tag), "Noktayı tanımlayan, index'lenen alan: warehouse = İstanbul, sensor = temperature."]
+          - [Etiket (tag), "Noktayı tanımlayan, index'lenen alan: warehouse = IST-1, sensor = temperature."]
           - [Flux, "InfluxDB'nin sorgu dili; adımlar |> ile birbirine bağlanır."]
           - [aggregateWindow, "Zamanı pencerelere bölüp her pencere için tek değer hesaplayan adım."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
@@ -26866,7 +26866,7 @@ steps:
         steps:
           - text: >-
               "Ops" (operasyon) ekranını açtın. Sayfa "15 minutes" ve "6 hours" seçiliyken sıcaklık ve sipariş serilerini istedi;
-              uygulama InfluxDB'ye iki Flux sorgusu gönderdi.
+              uygulama InfluxDB'ye üç Flux sorgusu gönderdi (sipariş, sıcaklık, nem).
             engines: [influxdb]
           - text: >-
               "1 hour" butonuna bastın. Tarayıcın aynı serileri window=1h ile istedi; uygulama aynı Flux sorgusunu 1 saatlik
@@ -26952,8 +26952,7 @@ steps:
             trigger: true
             metrics: [[Dönen nokta, items], [Süre, ms]]
         reading: >-
-          Dönen nokta sayısı, seçili aralıkta veri olan pencere sayısı ve depo sayısının çarpımıdır. Bu kurulumda sensör verisi bir
-          kez yüklendi ve zamanla eskidi; son 24 saatte sensör noktası yoksa grafik boş ve dönen nokta 0 olur. Bu durumda Flux
+          Dönen nokta sayısı, seçili aralıkta veri olan pencere sayısı ve depo sayısının çarpımıdır. Seçili aralıkta sensör noktası yoksa grafik boş ve dönen nokta 0 olur. Bu durumda Flux
           sorgusu yine çalıştı, sadece aralıkta nokta bulamadı. Sipariş grafiği aynı seriden (channel=web) okur: mağazadaki her sipariş
           bu seriye tek bir nokta yazar, pencere toplamı o noktayı da sayar. Süre her istekte değişir.
       query:
@@ -28368,7 +28367,7 @@ steps:
             engines: [s3]
           - text: >-
               "Presigned URL, straight from S3" butonuna bastın. Tarayıcın uygulamaya "P0001'in görseli için bir adres imzala"
-              dedi. Uygulama adresi kendi IAM kimliğiyle imzaladı; bunun için S3'e istek gitmedi.
+              dedi. Uygulama adresi kendi IAM kimliğiyle imzaladı; bunun için S3'e istek gitmedi. Bu istek hemen imzalıyor; üretimdeki panel önce oturumu ve ürünün sahibini kontrol eder.
           - text: >-
               Tarayıcın imzalı adresi aldı ve görseli doğrudan S3'ten indirdi (bucket adındaki S3 adresi). Görselin byte'ları
               uygulama sunucusundan geçmedi. Simülasyonun sağ şeridi bu yol.
