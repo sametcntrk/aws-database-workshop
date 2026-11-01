@@ -21815,54 +21815,704 @@ steps:
           - [GROUP BY, "Satırları bir sütuna göre gruplayıp toplamak (şehre göre ciro)."]
           - [SORTKEY / DISTKEY, "Satırların diskte hangi sırayla ve hangi düğümlere dağıtılarak durduğu."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde analiz deposu için hazırlık
+      t1:
+        title: Önceden ne vardı? Bir yıllık satış geçmişi Redshift'e nasıl geldi?
         intro: >-
-          Rapor hiç açılmadan, satış tablosu analiz sorgularına göre kurulur ve doldurulur. Aşağıdaki beş adım bu hazırlığın
-          sırasıdır.
-        text:
-          - title: Önce raporların soruları yazılır
-            text: >-
-              "Aya göre", "kategoriye göre", "şehre göre" ciro, sipariş ve adet. Hepsi çok satırı okuyup az sayıda sütunu toplayan
-              sorgular; tek bir satırı bulmak isteyen yok.
-            code: |-
-              SELECT city, count(DISTINCT order_id), sum(qty), sum(amount) FROM sales GROUP BY 1 ORDER BY 4 DESC
-          - title: Tablo raporlara uygun kurulur
-            text: >-
-              Raporların çoğu bir tarih aralığı seçtiği için tarih SORTKEY olur: Redshift gereksiz blokları tarihe bakarak atlar.
-              Sık JOIN edilen anahtar DISTKEY olur: aynı müşterinin satırları aynı düğümde durur.
-            code: |-
-              CREATE TABLE sales (order_id varchar(16), order_date date SORTKEY, customer_id varchar(8) DISTKEY,
-                                  city varchar(32), category varchar(32), product_id varchar(8), qty smallint, amount decimal(12,2));
-          - title: Veri toplu yüklenir
-            text: >-
-              Analiz deposuna satır satır INSERT yapılmaz; dosyalar S3'e konur ve COPY ile paralel yüklenir. Canlı veri ise
-              işlemsel veritabanından zero-ETL ile akar (Adım 30).
-            code: |-
-              COPY sales FROM 's3://bucket/sales/' IAM_ROLE '…' FORMAT AS PARQUET;
-          - title: Kapasite iş yüküne göre seçilir
-            text: >-
-              Redshift Serverless'ta sunucu seçilmez; taban kapasite (RPU) verilir ve sorgu geldikçe ölçeklenir, boşta ödeme
-              yapılmaz. Sürekli yoğun panolar için sağlanan (provisioned) cluster daha ekonomik olabilir.
-          - title: Sorgu planı ve süre izlenir
-            text: >-
-              EXPLAIN ile sorgunun hangi sütunları taradığı ve verinin düğümler arasında taşınıp taşınmadığı görülür; sistem
-              tablolarında (SYS_QUERY_HISTORY) sorgu süreleri izlenir.
-      feed:
-        title: Veri nereden geliyor?
-        writes: >-
-          Kullanıcı yazmaz. Geçmiş satışlar toplu yükleme ile (ör. S3'ten COPY) gelir; canlı siparişler işlemsel veritabanından
-          zero-ETL ile kendiliğinden kopyalanır.
-        reads: Rapor ekranları, panolar ve analistlerin sorguları.
-        kind: >-
-          Motordan motora: Aurora'nın değişiklikleri zero-ETL entegrasyonuyla Redshift'e akar; arada uygulama ya da yazılmış bir
-          veri hattı yoktur. Geçmiş veri ise toplu yüklemeyle gelir.
-        with: >-
-          Raporun her satırı başka bir veritabanında doğdu: sipariş Aurora'da yazıldı, Redshift onun kopyasını tutuyor. Aynı
-          sipariş Keyspaces'te olay, ElastiCache'te sıralama puanı olarak da durur; rapor için doğru kaynak Redshift'teki kopyadır.
-        best: >-
-          Analiz sorguları işlemsel veritabanında değil, sütun bazlı bir analiz deposunda çalışır. İşlemsel veri ona zero-ETL ile
-          kod yazmadan, kısa bir gecikmeyle (burada yaklaşık 30 saniye) akar; ağır raporlar siparişleri hiç yavaşlatmaz.
+          "City" butonuna basılmadan önce sales tablosu zaten dolu: bir yılın satış kalemleri, her biri bir satır. Burada bu tabloyu dolduran gerçek
+          zinciri görüyorsun: tablo neden aurora_live'dan ayrı, anahtarları neden böyle seçildi, geçmiş bir kez nasıl yüklendi, her gece kapanan gün
+          nasıl eklendi ve aynı parti iki kez çalışsa ya da bozuk gelse rapor neden yanlış olmuyor. Önce bileşenler, sonra bir simülasyon, sonra
+          dört aşama.
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1 ve Ekip", "t-1: tıklamandan (t0) önceki zaman. Ekip: mağazanın sistemini kuran ve işleten mühendisler; bir kez çalışan komutları onlar gönderir, alarmlara onlar bakar."]
+          - ["Satış kalemi", "Bir siparişin içindeki bir ürün satırı. sales tablosunda her kalem bir satırdır; iki ürünlü sipariş iki satır tutar."]
+          - ["Analiz deposu ve Redshift Serverless", "Analiz deposu: çok satırı okuyup toplamak için kurulmuş veritabanı. Serverless: sunucu seçmezsin; çalışma grubuna (workgroup) bir taban kapasite verirsin, burada 8 RPU (Redshift işlem birimi)."]
+          - ["S3 ve CSV", "S3: AWS'in dosya deposu; dosyalar bir kovada (bucket) durur. CSV: her satırı bir kayıt, değerleri virgülle ayrılmış düz metin dosyası."]
+          - ["COPY", "Redshift'in toplu yükleme komutu: dosyaları S3'ten okur, sütunlara ayırır, sıkıştırır, dilimlere paralel yazar. Bir kamyonu tek tek kolilerle değil, tek seferde boşaltmak gibi."]
+          - ["Manifest", "Yüklenecek dosyaların tam listesi (küçük bir JSON dosyası). Kargo irsaliyesi gibi: listede ne varsa o yüklenir; \"mandatory\" (zorunlu) işaretli dosya yoksa yükleme hata verir."]
+          - ["Parti (batch)", "Bir gecede birlikte yüklenen satırlar; burada kapanan bir günün bütün kalemleri."]
+          - ["Ara tablo (staging)", "Asıl tablonun aynısı olan boş bir tablo (sales_stg). Dosya önce buraya yüklenir, kontrol edilir; asıl tabloya sonra geçilir. Mal rafa konmadan önce kontrol edilen depo girişi gibi."]
+          - ["Transaction (iş paketi)", "Birlikte kaydedilmesi gereken komutların paketi: BEGIN ile başlar, COMMIT ile kalıcı olur; yarıda kalırsa hiçbiri olmamış sayılır (ROLLBACK)."]
+          - ["Dilim (slice)", "Redshift'in veriyi paylaştırdığı paralel çalışan birim. Her dilim kendi satırlarını okur. Bir sınavın kâğıtlarını birkaç öğretmene bölüştürmek gibi."]
+          - ["DISTKEY ve SORTKEY", "DISTKEY: satırın hangi dilime gideceğini belirleyen sütun. SORTKEY: satırların diskte hangi sırayla durduğu; tarih aralığı sorgusu gereksiz blokları atlar (zone map: her bloğun en küçük ve en büyük değerini tutan küçük not)."]
+          - ["Kodlama (ENCODE)", "Bir sütunun nasıl sıkıştırıldığı. az64: sayılar ve tarihler; bytedict: az sayıda farklı değer, sözlükle; lzo: metin; none: sıkıştırılmamış."]
+          - ["VACUUM ve ANALYZE", "VACUUM: silinmiş işaretli satırları temizleyen ve satırları sıraya koyan bakım işi. ANALYZE: sorgu planlayıcının kullandığı istatistikleri güncelleyen iş. Redshift ikisini de arka planda kendisi çalıştırır."]
+          - ["unsorted", "svv_table_info görünümünün sütunu: satırların yüzde kaçı henüz sıralanmamış bölgede."]
+          - ["Sorgu kuyruğu ve WLM", "WLM (workload management, iş yükü yönetimi): sorguları türüne göre ayırıp kurallar koymak. Serverless'ta bunun karşılığı kuyruklardır (query queues): her kuyruğun kendi kuralı vardır, ör. \"5 dakikayı geçen sorguyu durdur\"."]
+          - ["JOIN, blok, hash", "JOIN: iki tabloyu ortak bir sütunla birleştirmek. Blok: Redshift'in diskteki 1 MB'lık saklama parçası. Hash: bir değerden sabit bir sayı üreten hesap; satırın dilimini o seçer."]
+          - ["Primary key ve NOT NULL", "Primary key: satırı tek başına tanıtan sütun, kimlik numarası gibi. Redshift bunu tanımlamana izin verir ama kuralı uygulamaz. NOT NULL: bu sütun boş kalamaz kuralı."]
+          - ["Okuma sunucusu, IAM role, pano", "Okuma sunucusu: Aurora'nın sadece okuyan sunucusu; ağır okumalar sipariş yazan sunucuyu yormaz. IAM role: bir AWS servisine verilen yetki; şifre yerine geçer. Pano: düzenli bakılan rapor ekranı."]
+          - ["Kod kartlarındaki sözcükler", "TRUNCATE: tabloyu boşaltmak. LIKE: başka bir tablonun tanımını kopyalamak. UTC ve 21:00Z: dünya saati; Türkiye UTC+3, yani Türkiye'nin gün başlangıcı önceki günün 21:00Z'si. O…: eski sitenin sipariş numarası; W…: yeni sitenin ödemesi. Sağlanan (provisioned): sunucusu seçilen klasik Redshift."]
+          - ["Mutabakat", "İki defterin aynı toplamı verdiğini kontrol etmek; burada sales ile aurora_live'ı gün gün."]
+          - ["Lambda, EventBridge Scheduler, CloudWatch", "Lambda: sunucusuz çalışan küçük program. EventBridge Scheduler: AWS'in zamanlayıcısı. CloudWatch: ölçüleri ve alarmları tutan izleme servisi."]
+          - ["Kesit, temsilî, Örnek durum, Olsaydı", "Kesit: simülasyonda gösterilen satırlar. Temsilî: anlatım için seçilmiş değer (saat, sayı). Örnek durum: olmuş sayılan bir olay. Olsaydı: tablolara kalıcı etki etmeyen bir ihtimal; sonraki karede geri alınır."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra" sütunu veriyi kimden alıp
+          kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim kodumuz" etiketli parçaları mağazanın ekibi yazar. Aynı parçalar aşağıdaki
+          simülasyonda birer kutu olarak duruyor.
+        inventory:
+          - id: app
+            name: Uygulama
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucusunda)
+            does: Siparişi Aurora'ya yazar. sales tablosuna hiç yazmaz; bu zincirde başka işi yoktur.
+            box: Siparişi Aurora'ya yazar; sales'e hiç yazmaz.
+            phases: [3]
+            before: Tarayıcı (ödeme)
+            after: aurora
+          - id: aurora
+            name: Aurora PostgreSQL (shop, okuma sunucusu)
+            kind: aws
+            what: siparişlerin asıl kaydı; dışa aktarma okuma sunucusundan okur
+            does: >-
+              orders, order_items, products, customers tabloları burada; eski sitenin sipariş geçmişi de 30 Eyl'de buraya taşındı (Adım 26). sales'in kaynağı
+              budur. Dışa aktarma sorgusu okuma sunucusunda çalıştığı için siparişleri yazan sunucu etkilenmez.
+            box: Asıl kayıt; dışa aktarma okuma sunucusundan okur, yazma sunucusu etkilenmez.
+            phases: [1, 2, 3, 4]
+            before: [app, Eski site (taşıma, Adım 26)]
+            after: [live, s3]
+          - id: live
+            name: zero-ETL → aurora_live (Adım 30)
+            kind: aws
+            what: AWS'in kopyalama servisi ve Redshift'teki salt okunur kopya
+            does: >-
+              Her siparişi yaklaşık 30 saniyede Redshift'e taşır. Bu sayfanın zinciri değildir (Adım 30 anlatır); burada iki iş için var: "bugünü" gösteren
+              ikinci kaynak olmak ve gece mutabakatında karşılaştırma defteri olmak.
+            box: "Her sipariş ~30 sn içinde gelir; 4 ayrı tablo, salt okunur (Adım 30)."
+            phases: [1, 2, 3, 4]
+            before: aurora
+            after: [recon, "\"Live from Aurora\" raporu (Adım 30)"]
+          - id: sched
+            name: EventBridge Scheduler
+            kind: aws
+            what: AWS'in zamanlayıcısı
+            does: Her gece 02:00'de (Türkiye saati) yükleme işini, 02:30'da mutabakatı başlatır.
+            box: "02:00 yükleme, 02:30 mutabakat."
+            phases: [3]
+            before: Saat
+            after: [job, recon]
+          - id: job
+            name: Satış yükleme işi (Lambda)
+            kind: code
+            what: mağaza ekibinin yazdığı küçük program
+            does: >-
+              Kapanan günü dosyaya döktürür, manifesti yazar, COPY ile ara tabloya yükletir, satır sayısını kontrol eder, günü tek iş paketinde sales'e geçirir.
+              Komutları Redshift Data API ile gönderir (bağlantı açık tutmadan, komut gönderip sonucu soran AWS arayüzü). Satırları kendisi taşımaz.
+            box: "Sırayla: dök → manifest → COPY → kontrol → günü değiştir."
+            phases: [2, 3, 4]
+            before: sched
+            after: [aurora, s3, stg, sales]
+          - id: s3
+            name: S3 olay arşivi (lm-event-archive; sales/ ve manifests/)
+            kind: aws
+            what: mağazanın yıllarca sakladığı Amazon S3 bucket'ı (Adım 10); iki ayrı klasör
+            does: >-
+              Her günün CSV dosyası sales/ altında, her partinin manifesti manifests/ altında durur ve silinmez. Gün yeniden dökülürse dosya üstüne yazılır; eski sürüm
+              S3 sürümlemesiyle saklanır.
+            box: "Gün gün CSV dosyaları ve manifestler; silinmez, eski sürüm saklanır."
+            phases: [2, 3, 4]
+            before: aurora
+            after: [stg, sales]
+          - id: stg
+            name: Ara tablo (sales_stg)
+            kind: aws
+            what: Redshift'te sales'in aynısı olan boş tablo
+            does: Her çalışmada COPY önce buraya yükler; iş bitince boşaltılır. Dosya bozuksa hata burada kalır; rapor bunu görmez.
+            box: "COPY önce buraya yükler; iş bitince boşaltılır."
+            phases: [3, 4]
+            before: s3
+            after: sales
+          - id: sales
+            name: Redshift · sales
+            kind: aws
+            what: raporun okuduğu tablo (Redshift Serverless)
+            does: >-
+              Tek geniş tablo: bir yılın satış kalemleri, JOIN gerekmez. DISTKEY customer_id, SORTKEY order_date, kolonlar sıkıştırılmış. Canlıda 11.878 satır,
+              8 sütun. Uygulama sadece okur.
+            box: "11.878 kalem; DISTKEY customer_id, SORTKEY order_date. t0 bunu okur."
+            phases: [1, 2, 3, 4]
+            before: [s3, stg]
+            after: [maint, recon, "\"History\" raporu (t0)"]
+          - id: maint
+            name: Otomatik bakım (VACUUM, sıralama, ANALYZE)
+            kind: aws
+            what: Redshift'in arka plandaki işleri
+            does: Silinen satırların yerini açar, yeni satırları sıraya sokar, istatistikleri günceller. Yük düşükken, kendi kararıyla çalışır.
+            box: Yerini açar, sıralar, istatistiği günceller; arka planda.
+            phases: [2, 3, 4]
+            before: sales
+            after: sales
+          - id: wlm
+            name: Çalışma grubu (8 RPU, sorgu kuyrukları)
+            kind: aws
+            what: Redshift Serverless ayarları
+            does: >-
+              Taban kapasite 8 RPU; yük artınca kendisi ölçeklenir. Kuyruklar yüklemeyi, panoları ve analist sorgularını ayırır; kuralı aşan sorguyu durdurur.
+            box: "8 RPU; üç kuyruk: yükleme, panolar, analist."
+            phases: [1, 4]
+            before: Ekip (ayar)
+            after: sales
+          - id: recon
+            name: Gece mutabakatı (Lambda)
+            kind: code
+            what: mağaza ekibinin yazdığı küçük program
+            does: >-
+              sales ile aurora_live'ı gün gün toplar ve karşılaştırır: her gece kapanmış son 7 gün, Pazar geceleri bütün yıl. Farklı çıkan günü yükleme işine
+              yeniden yükletir. Her çalışmada kalan farkı CloudWatch'a yazar; fark kaldıysa alarm çalar.
+            box: "sales = aurora_live mi? Gün gün toplar."
+            phases: [2, 3, 4]
+            before: [sched, sales, live]
+            after: monitor
+          - id: monitor
+            name: İzleme (SYS_LOAD_* görünümleri, CloudWatch alarmları)
+            kind: aws
+            what: Redshift'in sistem görünümleri ve CloudWatch
+            does: >-
+              SYS_LOAD_HISTORY her COPY'nin satır sayısını, SYS_LOAD_ERROR_DETAIL hatanın dosyasını, satırını ve sütununu gösterir. Üç alarm: parti gelmedi, parti
+              hata verdi, mutabakatta fark var.
+            box: "COPY kayıtları, hata ayrıntısı, üç alarm."
+            phases: [3, 4]
+            before: [job, recon, sales]
+            after: Ekip
+        sim_title: "Simülasyon: satış geçmişi sales tablosuna nasıl geldi?"
+        sim:
+          kind: pipeline
+          title: Aurora → S3 → COPY → ara tablo → sales; yanda zero-ETL → aurora_live
+          caption: >-
+            sales'te t0'daki simülasyonun 8 satırlık örnek kesiti var; gerçek tabloda 11.878 satır var ve sipariş numaraları O004191 gibi altı hanelidir. Sütunlar
+            yan yana sığsın diye ikişer ikişer birleştirildi; category ve product_id tabloda gösterilmiyor, dosya satırında görünür. Dilimler iki taneyle temsilî:
+            satırı müşteri numarasının 2'ye bölümünden kalana göre dağıttık (Redshift kendi hash'ini kullanır); t0 aynı 8 satırı tek tabloda gösterir. "Kesitin dışında"
+            tabloları t0'ın 8 satırına dahil değildir; son üç sipariş verildikçe görünür. aurora_live kutusunda sadece bu üç sipariş var; o kopyada bütün yıl durur. Önce bir
+            kez yüklenen geçmiş, sonra 30 Eki'nin siparişinin bütün kutulardan geçişi, sonra "Örnek durum" ve "Olsaydı" kareleri oynuyor. Saatler, parti sayıları ve gün
+            toplamları temsilî; 11.878 canlı sistemden. Son karede sales, t0'ın başladığı hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım}
+          rows:
+            - {id: order, title: "Sipariş ve canlı kopya: Uygulama → Aurora → zero-ETL → aurora_live", flow: true}
+            - {id: load, title: "Gece hattı: zamanlayıcı → yükleme işi → S3", flow: true}
+            - {id: target, title: "Redshift'in içi: ara tablo → sales", flow: true}
+            - {id: helpers, title: "Yandaki işler: bakım, kuyruklar, mutabakat, izleme", side: true}
+          summary: >-
+            sales'i Uygulama yazmadı. Ekip tabloyu raporun sorusuna göre kurdu, geçmişi Aurora'dan S3'e döktü, manifestle bir kez COPY etti. Sonra her gece kapanan gün
+            aynı yoldan geldi: dosya, manifest, ara tablo, kontrol, tek iş paketinde değiştirme. Aynı parti iki kez çalışsa da satır iki kat olmaz; bozuk dosya rapora
+            ulaşmaz; mutabakat kalan farkı yakalar. Bugünün siparişleri (seninki dahil) henüz sales'te değil, aurora_live'da. Son hâl: 11.878 satır; kesitteki 8 satır t0'ın başladığı satırlar.
+          boxes:
+            - id: app
+              row: order
+            - id: aurora
+              row: order
+              tables:
+                - name: "orders + order_items (kesit: t0'daki 8 kalem)"
+                  cols: ["order_id · product_id", "customer_id · tarih", "qty × unit_price"]
+                  rows:
+                    - {key: a1, "order_id · product_id": "O1001 · P0001", "customer_id · tarih": "C00001 · 2 Mar", "qty × unit_price": "1 × 3.373,84"}
+                    - {key: a2, "order_id · product_id": "O1002 · P0084", "customer_id · tarih": "C00417 · 2 Mar", "qty × unit_price": "2 × 397,42"}
+                    - {key: a3, "order_id · product_id": "O1003 · P0130", "customer_id · tarih": "C00205 · 3 Mar", "qty × unit_price": "1 × 291,71"}
+                    - {key: a4, "order_id · product_id": "O1003 · P0113", "customer_id · tarih": "C00205 · 3 Mar", "qty × unit_price": "1 × 194,94"}
+                    - {key: a5, "order_id · product_id": "O1004 · P0052", "customer_id · tarih": "C00002 · 4 Mar", "qty × unit_price": "1 × 1.786,90"}
+                    - {key: a6, "order_id · product_id": "O1005 · P0066", "customer_id · tarih": "C00731 · 5 Mar", "qty × unit_price": "2 × 951,92"}
+                    - {key: a7, "order_id · product_id": "O1006 · P0143", "customer_id · tarih": "C00088 · 5 Mar", "qty × unit_price": "1 × 478,65"}
+                    - {key: a8, "order_id · product_id": "O1007 · P0009", "customer_id · tarih": "C00512 · 6 Mar", "qty × unit_price": "3 × 101,43"}
+                - name: "customers (kesit)"
+                  cols: [customer_id, city]
+                  rows:
+                    - {customer_id: C00001, city: İstanbul}
+                    - {customer_id: C00002, city: Ankara}
+                    - {customer_id: C00417, city: Ankara}
+                    - {customer_id: C00205, city: İzmir}
+                    - {customer_id: C00731, city: Frankfurt}
+                    - {customer_id: C00088, city: İstanbul}
+                    - {customer_id: C00512, city: Frankfurt}
+                - name: "orders (kesitin dışında: son üç sipariş)"
+                  cols: ["order_id · customer_id", tarih, total]
+                  money: [total]
+                  rows:
+                    - {key: w1, "order_id · customer_id": "W1793380550 · C00001", tarih: "30 Eki 22:10", total: 951.92, hidden: true}
+                    - {key: w2, "order_id · customer_id": "W1793390012 · C00002", tarih: "31 Eki 08:40", total: 1299.90, hidden: true}
+                    - {key: w3, "order_id · customer_id": "W1793396741 · C00001", tarih: "31 Eki 10:25", total: 10890.26, hidden: true}
+            - id: live
+              row: order
+              tables:
+                - name: "aurora_live.public.orders (kesitin dışında: son üç sipariş)"
+                  cols: [order_id, total]
+                  money: [total]
+                  rows:
+                    - {key: w1, order_id: W1793380550, total: 951.92, hidden: true}
+                    - {key: w2, order_id: W1793390012, total: 1299.90, hidden: true}
+                    - {key: w3, order_id: W1793396741, total: 10890.26, hidden: true}
+            - id: sched
+              row: load
+            - id: job
+              row: load
+            - id: s3
+              row: load
+              tables:
+                - name: "lm-event-archive (kesit)"
+                  cols: [dosya, içinde]
+                  rows:
+                    - {key: f1, dosya: "sales/2026-03-02/part-00.csv", içinde: "O1001, O1002 + günün geri kalanı", hidden: true}
+                    - {key: f2, dosya: "sales/2026-03-03/part-00.csv", içinde: "O1003 (2 kalem) + …", hidden: true}
+                    - {key: f3, dosya: "sales/2026-03-04/part-00.csv", içinde: "O1004 + …", hidden: true}
+                    - {key: f4, dosya: "sales/2026-03-05/part-00.csv", içinde: "O1005, O1006 + …", hidden: true}
+                    - {key: f5, dosya: "sales/2026-03-06/part-00.csv", içinde: "O1007 + …", hidden: true}
+                    - {key: m1, dosya: "manifests/ilk-yukleme.json", içinde: "341 günün dosyası, hepsi mandatory", hidden: true}
+                    - {key: f6, dosya: "sales/2026-10-30/part-00.csv", içinde: "W1793380550 + günün 26 kalemi", hidden: true}
+                    - {key: m2, dosya: "manifests/2026-10-30.json", içinde: "1 dosya, mandatory", hidden: true}
+            - id: stg
+              row: target
+              tables:
+                - name: "sales_stg (kesit: o an yüklenen parti)"
+                  cols: ["order_id · order_date", "customer_id · city", "qty · amount"]
+                  rows:
+                    - {key: s1, "order_id · order_date": "W1793380550 · 2026-10-30", "customer_id · city": "C00001 · İstanbul", "qty · amount": "1 · 951,92", hidden: true}
+                    - {key: s2, "order_id · order_date": "O1001 · 2026-03-02", "customer_id · city": "C00001 · İstanbul", "qty · amount": "1 · 3.373,84", hidden: true}
+                    - {key: s3, "order_id · order_date": "O1002 · 2026-03-02", "customer_id · city": "C00417 · Ankara", "qty · amount": "2 · 794,84", hidden: true}
+                    - {key: s4, "order_id · order_date": "O1005 · 2026-03-05", "customer_id · city": "C00731 · Frankfurt", "qty · amount": "2 · 1.903,84", hidden: true}
+                    - {key: s5, "order_id · order_date": "O1006 · 2026-03-05", "customer_id · city": "C00088 · İstanbul", "qty · amount": "1 · 478,65", hidden: true}
+            - id: sales
+              row: target
+              tables:
+                - name: "sales, 1. dilim (kesit: t0'daki satırlar)"
+                  cols: ["order_id · order_date", "customer_id · city", "qty · amount"]
+                  rows:
+                    - {key: r1, "order_id · order_date": "O1001 · 2026-03-02", "customer_id · city": "C00001 · İstanbul", "qty · amount": "1 · 3.373,84", hidden: true}
+                    - {key: d1, "order_id · order_date": "O1001 · 2026-03-02", "customer_id · city": "C00001 · İstanbul", "qty · amount": "1 · 3.373,84", hidden: true}
+                    - {key: r2, "order_id · order_date": "O1002 · 2026-03-02", "customer_id · city": "C00417 · Ankara", "qty · amount": "2 · 794,84", hidden: true}
+                    - {key: d2, "order_id · order_date": "O1002 · 2026-03-02", "customer_id · city": "C00417 · Ankara", "qty · amount": "2 · 794,84", hidden: true}
+                    - {key: r3, "order_id · order_date": "O1003 · 2026-03-03", "customer_id · city": "C00205 · İzmir", "qty · amount": "1 · 291,71", hidden: true}
+                    - {key: r4, "order_id · order_date": "O1003 · 2026-03-03", "customer_id · city": "C00205 · İzmir", "qty · amount": "1 · 194,94", hidden: true}
+                    - {key: r6, "order_id · order_date": "O1005 · 2026-03-05", "customer_id · city": "C00731 · Frankfurt", "qty · amount": "2 · 1.903,84", hidden: true}
+                - name: "sales, 0. dilim (kesit: t0'daki satırlar)"
+                  cols: ["order_id · order_date", "customer_id · city", "qty · amount"]
+                  rows:
+                    - {key: r5, "order_id · order_date": "O1004 · 2026-03-04", "customer_id · city": "C00002 · Ankara", "qty · amount": "1 · 1.786,90", hidden: true}
+                    - {key: r7, "order_id · order_date": "O1006 · 2026-03-05", "customer_id · city": "C00088 · İstanbul", "qty · amount": "1 · 478,65", hidden: true}
+                    - {key: r8, "order_id · order_date": "O1007 · 2026-03-06", "customer_id · city": "C00512 · Frankfurt", "qty · amount": "3 · 304,29", hidden: true}
+                - name: "sales (kesitin dışında: 30 Eki'nin kalemi)"
+                  cols: ["order_id · order_date", "customer_id · city", "qty · amount"]
+                  rows:
+                    - {key: x1, "order_id · order_date": "W1793380550 · 2026-10-30", "customer_id · city": "C00001 · İstanbul", "qty · amount": "1 · 951,92", hidden: true}
+            - id: maint
+              row: helpers
+            - id: wlm
+              row: helpers
+            - id: recon
+              row: helpers
+            - id: monitor
+              row: helpers
+          frames:
+            - phase: 2
+              who: sales
+              lit: [sales]
+              packet: {at: sales, text: "CREATE TABLE sales (order_id varchar(16), order_date date SORTKEY, customer_id varchar(8) DISTKEY, city varchar(32), category varchar(32), product_id varchar(8), qty smallint, amount decimal(12,2))"}
+              note: {sales: "boş"}
+              say: >-
+                30 Eyl gecesi. Eski sitenin sipariş geçmişi Aurora'ya taşındı (Adım 26); yeni site 1 Eki 03:00'te açılacak. Ekip sales tablosunu yarattı: müşteriye göre dağılan, tarihe göre
+                sıralanan 8 sütun. Tablo boş.
+            - phase: 2
+              who: aurora
+              lit: [job, aurora, s3]
+              packet: {at: aurora, text: "aws_s3.query_export_to_s3('SELECT o.order_id, tarih, o.customer_id, c.city, p.category, oi.product_id, oi.qty, round(oi.qty * oi.unit_price, 2) … WHERE o.status <> ''cancelled'' …') · her gün için bir dosya"}
+              show: {s3: [f1, f2, f3, f4, f5]}
+              fresh: {s3: [f1, f2, f3, f4, f5]}
+              say: >-
+                Yükleme işi Aurora'dan geçmişi istedi: taşınan geçmişin başladığı 25 Eki 2025'ten 30 Eyl 2026'ya, gün gün. Aurora dört tabloyu JOIN'ledi, iptal edilenleri dışarıda bıraktı, sonucu okuma sunucusundan
+                S3'e dosya olarak yazdı. Şehir ve kategori artık her satırın içinde. Sipariş yazan sunucu etkilenmedi.
+            - phase: 2
+              who: job
+              lit: [job, s3]
+              packet: {at: job, text: "{\"entries\": [{\"url\": \"s3://lm-event-archive/sales/2026-03-02/part-00.csv\", \"mandatory\": true}, …]}"}
+              show: {s3: [m1]}
+              fresh: {s3: [m1]}
+              say: >-
+                Yükleme işi 341 günün dosyasını tek tek bir manifeste yazdı. COPY'ye "şu klasördekileri al" değil, "tam olarak bunları al" denecek: bir dosya eksikse yükleme hata verir,
+                klasöre düşen yabancı bir dosya yüklenmez.
+            - phase: 2
+              who: sales
+              lit: [job, s3, sales]
+              packet: {at: sales, text: "COPY sales FROM 's3://lm-event-archive/manifests/ilk-yukleme.json' IAM_ROLE '…' MANIFEST FORMAT AS CSV · dosya satırı: O1001,2026-03-02,C00001,İstanbul,Elektronik,P0001,1,3373.84"}
+              show: {sales: [r1, r2, r3, r4, r5, r6, r7, r8]}
+              fresh: {sales: [r1, r2, r3, r4, r5, r6, r7, r8]}
+              note: {sales: "≈ 11.070 kalem (temsilî)"}
+              say: >-
+                COPY dosyaları paralel okudu. Her satır müşterisinin numarasına göre bir dilime gitti: aynı müşterinin satırları aynı dilimde. Sütunlar ayrı ayrı bloklara sıkışarak yazıldı.
+                Tablo boşken doğrudan sales'e yüklendi; ara tabloya gerek yoktu.
+            - phase: 2
+              who: maint
+              lit: [sales, maint]
+              note: {maint: "ANALYZE: istatistik güncel · satırların çoğu sıralanmamış bölgede"}
+              say: >-
+                Redshift yeni tablonun istatistiklerini kendisi güncelledi ve kodlamaları seçti (ENCODE AUTO). Planlayıcı artık kaç şehir, kaç satır olduğunu biliyor. Satırlar henüz sıralanmamış bölgede; sıralamayı Redshift sonra, kendi kararıyla yapar (4. aşamada ölçüm).
+            - phase: 2
+              who: recon
+              lit: [recon, sales, live]
+              note: {recon: "341 gün karşılaştırıldı · fark 0"}
+              say: >-
+                Son kontrol: mutabakat işi 341 günün toplamını sales'ten ve aurora_live'dan (zero-ETL'in aynı tablolardan yaptığı kopya; kutuda sadece son siparişler görünür) ayrı ayrı topladı. Bütün günler tuttu. Geçmiş hazır.
+            - phase: 3
+              who: app
+              lit: [app, aurora]
+              show: {aurora: [w1]}
+              fresh: {aurora: [w1]}
+              note: {maint: "", recon: "", sales: "11.851 kalem (temsilî)"}
+              say: >-
+                Bir ay geçti: 1–29 Eki geceleri aynı yoldan 781 kalem geldi, sales 11.851 satır oldu. Şimdi bir geceyi kutu kutu izliyoruz. 30 Eki 22:10: Ayşe Yılmaz (C00001; mağazadaki kimliğin bu) bir Powerbank aldı: W1793380550, 951,92 ₺. Uygulama siparişi Aurora'ya yazdı (Adım 25). sales'e hiçbir şey yazmadı.
+            - phase: 3
+              who: live
+              lit: [aurora, live]
+              show: {live: [w1]}
+              fresh: {live: [w1]}
+              say: >-
+                Yaklaşık 30 saniye sonra sipariş aurora_live'da. zero-ETL'in işi bu (Adım 30). sales ise henüz bu siparişi bilmiyor; gün kapanmadı.
+            - phase: 3
+              who: sched
+              lit: [sched, job]
+              packet: {at: sched, text: "31 Eki 02:00 → Satış yükleme işi · gün = 2026-10-30"}
+              say: >-
+                31 Eki 02:00. 30 Eki Türkiye saatiyle kapandı. Zamanlayıcı yükleme işini başlattı. Gece seçildi: panolara bakan yok.
+            - phase: 3
+              who: aurora
+              lit: [job, aurora, s3]
+              packet: {at: aurora, text: "aws_s3.query_export_to_s3('… WHERE o.status <> ''cancelled'' AND o.order_date >= ''2026-10-29T21:00Z'' AND o.order_date < ''2026-10-30T21:00Z''', 'sales/2026-10-30/part-00.csv') → rows_uploaded = 27"}
+              show: {s3: [f6]}
+              fresh: {s3: [f6]}
+              say: >-
+                Aurora o günün kalemlerini okuma sunucusundan S3'e döktü: 27 kalem (temsilî; bu sayıyı yükleme işi not aldı). Türkiye'de gün UTC'ye göre 3 saat önce başlar; sorgudaki saatler bu yüzden 21:00Z.
+            - phase: 3
+              who: job
+              lit: [job, s3]
+              packet: {at: job, text: "PUT manifests/2026-10-30.json · {\"entries\": [{\"url\": \"s3://lm-event-archive/sales/2026-10-30/part-00.csv\", \"mandatory\": true}]}"}
+              show: {s3: [m2]}
+              fresh: {s3: [m2]}
+              say: Yükleme işi bu gecenin manifestini yazdı. Parti artık tek bir dosya listesiyle tanımlı; aynı liste yarın da aynı dosyayı gösterir.
+            - phase: 3
+              who: stg
+              lit: [job, s3, stg]
+              packet: {at: stg, text: "TRUNCATE sales_stg · COPY sales_stg FROM 's3://lm-event-archive/manifests/2026-10-30.json' IAM_ROLE '…' MANIFEST FORMAT AS CSV MAXERROR 0 · dosya satırı: W1793380550,2026-10-30,C00001,İstanbul,Elektronik,P0066,1,951.92"}
+              show: {stg: [s1]}
+              fresh: {stg: [s1]}
+              note: {stg: "27 kalem (kesitte 1)"}
+              say: >-
+                COPY ara tabloya yükledi, sales'e değil. Rapor bu sırada hâlâ dünkü sales'i okuyor. MAXERROR 0: tek bir bozuk satır bütün yüklemeyi durdurur.
+            - phase: 3
+              who: job
+              lit: [job, stg]
+              packet: {at: job, text: "SYS_LOAD_HISTORY.loaded_rows = 27 · rows_uploaded = 27 → tutuyor"}
+              say: Yükleme işi iki sayıyı karşılaştırdı - Aurora'nın döktüğü 27, COPY'nin yüklediği 27. Tutmasaydı burada durur, sales'e dokunmazdı.
+            - phase: 3
+              who: sales
+              lit: [job, stg, sales]
+              packet: {at: sales, text: "BEGIN · DELETE FROM sales WHERE order_date = '2026-10-30' · INSERT INTO sales SELECT * FROM sales_stg · COMMIT · sonra TRUNCATE sales_stg"}
+              show: {sales: [x1]}
+              fresh: {sales: [x1]}
+              hide: {stg: [s1]}
+              note: {stg: "", sales: "11.878 kalem"}
+              say: >-
+                Tek iş paketi: önce o günün satırları silindi (bu gece silinecek satır yoktu; gün ilk kez geliyor), sonra ara tablodaki 27 kalem eklendi. COMMIT anında raporlar yeni günü bir bütün olarak gördü, yarım hâlini hiç görmedi.
+                Ara tablo boşaltıldı. sales 11.851'den 11.878 satıra çıktı.
+            - phase: 3
+              who: maint
+              lit: [sales, maint]
+              note: {maint: "unsorted %91,58 (canlı ölçüm, 31 Eki)"}
+              say: >-
+                Yeni satırlar da sıralanmamış bölgeye gitti. Canlı ölçümde tablonun %91,58'i orada: ilk yüklemenin satırları dahil, neredeyse hepsi (neden: 4. aşama). Redshift sorgulardan fayda göreceğini anlayınca sıralar; 11.878 satırda fark ölçülmez, milyarlarca satırda belirgindir. Üstelik bu
+                raporda tarih süzgeci yok; sıra bu sorguyu değiştirmez.
+            - phase: 3
+              who: recon
+              lit: [sched, recon, sales, live, monitor]
+              packet: {at: recon, text: "02:30 · 30 Eki: sales 71.340,18 = aurora_live 71.340,18 · son 7 gün fark 0 (temsilî)"}
+              note: {recon: "son 7 gün · fark 0", monitor: "LoadSucceeded = 1 · ReconDiff = 0"}
+              say: >-
+                02:30. Mutabakat işi son 7 günü iki defterden topladı; fark yok. Yükleme işi "başarılı" ölçüsünü, mutabakat işi farkı CloudWatch'a yazdı. Alarm yok.
+            - phase: 3
+              who: app
+              lit: [app, aurora, live]
+              show: {aurora: [w2, w3], live: [w2, w3]}
+              fresh: {aurora: [w2, w3], live: [w2, w3]}
+              note: {recon: ""}
+              say: >-
+                Aynı sabah 08:40'ta Mert Doğan (W1793390012), 10:25'te sen (W1793396741, Adım 25) sipariş verdiniz. İkisi de 30 saniye içinde aurora_live'da; sales'te yok. Bu gecenin partisini bekliyorlar.
+                "History" dün gece kapanan günü, "Live from Aurora" şu anı gösterir (Adım 30).
+            - phase: 4
+              who: monitor
+              lit: [sales, monitor]
+              packet: {at: monitor, text: "SYS_LOAD_HISTORY: table_name = sales_stg · status = completed · loaded_rows = 27 · source_file_count = 1 · error_count = 0"}
+              say: >-
+                Örnek durum: Ekip sabah bu görünümden dün geceki COPY'ye baktı. Bu Serverless çalışma grubunda eski STL_LOAD_ERRORS tablosu dolmaz; aynı bilgi SYS_ görünümlerinde. "Hangi blok nerede?" sorusu da buradan cevaplanmaz: blok düzeyindeki tablolar
+                okunamaz; tablonun özeti için svv_table_info var.
+            - phase: 4
+              who: stg
+              lit: [job, s3, stg, monitor]
+              packet: {at: stg, text: "COPY → HATA · SYS_LOAD_ERROR_DETAIL: file_name = sales/2026-10-30/part-00.csv · line_number = 14 · column_name = city · error_message = String length exceeds DDL length"}
+              hide: {sales: [x1]}
+              note: {stg: "0 satır", monitor: "alarm: parti hata verdi", sales: "11.851 kalem: 30 Eki hiç gelmedi"}
+              say: >-
+                Olsaydı: dün geceki dosyanın 14. satırında şehir adı 32 baytı aşsaydı (varchar(32) harf değil bayt sayar; temsilî). COPY bütün yüklemeyi geri alırdı, ara tablo boş kalırdı, sales'e o geceden hiçbir şey geçmezdi: W1793380550 tabloda olmazdı. Rapor bir gün geriden ama doğru kalırdı.
+                Görünüm dosyayı, satırı ve sütunu söylerdi; alarm çalardı.
+            - phase: 4
+              who: job
+              lit: [job, aurora, s3, stg, sales]
+              show: {sales: [x1]}
+              fresh: {sales: [x1]}
+              note: {stg: "", monitor: "", sales: "11.878 kalem"}
+              say: >-
+                Onarım: Ekip kaynağı düzeltir ya da sütunu genişletir, yükleme işini aynı gün için yeniden başlatır. Dosya yeniden yazılır, COPY ara tabloya yükler, kontrol geçer, gün sales'e girer. Kimse sales'i elle düzeltmez.
+            - phase: 4
+              who: sales
+              lit: [job, sales]
+              packet: {at: sales, text: "COPY sales FROM 's3://…/sales/2026-03-02/part-00.csv' · ikinci kez · O1001 ve O1002 ikişer satır"}
+              show: {sales: [d1, d2]}
+              fresh: {sales: [d1, d2]}
+              mark: {sales: {d1: dup, d2: dup}}
+              note: {sales: "O1001: 6.747,68 · O1002: 1.589,68 (iki kat)"}
+              say: >-
+                Olsaydı: biri bir günün dosyasını (kesitte görünsün diye 2 Mart'ı aldık) ara tabloyu atlayıp doğrudan sales'e ikinci kez COPY etseydi. Redshift primary key kuralını uygulamaz, iki kez yüklenen satırı reddetmez. O günün her kalemi iki kat olurdu; İstanbul'un da Ankara'nın da cirosu şişerdi.
+            - phase: 4
+              who: job
+              lit: [job, stg, sales]
+              packet: {at: sales, text: "COPY sales_stg (2 Mart) · BEGIN · DELETE FROM sales WHERE order_date = '2026-03-02' · INSERT INTO sales SELECT * FROM sales_stg · COMMIT"}
+              show: {stg: [s2, s3]}
+              fresh: {stg: [s2, s3]}
+              hide: {sales: [d1, d2]}
+              mark: {sales: {d1: "", d2: ""}}
+              note: {sales: ""}
+              say: >-
+                Bizim yolumuzda gün önce ara tabloya yüklenir; sonra o günün bütün satırları silinir, doğru satırlar eklenir. Kaç kez çalışırsa çalışsın sonuç aynıdır (idempotent: tekrar etmek sonucu değiştirmez). Çift satır oluşmaz, oluşmuşsa da gider.
+            - phase: 4
+              who: sales
+              lit: [job, sales]
+              packet: {at: sales, text: "BEGIN · DELETE … · INSERT → HATA → ROLLBACK · silinen satırlar geri geldi · sonra TRUNCATE sales_stg"}
+              hide: {stg: [s2, s3]}
+              say: >-
+                Olsaydı: Redshift paketin ortasında, DELETE'ten sonra hata verseydi. COMMIT gelmediği için paket geri alınırdı; tablo hiçbir şey olmamış gibi kalırdı. Rapor o günü yarım görmezdi. İş yeniden başlatılır.
+            - phase: 4
+              who: recon
+              lit: [recon, sales, live, monitor]
+              set: {sales: {r7: {"qty · amount": "1 · 4.786,50"}}}
+              mark: {sales: {r7: fix}}
+              note: {recon: "2026-03-05: sales 6.690,34 ≠ aurora_live 2.382,49 · fark 4.307,85", monitor: "alarm: mutabakatta fark var"}
+              say: >-
+                Olsaydı: dökme sorgusunun yeni bir sürümü hatalı olsaydı ve 5 Mart yeniden yüklenirken O1006'nın tutarı 478,65 yerine 4.786,50 yazılsaydı. COPY bunu yakalamaz; sayı geçerli bir sayıdır. Pazar gecesinin tam mutabakatı o günü iki defterden toplardı (kesitteki iki kalem): fark 4.307,85. Otomatik yeniden yükleme aynı hatalı sürümle aynı sonucu verirdi, fark kalırdı; alarm çalardı.
+            - phase: 4
+              who: job
+              lit: [job, aurora, s3, stg, sales]
+              packet: {at: sales, text: "gün = 2026-03-05 · dök → manifest → COPY sales_stg → kontrol → BEGIN · DELETE … · INSERT … · COMMIT"}
+              show: {stg: [s4, s5]}
+              set: {sales: {r7: {"qty · amount": "1 · 478,65"}}}
+              mark: {sales: {r7: ""}}
+              fresh: {sales: [r6, r7], stg: [s4, s5]}
+              note: {recon: "2026-03-05: fark 0", monitor: ""}
+              say: >-
+                Onarım: Ekip hatalı sürümü geri alır ve yükleme işini o gün için yeniden çalıştırır. Aynı beş adım: dök, manifest, COPY, kontrol, günü değiştir. Bozuk partiyi onarmak ile her geceki yükleme aynı koddur.
+            - phase: 4
+              who: maint
+              lit: [sales, maint]
+              hide: {stg: [s4, s5]}
+              note: {maint: "VACUUM DELETE: silinenlerin yeri açıldı · ANALYZE: güncel", recon: ""}
+              say: >-
+                Silinen satırlar diskten hemen gitmez; silinmiş işaretlenir ve sorgular onları da tarar. Redshift yükü düşük bir anda arka planda VACUUM DELETE çalıştırır, istatistikleri de kendisi günceller. Ekip sadece çok büyük bir yeniden yüklemeden sonra elle VACUUM başlatır.
+            - phase: 4
+              who: wlm
+              lit: [wlm, sales]
+              packet: {at: wlm, text: "kuyruk analist · kural: query_execution_time > 300 → abort"}
+              note: {wlm: "analist sorgusu 300 sn'de durduruldu · yükleme ve panolar etkilenmedi"}
+              say: >-
+                Olsaydı: bir analist bütün tabloyu kendisiyle JOIN'leyen dev bir sorgu başlatsaydı. Çalışma grubu ölçeklenir ve fatura büyürdü. Analist kuyruğunun kuralı sorguyu 300 saniyede durdururdu (temsilî); yükleme kendi kuyruğunda devam ederdi.
+            - phase: 4
+              who: sales
+              lit: [sales]
+              note: {wlm: "", maint: "", sales: "11.878 kalem"}
+              say: >-
+                Hazır. sales'te 11.878 kalem var; kesitteki 8 satır t0'daki simülasyonun başladığı satırlar. "City" butonuna bastığında Redshift bu tablodan sadece city, order_id, qty ve amount sütunlarını okuyacak.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Önce soru: rapor ne soruyor? Sonra iki karar. Aurora'nın kopyası (aurora_live) varken neden ayrıca sales var? Tablo o soruya göre nasıl kurulur: dağıtım, sıra, sıkıştırma ve aynı depoyu paylaşan
+              işlerin kuralları.
+            cards:
+              - title: Raporun soruları
+                text: >-
+                  "Aya göre", "kategoriye göre", "şehre göre" ciro, sipariş sayısı ve adet. Hepsi bütün yılı okuyup az sayıda sütunu toplar; tek bir satırı arayan sorgu yok. Şirket bu raporlara her gün bakar ve
+                  rakamların sebepsiz değişmemesini bekler: geçen martın cirosu ancak bir sipariş sonradan iptal edilirse ya da bir hata düzeltilirse değişmeli, o zaman da kayıtlı bir yeniden yüklemeyle.
+              - title: İki tablo, iki iş
+                text:
+                  - >-
+                    aurora_live zaten var ve Aurora'nın dört tablosunu 30 saniye geriden izliyor. O zaman neden sales? Çünkü sorular farklı. aurora_live "şu an ne oldu?" sorusuna cevap verir; sales "kapanmış
+                    günlerin kesin rakamı ne?" sorusuna. "History" (geçmiş) düğmesi sales'i, "Live from Aurora" aurora_live'ı okur (Adım 30).
+                  - >-
+                    Canlı sistemde iki rapor yan yana: şehre göre Ankara sales'te 7.730.942,30 ₺, aurora_live'da 7.732.442,30 ₺; İstanbul 6.907.980,48 ₺ ile 6.944.068,29 ₺. Bütün şehirlerde fark 13 sipariş,
+                    56.455,01 ₺: henüz sales'e girmemiş siparişler. Rakam yeni siparişle değişir.
+                map:
+                  cols: ["Soru", "sales", "aurora_live"]
+                  rows:
+                    - ["Kim yazar?", "Yükleme işi, her gece, S3'ten COPY", "zero-ETL, sürekli"]
+                    - ["Ne kadar güncel?", "Dün gece kapanan güne kadar", "Yaklaşık 30 saniye geriden"]
+                    - ["Şekli", "Tek geniş tablo; şehir ve kategori satırın içinde, JOIN yok", "Aurora'nın 4 tablosu; rapor 3 JOIN yapar"]
+                    - ["Anahtar ve şekil", "Rapora göre biz seçtik", "Aurora'daki tablolar olduğu gibi gelir"]
+                    - ["Müşteri şehir değiştirirse", "Satır, yüklendiği andaki şehri taşır: kopya. Gün yeniden yüklenirse yeni şehri alır.", "Eski siparişler de hemen yeni şehirde görünür: JOIN o anki hâli okur"]
+                    - ["Değişebilir mi?", "Evet, yükleme işi günü yeniden yazabilir", "Hayır, salt okunur"]
+                    - ["Ne için?", "Yıllık eğilim, kapanmış ay, finans", "Bugün ne oluyor, siparişim rapora girdi mi?"]
+              - title: "Tablo soruya göre kurulur: dağıtım ve sıra"
+                text:
+                  - >-
+                    Dürüst cevap: şehre göre sorguyu hızlandıran şey DISTKEY ya da SORTKEY değildir. Sorguda tarih süzgeci yok, yani SORTKEY hiçbir bloğu atlatmaz. Hız iki yerden gelir: sütun bazlı okuma (8 sütundan
+                    4'ü) ve dilimlerin aynı anda çalışması. DISTKEY bu paralelliği dengeli tutar; SORTKEY tarih seçen raporları hızlandırır.
+                map:
+                  cols: [Seçim, Neden, "Şehre göre sorguda ne yapar?"]
+                  rows:
+                    - ["DISTKEY customer_id", "Müşteri çok (1.000) ve dengeli; dilimlere yakın pay düşer. Aynı müşterinin satırları bir arada: \"bu müşteri neler aldı?\" gibi sorgular tek dilimde biter. Bu raporun kendisi JOIN yapmaz.", "Her dilim kendi payını okur. Aynı şehrin satırları farklı dilimlerdedir; ara sonuçlar sonda birleşir."]
+                    - ["DISTKEY city olsaydı", "Sadece 9 şehir var: 9 grup, bazı dilimler boş kalır, bazıları ağırlaşır (skew, dengesizlik). AWS'in önerisi: çok farklı değeri olan, dengeli dağılan bir sütun.", "Birleştirme biraz kolaylaşır ama en dolu dilim bütün sorguyu bekletir."]
+                    - ["SORTKEY order_date", "\"Geçen ay\" gibi tarih aralıkları gereksiz blokları atlar; yeni gün tablonun sonuna eklenir.", "Bu sorguda etkisi yok; bütün yıl okunur. Tarih seçen raporlar ve DELETE WHERE order_date için çalışır; sıralanmamış bölgede kazancı azalır (4. aşama)."]
+                code_title: Tablonun gerçek tanımı
+                code:
+                  - {code: "CREATE TABLE sales (order_id varchar(16),", tag: Ekip → Redshift, say: "Sipariş numarası; aynı sipariş birden çok satırda olabilir."}
+                  - {code: "  order_date date SORTKEY,", tag: Redshift'in içinde, say: "Hedef sıra: tarih. Yeni satırlar önce sıralanmamış bölgede bekler."}
+                  - {code: "  customer_id varchar(8) DISTKEY,", tag: Redshift'in içinde, say: "Aynı müşterinin satırları aynı dilimde."}
+                  - {code: "  city varchar(32), category varchar(32), product_id varchar(8),", tag: Redshift'in içinde, say: "Şehir ve kategori satırın içinde; JOIN gerekmez."}
+                  - {code: "  qty smallint, amount decimal(12,2));", tag: Redshift'in içinde, say: "Adet ve tutar; tutar adet × birim fiyat olarak hesaplanmış gelir."}
+              - title: Sıkıştırma (kodlama)
+                text: >-
+                  CREATE TABLE'da kodlama yazılmadı: Redshift her sütuna kendisi seçti (ENCODE AUTO). Aşağıda canlı tablonun değerleri (pg_table_def). Aynı türden değerler yan yana durduğu için çok iyi sıkışır: bu sorgunun okuduğu
+                  sütunların hepsi sıkıştırılmıştır. order_date bilerek sıkıştırılmaz: blok atlama hızlı kalsın diye. Ara tablo LIKE ile kurulduğu için aynı kodlamaları taşır; COPY her gece kodlama seçmek için zaman harcamaz.
+                map:
+                  cols: [Sütun, Kodlama, Neden]
+                  rows:
+                    - ["order_date", "none", "SORTKEY; blok atlamak için sıkıştırılmaz."]
+                    - ["category", "bytedict", "5 farklı değer; sözlükle küçük kodlar."]
+                    - ["qty, amount", "az64", "Sayılar; az bitle yazılır."]
+                    - ["order_id, customer_id, city, product_id", "lzo", "Metinler; tekrar eden harf dizileri kısalır."]
+              - title: Aynı depoyu paylaşan işler (WLM)
+                text: >-
+                  Aynı çalışma grubunda üç tür iş var: gece yüklemesi, panolar, analistlerin elle yazdığı sorgular. Taban 8 RPU; yük artınca Serverless kendisi ölçeklenir, bedeli kullanılan kadar yazılır. Sağlanan
+                  (provisioned) Redshift'te kuyruk önceliği ve bellek payı verilir; Serverless'ta bu ayarlar yoktur, kaynağı AWS paylaştırır. Ekibin elindeki araç kuyruklar ve kurallardır. AWS'e göre kuyruklar bir kez açılınca kuyruksuz düzene dönülmez; bu yüzden kuyruk sayısı baştan az tutulur.
+                map:
+                  cols: [Kuyruk, Kimin sorguları, Kural (temsilî)]
+                  rows:
+                    - ["yukleme", "Yükleme işi, mutabakat", "1 saati geçerse sadece kaydet (log); yüklemeyi kesme."]
+                    - ["panolar", "Rapor ekranları", "60 sn'yi geçerse durdur (abort)."]
+                    - ["analist", "Elle yazılan sorgular", "300 sn'yi geçerse durdur (abort)."]
+                code_title: Kuyruk ayarından
+                code:
+                  - {code: "{\"name\": \"analist\", \"user_role\": [\"analyst\"], \"rules\": [{\"rule_name\": \"uzun_sorgu\",", tag: Ekip → Redshift, say: "Analist rolünün sorguları bu kuyruğa düşer."}
+                  - {code: "  \"predicate\": [{\"metric_name\": \"query_execution_time\", \"operator\": \">\", \"value\": 300}],", tag: Redshift'in içinde, say: "Koşul (predicate): çalışma süresi 300 saniyeyi geçerse."}
+                  - {code: "  \"action\": \"abort\"}]}", tag: Redshift'in içinde, say: "Sorguyu durdur."}
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              Hedef boşken bir yıl bir kez taşınır. Geçmişin kaynağı Aurora'dır: eski sitenin siparişleri 30 Eyl'de oraya taşındı. Önce dosyalar S3'e dökülür, sonra manifestle tek COPY, sonra istatistikler ve ilk mutabakat.
+            cards:
+              - title: Geçmiş S3'e dökülür
+                text: >-
+                  Ekip yükleme işini bir kez, tarih aralığıyla başlatır: 25 Eki 2025 – 30 Eyl 2026. Aurora, okuma sunucusundan her gün için bir CSV dosyası yazar. Her gün Lambda'nın ayrı bir çağrısıdır; 15 dakika sınırına takılmaz. Neden doğrudan aktarılmıyor? S3'teki dosya hem parti hem yedektir; aynı
+                  gün yıllar sonra da aynı dosyadan yüklenebilir. Arşiv mağazanın yıllarca sakladığı kovadır; satış dosyaları orada kendi klasöründedir. Yazan fonksiyon, Adım 10'da satın almaları döken fonksiyonun aynısıdır.
+                code:
+                  - {code: "SELECT * FROM aws_s3.query_export_to_s3(", tag: Yükleme işi → Aurora, say: "Sorgunun sonucu S3'e dosya olur; dönen rows_uploaded yazılan satır sayısıdır."}
+                  - {code: "  'SELECT o.order_id, (o.order_date AT TIME ZONE ''Europe/Istanbul'')::date, o.customer_id, c.city, p.category, oi.product_id, oi.qty, round(oi.qty * oi.unit_price, 2) …", tag: Aurora'nın içinde, say: "Dört tablo JOIN'lenir, tek satıra açılır: sales'in 8 sütunu, aynı sırada."}
+                  - {code: "   WHERE o.status <> ''cancelled'' AND …',", tag: Aurora'nın içinde, say: "İptal edilen sipariş rapora girmez."}
+                  - {code: "  aws_commons.create_s3_uri('lm-event-archive', 'sales/2026-03-02/part-00.csv', 'eu-central-1'),", tag: Aurora → S3, say: "Her gün kendi klasörüne."}
+                  - {code: "  options := 'format csv');", tag: Aurora → S3, say: "Düz metin: virgülle ayrılmış değerler."}
+              - title: "Manifest: tam dosya listesi"
+                text: >-
+                  COPY'ye klasör verilirse klasörde ne varsa yükler. Bir dosya eksikse eksik yükleyip "başarılı" der; yanlışlıkla konmuş bir dosyayı da yükler. Manifest bu iki hatayı kapatır. "mandatory" yazılmazsa varsayılanı false'tur, eksik dosya sessizce geçilir; bu yüzden yazılır.
+                code:
+                  - {code: "{\"entries\": [", tag: Yükleme işi → S3, say: "Dosya listesi başlar."}
+                  - {code: "  {\"url\": \"s3://lm-event-archive/sales/2026-03-02/part-00.csv\", \"mandatory\": true},", tag: Yükleme işi → S3, say: "Tam adres; klasör değil."}
+                  - {code: "  …]}", tag: Yükleme işi → S3, say: "341 satır, her gün bir dosya."}
+              - title: Tek COPY, boş tabloya
+                text: >-
+                  COPY dosyaları dilimlere paylaştırır ve paralel okur; satır satır INSERT'ten kat kat ucuzdur. COPY'yi Redshift çalıştırır; Lambda sadece bitti mi diye sorar. Tablo boş olduğu için ara tabloya gerek yok: yanlış giderse tablo boşaltılır, baştan yüklenir. Bitince yüklenen satır sayısı dökülen satırların toplamıyla karşılaştırılır. Redshift kodlamaları ve istatistikleri kendisi kurar.
+                code:
+                  - {code: "COPY sales", tag: Yükleme işi → Redshift, say: "Hedef: boş sales tablosu."}
+                  - {code: "FROM 's3://lm-event-archive/manifests/ilk-yukleme.json'", tag: S3 → Redshift, say: "Listedeki dosyalar, sadece onlar."}
+                  - {code: "IAM_ROLE '…' MANIFEST FORMAT AS CSV;", tag: Redshift'in içinde, say: "Redshift S3'ü şifreyle değil, kendisine verilen yetkiyle (IAM role) okur."}
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              Her gece aynı adımlar: Uygulama sipariş yazar, zamanlayıcı 02:00'de işi başlatır, kapanan gün dosya olur, manifestle ara tabloya yüklenir, satır sayısı kontrol edilir, gün tek iş paketinde sales'e geçer, 02:30'da mutabakat çalışır.
+            cards:
+              - title: Gün boyunca sales değişmez
+                text: >-
+                  Uygulama siparişi sadece Aurora'ya yazar (Adım 25). Aynı sipariş 30 saniyede aurora_live'a girer. sales ise gün kapanana kadar değişmez. Bu bir eksik değil, seçimdir: kapanmış günlerin rakamı bir kez hesaplanır; sadece kayıtlı bir yeniden yüklemeyle değişir.
+              - title: Zamanlayıcı ve kapanan gün
+                text: >-
+                  EventBridge Scheduler 02:00'de Lambda'yı başlatır; hangi günün yükleneceğini hesaplar. Gün Türkiye saatine göredir, Adım 25'teki gece karşılaştırmasıyla aynı: 30 Eki = 2026-10-29T21:00Z – 2026-10-30T21:00Z. Lambda en fazla 15 dakika çalışır; bir günün 27 kalemi için fazlasıyla yeter.
+              - title: Önce ara tablo, sonra kontrol
+                text: >-
+                  Ara tablo bir kez kurulur: LIKE ile sales'in aynısı, aynı dağıtım, aynı sıra, aynı kodlama. Normalde boş durur; iş önce yine de boşaltır, COPY buraya yapar. MAXERROR 0 tek bir bozuk satırda bütün COPY'yi geri alır (zaten varsayılandır; görünsün diye yazılır). Sonra iki sayı karşılaştırılır: Aurora'nın dönen rows_uploaded değeri ve COPY'nin loaded_rows değeri.
+                code:
+                  - {code: "CREATE TABLE sales_stg (LIKE sales);        -- bir kez", tag: Ekip → Redshift, say: "Asıl tablonun boş ikizi."}
+                  - {code: "TRUNCATE sales_stg;", tag: Yükleme işi → Redshift, say: "Yarım kalmış bir denemeden satır kaldıysa gider."}
+                  - {code: "COPY sales_stg FROM 's3://lm-event-archive/manifests/2026-10-30.json'", tag: S3 → Redshift, say: "Sadece bu gecenin dosyası."}
+                  - {code: "  IAM_ROLE '…' MANIFEST FORMAT AS CSV MAXERROR 0 COMPUPDATE OFF STATUPDATE OFF;", tag: Redshift'in içinde, say: "Bozuk satırda dur. Satırlar burada birkaç dakika kalacak; kodlama ve istatistik hesabını atla."}
+                  - {code: "SELECT loaded_rows FROM sys_load_history WHERE query_id = :copy;", tag: Redshift → Yükleme işi, say: "27 mi? Tutmazsa dur."}
+              - title: "Tek iş paketinde: sil ve ekle"
+                text:
+                  - >-
+                    Yükleme tekrarlanabilir olmalı: iş yarıda kalırsa ya da aynı gün yeniden gerekirse, sonuç aynı çıkmalı. Redshift primary key kuralını uygulamaz, çift satırı kendisi engellemez. Bu yüzden bütün gün değiştirilir: önce o tarihin satırları silinir, sonra ara tablodakiler eklenir.
+                  - >-
+                    Neden MERGE değil? MERGE eşleşen satırı günceller, eşleşmeyeni ekler; ama hedefte kalan, kaynaktan çıkmış satıra dokunmaz. Sonradan iptal edilen bir sipariş kalemi sales'te kalırdı. Ayrıca bu tabloda satırı tek başına tanıtan bir sütun yok. Bütün günü değiştirmek ikisini de çözer. AWS de ara tablo + tek transaction yolunu önerir; komutları Data API tek iş paketi olarak gönderir. COMMIT'ten sonra ara tablo boşaltılır.
+                code:
+                  - {code: "BEGIN;", tag: Yükleme işi → Redshift, say: "Paket başlar."}
+                  - {code: "DELETE FROM sales WHERE order_date = '2026-10-30';", tag: Redshift'in içinde, say: "O günün eski satırları silinmiş işaretlenir. İlk kez gelen günde silinecek satır yoktur."}
+                  - {code: "INSERT INTO sales SELECT * FROM sales_stg;", tag: Redshift'in içinde, say: "Yeni satırlar eklenir; her biri kendi dilimine."}
+                  - {code: "COMMIT;", tag: Yükleme işi → Redshift, say: "Rapor yeni günü tek seferde görür."}
+              - title: "Gece mutabakatı: 02:30"
+                text: >-
+                  Ayrı bir Lambda iki defteri gün gün toplar. Yükleme işinin kontrolü "dosya tam yüklendi mi?" sorusuna bakar; mutabakat "doğru rakam mı?" sorusuna. Her gece Türkiye saatiyle kapanmış son 7 gün (31 Eki'de 24–30 Eki), Pazar geceleri bütün yıl. aurora_live 30 saniye geride olsa da fark etmez: karşılaştırılan günler saatler önce kapandı. Yükleme bitmeden başlarsa son günü atlar; o günü "parti gelmedi" alarmı korur.
+                code:
+                  - {code: "SELECT order_date, sum(amount) FROM sales WHERE order_date BETWEEN :ilk AND :son GROUP BY 1;", tag: Mutabakat → Redshift, say: "Birinci defter: sales. :ilk ve :son gün aralığıdır (24 ve 30 Eki)."}
+                  - {code: "SELECT (o.order_date AT TIME ZONE 'Europe/Istanbul')::date, sum(oi.qty * oi.unit_price)", tag: Mutabakat → Redshift, say: "İkinci defter: aurora_live, adet × fiyat."}
+                  - {code: "  FROM aurora_live.public.orders o JOIN aurora_live.public.order_items oi USING (order_id)", tag: Redshift'in içinde, say: "Aynı Redshift'te başka bir veritabanı; Aurora'ya gidilmez."}
+                  - {code: "  WHERE o.status <> 'cancelled' AND (o.order_date AT TIME ZONE 'Europe/Istanbul')::date BETWEEN :ilk AND :son GROUP BY 1;", tag: Redshift → Mutabakat, say: "Aynı kural: iptal yok, aynı günler."}
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              Geçen geceki COPY örnek durum olarak okunur. Sonra "Olsaydı" kareleri: bozuk satır, çift yükleme, yarıda kalan iş, yanlış tutar, kaçak sorgu. Her biri için bir emniyet var; aşağıda ne zaman çalıştığı, neyi yakalamadığı, Ekibin ne yaptığı.
+            cards:
+              - title: Bozuk satır
+                text: >-
+                  Ne zaman: her COPY'de. MAXERROR 0 olduğu için tek hata bütün COPY'yi geri alır, ara tablo boş kalır, sales değişmez. Yakalamadığı: geçerli görünen yanlış değer (4.786,50 de bir sayıdır). Onarım: görünüm dosyayı, satırı ve sütunu söyler; Ekip kaynağı, sorguyu ya da sütunu düzeltir, işi aynı gün için yeniden başlatır.
+                code:
+                  - {code: "SELECT trim(file_name), line_number, trim(column_name), trim(error_message)", tag: Ekip → Redshift, say: "Hangi dosya, hangi satır, hangi sütun, neden."}
+                  - {code: "  FROM sys_load_error_detail ORDER BY start_time DESC LIMIT 10;", tag: Redshift → Ekip, say: "Serverless'ta bu görünüm; sağlanan Redshift'teki STL_LOAD_ERRORS burada dolmaz."}
+              - title: Eksik dosya
+                text: >-
+                  Ne zaman: her COPY'de; manifestte mandatory olan dosya yoksa COPY hata verir. Yakalamadığı: dosya var ama eksik yazılmış; onu rows_uploaded ile loaded_rows karşılaştırması yakalar. Hiç sipariş olmayan gün hata değildir: rows_uploaded 0 ise iş COPY'yi atlar, günü boş kapatır. Onarım: iş yeniden çalıştırılır, dosya yeniden dökülür.
+              - title: Aynı parti iki kez
+                text: >-
+                  Ne zaman: her çalıştırmada; önce sil sonra ekle. Lambda yeniden denese de, Ekip elle başlatsa da sonuç aynı. Yakalamadığı: biri ara tabloyu atlayıp doğrudan sales'e COPY ederse Redshift çift satırı reddetmez. Onarım: mutabakat farkı gösterir, gün yeniden yüklenir. Bu yüzden sales'e yazma yetkisi sadece yükleme işinin rolündedir.
+              - title: İş yarıda kalırsa
+                text: >-
+                  Ne zaman: DELETE ile COMMIT arasında Redshift hata verirse paket geri alınır, tablo eski hâlindedir. Lambda düşerse paket Redshift'te zaten tek parça çalışır: biter ya da geri alınır. Yakalamadığı: iş hiç başlamadıysa kimse hata görmez; onu "parti gelmedi" alarmı yakalar. Onarım: işi yeniden başlatmak yeter.
+              - title: "Sonradan değişen gün ve yanlış rakam: mutabakat"
+                text: >-
+                  Ne zaman: her gece son 7 gün, Pazar geceleri bütün yıl. Sonradan iptal edilen sipariş ya da kod hatasıyla bozulmuş tutar burada fark olarak çıkar. Geç iptal olağandır: alarm çalmaz, mutabakat o günü yükleme işine yeniden yükletir, fark kapanır. Alarm sadece yeniden yüklemeden sonra fark kalırsa çalar. Yakalamadığı: sadece toplamlara bakar; şehri yanlış yazılmış bir satır toplamı değiştirmez. Aurora'daki kaydın kendisi yanlışsa iki defter de aynı yanlışı gösterir; onu Aurora'nın kendi emniyetleri yakalar (Adım 26), düzeltme gelince fark çıkar ve gün yeniden yüklenir. Sütun sütun tam kontrol pahalıdır; bu açık kabul edildi. 7 günden eski bir iptal Pazar kontrolüne kadar raporda kalır. Onarım: Ekip alarmın sebebini düzeltir, işi o gün için yeniden başlatır.
+              - title: Bakım (VACUUM, ANALYZE)
+                text:
+                  - >-
+                    Ne zaman: Redshift'in kendi kararıyla, yük düşükken. Silinmiş işaretli satırları temizler, sıralar, istatistikleri günceller. Normal gecede silinecek satır yoktur; silme yeniden yüklemede olur ve sorgular temizlenene kadar o satırları da tarar.
+                  - >-
+                    Canlı ölçüm (svv_table_info, 31 Eki): tbl_rows 11.878, encoded Y AUTO(ENCODE), unsorted %91,58; yani yaklaşık 10.880 satır sıralanmamış bölgede. Neden bu kadar yüksek? AWS'e göre COPY yeni satırları sıralı bölgeye ancak sıralama sütunu NOT NULL ise, tablo tam sıralıysa ve yeni satırlar hepsinden sonra geliyorsa koyar. Bizim order_date sütununda NOT NULL yok; olası sebep bu, ilk yükleme de dahil. Arka plandaki sıralama ise sorgulara bakarak karar verir: tablo küçük ve bu rapor tarih seçmiyor, bu yüzden acele etmiyor. Fark ölçülmüyor.
+                  - >-
+                    Yakalamadığı: arka plan işi yoğun saatlerde bekler; ne zaman çalışacağı bize söylenmez. Onarım: svv_table_info'daki unsorted ve vacuum_sort_benefit izlenir; büyük bir yeniden yüklemeden sonra Ekip elle başlatır. Tablo milyarlara büyürse sıralama sütununa NOT NULL eklemek ilk işlerden biri olur.
+                code:
+                  - {code: "SELECT tbl_rows, unsorted, vacuum_sort_benefit FROM svv_table_info WHERE \"table\" = 'sales';", tag: Ekip → Redshift, say: "Satır sayısı, sırasız oran, sıralamanın kazandıracağı tahmini oran."}
+                  - {code: "VACUUM SORT ONLY sales;", tag: Ekip → Redshift, say: "Sadece sıralar; tablo zaten %95 sıralıysa atlar."}
+                  - {code: "ANALYZE sales;", tag: Ekip → Redshift, say: "İstatistikleri hemen günceller; çoğu zaman gerekmez."}
+              - title: Kaçak sorgu
+                text: >-
+                  Ne zaman: sorgu çalışırken, kuyruğunun kuralı aşılınca durur. Yakalamadığı: kuralın altında kalan ama sık çalışan sorgular; faturayı onlar büyütür. Onarım: SYS_QUERY_HISTORY'den en uzun sorgular okunur, sorgunun sahibiyle düzeltilir.
+              - title: "Hiç çalışmazsa: üç alarm"
+                text: >-
+                  Her biri CloudWatch'ta, Ekibe mesaj gönderir. Ne zaman: sürekli. Yakalamadığı: alarmlar işin çalışıp çalışmadığına bakar, rakamın anlamına değil; onu mutabakat ölçer. Onarım: alarm hangi adımda durulduğunu söyler; Ekip aynı işi aynı gün için yeniden başlatır.
+                map:
+                  cols: [Alarm, "Formül (temsilî)", "Ne anlatır?"]
+                  rows:
+                    - ["Parti gelmedi", "LoadSucceeded toplamı, son 26 saat < 1 (veri yoksa da alarm)", "Zamanlayıcı ya da Lambda çalışmadı. 26 saat: gece işi biraz gecikirse yanlış alarm çalmasın."]
+                    - ["Parti hata verdi", "LoadFailed toplamı, son 1 saat >= 1", "COPY, kontrol ya da iş paketi durdu; sales dünkü hâlinde."]
+                    - ["Mutabakatta fark", "ReconDiff (mutlak ₺ farkı), son çalışma > 0", "İki defter tutmuyor; hangi gün olduğu mutabakatın kaydında."]
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
