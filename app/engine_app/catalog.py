@@ -89,7 +89,7 @@ META["influxdb"] = {
     "id": "influxdb", "name": "Amazon Timestream for InfluxDB", "data_type": "Semi-structured", "category": "Time-series",
     "auth": "Password (Secrets Manager)", "via": "InfluxDB endpoint (data subnet, HTTPS 8086)", "section": "Operations",
     "model": "bucket metrics\n  warehouse_env  tags: warehouse, sensor   field: value   every 5 minutes\n"
-             "  orders         tags: channel              field: count   every minute",
+             "  orders         tags: channel              field: count   one point per order",
 }
 PAGES["influxdb"] = [page("ops", "ops", "Operations", "/admin/ops")]
 

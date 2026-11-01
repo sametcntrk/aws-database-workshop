@@ -88,7 +88,7 @@ def register(bp):
         uid = persona_id() if who == "persona" else visitor_id()
         cql = f"SELECT event_time, event_type, product_id, detail FROM {table()} WHERE user_id = %s LIMIT {limit}"
         with trace.call("SELECT", cql.replace("%s", f"'{uid}'"), {"consistency": level}) as t:
-            rows = list(s().execute(SimpleStatement(cql, consistency_level=LEVELS.get(level, ConsistencyLevel.LOCAL_QUORUM)), (uid,)))
+            rows = list(s().execute(SimpleStatement(cql, consistency_level=LEVELS.get(level, ConsistencyLevel.LOCAL_QUORUM), fetch_size=limit), (uid,)))
             t.result(items=len(rows), note=("LOCAL_ONE reads one replica: half the read cost, but a write from the last moment can be missing."
                                             if level == "LOCAL_ONE" else
                                             "LOCAL_QUORUM reads 2 of 3 replicas, so you always see your own last write.")
@@ -99,14 +99,14 @@ def register(bp):
     @bp.get("/api/recent")
     def api_recent():
         cql = f"SELECT product_id, detail, event_type FROM {table()} WHERE user_id = %s LIMIT 40"
-        with trace.call("SELECT", cql.replace("%s", f"'{visitor_id()}'"), {}) as t:
-            rows = list(s().execute(cql, (visitor_id(),)))
+        with trace.call("SELECT", cql.replace("%s", f"'{visitor_id()}'"), {"consistency": "LOCAL_ONE"}) as t:
+            rows = list(s().execute(SimpleStatement(cql, consistency_level=ConsistencyLevel.LOCAL_ONE, fetch_size=40), (visitor_id(),)))
             seen, recent = set(), []
             for r in rows:
                 if r.event_type == "view" and r.product_id not in seen:
                     seen.add(r.product_id)
                     recent.append({"product_id": r.product_id, "detail": r.detail})
-            t.result(items=len(recent), read=len(rows), note="The partition holds your history in time order, so 'recently viewed' is one read.")
+            t.result(items=len(recent), read=len(rows), note="The partition holds your history in time order, so 'recently viewed' is one read. LOCAL_ONE: a strip that misses the newest view for a moment does no harm.")
         return jsonify(trace.payload(recent[:8]))
 
     @bp.post("/api/simulate")

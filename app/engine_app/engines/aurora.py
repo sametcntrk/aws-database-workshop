@@ -152,9 +152,9 @@ FROM orders WHERE visitor_id IS NOT NULL GROUP BY 1 ORDER BY 1"""
             if explain:
                 sql(cur, "EXPLAIN ANALYZE", "EXPLAIN ANALYZE " + q)
                 plan = "\n".join(r[0] for r in cur.fetchall())
-            sql(cur, "SELECT (workshop orders)", today)
+            sql(cur, "SELECT (store orders per hour)", today)
             hours = [{"hour": r[0].isoformat(), "orders": r[1], "revenue": float(r[2])} for r in cur.fetchall()]
-        return jsonify(trace.payload({"segments": seg, "workshop": hours, "plan": plan}))
+        return jsonify(trace.payload({"segments": seg, "hourly": hours, "plan": plan}))
 
 
 def _rows(cur):
