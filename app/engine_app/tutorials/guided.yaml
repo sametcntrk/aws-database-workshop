@@ -18638,54 +18638,808 @@ steps:
           - [JOIN, "İki tablonun satırlarını ortak bir anahtar üzerinden birleştirmek."]
           - [GROUP BY, "Satırları bir sütuna göre gruplayıp her grup için tek satır üretmek (count, string_agg)."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde sipariş tabloları için hazırlık
+      t1:
+        title: Önceden ne vardı? Siparişin üç tablosu nasıl kuruldu, satırlar oraya nasıl geldi, liste nasıl hızlı kalıyor?
         intro: >-
-          Siparişlerim sayfası hiç açılmadan, tablolar, anahtarlar ve index'ler bu sayfanın sorusuna göre kurulur. Aşağıdaki
-          beş adım bu hazırlığın sırasıdır.
-        text:
-          - title: Önce veri modeli kurulur
-            text: >-
-              Her bilgi bir kez ve kendi tablosunda tutulur (normalizasyon): sipariş başlığı orders'ta, kalemler order_items'ta,
-              ürün adı products'ta. Ürünün adı değişirse tek yerde değişir.
-            code: |-
-              orders(order_id PK, customer_id FK, visitor_id, order_date, status, total)
-              order_items(order_id FK, product_id FK, qty, unit_price, PRIMARY KEY (order_id, product_id))
-              products(product_id PK, name, category, price, stock)
-          - title: İlişkiler veritabanına yazılır
-            text: >-
-              Yabancı anahtarlar (REFERENCES) olmayan bir siparişe kalem eklenmesini ya da var olmayan bir ürünün satılmasını
-              engeller. Sipariş silinirse kalemleri de silinir (ON DELETE CASCADE).
-          - title: Sayfanın sorusuna index kurulur
-            text: >-
-              "Bu ziyaretçinin siparişleri" sorusu için orders(visitor_id) üzerinde bir index kurulur; JOIN'ler birincil
-              anahtarların index'lerini kullanır. Index olmasaydı her sayfa açılışında bütün orders tablosu taranırdı.
-            code: |-
-              CREATE INDEX ON orders (visitor_id);
-              CREATE INDEX ON orders (customer_id);
-          - title: Plan kontrol edilir
-            text: >-
-              EXPLAIN ANALYZE ile sorgunun hangi index'leri kullandığı ve kaç satır okuduğu görülür (Adım 32). Tablo büyüdükçe
-              plan yeniden kontrol edilir.
-            code: |-
-              EXPLAIN ANALYZE SELECT … FROM orders o JOIN order_items oi USING (order_id) … WHERE o.visitor_id = $1 …;
-          - title: Okumalar okuma ucuna gider
-            text: >-
-              Liste ve rapor gibi sadece okuyan sorgular Aurora'nın okuma ucuna (reader endpoint) gönderilir; yazma ucu
-              siparişlere kalır. Okuma kopyaları depolamayı paylaştığı için gecikmeleri genelde milisaniyeler düzeyindedir.
-      feed:
-        title: Veri nereden geliyor?
-        writes: Uygulama, ödeme adımında (sipariş ve kalemler); durum değişiklikleri sipariş takip sisteminden.
-        reads: Uygulama, siparişlerim sayfası ve sipariş detayı için.
-        kind: >-
-          Uygulama orkestrasyonu. Aurora siparişin asıl kaydıdır; değişikliklerini zero-ETL ile analiz deposuna (Redshift)
-          kendisi aktarır.
-        with: >-
-          Sipariş listesi tek veritabanından gelir; ama aynı sipariş başka yerlerde kopya olarak durur: Redshift'te rapor için,
-          Keyspaces'te alışveriş geçmişinde, Neptune'da önerilerde. Asıl ve doğru olan Aurora'daki kayıttır.
-        best: >-
-          İşlemsel veri (sipariş) normalize tablolarda ve tek veritabanında tutulur; okuma yükü okuma ucuna, analiz yükü ayrı bir
-          analiz deposuna (zero-ETL) verilir. Böylece rapor sorguları siparişleri yavaşlatmaz.
+          Sen "Orders" sayfasını açmadan önce (31 Eki 10:26) Aurora'da bu tarayıcıdan verilmiş iki siparişin duruyor: dün akşamki Rhein
+          Powerbank 66 (W1793380550) ve az önce verdiğin, iki kalemli sipariş (W1793396741, 10.890,26 TL). Yanlarında
+          başka müşterilerin siparişleri ve eski siteden taşınan binlerce eski sipariş var (Ayşe'nin eski siparişleri de; onlar listede çıkmaz, nedeni t-1 · 1'de). Bu bölüm o satırların oraya
+          nasıl geldiğini ve listenin neden birkaç milisaniyede çıktığını anlatıyor: bir siparişin neden üç ayrı tabloda
+          tutulduğu (orders, order_items, products) ve müşterinin neden dördüncü bir tabloda (customers), hangi değerin ödeme anında siparişe kopyalandığı
+          (adet, birim fiyat, toplam) ve hangisinin her okumada JOIN ile canlı okunduğu (ürün adı, müşterinin adı ve şehri),
+          listeyi hızlı tutan index'ler ve planın önceden nasıl kontrol edildiği (EXPLAIN), listenin hangi sunucudan okunduğu
+          (yazma sunucusu mu, okuma sunucusu mu, gecikme), sonraki sayfanın nasıl istendiği (OFFSET değil, kaldığın yerden),
+          eski sitenin sipariş geçmişinin 30 Eyl'de kurallar açıkken nasıl taşındığı, bir ürünün adı ya da bir müşterinin
+          şehri değişince eski siparişlerde ne göründüğü ve yavaşlayan bir sorgunun nasıl fark edildiği. Siparişin paketi (Adım
+          23), fiyatın ödemede katalogdan yeniden okunması (Adım 12), siparişin olay olarak beş depoya yayılması (Adım 25) ve
+          Redshift'e kopyalanması (Adım 30) çalışmaya devam ediyor; bu sayfanın sorusu olmadıkları için sadece anılıyorlar.
+          Önce bileşenler, sonra bir simülasyon, sonra dört aşama (tasarım, ilk yükleme, sürekli besleme, tutarlılık ve onarım).
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1, t0 ve saatler", "t0: senin \"Orders\" sayfasını açman, 31 Eki 10:26. t-1: ondan önceki zaman. Mağaza 1 Eki'de bu sistemle açıldı. Saatler Türkiye saatidir (UTC+3). Ürünler, adları ve bugünkü fiyatları (P0001 3.373,84 TL, P0021 1.050,63 TL, P0066 951,92 TL, P0131 3.758,21 TL), müşterilerin adı ve şehri ve tabloların boyu canlı sistemden; saatler, eski sitenin sayıları, gecikmeler ve süreler temsilîdir."]
+          - ["Ekip ve eski site", "Ekip: mağazanın sistemini kuran ve işleten mühendisler; kurulum komutlarını onlar gönderir, alarmlara onlar bakar. Eski site: mağazanın bu sistemden önceki sitesi. 1.000 müşterisi ve sipariş geçmişi 30 Eyl'de Aurora'ya bir kez taşındı (Adım 25). Bu yüzden 1 Eki'den önceki siparişler de Aurora'da var."]
+          - ["Tablo, satır, sütun", "Tablo: aynı türden kayıtların durduğu liste (bir defterin tek bir bölümü gibi). Satır: tek bir kayıt (bir sipariş). Sütun: her satırın aynı bilgisi (tarih, toplam)."]
+          - ["Normalizasyon", "Her bilgiyi bir kez ve kendi tablosunda tutmak. Ürünün adı products'ta bir kez durur; kalemler ürünü sadece numarasıyla (product_id) gösterir. Bir rehberde adresi her sayfaya yazmak yerine bir kez yazıp \"bkz. sayfa 12\" demek gibi."]
+          - ["Anahtarlar: PRIMARY KEY, FOREIGN KEY, UNIQUE", "PRIMARY KEY (birincil anahtar): satırın tek adı; aynısından iki tane olamaz (orders için order_id). FOREIGN KEY (yabancı anahtar, REFERENCES): bir sütunun başka tablodaki var olan bir satırı göstermesi kuralı; var olmayan ürüne kalem yazılamaz (hata kodu 23503). UNIQUE: bir sütunda aynı değer iki kez olamaz (request_id, Adım 23). Kuralları veritabanı kendisi uygular; hangi program yazarsa yazsın."]
+          - ["Kopya ve bağ (JOIN)", "Kopya: değerin ödeme anında siparişin satırına yazılması (birim fiyat); sonra kaynağı değişse de kopya değişmez. Bağ: değerin sadece anahtarla gösterilmesi (ürün numarası); değer her okumada JOIN ile kaynağından, o anki hâliyle okunur."]
+          - ["Index", "Bir sütunun değerlerinin sıralı tutulan ayrı bir listesi; her değerin yanında satırın yeri yazar. Kitabın sonundaki dizin gibi: bütün kitabı okumadan sayfayı bulursun. PRIMARY KEY'in index'i kendiliğinden kurulur (orders_pkey, order_items_pkey, products_pkey); diğerlerini Ekip kurar (orders_visitor_id_idx). Birden çok sütunlu index (bileşik): önce ilk sütuna, sonra ikinciye göre sıralı; sadece ilk sütunla aramada da kullanılır."]
+          - ["EXPLAIN ve plan", "Plan: PostgreSQL'in bir sorguyu hangi adımlarla yapacağı (planlayıcı seçer). EXPLAIN planı gösterir; EXPLAIN ANALYZE sorguyu gerçekten çalıştırır ve her adımda kaç satır geçtiğini ve ne kadar sürdüğünü yazar; BUFFERS eklenirse kaç veri sayfasının bellekten, kaçının diskten okunduğunu da. Plan içten dışa okunur: en içteki adım önce çalışır. ANALYZE (tek başına): tabloların boyunu ve değer dağılımını sayıp planlayıcıya bildirir."]
+          - ["Plan sözcükleri", "Seq Scan: tablonun bütün satırlarını baştan sona okumak. Index Scan: index'te bulup sadece o satırları okumak. Nested Loop: dıştaki her satır için içte bir arama. Hash Join: bir tabloyu bellekte bir arama tablosuna koyup ötekini onunla eşlemek. HashAggregate: satırları gruplamak (GROUP BY). Sort: sıralamak. Limit: ilk N satırda durmak. rows: o adımdan geçen satır sayısı; loops: adımın kaç kez çalıştığı. Rows Removed by Filter: okunup koşula uymadığı için atılan satır."]
+          - ["Yazma sunucusu, okuma sunucusu, uç (endpoint)", "Aurora cluster'ında yazmaları yapan bir yazma sunucusu (writer) ve sadece okuyan okuma sunucuları (reader, Aurora Replica) vardır. Veri hepsinin paylaştığı depolamada, üç Availability Zone'da (ayrı veri merkezleri) altı kopya olarak durur; okuma sunucusu veriyi kopyalamaz, aynı depolamayı okur. Uç: bağlanılan adres. Cluster ucu yazma sunucusuna, reader ucu (cluster-ro) okuma sunucularına gider."]
+          - ["Gecikme (replica lag)", "Okuma sunucusunun yazma sunucusunun son değişikliğini görmesine kadar geçen süre. Aurora'da genelde onlarca milisaniyedir; ağır yük altında artabilir. CloudWatch'ta AuroraReplicaLag ölçüsü (milisaniye) gösterir."]
+          - ["RDS Proxy", "AWS'in bağlantı havuzu servisi (Adım 23): Uygulama sunucularının çok sayıda bağlantısını Aurora'ya açık tuttuğu az sayıda bağlantıya paylaştırır. Varsayılan ucu yazma sunucusuna gider; Ekip ayrıca bir salt okuma ucu (READ_ONLY) açabilir, o uç okuma sunucularına gider."]
+          - ["Transaction (iş paketi) ve COMMIT", "Birlikte olması gereken yazmaların paketi. COMMIT hepsini birden kalıcı ve herkese görünür yapar; ROLLBACK hepsini geri alır. Ya hepsi ya hiçbiri."]
+          - ["Ara tablo ve aws_s3", "Ara tablo (staging): dosyanın önce kuralsız, olduğu gibi okunduğu geçici tablo; kontrol orada yapılır, asıl tablolara sonra geçilir. NOT VALID ve VALIDATE CONSTRAINT: bir kuralı \"şimdilik eski satırları kontrol etme\" diye eklemek, sonra eski satırları tek seferde kontrol etmek. Aurora clone: bir cluster'ın dakikalar içinde açılan, ayrı ve bağımsız bir kopyası; prova için. eu-central-1: AWS'in Frankfurt bölgesi. aws_s3: Aurora PostgreSQL'in S3'teki (AWS'in dosya deposu) bir dosyayı doğrudan tabloya okuyan eklentisi (table_import_from_s3). CSV: virgülle ayrılmış satırlardan oluşan dosya."]
+          - ["Sayfalama: OFFSET ve kaldığın yerden (keyset)", "OFFSET 40: \"ilk 40'ı atla\"; veritabanı o 40'ı yine okur, sonra atar. Keyset: \"en son gördüğümden daha eski olanlar\"; son satırın tarihi ve numarası bir sonraki isteğe verilir, index oradan devam eder."]
+          - ["İzleme sözcükleri", "CloudWatch: AWS'in ölçüm, kayıt ve alarm servisi. CloudWatch Database Insights: veritabanının yükünü sorgu sorgu gösteren ekran (Performance Insights'ın yerini aldı). DBLoad: aynı anda çalışan ortalama oturum sayısı (AAS, average active sessions). Top SQL: yükün en büyük payını hangi sorguların getirdiği. Yavaş sorgu kaydı: log_min_duration_statement ayarından uzun süren her sorgunun Aurora'nın kaydına yazılması; kayıt CloudWatch Logs'a akar. Metric filter: kayıtta bir kalıba uyan satırları sayıp ölçüye çeviren CloudWatch ayarı. p95: isteklerin %95'inin bu süreden kısa sürdüğü değer. Alarm: bir ölçü koşulu sağlarsa Ekip'e haber."]
+          - ["Kesit, temsilî, Örnek durum ve Olsaydı", "Kesit: simülasyonda gösterilen ve t0'daki durumu oluşturan satırlar: üç sipariş (ikisi senin, biri Mert Doğan'ın), dört kalem, dört ürün, iki müşteri. Tablolarda başka satırlar da var (sayıları kutuların notunda); eski sitenin bir siparişi \"kesitin dışında\" tablosunda. Temsilî: canlı sistemden gelmeyen, anlatım için seçilmiş değer. \"Olsaydı\" kareleri yaşanmadı; her biri ayrı bir durumdur, birbirine eklenmez ve bir sonraki karede geri alınır."]
+          - ["Kod kartlarındaki sözcükler", "SQL: CREATE TABLE tablo kur; text metin, int tam sayı, numeric(12,2) iki kuruşlu tutar, timestamptz saat dilimli zaman; REFERENCES başka tablonun satırına bağlı; ON DELETE CASCADE sipariş silinirse kalemleri de silinir; CREATE INDEX index kur (CONCURRENTLY: yazmaları durdurmadan); SELECT oku; FROM hangi tablodan; JOIN … USING (order_id) iki tabloyu aynı adlı sütunla eşle; LEFT JOIN eşi olmasa da soldaki satırı tut (eşi yoksa … IS NULL); WHERE hangi satırlar; GROUP BY gruplara ayır; count(*) say; sum(…) topla; HAVING count(*) > 1 birden çok olan gruplar; string_agg(…, ', ') adları virgülle birleştir; ORDER BY … DESC yeniden eskiye sırala; LIMIT en çok bu kadar; OFFSET bu kadarını atla; (a, b) < (x, y) önce a'ya, eşitse b'ye göre küçük; INSERT INTO … SELECT bir tablodan okuyup ötekine yaz; UPDATE … SET değiştir; BEGIN, COMMIT paket aç, kapat; NULL boş; now() şu an; $1, $2 komuta ayrıca verilen değerin yeri. aws komutları: aws rds create-db-proxy-endpoint proxy'ye uç ekle (--target-role READ_ONLY salt okuma); aws rds modify-db-cluster cluster ayarını değiştir (--cloudwatch-logs-export-configuration kaydı CloudWatch Logs'a gönder). IF(…, a, b) koşul doğruysa a değilse b; n istek sayısı. → sonrası sonuç; # ve -- sonrası açıklama; … kısaltılmış kısım."]
+          - ["Diğer adlar", "Uygulama: mağazanın arka uç programı (EC2 sunucularında: AWS'in kiralık sanal sunucuları); tarayıcıdan gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar. \"Orders\" sayfası: mağazada Siparişlerim sayfasının adı; \"Place the order\": ödeme sayfasındaki \"sipariş ver\" butonu. GET /aurora/api/orders: Siparişlerim sayfasının isteği; POST /aurora/api/orders: ödeme sayfasının \"sipariş ver\" isteği. visitor_id: siparişi veren tarayıcının kimliği (lm_visitor çerezi; senin tarayıcın 7f3a…, Mert'inki c41e…). customer_id: siparişin yazıldığı müşteri (sen Ayşe Yılmaz, C00001; segment: müşterinin grubu, bireysel, kurumsal ya da premium). request_id: her \"Place the order\" tıklamasının tek numarası (Adım 17, 23). status: siparişin durumu; processing ödemesi onaylandı, depoda hazırlanıyor; delivered teslim edildi (bunu kargo teslim edince teslimat zinciri, yani kargo şirketinden gelen bilgiyi işleyen sistem yazar); cancelled iptal. zero-ETL: Aurora'nın tabloları Redshift'e (rapor veritabanı) kendisi kopyalaması; aurora_live kopyanın Redshift'teki adı (Adım 30). outbox: siparişle aynı pakette yazılan \"sipariş verildi\" satırı (Adım 25). Katalog yönetim servisi: katalog ekibinin ürün ve fiyat ekranlarının arka ucu (Adım 1, 9, 12). Ürün adlarının sonundaki sayı ürün numarasıdır (P0131 → Kapadokya Mekanik Klavye 131); adet değildir. \"Adım 12\" gibi adlar bu görevin (mağazadaki 37 adımın) adımlarıdır; en çok anılanlar: Adım 12 sepet ve ödemede fiyat kontrolü, Adım 23 siparişin paketi, Adım 25 siparişi verdiğin adım (siparişin beş depoya yayılması ve depoların açılış gecesi ilk yüklemesi orada), Adım 30 Redshift kopyası; simülasyonun sayacındaki \"Adım 1 / 25\" ise simülasyonun karesidir."]
+        inventory_title: Bileşenler
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra"
+          sütunu bilgiyi ya da isteği kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim kodumuz"
+          etiketli parçaları mağazanın ekibi yazar. Satırları üç yazar yazar: Uygulama (siparişler ve kalemler, ödemede),
+          Katalog yönetim servisi (ürünler) ve bir kez çalışan geçmiş taşıma işi (eski sitenin müşterileri ve siparişleri, S3
+          üzerinden). Siparişlerim listesi aynı tabloları Uygulama'dan, RDS Proxy üzerinden yazma sunucusunda okur; okuma
+          sunucusu aynı depolamayı okur ve ağır okumaları alır. Hepsini CloudWatch izler. Aynı parçalar aşağıdaki simülasyonda
+          birer kutu.
+        inventory:
+          - id: pages
+            name: Mağazanın sayfaları (tarayıcıdaki kod)
+            kind: code
+            what: ödeme sayfası ve Siparişlerim sayfası
+            does: >-
+              Ödeme sayfası "Place the order" tıklamasını numarasıyla Uygulama'ya gönderir (POST /aurora/api/orders, Adım 23).
+              Siparişlerim sayfası açılınca siparişleri ister (GET /aurora/api/orders) ve gelen satırlardan tabloyu çizer.
+            box: "Sipariş ver (POST) ve siparişleri iste (GET); cevabı çizer."
+            phases: [1, 3, 4]
+            before: Müşteri (tıklar, sayfayı açar)
+            after: web
+          - id: web
+            name: Uygulama (ödeme ve Siparişlerim istekleri)
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucularında)
+            does: >-
+              Ödemede tek pakette stoğu düşürür, siparişi ve kalemlerini yazar; her kaleme ürünün o anki fiyatını katalogdan
+              okuyup kopyalar (unit_price, Adım 12) ve toplamı hesaplar. Siparişlerim isteğinde tek bir SELECT gönderir: üç tablo,
+              JOIN, bu tarayıcının siparişleri, en yeni 20. İkisini de yazma sunucusuna gönderir. Hesap ekranında müşterinin
+              adını ve şehrini customers'ta günceller.
+            box: "Ödeme: sipariş + kalemler (fiyat kopyası). Liste: tek SELECT, JOIN."
+            phases: [1, 3, 4]
+            before: pages
+            after: [proxy, pages]
+          - id: proxy
+            name: RDS Proxy (shop-proxy)
+            kind: aws
+            what: AWS'in bağlantı havuzu servisi
+            does: >-
+              Uygulama'nın bağlantılarını az sayıda veritabanı bağlantısına paylaştırır (Adım 23). Varsayılan ucu (okuma-yazma)
+              yazma sunucusuna gider; salt okuma ucu (shop-proxy-ro) okuma sunucusuna.
+            box: "Okuma-yazma ucu → yazma sunucusu; salt okuma ucu → okuma sunucusu."
+            phases: [1, 3, 4]
+            before: web
+            after: [aurora, reader]
+          - id: aurora
+            name: Aurora PostgreSQL (shop, yazma sunucusu)
+            kind: aws
+            what: işlemsel (sipariş) veritabanı
+            does: >-
+              Siparişin asıl kaydı: customers, products, orders, order_items. Kuralları kendisi uygular (anahtarlar, FOREIGN
+              KEY), index'leri her yazmada günceller ve Siparişlerim'in JOIN'ini planlayıp çalıştırır. Değişikliklerini paylaşılan
+              depolamaya yazar.
+            box: "Dört tablo ve index'leri; kurallar; listenin JOIN'i."
+            phases: [1, 2, 3, 4]
+            before: [proxy, admin, migrate]
+            after: [reader, monitor, web]
+          - id: reader
+            name: Aurora okuma sunucusu (reader)
+            kind: aws
+            what: aynı cluster'ın sadece okuyan sunucusu
+            does: >-
+              Yazma sunucusuyla aynı depolamayı okur; son değişikliği genelde onlarca milisaniye geriden görür. Ağır ve
+              biraz gecikmeyi kaldıran okumaları alır: taşıma kontrolleri, plan denemeleri (EXPLAIN), ilk yükleme işleri (Adım 25).
+              Yazma sunucusu çökerse onun yerine geçer (Adım 23).
+            box: "Aynı depolama, onlarca ms geriden; ağır okumalar burada."
+            phases: [1, 2, 3, 4]
+            before: aurora
+            after: [migrate, monitor, Ekip (plan denemeleri)]
+          - id: admin
+            name: Katalog yönetim servisi
+            kind: code
+            what: katalog ekibinin ürün ekranlarının arka ucu
+            does: >-
+              Ürünün satırını yazar ve değiştirir: numara, ad, kategori, fiyat (Adım 1, 9, 12). Bir siparişe hiç dokunmaz;
+              ürünün adı değişirse eski siparişler de yeni adı gösterir, fiyatı değişirse eski kalemin fiyatı değişmez.
+            box: "products: ad ve fiyat; siparişe dokunmaz."
+            phases: [2, 3, 4]
+            before: Katalog ekibi
+            after: aurora
+          - id: s3
+            name: S3 (taşıma klasörü)
+            kind: aws
+            what: AWS'in dosya deposu
+            does: >-
+              Eski sitenin 30 Eyl'de bir kez bıraktığı üç dosyayı saklar: müşteriler, siparişler, kalemler. Taşıma işi
+              buradan okur; dosyalar iş bitse de silinmez, iş yeniden çalışabilir.
+            box: "Eski sitenin üç dosyası (bir kez)."
+            phases: [2]
+            before: Eski site (dışa aktarma)
+            after: migrate
+          - id: migrate
+            name: Geçmiş taşıma işi
+            kind: code
+            what: bir kez çalışan program (30 Eyl)
+            does: >-
+              Dosyaları ara tablolara okur, okuma sunucusunda kontrol eder (ürünü ya da müşterisi olmayan satır, tutmayan
+              toplam), sonra tek pakette ve kurallar açıkken asıl tablolara yazar: önce müşteriler, sonra siparişler, en son
+              kalemler. Eski siparişin tarayıcı kimliği (visitor_id) boş kalır.
+            box: "Ara tablo → kontrol → tek paket (kurallar açık)."
+            phases: [2, 4]
+            before: [s3, reader]
+            after: aurora
+          - id: monitor
+            name: CloudWatch (Database Insights, yavaş sorgu kaydı, alarmlar)
+            kind: aws
+            what: AWS'in izleme servisi
+            does: >-
+              Veritabanının yükünü sorgu sorgu gösterir (DBLoad, Top SQL), 500 ms'den uzun sorguların kaydını toplar,
+              Siparişlerim isteğinin süresini ve hata oranını, okuma sunucusunun gecikmesini izler. Toplam 4 alarm.
+            box: "Yük, yavaş sorgular, liste süresi, gecikme; 4 alarm."
+            phases: [1, 3, 4]
+            before: [aurora, reader, web]
+            after: Ekip (alarm)
+        sim_title: "Simülasyon: üç tablo bu sabaha nasıl geldi, Siparişlerim onları nasıl okuyor?"
+        sim:
+          kind: pipeline
+          title: Sayfalar → Uygulama → RDS Proxy → Aurora (yazma) · okuma sunucusu · S3 → taşıma işi · katalog servisi · CloudWatch
+          caption: >-
+            Aurora kutusundaki ilk dört tablo kesit: t0'da Siparişlerim'in okuyacağı satırlar (üç sipariş: ikisi senin tarayıcının
+            7f3a…, biri Mert Doğan'ın c41e…; dört kalem; dört ürün; iki müşteri). Tablolarda başka satırlar da var; sayıları
+            notlarda. Eski sitenin bir siparişi "kesitin dışında" tablosunda. Önce tabloların, index'lerin ve izlemenin kurulması,
+            sonra 30 Eyl'deki geçmiş taşıma, sonra açılıştan bu sabaha siparişler ve bir fiyat değişikliği, sonra "Olsaydı"
+            kareleri (yetim kalem, okuma sunucusundan liste, ad, fiyat ve şehir değişikliği, yavaşlayan liste). Canlı sistemden:
+            ürünler, adları ve bugünkü fiyatları, müşteriler. Temsilî: saatler, eski sitenin sayıları, gecikmeler, süreler.
+            Son karede her şey senin Orders sayfasını açmandan (t0) hemen önceki hâlde.
+          tick_ms: 2800
+          phases: {1: Tasarım, 2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım}
+          rows:
+            - {id: order, title: "Siparişin ve listenin yolu: sayfalar → Uygulama → RDS Proxy → Aurora (yazma sunucusu, asıl kayıt)", flow: true}
+            - {id: replica, title: "Aynı depolamayı okuyan ikinci sunucu"}
+            - {id: hist, title: "Bir kez, 30 Eyl: eski sitenin geçmişi → S3 → taşıma işi → Aurora", flow: true}
+            - {id: helpers, title: "Yandaki işler: ürün satırlarını yazan katalog servisi ve izleme", side: true}
+          summary: >-
+            Önce dört tablo, anahtarları ve index'leri kuruldu; RDS Proxy'ye ikinci (salt okuma) uç açıldı; izleme ve 4 alarm hazırlandı.
+            30 Eyl'de ürünler katalog servisinden, eski sitenin müşterileri ve siparişleri S3'ten taşındı: ara tablo, kontrol,
+            kurallar açıkken tek paket. Açılıştan sonra her sipariş Uygulama'dan aynı yoldan yazıldı; birim fiyat ödeme anında
+            kaleme kopyalandı, ad ise products'ta kaldı. Siparişlerim her açılışta yazma sunucusunda tek bir JOIN ile, index'lerle
+            birkaç satır okudu. Son durum: senin iki siparişin (3 kalem), Mert'in bir siparişi, dört ürün, iki müşteri; t0 buradan
+            başlar.
+          boxes:
+            - id: pages
+              row: order
+            - id: web
+              row: order
+            - id: proxy
+              row: order
+            - id: aurora
+              row: order
+              tables:
+                - name: "orders (kesit: t0'daki 3 sipariş)"
+                  cols: [order_id · müşteri, tarih · tarayıcı, total]
+                  money: [total]
+                  rows:
+                    - {key: o3, order_id · müşteri: "W1793396741 · C00001", tarih · tarayıcı: "31 Eki 10:25 · 7f3a…", total: 10890.26, hidden: true}
+                    - {key: o2, order_id · müşteri: "W1793390012 · C00002", tarih · tarayıcı: "31 Eki 08:40 · c41e…", total: 1299.90, hidden: true}
+                    - {key: o1, order_id · müşteri: "W1793380550 · C00001", tarih · tarayıcı: "30 Eki 22:10 · 7f3a…", total: 951.92, hidden: true}
+                - name: "order_items (kesit: bu üç siparişin kalemleri)"
+                  cols: [order_id · ürün, qty, unit_price]
+                  money: [unit_price]
+                  rows:
+                    - {key: i1, order_id · ürün: "W…6741 · P0001", qty: 1, unit_price: 3373.84, hidden: true}
+                    - {key: i2, order_id · ürün: "W…6741 · P0131", qty: 2, unit_price: 3758.21, hidden: true}
+                    - {key: i3, order_id · ürün: "W…0012 · P0021", qty: 1, unit_price: 1299.90, hidden: true}
+                    - {key: i4, order_id · ürün: "W…0550 · P0066", qty: 1, unit_price: 951.92, hidden: true}
+                - name: "products (kesit: bu kalemlerin ürünleri)"
+                  cols: [product_id, name, price]
+                  money: [price]
+                  rows:
+                    - {key: P0001, product_id: P0001, name: Alpen Kablosuz Kulaklık 1, price: 3373.84, hidden: true}
+                    - {key: P0021, product_id: P0021, name: Bosphorus Akıllı Saat 21, price: 1299.90, hidden: true}
+                    - {key: P0066, product_id: P0066, name: Rhein Powerbank 66, price: 951.92, hidden: true}
+                    - {key: P0131, product_id: P0131, name: Kapadokya Mekanik Klavye 131, price: 3758.21, hidden: true}
+                - name: "customers (kesit)"
+                  cols: [customer_id, name, city]
+                  rows:
+                    - {key: C00001, customer_id: C00001, name: Ayşe Yılmaz, city: İstanbul, hidden: true}
+                    - {key: C00002, customer_id: C00002, name: Mert Doğan, city: Ankara, hidden: true}
+                - name: "kesitin dışında: eski sitenin siparişlerinden biri"
+                  cols: [order_id · müşteri, tarih · tarayıcı, total]
+                  money: [total]
+                  rows:
+                    - {key: h1, order_id · müşteri: "E0412873 · C00001", tarih · tarayıcı: "4 Kas 2025 · boş", total: 2140.50, hidden: true}
+            - id: reader
+              row: replica
+              tables:
+                - name: "okuma sunucusu"
+                  cols: [ölçü, değer]
+                  rows:
+                    - {key: r1, ölçü: "gecikme (AuroraReplicaLag)", değer: "—", hidden: true}
+                    - {key: r2, ölçü: "son iş", değer: "—", hidden: true}
+            - id: s3
+              row: hist
+              tables:
+                - name: "lm-migration/orders-history/"
+                  cols: [dosya, satır]
+                  rows:
+                    - {key: f1, dosya: customers.csv, satır: "1.000", hidden: true}
+                    - {key: f2, dosya: orders.csv, satır: "3.800", hidden: true}
+                    - {key: f3, dosya: order_items.csv, satır: "9.500", hidden: true}
+            - id: migrate
+              row: hist
+              tables:
+                - name: "çalışma (30 Eyl)"
+                  cols: [adım, sonuç]
+                  rows:
+                    - {key: m1, adım: ara tablolar, sonuç: "—", hidden: true}
+                    - {key: m2, adım: kontroller, sonuç: "—", hidden: true}
+                    - {key: m3, adım: asıl tablolar, sonuç: "—", hidden: true}
+                    - {key: m4, adım: sayım ve plan, sonuç: "—", hidden: true}
+            - id: admin
+              row: helpers
+            - id: monitor
+              row: helpers
+              tables:
+                - name: "pano (son 5 dakika)"
+                  cols: [ölçü, değer]
+                  rows:
+                    - {key: w1, ölçü: "Siparişlerim süresi (p95)", değer: "—", hidden: true}
+                    - {key: w2, ölçü: "Top SQL: listenin yük payı", değer: "—", hidden: true}
+                    - {key: w3, ölçü: "AuroraReplicaLag", değer: "—", hidden: true}
+                    - {key: w4, ölçü: "yavaş sorgu kaydı (> 500 ms)", değer: "—", hidden: true}
+                    - {key: w5, ölçü: "alarmlar", değer: "—", hidden: true}
+          frames:
+            - phase: 1
+              who: aurora
+              lit: [aurora, reader]
+              packet: {at: aurora, text: "28 Eyl · CREATE TABLE customers · products · orders (order_id PK, customer_id REFERENCES customers, visitor_id, request_id UNIQUE, order_date, status, total) · order_items (PK (order_id, product_id), REFERENCES orders, products, qty, unit_price) · CREATE INDEX ON orders (visitor_id) · ON orders (customer_id)"}
+              note: {aurora: "4 tablo, 2 ek index · henüz satır yok", reader: "aynı depolama: aynı tablolar, kopya yok"}
+              say: >-
+                28 Eyl, açılıştan üç gün önce. Ekip Aurora'da dört tabloyu kurdu: müşteri (customers), ürün (products), sipariş
+                başlığı (orders) ve siparişin kalemleri (order_items). Tablolar anahtarlarla bağlı: kalem bir siparişe ve bir ürüne,
+                sipariş bir müşteriye. Listenin ilk araması için orders(visitor_id) index'i de kuruldu. Okuma sunucusu ayrı bir kopya
+                değil; aynı depolamayı okuduğu için tabloları hemen görüyor.
+            - phase: 1
+              who: proxy
+              lit: [proxy, aurora, reader]
+              packet: {at: proxy, text: "28 Eyl · shop-proxy: okuma-yazma ucu → yazma sunucusu · aws rds create-db-proxy-endpoint --db-proxy-endpoint-name shop-proxy-ro --target-role READ_ONLY → okuma sunucusu"}
+              note: {aurora: "", reader: "salt okuma ucunun hedefi", proxy: "iki uç: okuma-yazma ve salt okuma"}
+              say: >-
+                Ekip RDS Proxy'ye (Adım 23) ikinci bir uç ekledi: salt okuma ucu okuma sunucusuna gider. Varsayılan uç yazma
+                sunucusuna gider. Hangi okumanın hangi uca gideceği bir tasarım kararı; bir sonraki karede.
+            - phase: 1
+              who: web
+              lit: [pages, web, proxy, aurora]
+              packet: {at: web, text: "Uygulama'nın ayarı · ödeme (POST) ve Siparişlerim (GET) → okuma-yazma ucu → yazma sunucusu · ağır, gecikmeyi kaldıran okumalar (taşıma kontrolleri, plan denemeleri, ilk yüklemeler) → salt okuma ucu"}
+              note: {reader: "", proxy: "", web: "liste de asıl kayıttan okur", aurora: "sipariş ve liste burada", pages: "iki istek: POST ve GET"}
+              say: >-
+                Karar: Siparişlerim listesi de yazma sunucusundan okunur. Müşteri siparişini verdikten bir saniye sonra listeyi
+                açarsa siparişini görmeli; okuma sunucusu birkaç on milisaniye geriden geldiği için onu bazen göremezdi. Sorgu
+                ucuz (bir tarayıcının birkaç siparişi, index'lerle), yazma sunucusunu yormaz. Ağır okumalar okuma sunucusuna gider.
+            - phase: 1
+              who: monitor
+              lit: [monitor, aurora, reader]
+              packet: {at: monitor, text: "28 Eyl · Database Insights açık · log_min_duration_statement = 500 ms · postgresql kaydı → CloudWatch Logs · put-metric-alarm × 4 (liste p95, liste hata oranı, AuroraReplicaLag, yavaş sorgu satırı)"}
+              show: {monitor: [w1, w2, w3, w4, w5]}
+              set: {monitor: {w5: {değer: "4 alarm · henüz veri yok"}}}
+              note: {pages: "", web: "", proxy: "", aurora: "her sorgunun yükü ölçülüyor", reader: "gecikmesi ölçülüyor", monitor: "pano ve 4 alarm, ilk siparişten önce"}
+              say: >-
+                İzleme ilk siparişten önce hazır. Database Insights hangi sorgunun ne kadar yük getirdiğini gösterecek; 500
+                milisaniyeden uzun süren her sorgu kayda yazılacak ve CloudWatch'a akacak. Siparişlerim isteğinin süresi, hata
+                oranı ve okuma sunucusunun gecikmesi için birer, yavaş sorgu kaydı için bir alarm: toplam 4.
+            - phase: 2
+              who: admin
+              lit: [admin, aurora]
+              packet: {at: admin, text: "30 Eyl · katalog: 200 ürün · INSERT INTO products (product_id, name, category, price) VALUES ('P0021', 'Bosphorus Akıllı Saat 21', 'Elektronik', 1299.90) …"}
+              show: {aurora: [P0001, P0021, P0066, P0131]}
+              fresh: {aurora: [P0001, P0021, P0066, P0131]}
+              note: {monitor: "", aurora: "products: 200 satır (kesitte 4)", admin: "her ürünün satırı: ad ve fiyat"}
+              say: >-
+                30 Eyl gündüz. Katalog ekibi ürünleri kataloğa ekledi; Katalog yönetim servisi her ürün için Aurora'ya bir satır yazdı
+                (Adım 1, 9, 12): numara, ad, kategori, fiyat. Ürünün adı bundan sonra sadece burada durur. P0021'in o günkü fiyatı
+                1.299,90 TL (temsilî).
+            - phase: 2
+              who: s3
+              lit: [s3]
+              packet: {at: s3, text: "30 Eyl 23:00 · eski site sipariş almayı durdurdu · dışa aktarma → s3://lm-migration/orders-history/ customers.csv · orders.csv · order_items.csv"}
+              show: {s3: [f1, f2, f3]}
+              fresh: {s3: [f1, f2, f3]}
+              note: {admin: "", aurora: "", s3: "3 dosya, 14.300 satır (temsilî)"}
+              say: >-
+                30 Eyl 23:00. Eski site sipariş almayı durdurdu, böylece taşıma sırasında yeni bir eski sipariş doğmaz. Eski
+                site müşterilerini, siparişlerini ve kalemlerini üç dosya olarak S3'e bıraktı: 1.000 müşteri, 3.800 sipariş,
+                9.500 kalem (sipariş ve kalem sayısı temsilî).
+            - phase: 2
+              who: migrate
+              lit: [s3, migrate, aurora]
+              packet: {at: migrate, text: "23:10 · SELECT aws_s3.table_import_from_s3('stage_orders', '', '(format csv, header true)', …orders.csv) × 3 → stage_customers 1.000 · stage_orders 3.800 · stage_items 9.500"}
+              show: {migrate: [m1, m2, m3, m4]}
+              set: {migrate: {m1: {sonuç: "1.000 · 3.800 · 9.500"}}}
+              fresh: {migrate: [m1]}
+              note: {s3: "", aurora: "ara tablolar dolu · asıl tablolar boş", migrate: "dosyalar olduğu gibi, kuralsız"}
+              say: >-
+                Taşıma işi üç dosyayı önce üç ara tabloya okudu (aws_s3). Ara tabloların kuralı yok; dosyada ne varsa oraya
+                girer. Asıl tablolara henüz hiçbir şey yazılmadı.
+            - phase: 2
+              who: migrate
+              lit: [migrate, reader]
+              packet: {at: reader, text: "okuma sunucusunda · ürünü olmayan kalem: LEFT JOIN products … IS NULL → 0 · müşterisi olmayan sipariş → 0 · toplamı kalemlerini tutmayan sipariş → 0 · aynı numaralı iki sipariş → 0"}
+              set: {migrate: {m2: {sonuç: "4 kontrol: hepsi 0"}}, reader: {r2: {değer: "taşıma kontrolleri"}}}
+              show: {reader: [r1, r2]}
+              fresh: {migrate: [m2], reader: [r2]}
+              note: {aurora: "", migrate: "yazmadan önce kontrol", reader: "kontroller burada: yazma sunucusu yorulmaz"}
+              say: >-
+                Sonra dört kontrol, okuma sunucusunda (ara tabloları o da görür): kalemlerin ürünü katalogda var mı, siparişlerin
+                müşterisi var mı, her siparişin toplamı kalemlerinin toplamını tutuyor mu, aynı numara iki kez var mı? Dördü de 0.
+            - phase: 2
+              who: migrate
+              lit: [migrate, aurora]
+              packet: {at: aurora, text: "23:30 · BEGIN · INSERT INTO customers SELECT … (1.000) · INSERT INTO orders SELECT …, visitor_id NULL … (3.800) · INSERT INTO order_items SELECT … (9.500; her satırda FOREIGN KEY kontrolü) · COMMIT · ANALYZE"}
+              show: {aurora: [C00001, C00002, h1]}
+              set: {migrate: {m3: {sonuç: "COMMIT · ANALYZE"}}}
+              fresh: {aurora: [C00001, C00002, h1], migrate: [m3]}
+              note: {reader: "", migrate: "önce müşteriler, sonra siparişler, en son kalemler", aurora: "customers 1.000 · orders 3.800 · order_items 9.500 (kesitte 2 müşteri, 1 eski sipariş)"}
+              say: >-
+                Sonra tek paket, kurallar açık: önce müşteriler, sonra siparişler, en son kalemler; her kalem yazılırken FOREIGN
+                KEY siparişini ve ürününü kontrol etti. Eski siparişin tarayıcı kimliği yok: visitor_id boş (Ayşe'nin E0412873
+                siparişi gibi). Bu yüzden eski siparişler hiçbir tarayıcının Siparişlerim listesinde çıkmaz. Sonunda ANALYZE.
+            - phase: 2
+              who: reader
+              lit: [migrate, reader]
+              packet: {at: reader, text: "okuma sunucusunda · count(*) → 1.000 · 3.800 · 9.500 = dosyalar · EXPLAIN ANALYZE Siparişlerim sorgusu → Index Scan using orders_visitor_id_idx on orders o (rows=0) · 0,1 ms (temsilî)"}
+              set: {migrate: {m4: {sonuç: "dosyalarla aynı · plan index'li"}}, reader: {r1: {değer: "≈ 20 ms"}, r2: {değer: "sayım + EXPLAIN"}}}
+              fresh: {migrate: [m4], reader: [r1, r2]}
+              note: {aurora: "", migrate: "bitti; ara tablolar silindi, dosyalar S3'te kaldı", reader: "plan: tarayıcının siparişleri index'le"}
+              say: >-
+                Son kontrol yine okuma sunucusunda: satır sayıları dosyalarla aynı. Ekip Siparişlerim sorgusunu gerçek boyuttaki
+                tablolarla EXPLAIN ANALYZE ile çalıştırdı: siparişler index'le bulunuyor, bütün tablo okunmuyor. Mağaza 1 Eki'de açıldı.
+            - phase: 3
+              who: aurora
+              lit: [pages, web, proxy, aurora, reader]
+              packet: {at: aurora, text: "1 Eki – 30 Eki · her sipariş: ödeme sayfası → Uygulama → shop-proxy (okuma-yazma) → yazma sunucusu · tek paket (Adım 23) · okuma sunucusu aynı değişikliği ≈ 20 ms sonra görür"}
+              set: {reader: {r2: {değer: "1 Eki 03:00: türeyen depoların ilk yüklemesi (Adım 25)"}}}
+              fresh: {reader: [r2]}
+              note: {migrate: "", reader: "her siparişi ≈ 20 ms geriden görür", aurora: "her gün onlarca yeni sipariş", pages: "", web: "", proxy: ""}
+              say: >-
+                1 Eki'den bu sabaha, özet. Her yeni sipariş aynı yoldan yazıldı: ödeme sayfası, Uygulama, RDS Proxy, yazma
+                sunucusu. Okuma sunucusu her değişikliği aynı depolamadan, genelde onlarca milisaniye sonra gördü. Şimdi kesitteki
+                üç siparişin nasıl yazıldığına bakalım.
+            - phase: 3
+              who: web
+              lit: [pages, web, proxy, aurora]
+              packet: {at: aurora, text: "30 Eki 22:10 · BEGIN · UPDATE products … P0066 … stock >= 1 · INSERT orders ('W1793380550', 'C00001', '7f3a…', now(), 'processing', 951.92, request_id) · INSERT order_items ('W1793380550', 'P0066', 1, 951.92) · outbox · COMMIT"}
+              show: {aurora: [o1, i4]}
+              fresh: {aurora: [o1, i4]}
+              note: {reader: "", aurora: "sipariş ve kalemi birlikte kalıcı", web: "fiyat: katalogdan, ödeme anında", pages: "\"Sipariş verildi\""}
+              say: >-
+                30 Eki 22:10. Ayşe olarak (C00001) bu tarayıcıdan (7f3a…) Rhein Powerbank 66'yı aldın. Uygulama Adım 23'teki paketi
+                yazdı: sipariş başlığı (kim, hangi tarayıcı, ne zaman, toplam) ve bir kalem. Kalemde ürünün sadece numarası ve
+                o anki fiyatın kopyası var (951,92; Adım 12); ürünün adı kaleme yazılmadı.
+            - phase: 3
+              who: pages
+              lit: [pages, web, proxy, aurora]
+              packet: {at: aurora, text: "22:11 · GET /aurora/api/orders · SELECT … FROM orders o JOIN order_items oi USING (order_id) JOIN products p USING (product_id) WHERE o.visitor_id = '7f3a…' GROUP BY o.order_id ORDER BY o.order_date DESC LIMIT 20 → 1 satır: W1793380550 · processing · 951,92 · Rhein Powerbank 66"}
+              mark: {aurora: {o1: ""}}
+              note: {web: "tek SELECT, okuma-yazma ucuna", aurora: "1 index araması + 2 birincil anahtar araması → 1 satır", pages: "liste: 1 sipariş"}
+              say: >-
+                22:11. Siparişlerim sayfasını açtın. Uygulama yazma sunucusuna tek bir SELECT gönderdi: bu tarayıcının siparişleri
+                (index'le), her siparişin kalemleri (kalemin birincil anahtarıyla), her kalemin ürünü ve adı (ürünün birincil
+                anahtarıyla). Az önceki siparişin listedeydi; ad products'tan, o an okundu.
+            - phase: 3
+              who: reader
+              lit: [aurora, reader, monitor]
+              packet: {at: reader, text: "AuroraReplicaLag ≈ 20 ms · okuma sunucusu W1793380550'u kendi kopyası olmadan, aynı depolamadan görüyor"}
+              set: {monitor: {w3: {değer: "≈ 20 ms"}}}
+              fresh: {monitor: [w3]}
+              note: {pages: "", web: "", proxy: "", aurora: "", reader: "≈ 20 ms geriden: liste için yazma sunucusu seçildi", monitor: "gecikme ölçüsü"}
+              say: >-
+                Aynı anda okuma sunucusu da siparişi gördü, yaklaşık 20 milisaniye geriden (temsilî). Bu süre genelde küçük;
+                ama sıfır değil ve yük altında büyüyebilir. Liste bu yüzden yazma sunucusundan okunuyor (t-1 · 1).
+            - phase: 3
+              who: web
+              lit: [pages, web, proxy, aurora]
+              packet: {at: aurora, text: "31 Eki 08:40 · Mert (C00002) · tarayıcı c41e… · fiyat katalogdan: P0021 1.299,90 · BEGIN · UPDATE products … P0021 … stock >= 1 · INSERT orders ('W1793390012', 'C00002', 'c41e…', …, 1299.90) · INSERT order_items ('W1793390012', 'P0021', 1, 1299.90) · outbox · COMMIT"}
+              show: {aurora: [o2, i3]}
+              fresh: {aurora: [o2, i3]}
+              note: {reader: "", monitor: "", aurora: "Mert'in kalemi: P0021 · 1.299,90", web: "", pages: ""}
+              say: >-
+                31 Eki 08:40. Mert Doğan (C00002) başka bir tarayıcıdan (c41e…) bir Bosphorus Akıllı Saat 21 aldı. Uygulama ödeme
+                anında ürünün fiyatını katalogdan okudu, 1.299,90, ve kaleme kopyaladı (temsilî fiyat).
+            - phase: 3
+              who: admin
+              lit: [admin, aurora]
+              packet: {at: admin, text: "31 Eki 09:00 · UPDATE products SET price = 1050.63 WHERE product_id = 'P0021' · order_items'a dokunulmadı"}
+              set: {aurora: {P0021: {price: 1050.63}}}
+              fresh: {aurora: [P0021, i3]}
+              note: {aurora: "P0021 bugün 1.050,63 · Mert'in kalemi 1.299,90 kaldı", admin: "sadece ürünün satırı değişti"}
+              say: >-
+                09:00. Katalog ekibi P0021'in fiyatını 1.050,63'e indirdi. Değişen tek satır products'taki satır. Mert'in kalemi
+                1.299,90'da kaldı: Mert o fiyatı ödedi ve kopya kaynağı izlemez. Mert'in listesinde toplam 1.299,90 görünmeye
+                devam eder; ürünün adı ise her açılışta products'tan okunur.
+            - phase: 3
+              who: web
+              lit: [pages, web, proxy, aurora, reader]
+              packet: {at: aurora, text: "10:25 · senin ödemen (Adım 25) · fiyatlar katalogdan: P0001 3.373,84 · P0131 3.758,21 · INSERT orders ('W1793396741', 'C00001', '7f3a…', …, 'processing', 10890.26) · order_items (P0001, 1, 3373.84) · (P0131, 2, 3758.21) · outbox · COMMIT"}
+              show: {aurora: [o3, i1, i2]}
+              fresh: {aurora: [o3, i1, i2]}
+              note: {admin: "", aurora: "3.373,84 + 2 × 3.758,21 = 10.890,26", reader: "≈ 20 ms sonra görür", web: "toplamı kalemlerden hesapladı", pages: "\"Sipariş verildi\""}
+              say: >-
+                10:25. Senin ödemen (Adım 25): bir Alpen Kablosuz Kulaklık 1 ve iki Kapadokya Mekanik Klavye 131. Uygulama iki
+                fiyatı katalogdan okudu, kalemlere kopyaladı ve toplamı hesapladı: 3.373,84 + 2 × 3.758,21 = 10.890,26 TL. Siparişin
+                kesinleşti; t0'da listede en üstte olacak.
+            - phase: 3
+              who: monitor
+              lit: [monitor, web, aurora, reader]
+              packet: {at: monitor, text: "10:25 · Siparişlerim: son 5 dk'da 38 istek, p95 14 ms, hata 0 · Top SQL: liste sorgusu yükün %1'inden az · AuroraReplicaLag 18 ms · yavaş sorgu kaydı 0 satır · 4 alarm OK (değerler temsilî)"}
+              set: {monitor: {w1: {değer: "14 ms (38 istek)"}, w2: {değer: "%1'den az"}, w3: {değer: "18 ms"}, w4: {değer: "0 satır"}, w5: {değer: "4 alarm OK"}}, reader: {r1: {değer: "18 ms"}}}
+              fresh: {monitor: [w1, w2, w3, w4, w5], reader: [r1]}
+              note: {pages: "", proxy: "", aurora: "orders ≈ 5.000 · order_items ≈ 12.500 satır", reader: "18 ms geride", web: "her isteğin süresini yazar", monitor: "liste hızlı, gecikme küçük"}
+              say: >-
+                10:25, pano. Son 5 dakikada 38 Siparişlerim isteği; %95'i 14 milisaniyeden kısa. Liste sorgusu veritabanının
+                yükünde çok küçük bir pay. Okuma sunucusu 18 ms geride, 500 ms'yi geçen sorgu yok, 4 alarm OK (temsilî). Tablolar
+                artık yaklaşık 5.000 sipariş ve 12.500 kalem; liste yine sadece bir tarayıcının birkaç satırını okuyor.
+            - phase: 4
+              who: migrate
+              lit: [migrate, reader, admin, aurora]
+              packet: {at: reader, text: "olsaydı: 30 Eyl · ürünü olmayan kalem kontrolü → 3 (ürün P0207, eski sitede satıştan kalkmış) · taşıma işi asıl tablolara yazmadan durur · katalog servisi P0207'yi \"satıştan kalktı\" (stok 0) olarak ekler · iş baştan → 0"}
+              set: {migrate: {m2: {sonuç: "olsaydı: 3 yetim kalem → dur"}}}
+              mark: {migrate: {m2: fix}}
+              note: {web: "", monitor: "", migrate: "olsaydı: kontrol yazmadan önce durdurur", reader: "olsaydı: kontrol burada çalışır", admin: "olsaydı: eksik ürünü ekler", aurora: "olsaydı: asıl tablolara hiçbir şey yazılmamıştı"}
+              say: >-
+                Olsaydı (ayrı bir durum, 30 Eyl): eski sitede satılmış ama artık satılmayan bir ürünün (P0207) üç kalemi dosyada
+                olsaydı. Kontrol bunu asıl tablolara yazmadan önce bulur ve iş durur. Kontrol olmasaydı FOREIGN KEY kalemi
+                reddeder (23503) ve bütün paket geri alınırdı. Onarım: katalog servisi ürünü "satıştan kalktı" olarak ekler, iş
+                baştan çalışır.
+            - phase: 4
+              who: web
+              lit: [pages, web, proxy, reader, aurora]
+              packet: {at: reader, text: "olsaydı: liste salt okuma ucuna (shop-proxy-ro) · 10:25:01 COMMIT (yazma sunucusu) · 10:25:01.4 Siparişlerim → okuma sunucusu, gecikme o an 2 sn → W1793396741 yok · müşteri \"sipariş verilmedi\" sanıp yeniden tıklar → yeni request_id → ikinci sipariş"}
+              set: {migrate: {m2: {sonuç: "4 kontrol: hepsi 0"}}, reader: {r1: {değer: "olsaydı: 2 sn"}}}
+              mark: {migrate: {m2: ""}, reader: {r1: fix}}
+              note: {migrate: "", admin: "", aurora: "sipariş burada var", reader: "olsaydı: 2 sn geride, sipariş henüz yok", proxy: "olsaydı: salt okuma ucu", web: "olsaydı: listeyi okuma sunucusuna sordu", pages: "olsaydı: liste eski"}
+              say: >-
+                Olsaydı (ayrı bir durum): liste okuma sunucusundan okunsaydı ve gecikme o an 2 saniye olsaydı. Siparişini verip
+                hemen listeye bakan müşteri onu göremez ve yeniden sipariş verebilir. request_id aynı tıklamanın tekrarını
+                durdurur (Adım 23), ama yeni bir tıklama yeni bir numaradır. Bu yüzden müşterinin kendi siparişlerini gösteren
+                liste asıl kayıttan, yazma sunucusundan okunur.
+            - phase: 4
+              who: admin
+              lit: [admin, aurora, pages, web]
+              packet: {at: admin, text: "olsaydı: UPDATE products SET name = 'Kapadokya Mekanik Klavye 131 (Türkçe Q)' WHERE product_id = 'P0131' → bir sonraki Siparişlerim: W1793396741 yeni adla · unit_price ve total değişmez"}
+              set: {reader: {r1: {değer: "18 ms"}}, aurora: {P0131: {name: "Kapadokya Mekanik Klavye 131 (Türkçe Q)"}}}
+              mark: {reader: {r1: ""}, aurora: {P0131: fix}}
+              note: {reader: "", proxy: "", aurora: "olsaydı: ad tek yerde değişti; eski siparişler de yeni adı gösterir", admin: "olsaydı: adı değiştirdi", pages: "olsaydı: listede yeni ad", web: ""}
+              say: >-
+                Olsaydı (ayrı bir durum): katalog ekibi P0131'in adını değiştirseydi. Ad tek yerde durduğu için bir sonraki
+                Siparişlerim açılışında senin siparişin de yeni adla görünür. Bu yüzden kural: ad sadece düzeltme için değişir;
+                gerçekten başka bir ürün satılacaksa yeni bir ürün numarası açılır, eski siparişler eski ürünü göstermeye devam eder.
+            - phase: 4
+              who: admin
+              lit: [admin, aurora]
+              packet: {at: admin, text: "olsaydı: UPDATE products SET price = 3999.00 WHERE product_id = 'P0131' → order_items (W…6741, P0131) unit_price 3.758,21 kalır · orders total 10.890,26 kalır"}
+              set: {aurora: {P0131: {name: Kapadokya Mekanik Klavye 131, price: 3999.00}}}
+              mark: {aurora: {P0131: fix, i2: ""}}
+              note: {pages: "", web: "", aurora: "olsaydı: ürünün fiyatı 3.999,00 · senin kalemin 3.758,21, toplam 10.890,26", admin: "olsaydı: fiyatı değiştirdi"}
+              say: >-
+                Olsaydı (ayrı bir durum): P0131'in fiyatı 3.999,00'a çıksaydı. Değişen yine sadece products'taki satır. Senin
+                kalemin 3.758,21'de, siparişinin toplamı 10.890,26'da kalır: ödenen tutar kalemde ve başlıkta kopya olarak durur.
+                Bu, P0021'in 09:00'daki indiriminde gerçekten de oldu.
+            - phase: 4
+              who: web
+              lit: [pages, web, proxy, aurora]
+              packet: {at: aurora, text: "olsaydı: hesap ekranı · UPDATE customers SET city = 'İzmir' WHERE customer_id = 'C00001' → customers'ı JOIN eden her okuma (raporlar, aurora_live) Ayşe'nin bütün siparişlerini İzmir'de gösterir · orders değişmez"}
+              set: {aurora: {P0131: {price: 3758.21}, C00001: {city: İzmir}}}
+              mark: {aurora: {P0131: "", C00001: fix}}
+              note: {admin: "", aurora: "olsaydı: tek satır değişti; eski siparişlere JOIN'le yeni şehir", web: "olsaydı: hesap ekranından güncelledi", pages: "olsaydı: Siparişlerim'de şehir yok, liste aynı", proxy: ""}
+              say: >-
+                Olsaydı (ayrı bir durum): Ayşe hesabında şehrini İzmir yapsaydı. Değişen tek satır customers'taki satır. Siparişlerim
+                listesi şehri göstermediği için değişmez; ama customers'ı JOIN eden her okuma (ör. şehre göre rapor) Ayşe'nin
+                eski siparişlerini de İzmir'de gösterir. Siparişin anındaki şehir gerekiyorsa o, fiyat gibi siparişe kopyalanır.
+            - phase: 4
+              who: monitor
+              lit: [web, aurora, monitor]
+              packet: {at: monitor, text: "olsaydı: orders 5 milyon satır ve orders(visitor_id) index'i yok · plan: Seq Scan on orders · Rows Removed by Filter: 4.999.998 · Siparişlerim p95 1.800 ms (5 dk'da 410 istek) → ALARM · yavaş sorgu kaydı 410 satır → ALARM · Top SQL: liste sorgusu 1. sırada · onarım: CREATE INDEX CONCURRENTLY ON orders (visitor_id)"}
+              set: {aurora: {C00001: {city: İstanbul}}, monitor: {w1: {değer: "olsaydı: 1.800 ms (410 istek)"}, w2: {değer: "olsaydı: 1. sırada"}, w4: {değer: "olsaydı: 410 satır"}, w5: {değer: "olsaydı: 2 ALARM"}}}
+              mark: {aurora: {C00001: ""}, monitor: {w1: fix, w2: fix, w4: fix, w5: fix}}
+              note: {pages: "", proxy: "", web: "olsaydı: her isteğin süresi uzadı", aurora: "olsaydı: her istekte bütün tablo", monitor: "olsaydı: hangi sorgu, ne kadar, kaç kez: tek ekranda"}
+              say: >-
+                Olsaydı (ayrı bir durum): tablo 5 milyon siparişe büyüseydi ve tarayıcı index'i olmasaydı. Her açılışta bütün
+                tablo okunur; liste 2 saniyeye yaklaşır. Pano bunu üç yerden gösterir: Siparişlerim'in p95'i, yavaş sorgu kaydı ve
+                Top SQL'in ilk sırası. Onarım: index yazmaları durdurmadan kurulur (CONCURRENTLY); plan yeniden Index Scan olur.
+            - phase: 4
+              who: aurora
+              lit: [pages, web, proxy, aurora, reader, monitor]
+              set: {monitor: {w1: {değer: "14 ms (38 istek)"}, w2: {değer: "%1'den az"}, w4: {değer: "0 satır"}, w5: {değer: "4 alarm OK"}}}
+              mark: {monitor: {w1: "", w2: "", w4: "", w5: ""}}
+              note: {web: "", monitor: "4 alarm OK", pages: "", proxy: "", reader: "18 ms geride", aurora: "senin 2 siparişin (3 kalem) · Mert'in 1 siparişi · 4 ürün · 2 müşteri"}
+              say: >-
+                Hazır. "Olsaydı" kareleri yaşanmadı. 31 Eki 10:26, Orders sayfasını açmandan hemen önce: orders'ta bu tarayıcının
+                iki siparişi (W1793396741 10.890,26 ve W1793380550 951,92) ve Mert'in siparişi, order_items'ta üç siparişin dört
+                kalemi (birim fiyatın kopyalarıyla), products'ta adlar ve bugünkü fiyatlar, customers'ta Ayşe ve Mert. t0'daki SELECT
+                bu satırları birleştirecek.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Önce sayfanın sorusu: "bu tarayıcının en yeni 20 siparişi; her biri tek satırda tarih, durum, ürün adları ve toplamla".
+              Sonra cevabı: bilgiler neden üç tabloda, hangi değer siparişe kopyalanır ve hangisi okurken bağlanır, üç arama
+              hangi index'lerle yapılır, plan nasıl önceden görülür, liste hangi sunucudan okunur, sonraki sayfa nasıl istenir
+              ve yavaşlayan bir sorgu nasıl fark edilir.
+            cards:
+              - title: "Neden ayrı tablolar? Sipariş üç tabloda, müşteri dördüncüde (normalizasyon)"
+                text: >-
+                  Bir siparişin bir başlığı (kim, ne zaman, durum, toplam) ve bir ya da birçok kalemi vardır. Kalemleri başlığın
+                  içine koymak "en çok kaç kalem?" sorusunu doğurur; ürünün adını her kaleme yazmak aynı adı binlerce kez kopyalar
+                  ve bir yazım düzeltmesi binlerce satırı değiştirmeyi gerektirir. Bu yüzden sipariş üç tabloya bölünür (başlık, kalem, ürün), müşteri de dördüncüye: her biri bir tür bilgi,
+                  birbirine anahtarlarla bağlı. Kurallar tabloda yazılı; hangi program yazarsa yazsın Aurora uygular.
+                map:
+                  cols: [Tablo, Bir satırı, Anahtarı ve bağı]
+                  rows:
+                    - ["customers", "bir müşteri (ad, şehir, segment)", "customer_id (PRIMARY KEY)"]
+                    - ["products", "bir ürün (ad, kategori, fiyat, stok)", "product_id (PRIMARY KEY)"]
+                    - ["orders", "bir siparişin başlığı", "order_id (PRIMARY KEY) · customer_id → customers"]
+                    - ["order_items", "bir siparişin bir ürünü (adet, birim fiyat)", "(order_id, product_id) PRIMARY KEY · order_id → orders · product_id → products"]
+                code:
+                  - {code: "CREATE TABLE orders (order_id text PRIMARY KEY, customer_id text REFERENCES customers,", tag: Ekip → Aurora, say: "Sipariş başlığı; var olan bir müşteriye bağlı."}
+                  - {code: "  visitor_id text, request_id text UNIQUE, order_date timestamptz, status text, total numeric(12,2));", tag: Ekip → Aurora, say: "Tarayıcı, tıklamanın numarası (Adım 23), zaman, durum, toplam."}
+                  - {code: "CREATE TABLE order_items (order_id text REFERENCES orders ON DELETE CASCADE,", tag: Ekip → Aurora, say: "Kalem var olan bir siparişe bağlı."}
+                  - {code: "  product_id text REFERENCES products, qty int, unit_price numeric(10,2), PRIMARY KEY (order_id, product_id));", tag: Ekip → Aurora, say: "Var olan bir ürüne bağlı; adet ve o anki fiyat. Ad yok."}
+              - title: "Neyi kopyala, neyi bağla?"
+                text:
+                  - >-
+                    Kural: siparişin anına ait olan ve sonra değişmemesi gereken değer siparişe kopyalanır; şeyin kendisini anlatan
+                    değer anahtarla bağlanır ve her okumada JOIN ile o anki hâliyle okunur. Müşteri ödediği fiyatı görmeli; ürünün
+                    adındaki bir yazım düzeltmesi ise bütün siparişlere yansıyabilir.
+                  - >-
+                    Bir satırı kim yaratır, değeri kim doldurur: orders ve order_items satırını ödemede Uygulama yaratır (eski
+                    siparişleri taşıma işi); birim fiyatı Uygulama ödeme anında katalogdan okur (Adım 12), toplamı kalemlerden
+                    hesaplar, durumu processing yazar (sonra teslimat zinciri delivered yazar). Ürünün adını ve fiyatını Katalog
+                    yönetim servisi yazar. customers satırını yeni bir müşteri hesap açınca Uygulama yazar (eski müşterileri taşıma
+                    işi); adını ve şehrini sonra Uygulama'nın hesap ekranı günceller.
+                map:
+                  cols: [Değer, Nerede durur, Kopya mı bağ mı, Neden]
+                  rows:
+                    - ["unit_price (birim fiyat)", "order_items", "kopya (ödeme anında)", "Fiyat sonra değişse de müşteri o fiyatı ödedi."]
+                    - ["qty, total", "order_items, orders", "kopya", "Ödenen tutar; bir daha hesaplanmaz."]
+                    - ["ürünün adı", "products", "bağ (JOIN)", "Tek yerde; düzeltme her siparişe yansır."]
+                    - ["müşterinin adı ve şehri", "customers", "bağ (JOIN)", "Tek yerde; değişince her okumada yeni değer."]
+                    - ["status (durum)", "orders", "siparişin kendi değeri", "Uygulama processing, teslimat zinciri delivered yazar."]
+              - title: "Üç arama, üç index"
+                text:
+                  - >-
+                    Liste üç arama yapar: tarayıcıdan siparişlerine, siparişten kalemlerine, kalemden ürününe. Birincisi için Ekip
+                    orders(visitor_id) index'ini kurdu. İkincisi için ayrı bir index gerekmez: kalemin birincil anahtarı (order_id,
+                    product_id) önce order_id'ye göre sıralıdır, sadece order_id ile aramada da kullanılır. Üçüncüsü ürünün birincil
+                    anahtarıdır. orders(customer_id) index'i başka soruların: "bu müşterinin siparişleri" (Adım 14: bir kampanyanın müşteri
+                    başına sınırı, müşterinin önceki siparişleri sayılarak kontrol edilir; Adım 33: canlı sıralamanın gece karşılaştırması
+                    müşterinin bütün siparişlerini toplar).
+                  - >-
+                    Liste neden müşteriye değil tarayıcıya göre? Mağaza misafir alışverişiyle çalışır: şifre ve giriş yok, müşteri
+                    kendini bir çerezle tanıtır. Müşteriye göre bir liste, kendini Ayşe diye tanıtan herkese Ayşe'nin bütün geçmişini
+                    gösterirdi. Tarayıcıya göre liste sadece
+                    bu tarayıcıdan verilen siparişleri gösterir; eski sitenin siparişlerinin tarayıcısı yok, hiçbir listede çıkmazlar.
+                    Bir tarayıcının çok siparişi olsaydı (visitor_id, order_date DESC, order_id DESC) bileşik index'i siparişleri
+                    hazır sıralı verir ve Sort adımı kalkardı; bugün bir tarayıcının birkaç siparişi var, sıralama bellekte anında
+                    biter, bu index kurulmadı. Plan okuma sunucusunda denenir ama aynı çıkar: okuma sunucusu aynı veriyi ve aynı
+                    istatistikleri görür.
+                code:
+                  - {code: "CREATE INDEX ON orders (visitor_id);        -- adı: orders_visitor_id_idx", tag: Ekip → Aurora, say: "Tarayıcının siparişleri: doğrudan."}
+                  - {code: "CREATE INDEX ON orders (customer_id);       -- orders_customer_id_idx", tag: Ekip → Aurora, say: "Müşterinin siparişleri (Adım 14, 33)."}
+                  - {code: "-- kendiliğinden: order_items_pkey (order_id, product_id) · products_pkey (product_id)", tag: Aurora'nın içinde, say: "Diğer iki arama birincil anahtarların index'iyle."}
+              - title: "Plan: EXPLAIN ile önceden görmek"
+                text: >-
+                  Sorguda "önce şunu bul" diye bir sıra yazmaz; sırayı planlayıcı seçer (t0). Ekip seçimi önceden görür: EXPLAIN
+                  ANALYZE sorguyu gerçek boyuttaki tablolarla çalıştırır ve her adımda kaç satır geçtiğini yazar. Bunu yazma
+                  sunucusunu yormamak için okuma sunucusunda, açılıştan önce ve her sürümden önce yapar. Bakılacak şey: orders için
+                  Seq Scan değil Index Scan, ve her adımda az satır. Aşağıdaki plan bugünkü hâliyle, senin iki siparişinle (temsilî; açılıştan önce bu tarayıcının siparişi yoktu, rows=0 idi); içten dışa okunur. Küçük tablolarda
+                  planlayıcı ürünler için Hash Join seçebilir; sonuç aynıdır.
+                code:
+                  - {code: "EXPLAIN (ANALYZE, BUFFERS) SELECT … WHERE o.visitor_id = '7f3a…' GROUP BY o.order_id … LIMIT 20;", tag: [Ekip → okuma sunucusu, okuma sunucusu → Ekip], say: "Sorguyu çalıştırır; planı ve gerçek sayıları verir."}
+                  - {code: "Limit → Sort (o.order_date DESC) → HashAggregate (o.order_id)", tag: Aurora'nın içinde, say: "En son: siparişe göre topla, sırala, 20'de dur."}
+                  - {code: "  → Nested Loop → Index Scan using orders_visitor_id_idx on orders o (rows=2)", tag: Aurora'nın içinde, say: "Önce: tarayıcının 2 siparişi, index'le."}
+                  - {code: "  → Index Scan using order_items_pkey on order_items oi (rows=3)", tag: Aurora'nın içinde, say: "Bu siparişlerin 3 kalemi."}
+                  - {code: "  → Index Scan using products_pkey on products p (rows=1 loops=3)", tag: Aurora'nın içinde, say: "Her kalemin ürünü: üç tek arama."}
+              - title: "Hangi sunucudan okunur? Yazma sunucusu, okuma sunucusu, gecikme"
+                text: >-
+                  Okuma sunucusu yazma sunucusuyla aynı depolamayı okur; son değişikliği genelde onlarca milisaniye geriden
+                  görür (AuroraReplicaLag). RDS Proxy'nin varsayılan ucu yazma sunucusuna, ikinci ucu (salt okuma) okuma
+                  sunucusuna gider. Müşterinin kendi siparişini gösteren liste yazma sunucusundan okunur: siparişini veren müşteri
+                  onu hemen görmeli ve sorgu birkaç satır okuyan ucuz bir sorgudur. Ağır ve biraz gecikmeyi kaldıran okumalar okuma
+                  sunucusuna gider. Raporlar Aurora'yı hiç yormaz: Redshift'teki kopyadan okunur (Adım 30).
+                map:
+                  cols: [Okuma, Nereye, Neden]
+                  rows:
+                    - ["Siparişlerim, ödeme", "yazma sunucusu (okuma-yazma ucu)", "Az önceki sipariş hemen görünmeli; sorgu ucuz."]
+                    - ["Taşıma kontrolleri, plan denemeleri, ilk yüklemeler (Adım 25)", "okuma sunucusu (salt okuma ucu)", "Ağır; birkaç on ms geriden olması sorun değil."]
+                    - ["Raporlar", "Redshift (zero-ETL kopyası, Adım 30)", "Büyük taramalar siparişleri yazan sunucudan uzak."]
+                code:
+                  - {code: "aws rds create-db-proxy-endpoint --db-proxy-name shop-proxy --db-proxy-endpoint-name shop-proxy-ro --target-role READ_ONLY …", tag: Ekip → RDS Proxy, say: "Okuma sunucusuna giden ikinci uç."}
+                  - {code: "AuroraReplicaLag (okuma sunucusu, ms)", tag: CloudWatch'ın içinde, say: "Okuma sunucusu ne kadar geride."}
+              - title: "Sonraki sayfa: OFFSET değil, kaldığın yerden"
+                text: >-
+                  Liste en yeni 20 siparişle sınırlı (LIMIT 20). Bir tarayıcının 20'den fazla siparişi olunca sonraki sayfa iki yolla
+                  istenebilir. OFFSET 40 "ilk 40'ı atla" der; veritabanı o 40'ı yine okur ve atar, sayfa ilerledikçe iş büyür. İki
+                  sayfa arasında yeni bir sipariş gelirse her şey bir satır kayar ve bir sipariş iki kez görünür. Kaldığın yerden
+                  (keyset) son görülen satırın tarihini ve numarasını bir sonraki isteğe verir: "bundan daha eski 20". Index
+                  oradan devam eder; yeni sipariş sayfaları kaydırmaz. Bunun için (visitor_id, order_date DESC, order_id DESC)
+                  index'i gerekir (yukarıda anılan bileşik index). Bugün bir tarayıcının 20'den fazla siparişi yok; sonraki sayfa ve
+                  bu index o gün eklenir.
+                code:
+                  - {code: "… WHERE o.visitor_id = $1 GROUP BY o.order_id ORDER BY o.order_date DESC LIMIT 20 OFFSET 40", tag: Uygulama → Aurora, say: "3. sayfa: önce 40'ı okur, atar."}
+                  - {code: "… WHERE o.visitor_id = $1 AND (o.order_date, o.order_id) < ($2, $3)", tag: Uygulama → Aurora, say: "Son görülen tarih ve numaradan daha eskiler."}
+                  - {code: "  GROUP BY o.order_id ORDER BY o.order_date DESC, o.order_id DESC LIMIT 20", tag: Uygulama → Aurora, say: "Aynı sıra; aynı tarihte numara karar verir."}
+              - title: "İzleme: hangi sorgu ne kadar yük getiriyor?"
+                text: >-
+                  Database Insights (Performance Insights'ın yerini aldı) veritabanının yükünü DBLoad olarak, aynı anda çalışan
+                  ortalama oturum sayısıyla gösterir ve Top SQL ile yükü sorgulara böler. Yavaş sorgu kaydı 500 ms'den uzun her
+                  sorguyu metniyle yazar; kayıt CloudWatch Logs'a akar ve bir sayaç (metric filter) satırları sayar. Uygulama her
+                  Siparişlerim isteğinin süresini kendi ölçüsü olarak yazar. Dört alarm (değerler temsilî): liste süresi, liste hata
+                  oranı, okuma sunucusunun gecikmesi, yavaş sorgu satırı. Oran alarmında az istekle tek bir hata %100 görünmesin diye
+                  en az 20 istek şartı var; süre alarmında da.
+                code:
+                  - {code: "log_min_duration_statement = 500   # ms · cluster parametre grubu", tag: Ekip → Aurora, say: "500 ms'den uzun her sorgu kayda."}
+                  - {code: "aws rds modify-db-cluster --cloudwatch-logs-export-configuration '{\"EnableLogTypes\": [\"postgresql\"]}'", tag: Ekip → Aurora, say: "Kayıt CloudWatch Logs'a akar."}
+                  - {code: "IF(n >= 20, p95(siparislerim_ms), 0) > 200   # 5 dk", tag: CloudWatch'ın içinde, say: "Liste yavaş; az istekte çalmaz."}
+                  - {code: "IF(n >= 20, 100 * hata / n, 0) > 5   # 5 dk", tag: CloudWatch'ın içinde, say: "Listenin hata oranı %5'ten büyük."}
+                  - {code: "AuroraReplicaLag Maximum > 1000   # ms · 5 dk'nın 3'ü", tag: CloudWatch'ın içinde, say: "Okuma sunucusu bir saniyeden fazla geride."}
+                  - {code: "yavaş sorgu satırı (metric filter) >= 5   # 5 dk", tag: CloudWatch'ın içinde, say: "Kısa sürede çok yavaş sorgu."}
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              Açılıştan önce eski sitenin geçmişi bir kez taşındı: 1.000 müşteri, 3.800 sipariş, 9.500 kalem (sipariş ve kalem
+              sayısı temsilî). Ürünleri zaten Katalog yönetim servisi yazmıştı. Sıra kuralların yönünde: önce bağlanılan
+              (ürünler, müşteriler), sonra bağlananlar (siparişler, en son kalemler). Önce ara tablolar ve kontroller, sonra
+              kurallar açıkken tek bir paket.
+            cards:
+              - title: "Sıra: önce ürünler ve müşteriler, sonra siparişler, en son kalemler"
+                text: >-
+                  FOREIGN KEY bir kalemin siparişi ve ürünü önceden var olmadan yazılmasına izin vermez. Bu yüzden ürünler 30
+                  Eyl'de katalog servisinden geldi (Adım 23); eski site ve yeni katalog aynı ürün numaralarını kullanır (P0001–P0200). Eski
+                  sitenin sattığı her ürün yeni katalogda da var; kontrol bunu sayarak doğruladı (yetim kalem 0). Olmasaydı ne olurdu:
+                  t-1 · 4. Eski site 30 Eyl 23:00'te
+                  sipariş almayı durdurdu ve dosyaları o andan sonra bıraktı: taşıma sırasında yeni bir eski sipariş doğmaz.
+                  Eski siparişlerin tarayıcı kimliği ve istek numarası yok (visitor_id ve request_id boş); durumları eski sitedeki
+                  gibi (delivered ya da cancelled).
+                map:
+                  cols: [Tablo, Nereden, Satır]
+                  rows:
+                    - ["products", "Katalog yönetim servisi", "200"]
+                    - ["customers", "customers.csv", "1.000"]
+                    - ["orders", "orders.csv", "3.800 (temsilî)"]
+                    - ["order_items", "order_items.csv", "9.500 (temsilî)"]
+              - title: "Önce ara tablolar, sonra kontroller"
+                text: >-
+                  Dosyalar önce kuralı olmayan ara tablolara okunur; bir hata asıl tablolara hiç ulaşmaz. Kontroller okuma
+                  sunucusunda çalışır: ara tabloları o da görür ve yazma sunucusu yorulmaz. Dört kontrolün dördü de 0 olmalı:
+                  ürünü olmayan kalem, müşterisi olmayan sipariş, toplamı kalemlerini tutmayan sipariş, aynı numaralı iki sipariş.
+                code:
+                  - {code: "SELECT aws_s3.table_import_from_s3('stage_items', '', '(format csv, header true)', aws_commons.create_s3_uri('lm-migration', 'orders-history/order_items.csv', 'eu-central-1'));", tag: Taşıma işi → Aurora, say: "Dosya ara tabloya (üç dosya için üç kez)."}
+                  - {code: "SELECT count(*) FROM stage_items s LEFT JOIN products p USING (product_id) WHERE p.product_id IS NULL;   → 0", tag: [Taşıma işi → okuma sunucusu, okuma sunucusu → Taşıma işi], say: "Ürünü olmayan kalem yok."}
+                  - {code: "SELECT count(*) FROM stage_orders o LEFT JOIN stage_customers c USING (customer_id) WHERE c.customer_id IS NULL;   → 0", tag: [Taşıma işi → okuma sunucusu, okuma sunucusu → Taşıma işi], say: "Müşterisi olmayan sipariş yok."}
+                  - {code: "SELECT count(*) FROM (SELECT order_id FROM stage_orders GROUP BY order_id HAVING count(*) > 1) d;   → 0", tag: [Taşıma işi → okuma sunucusu, okuma sunucusu → Taşıma işi], say: "Aynı numaralı iki sipariş yok."}
+                  - {code: "SELECT count(*) FROM stage_orders o JOIN (SELECT order_id, sum(qty * unit_price) AS t FROM stage_items GROUP BY 1) i USING (order_id) WHERE i.t <> o.total;   → 0", tag: [Taşıma işi → okuma sunucusu, okuma sunucusu → Taşıma işi], say: "Her toplam kalemlerini tutuyor."}
+              - title: "Tek paket, kurallar açık"
+                text: >-
+                  Asıl tablolara tek bir paketle geçilir ve kurallar kapatılmaz: her kalem yazılırken FOREIGN KEY siparişini ve
+                  ürününü kontrol eder. Bir satır bile tutmazsa (23503) bütün paket geri alınır, tablolar boş kalır, iş baştan
+                  çalışır. 9.500 kalemin kontrolü birkaç saniye sürer. Çok büyük taşımalarda kural önce NOT VALID eklenir ve yükten
+                  sonra VALIDATE CONSTRAINT ile bir kez kontrol edilir; burada gerekmedi. En sonda ANALYZE planlayıcıya yeni
+                  boyutları bildirir.
+                code:
+                  - {code: "BEGIN; INSERT INTO customers SELECT customer_id, name, email, city, segment, created_at FROM stage_customers;", tag: Taşıma işi → Aurora, say: "Önce bağlanılan: müşteriler."}
+                  - {code: "INSERT INTO orders (order_id, customer_id, visitor_id, order_date, status, total) SELECT order_id, customer_id, NULL, order_date, status, total FROM stage_orders;", tag: Taşıma işi → Aurora, say: "Eski siparişin tarayıcısı yok: visitor_id boş."}
+                  - {code: "INSERT INTO order_items SELECT order_id, product_id, qty, unit_price FROM stage_items; COMMIT;", tag: Taşıma işi → Aurora, say: "Her kalem FOREIGN KEY ile kontrol edilir; ya hepsi ya hiçbiri."}
+                  - {code: "ANALYZE customers, orders, order_items;", tag: Taşıma işi → Aurora, say: "Planlayıcı yeni boyutları öğrenir."}
+              - title: "Yüklemeden sonra: sayılar ve plan"
+                text: >-
+                  Okuma sunucusunda satırlar sayılır ve dosyalarla karşılaştırılır. Sonra Siparişlerim sorgusu gerçek boyuttaki
+                  tablolarla EXPLAIN ANALYZE ile çalıştırılır: orders için Index Scan. Ara tablolar silinir; dosyalar S3'te kalır.
+                  Aynı iş 29 Eyl'de, eski sitenin deneme dışa aktarmasıyla ve cluster'ın bir kopyasında (Aurora clone: aynı verinin
+                  dakikalar içinde açılan ayrı bir kopyası) prova edilmişti; gerçek taşıma 30 Eyl 23:10–23:40 arasında bitti (temsilî).
+                code:
+                  - {code: "SELECT (SELECT count(*) FROM customers), (SELECT count(*) FROM orders), (SELECT count(*) FROM order_items);   → 1000 · 3800 · 9500", tag: [Taşıma işi → okuma sunucusu, okuma sunucusu → Taşıma işi], say: "Dosyalardaki satır sayılarıyla aynı."}
+                  - {code: "EXPLAIN ANALYZE SELECT … WHERE o.visitor_id = 'deneme' …;   → Index Scan using orders_visitor_id_idx … (rows=0)", tag: [Ekip → okuma sunucusu, okuma sunucusu → Ekip], say: "Plan index'li; eski siparişler hiçbir tarayıcının değil."}
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              Açılıştan sonra satırları üç yazar yazar: Uygulama (ödemede sipariş ve kalemler; hesap ekranında müşteri), Katalog
+              yönetim servisi (ürünler). Siparişlerim aynı tablolardan, yazma sunucusunda okur. 31 Eki 10:25'te bu tarayıcının iki
+              siparişi ve Mert'in siparişi tablolarda.
+            cards:
+              - title: "Bir sipariş yazılırken (30 Eki 22:10, Ayşe)"
+                text: >-
+                  Uygulama Adım 23'teki paketi yazar. Başlıkta kim, hangi tarayıcı, ne zaman ve toplam; kalemde ürünün sadece
+                  numarası, adet ve o anki fiyatın kopyası. Ürünün adı yazılmaz.
+                code:
+                  - {code: "BEGIN; UPDATE products SET stock = stock - 1 WHERE product_id = 'P0066' AND stock >= 1;", tag: Uygulama → RDS Proxy → Aurora, say: "Stok (Adım 23)."}
+                  - {code: "INSERT INTO orders VALUES ('W1793380550', 'C00001', '7f3a…', now(), 'processing', 951.92, …);", tag: Uygulama → RDS Proxy → Aurora, say: "Başlık: müşteri, tarayıcı, zaman, durum, toplam."}
+                  - {code: "INSERT INTO order_items VALUES ('W1793380550', 'P0066', 1, 951.92);   -- fiyat: katalogdan, ödeme anında", tag: Uygulama → RDS Proxy → Aurora, say: "O anki fiyatın kopyası (Adım 12)."}
+                  - {code: "INSERT INTO outbox (…); COMMIT;", tag: Uygulama → RDS Proxy → Aurora, say: "Olay da aynı pakette (Adım 25)."}
+              - title: "Liste açılınca (22:11)"
+                text: >-
+                  Uygulama t0'daki komutun aynısını yazma sunucusuna gönderir. Aurora siparişi index'le bulur, kalemini ve ürününü
+                  birincil anahtarlarla ekler, adı o an products'tan okur ve sipariş başına tek satır döndürür.
+                code:
+                  - {code: "SELECT o.order_id, o.order_date, o.status, o.total, count(oi.*) AS lines, string_agg(p.name, ', ') AS products", tag: Uygulama → RDS Proxy → Aurora, say: "Her sipariş için bu bilgiler."}
+                  - {code: "FROM orders o JOIN order_items oi USING (order_id) JOIN products p USING (product_id) WHERE o.visitor_id = '7f3a…'", tag: Uygulama → RDS Proxy → Aurora, say: "Üç tablo, bu tarayıcı."}
+                  - {code: "GROUP BY o.order_id ORDER BY o.order_date DESC LIMIT 20;", tag: Uygulama → RDS Proxy → Aurora, say: "Sipariş başına bir satır, en yeni üstte."}
+                  - {code: "→ W1793380550 · 30 Eki 22:10 · processing · 951.92 · 1 · Rhein Powerbank 66", tag: Aurora → Uygulama, say: "Tek satır geldi."}
+              - title: "Fiyat değişince eski kalem değişmez (31 Eki 09:00)"
+                text: >-
+                  Mert 08:40'ta P0021'i 1.299,90'a aldı. 09:00'da katalog ekibi fiyatı 1.050,63'e indirdi (bugünkü fiyat; önceki
+                  fiyat temsilî). Değişen sadece products'taki satır; Mert'in kalemi ve siparişinin toplamı ödediği tutarda kaldı.
+                  Aynı ürünün adı değişseydi Mert'in listesi yeni adı gösterirdi (t-1 · 4).
+                code:
+                  - {code: "UPDATE products SET price = 1050.63 WHERE product_id = 'P0021';", tag: Katalog yönetim servisi → Aurora, say: "Ürünün bugünkü fiyatı."}
+                  - {code: "SELECT oi.unit_price, p.price FROM order_items oi JOIN products p USING (product_id) WHERE oi.order_id = 'W1793390012';   → 1299.90 · 1050.63", tag: [Ekip → okuma sunucusu, okuma sunucusu → Ekip], say: "Kalemdeki kopya ve bugünkü fiyat yan yana."}
+              - title: "Gün boyunca: sayılar (10:25)"
+                text: >-
+                  10:25'te orders yaklaşık 5.000, order_items yaklaşık 12.500 satır (canlı tabloda 5.013 ve 12.525; eski sitenin
+                  3.800 siparişi ve açılıştan beri verilenler). Siparişlerim bunlardan sadece bu tarayıcının 2 siparişini, onların
+                  3 kalemini ve 3 ürününü okur; tablo büyüdükçe okunan satır büyümez. Son 5 dakikada 38 istek, p95 14 ms; okuma
+                  sunucusu 18 ms geride; 4 alarm OK (temsilî). Canlı bir ölçümde, siparişi olmayan bir tarayıcıyla, aynı sorgu
+                  11,3 ms sürdü.
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              Taşımada ürünü olmayan bir kalem çıkarsa, liste okuma sunucusundan okunursa, bir ürünün adı, fiyatı ya da bir
+              müşterinin şehri değişirse ve liste yavaşlarsa ne olur? Hepsi "Olsaydı": yaşanmadı. Her biri için tasarımda bir
+              kural ya da bir parça (emniyet) var; ne zaman çalıştığı, neyi yakalamadığı ve onarımı aşağıda.
+            cards:
+              - title: "Taşımada ürünü olmayan bir kalem çıkarsa"
+                text: >-
+                  Ne zaman: asıl tablolara yazmadan önce; okuma sunucusundaki kontrol yetim kalemi bulur ve iş durur. İkinci emniyet
+                  FOREIGN KEY: kontrol atlansa bile kalem 23503 ile reddedilir ve bütün paket geri alınır. Yakalamadığı: var olan
+                  ama yanlış bir ürün numarası (P0031 yerine P0013); kurallar bunu göremez, fiyat farkı varsa toplam kontrolü
+                  yakalar. Onarım: katalog servisi eksik ürünü "satıştan kalktı" olarak ekler, ara tablolar boşaltılır ve iş baştan
+                  çalışır; asıl tablolara hiçbir şey yazılmamıştı.
+              - title: "Liste okuma sunucusundan okunsaydı"
+                text: >-
+                  Ne zaman: her siparişten hemen sonraki açılışta. Gecikme genelde onlarca milisaniye, ağır yük altında saniyeler
+                  olabilir; o arada müşteri siparişini göremez ve yeniden sipariş verebilir. request_id aynı tıklamanın tekrarını
+                  durdurur, yeni bir tıklamayı durdurmaz. Emniyet: müşterinin kendi siparişini gösteren liste yazma sunucusundan
+                  okunur. Yakalamadığı: yazma sunucusu çok yüklenirse liste de yavaşlar. Onarım: liste süresi alarmı; yük büyürse
+                  liste okuma sunucusuna taşınır ama müşterinin son siparişinden sonraki birkaç saniye yazma sunucusuna sorulur.
+              - title: "Bir ürünün adı değişirse"
+                text: >-
+                  Ne zaman: hemen; bir sonraki JOIN yeni adı okur, eski siparişler de yeni adla görünür. Redshift'teki kopya da
+                  birkaç saniye sonra aynı değişikliği alır (Adım 30). Emniyet: ad sadece düzeltme için değişir; başka bir ürün
+                  satılacaksa yeni bir ürün numarası açılır. Yakalamadığı: müşterinin sipariş anında gördüğü ad; order_items'ta ad
+                  sütunu yok. Onarım: siparişin anındaki ad gerekirse (ör. bir belge için) ad da fiyat gibi ödemede kaleme
+                  kopyalanır.
+              - title: "Bir ürünün fiyatı değişirse"
+                text: >-
+                  Ne zaman: hemen, ama sadece yeni siparişler için; eski kalemin birim fiyatı ve siparişin toplamı kopya olduğu için
+                  değişmez (P0021, 31 Eki 09:00). Yakalamadığı: sepetteki fiyat kopyası; onu ödeme yakalar, fiyatı katalogdan
+                  yeniden okur ve farkı müşteriye gösterir (Adım 12). Onarım: gerekmez.
+              - title: "Bir müşterinin şehri değişirse"
+                text: >-
+                  Ne zaman: hemen; customers'ı JOIN eden her okuma (Aurora'da ve Redshift'in aurora_live kopyasında) Ayşe'nin
+                  eski siparişlerini de yeni şehirde gösterir. Siparişlerim şehri göstermediği için değişmez. Olay akışına giden
+                  belge (outbox) şehri sipariş anındaki hâliyle taşır (Adım 25); türeyen depolar o anı tutar. Yakalamadığı:
+                  "sipariş verildiğinde müşteri hangi şehirdeydi?" sorusu Aurora'dan cevaplanamaz. Onarım: siparişe ait bir adres
+                  (teslimat adresi gibi) gerekiyorsa o, fiyat gibi ödemede siparişe kopyalanır.
+              - title: "Liste yavaşlarsa"
+                text: >-
+                  Ne zaman: 5 dakika içinde; Siparişlerim'in p95'i 200 ms'yi geçerse (en az 20 istekle) alarm çalar, 500 ms'yi geçen
+                  her sorgu yavaş sorgu kaydına düşer ve Database Insights'ta Top SQL hangi sorgu olduğunu gösterir. EXPLAIN
+                  nedenini gösterir (ör. Seq Scan). Yakalamadığı: eşiklerin altında kalan ara sıra yavaş istekler; tablo büyüdükçe
+                  yavaş yavaş artan süre (bu yüzden plan her sürümden önce yeniden kontrol edilir). Onarım: eksik index yazmaları
+                  durdurmadan kurulur.
+                code:
+                  - {code: "Seq Scan on orders o  Filter: (visitor_id = '7f3a…')  Rows Removed by Filter: 4999998", tag: Aurora'nın içinde, say: "Olsaydı: her istekte 5 milyon satır."}
+                  - {code: "CREATE INDEX CONCURRENTLY ON orders (visitor_id);", tag: Ekip → Aurora, say: "Siparişler yazılmaya devam ederken index kurulur."}
+                  - {code: "→ Index Scan using orders_visitor_id_idx on orders o (rows=2)", tag: Aurora'nın içinde, say: "Plan yeniden index'li."}
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
