@@ -13237,52 +13237,655 @@ steps:
           - [INCR, "Sayacı 1 artırır. Burada \"parçayı geri ver\" için."]
           - [Atomik, "Bölünemez: işlem ya tamamen olur ya hiç olmaz; arasına başka bir işlem giremez."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde fırsat sayacı için hazırlık
+      t1:
+        title: Önceden ne vardı? Sayaç 45'e nasıl geldi, satın alma nasıl kuruldu?
         intro: >-
-          "Buy" butonuna hiç basılmadan, sayaç ve satın alma kuralı hazırlanır. Aşağıdaki beş adım bu hazırlığın sırasıdır.
-        text:
-          - title: Önce satın almanın sorusu yazılır
-            text: >-
-              "Bir parça kaldıysa bana ver, kalmadıysa söyle" - bu tek bir atomik işlem olmalı. Cevapta kalan adet de gelmeli ki
-              sayfa güncellensin.
-            code: |-
-              DECR lm:deal:stock   →  sonuç ≥ 0 ise satın aldın, sonuç < 0 ise parça kalmadı
-          - title: Sayaç kampanyadan önce kurulur
-            text: >-
-              Kalan adet asıl stok kaydından alınır ve bellekte tek bir tamsayı anahtar olarak yazılır; kampanya bitince
-              kendiliğinden silinsin diye bir bitiş zamanı verilir.
-            code: |-
-              SET lm:deal:stock 50
-              EXPIREAT lm:deal:stock <kampanya bitişi>
-          - title: Eksiye düşme önceden düşünülür
-            text: >-
-              DECR sıfırın altına da iner. Basit yol: sonuç eksiyse "tükendi" denir ve INCR ile sayaç geri alınır. Sayacın hiç
-              eksiye inmemesi isteniyorsa kontrol ve azaltma tek bir Lua betiğinde yapılır.
-            code: |-
-              EVAL "local v = tonumber(redis.call('GET', KEYS[1])) if v and v > 0 then return redis.call('DECR', KEYS[1]) end return -1" 1 lm:deal:stock
-          - title: Sayaçtan sonra asıl kayıt yazılır
-            text: >-
-              Sayaç sadece kapıdaki ilk elemedir. Parçayı alan kişinin siparişi ilişkisel veritabanına transaction ile yazılır;
-              ödeme başarısız olursa sayaç INCR ile geri artırılır.
-          - title: Sayaç izlenir ve karşılaştırılır
-            text: >-
-              Kampanya boyunca satılan adet (başlangıç − sayaç) siparişlerle karşılaştırılır. Fark varsa (ör. geri verilmeyen
-              parçalar) asıl kayda göre düzeltilir.
-      feed:
-        title: Veri nereden geliyor?
-        writes: >-
-          Kampanyayı başlatan iş (sayacı kurar) ve her alımda uygulama (DECR; tükendiyse INCR ile geri alır).
-        reads: Uygulama, fırsatın göründüğü her sayfa için (ana sayfa, fırsatlar sayfası).
-        kind: >-
-          Uygulama orkestrasyonu. ElastiCache başka bir veritabanından kendiliğinden veri çekmez; sayacı biri kurar ve uygulama
-          değiştirir.
-        with: >-
-          Parçayı alan kişi onu fırsat fiyatıyla sepetine ekleyebilir (DynamoDB); siparişin asıl kaydı ödemede ilişkisel
-          veritabanına (Aurora) yazılır. Ürün bilgisi katalogdan (DocumentDB), görseli nesne deposundan (S3) gelir.
-        best: >-
-          Sayaç hızlı karar içindir, asıl kayıt veritabanındadır. Satın alma akışı: DECR (bellek) → sipariş transaction'ı
-          (veritabanı) → başarısızsa INCR. Sayaç kaybolursa asıl kayıttan yeniden kurulur.
+          Sen "Buy one now" butonuna basmadan önce bellekte (ElastiCache) fırsatın sayacı lm:deal:stock 45 gösteriyor: 50
+          parçanın 5'i satıldı. Fırsatın belleğe nasıl yazıldığını, her dakika siparişlerle nasıl karşılaştırıldığını ve
+          kaybolursa nasıl yeniden kurulduğunu Adım 2 anlattı. Bu bölüm başka bir soruyu anlatıyor: binlerce kişi aynı anda
+          bastığında satın alma nasıl şaşmaz? Neden tek bir komut (DECR) güvenli, neden "azalt, gerekirse geri ver" yolu
+          seçildi ve bir betik (Lua) neyi değiştirirdi; bir müşteriye bir tane kuralı; aynı tıklama iki kez gelirse ne olur;
+          sayaç neyi garanti etmez; fazla satışın nasıl izlendiği; bellek yük devri yaparsa ne olur. Adım 2'deki diğer
+          parçalar (Katalog yönetim servisi, DocumentDB'deki kampanya kaydı, hata kuyruğu), mağazanın önündeki yük
+          dengeleyici (ALB), ödemeyi onaylayan ödeme servisi ve her sayfada oturumunu yazan kod çalışmaya devam ediyor; bu sorunun parçası olmadıkları için
+          burada yoklar. Önce zincirin bileşenleri, sonra bir simülasyon, sonra dört aşama (tasarım, ilk yükleme, sürekli
+          besleme, tutarlılık ve onarım).
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1, t0 ve saatler", "t0: senin \"Buy one now\" tıklaman. t-1: ondan önceki zaman. Kampanya 31 Eki 10:00–16:00 (Adım 2'deki gibi). Saatler Türkiye saatidir; müşteriler, saatler, istek ve sipariş numaraları temsilîdir."]
+          - ["Ekip", "Mağazanın sistemini kuran ve işleten mühendisler; alarmlara onlar bakar, gerekirse sayacı elle düzeltirler."]
+          - ["Valkey ve ElastiCache Serverless", "Valkey: ElastiCache'in kullandığı, Redis ile aynı komutları anlayan bellek veritabanı motoru. Serverless: sunucu sayısını ve boyunu AWS'in kendisinin ayarladığı ElastiCache türü; mağazanın belleği bu türde."]
+          - ["Sayaç (lm:deal:stock)", "Değeri tek bir tam sayı olan anahtar: fırsattan kalan parça. Asıl kayıt değil, kapıdaki hızlı karar içindir (Adım 2)."]
+          - ["Atomik komut ve ana iş parçacığı", "Valkey'de ağdan gelen istekleri birkaç yardımcı iş parçacığı (I/O thread) okur, ama komutları tek bir ana iş parçacığı (main thread) sırayla, birer birer çalıştırır. Bir vezne gibi: önünde bin kişi olsa da gişedeki görevli bir kerede bir kişiye bakar. DECR okuma, bir çıkarma ve yazmayı aynı komutta yaptığı için arasına başka bir komut giremez: atomik (bölünemez)."]
+          - ["Önce oku, sonra yaz", "Sayacı GET ile okuyup bir eksiğini SET ile yazmak: iki ayrı komut. Arada başka bir alıcının komutu çalışabilir; iki kişi aynı 45'i okur, ikisi de 44 yazar, bir parça iki kez satılır. Bu güvensiz yolu Adım 18–19'da deneyeceksin."]
+          - ["Lua betiği (EVAL, EVALSHA)", "Sunucuya gönderilen küçük bir program. Valkey betiği tek seferde, bölünmeden çalıştırır: betik bitene kadar o bölümde (shard) başka komut çalışmaz. EVALSHA, önceden yüklenmiş (SCRIPT LOAD) betiği özetiyle (SHA1, betiğin parmak izi) çağırır."]
+          - ["Valkey functions (FUNCTION LOAD, FCALL)", "Betiği sunucuda adıyla saklamanın yeni yolu. ElastiCache Serverless'ta kullanılamaz: AWS bu komutları serverless önbelleklerde kapalı tutar; node-based (sunucularını senin seçtiğin) kümelerde vardır."]
+          - ["Hash slot, CROSSSLOT ve hash tag", "Bellek her anahtarı adından hesaplanan 0–16383 arası bir numaraya (slot) koyar: lm:deal:stock 1725, lm:deal 3299, lm:deal:buyer:C00017 4546. Slotlar belleğin bölümlerine (shard) dağıtılır; bir anahtar hep tek bir bölümdedir. Farklı slottaki anahtarlar tek bir paket işlemde (MULTI) ya da tek bir betikte birlikte değiştirilemez (CROSSSLOT hatası). Adın içine süslü parantezle bir etiket konursa ({deal}) slotu sadece parantezin içi belirler."]
+          - ["SET … NX, EX, EXPIREAT ve TTL", "NX: \"bu anahtar yoksa yaz, varsa dokunma\"; cevap OK ya da boş (nil). EX 120: anahtar 120 saniye sonra silinsin. EXPIREAT: \"şu saatte sil\". TTL: anahtarın kalan ömrü."]
+          - ["Alıcı anahtarı ve ön kayıt", "lm:deal:buyer:<müşteri>: \"bu müşteri bu fırsattan aldı\" kaydı; değeri o tıklamanın istek numarası. Önce 2 dakikalık bir ön kayıt olarak yazılır (EX 120); sipariş yazılınca ömrü kampanyanın bitişine (16:00) uzatılır. Bir restoranda masayı 2 dakikalığına tutmak gibi: gelmezsen masa boşa çıkar."]
+          - ["İstek numarası ve idempotent", "İstek numarası (request id): sayfanın her tıklamaya verdiği tek numara (ör. r-1a7c…); bağlantı koparsa aynı tıklama aynı numarayla yeniden gönderilir. Idempotent: aynı istek iki kez gelse de bir kez yapılmış gibi aynı sonucu veren işlem; asansör butonuna iki kez basmak gibi."]
+          - ["Müşteri numarası", "Görevin başında seçilen persona (ör. C00001, Ayşe Yılmaz); Uygulama onu oturumdan (lm:session:<ziyaretçi>) okur. Mağazada şifreyle giriş yok."]
+          - ["Transaction, COMMIT, ROLLBACK ve UNIQUE", "Transaction: birkaç yazmanın hepsi birden olur (COMMIT) ya da hiçbiri olmaz (ROLLBACK). UNIQUE index: bir sütunda aynı değerin iki kez yazılmasını veritabanının kendisinin reddetmesi."]
+          - ["Aurora PostgreSQL", "Siparişlerin asıl kaydının durduğu ilişkisel (tablolu) veritabanı: shop.orders (sipariş, müşteri, istek numarası, durum) ve shop.order_items (sipariş satırı, adet, kampanya numarası). Satılan adedin doğru değeri hep buradan sayılır."]
+          - ["Kampanya işi, EventBridge Scheduler", "Kampanya işi: AWS Lambda'da çalışan kodumuz; sayacı kurar ve her dakika siparişlerle karşılaştırır (Adım 2). EventBridge Scheduler: onu belli saatlerde çalıştıran AWS'in zamanlayıcısı."]
+          - ["CloudWatch, ölçü ve alarm", "AWS'in ölçüm ve alarm servisi. Ölçü (metric): her kontrolde yazılan bir sayı; alarm: sayı bir koşulu sağlarsa Ekip'e haber. Bu bölümdeki üç ölçü (Shop/Deal): StockDrift (beklenen sayaç − bellekteki sayaç; normalde 0), Oversold (50'den fazla satılan; normalde 0), RepeatBuyers (bu kampanyadan birden fazla satırı olan müşteri; normalde 0)."]
+          - ["Yük devri (failover)", "Belleğin işi yapan kopyası çökünce başka bir kopyanın onu devralması. ElastiCache Serverless veriyi kendiliğinden birden fazla veri merkezinde (Availability Zone) tutar; yine de \"tamam\" cevabı verilmiş son birkaç yazmanın yeni kopyaya ulaşmamış olması mümkündür."]
+          - ["ECPU", "ElastiCache Serverless'ın ücret birimi: bir komutun işlemci süresine ve taşıdığı veriye göre sayılır. DECR gibi basit bir komut 1 ECPU; daha çok işlemci süren bir betik daha fazla."]
+          - ["Kesit, temsilî, Örnek durum ve Olsaydı", "Kesit: simülasyonda gösterilen kayıtlar (t0'daki 2 anahtar; ayrıca kesitin dışındaki alıcı anahtarları ve kampanyanın siparişleri). Temsilî: canlı sistemden gelmeyen, anlatım için seçilmiş değer. \"Örnek durum\" kareleri sistemin bir aksiliğe nasıl cevap verdiğini gösterir; \"Olsaydı\" kareleri yaşanmadı, her biri ayrı bir durumdur ve birbirine eklenmez."]
+          - ["Kod kartlarındaki sözcükler", "r: Uygulama'nın belleğe bağlantısı (redis-py). r.set(…, nx=True, ex=120): yoksa yaz, 120 saniye ömürle. r.decr / r.incr / r.delete / r.expireat: DECR, INCR, DEL, EXPIREAT. DEL: anahtarı sil. INCRBY / DECRBY: sayaca birden fazla ekle / çıkar. db.execute(…): Aurora'ya SQL gönder. fetch(…): sayfanın Uygulama'ya istek göndermesi; Idempotency-Key: isteğin numarasını taşıyan başlık. redis.call('GET', KEYS[1]): betiğin içinden komut; KEYS[1] betiğe verilen ilk anahtar; tonumber: metni sayıya çevir. put_metric_data: CloudWatch'a ölçü yaz. ABS: mutlak değer (−1 de 1 sayılır). GROUP BY … HAVING COUNT(*) > 1: müşteriye göre grupla, birden fazla satırı olanları al. <16:00>: kampanyanın bitiş saati (komutta saniye cinsinden bir zaman). won: \"aldın mı?\" kararı. bitis: kampanyanın bitiş saati. except OdemeHatasi: ödeme reddedilirse; db.rollback(): transaction'ı geri al. HSET: hash'e alan yaz (kart). SQL sözcükleri: SELECT oku, INSERT INTO ekle, BEGIN … COMMIT transaction, JOIN … USING (order_id) iki tabloyu sipariş numarasıyla eşle, SUM(qty) adetleri topla, ALTER TABLE … ADD COLUMN sütun ekle (text: metin), CREATE UNIQUE INDEX tek değer kuralı. POST /elasticache/api/deal/buy: sayfanın Uygulama'ya gönderdiği \"satın al\" isteğinin adresi. Alarm komutu: --namespace Shop/Deal ölçünün grubu (bizim ölçülerimiz), --statistic Maximum --period 60 bir dakikanın en büyük değeri, --threshold 1 eşik, GreaterThanOrEqualToThreshold \"eşik ya da üstü\", --evaluation-periods 1 tek bir dakikaya bakar. status: siparişin durumu; paid ödendi, cancelled iptal. Tablolardaki tür: hash (alanları olan kayıt), string (tek değer). r-1a7c… gibi numaralardaki … kısaltma: numaranın devamı gösterilmiyor. … kısaltılmış kısım; # ve -- sonrası açıklama."]
+          - ["Diğer adlar", "Uygulama: mağazanın arka uç programı (EC2 sunucularında: AWS'in kiralık sanal sunucuları); tarayıcıdan gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar; belleğe redis-py kütüphanesiyle konuşur. Katalog yönetim servisi: kampanyayı kaydeden ve zamanlayıcıyı kuran arka ofis programı (Adım 2). Node-based: sunucularını ve sayısını senin seçtiğin ElastiCache türü (serverless'ın karşıtı). \"Adım 2\", \"Adım 18\" gibi adlar bu görevin (mağazadaki 37 adımın) adımlarıdır; simülasyonun sayacındaki \"Adım 1 / 20\" ise simülasyonun karesidir."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra"
+          sütunu isteği ya da bilgiyi kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim
+          kodumuz" etiketli parçaları mağazanın ekibi yazar. Bir satın alma, tarayıcıdaki sayfadan Uygulama'ya, oradan önce
+          belleğe (alıcı anahtarı, sonra sayaç), sonra Aurora'ya (sipariş) gider. Kampanya işi her dakika satılanları sayaçla
+          karşılaştırır; CloudWatch fazla satışı ve farkları izler. Aynı parçalar aşağıdaki simülasyonda birer kutu: üst
+          sırada satın alma yolu, ortada depolar, altta yandaki işler.
+        inventory:
+          - id: page
+            name: Fırsatlar sayfası (tarayıcıdaki kod)
+            kind: code
+            what: sayfanın tarayıcında çalışan kodu
+            does: >-
+              "Buy one now" tıklamasına bir istek numarası verir, butonu cevap gelene kadar kapatır ve isteği Uygulama'ya
+              gönderir. Bağlantı koparsa aynı numarayla bir kez daha dener; cevabı (aldın, tükendi, zaten aldın) yazar.
+            box: "Her tıklamaya bir istek numarası; yeniden denemede aynısı."
+            phases: [1, 3, 4]
+            before: Müşteri ("Buy one now" butonu)
+            after: web
+          - id: web
+            name: Uygulama (satın alma isteği)
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucularında)
+            does: >-
+              Müşteri numarasını oturumdan alır. Önce alıcı anahtarını yazar (SET … NX EX 120): yazılamazsa DECR göndermez.
+              Sonra sayacı DECR ile azaltır; sonuç 0'ın altındaysa INCR ile geri verir ve alıcı anahtarını siler. Siparişi Aurora'ya transaction ile
+              yazar; olmazsa ROLLBACK, INCR ve alıcı anahtarını siler. Sipariş yazılınca alıcı anahtarının ömrünü 16:00'ya uzatır.
+            box: "Alıcı anahtarı, DECR, sipariş; olmazsa INCR ile geri verir."
+            phases: [1, 3, 4]
+            before: page
+            after: [cache, aurora, page]
+          - id: cache
+            name: ElastiCache (Valkey)
+            kind: aws
+            what: bellekte çalışan veritabanı
+            does: >-
+              Fırsat kartı (lm:deal), sayaç (lm:deal:stock) ve her alıcının anahtarı (lm:deal:buyer:<müşteri>). Komutları
+              tek bir ana iş parçacığında birer birer çalıştırır; bu yüzden aynı anda gelen iki DECR asla aynı sayıyı görmez.
+              Veriyi birden fazla Availability Zone'da tutar.
+            box: "Kart, sayaç ve alıcı anahtarları; komutlar birer birer."
+            phases: [1, 2, 3, 4]
+            before: [dealjob, web]
+            after: "Fırsatlar sayfası (t0)"
+          - id: aurora
+            name: Aurora PostgreSQL (shop.orders, shop.order_items)
+            kind: aws
+            what: işlemsel (sipariş) veritabanı
+            does: >-
+              Siparişlerin asıl kaydı. Her sipariş tıklamanın istek numarasını taşır (request_id, UNIQUE: aynı numarayla
+              ikinci sipariş yazılamaz); her fırsat satırı kampanya numarasını (campaign_id). "Kaç tane satıldı?" sorusunun doğru cevabı buradadır.
+            box: "Siparişlerin asıl kaydı; request_id tek, satırda campaign_id."
+            phases: [1, 2, 3, 4]
+            before: web
+            after: dealjob
+          - id: scheduler
+            name: EventBridge Scheduler
+            kind: aws
+            what: AWS'in zamanlayıcı servisi
+            does: >-
+              Kampanyanın başlangıcında kampanya işini bir kez, sonra 16:00'ya kadar her dakika kontrol için çalıştırır
+              (Adım 2).
+            box: "10:00'da bir kez, sonra her dakika kampanya işini çalıştırır."
+            phases: [2, 3, 4]
+            before: "Katalog yönetim servisi (Adım 2)"
+            after: dealjob
+          - id: dealjob
+            name: Kampanya işi (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod
+            does: >-
+              10:00'da sayacı 50 ile kurar (Adım 2). Her dakika Aurora'da satılanları ve birden fazla satırı olan müşterileri
+              sayar, bellekteki sayaçla karşılaştırır ve üç sayıyı CloudWatch'a yazar: StockDrift, Oversold, RepeatBuyers.
+              Farkı kendisi düzeltmez; anahtarlar kaybolduysa yeniden kurar (Adım 2).
+            box: "Sayacı kurar; her dakika satılanları sayar, üç ölçüyü yazar."
+            phases: [1, 2, 3, 4]
+            before: [scheduler, aurora, cache]
+            after: [cache, monitor]
+          - id: monitor
+            name: CloudWatch alarmları
+            kind: aws
+            what: AWS'in izleme servisi
+            does: >-
+              Kampanya işinin her kontroldeki sayılarını izler. Üç alarm: fazla satış (Oversold ≥ 1, ilk kontrolde), sayaç
+              farkı (StockDrift 0 değil, iki kontrol üst üste), tekrar alan müşteri (RepeatBuyers ≥ 1).
+            box: "Üç alarm: fazla satış, sayaç farkı, tekrar alan müşteri."
+            phases: [1, 2, 3, 4]
+            before: dealjob
+            after: Ekip (alarm)
+        sim_title: "Simülasyon: sayaç 45'e nasıl geldi, her satın almada ne oldu?"
+        sim:
+          kind: pipeline
+          title: Sayfa → Uygulama → ElastiCache (alıcı anahtarı, sayaç) → Aurora (sipariş); yanda her dakikalık kontrol ve alarmlar
+          caption: >-
+            ElastiCache'teki ilk tablo kesit: t0'daki simülasyonun 2 anahtarı (lm:deal ve lm:deal:stock). Alıcı anahtarları
+            ve kampanyanın siparişleri kesitin dışında, ayrı tablolarda. Önce kampanyadan önceki hazırlık ve 10:00'da sayacın
+            kurulması, sonra bir satın almanın bütün kutulardan geçişi ve 4 satın alma daha, sonra "Örnek durum" kareleri (aynı
+            tıklamanın iki kez gelmesi, aynı müşterinin ikinci denemesi, reddedilen ödeme), en sonda "Olsaydı" kareleri (son
+            parçada iki alıcı, bellek yük devri, Uygulama'nın çökmesi); "Olsaydı" kareleri yaşanmadı, her biri ayrı bir durum.
+            Canlı sistemden: ürün, 50 adet, anahtar adları ve slotları. Temsilî: saatler, müşteriler, istek ve sipariş
+            numaraları. Sayaçtaki 45, t0 simülasyonunun başladığı değer; canlı sistemde sayaç satıldıkça değişir, gerçek değeri
+            t0'daki canlı sayılarda görürsün. Son karede her şey senin tıklamandan (t0) hemen önceki hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım}
+          rows:
+            - {id: path, title: "Satın alma yolu: sayfa → Uygulama", flow: true}
+            - {id: stores, title: "Depolar: bellek ve siparişlerin asıl kaydı"}
+            - {id: helpers, title: "Yandaki işler: her dakikalık kontrol ve alarmlar", side: true}
+          summary: >-
+            Kampanyadan önce siparişlere istek numarası sütunu (tek) ve üç alarm kuruldu; 10:00'da kampanya işi sayacı 50
+            yaptı. Her satın almada Uygulama önce alıcı anahtarını yazdı, sonra DECR gönderdi, sonra siparişi Aurora'ya yazdı
+            ve alıcı anahtarını 16:00'ya uzattı: 5 satın alma, sayaç 45. Aynı tıklama ikinci kez gelince DECR gönderilmedi,
+            aynı müşterinin ikinci denemesi geri çevrildi, reddedilen ödeme parçayı INCR ile geri verdi. Her dakikalık kontrol
+            50 − 5 = 45 buldu; üç alarm OK. Son durum: kesitte 2 anahtar, sayaç 45; t0 buradan başlar.
+          boxes:
+            - id: page
+              row: path
+            - id: web
+              row: path
+            - id: cache
+              row: stores
+              tables:
+                - name: "anahtarlar (kesit: t0'daki 2 anahtar)"
+                  cols: [anahtar, tür, değer, ömür]
+                  rows:
+                    - {key: deal, anahtar: "lm:deal", tür: hash, değer: "product_id P0001, name Alpen Kablosuz Kulaklık 1, price 2024.3, old_price 3373.84, …", ömür: "16:00'ya kadar", hidden: true}
+                    - {key: stock, anahtar: "lm:deal:stock", tür: string, değer: "50", ömür: "16:00'ya kadar", hidden: true}
+                - name: "kesitin dışında: alıcı anahtarları (lm:deal:buyer:…)"
+                  cols: [müşteri, değer, ömür]
+                  rows:
+                    - {key: b1, müşteri: C00017, değer: "r-1a7c…", ömür: "120 sn (ön kayıt)", hidden: true}
+                    - {key: b2, müşteri: C00042, değer: "r-2d4e…", ömür: "16:00'ya kadar", hidden: true}
+                    - {key: b3, müşteri: C00058, değer: "r-3b90…", ömür: "16:00'ya kadar", hidden: true}
+                    - {key: b4, müşteri: C00073, değer: "r-4f12…", ömür: "16:00'ya kadar", hidden: true}
+                    - {key: b5, müşteri: C00091, değer: "r-5e6a…", ömür: "16:00'ya kadar", hidden: true}
+                    - {key: b6, müşteri: C00105, değer: "r-6a90…", ömür: "120 sn (ön kayıt)", hidden: true}
+                    - {key: b7, müşteri: C00130, değer: "r-8b05…", ömür: "120 sn (ön kayıt)", hidden: true}
+            - id: aurora
+              row: stores
+              tables:
+                - name: "shop.orders (kesit: kampanyanın siparişleri)"
+                  cols: [order_id, customer_id, request_id, status]
+                  rows:
+                    - {order_id: O-90411, customer_id: C00017, request_id: "r-1a7c…", status: paid, hidden: true}
+                    - {order_id: O-90418, customer_id: C00042, request_id: "r-2d4e…", status: paid, hidden: true}
+                    - {order_id: O-90423, customer_id: C00058, request_id: "r-3b90…", status: paid, hidden: true}
+                    - {order_id: O-90430, customer_id: C00073, request_id: "r-4f12…", status: paid, hidden: true}
+                    - {order_id: O-90436, customer_id: C00091, request_id: "r-5e6a…", status: paid, hidden: true}
+                    - {order_id: O-90441, customer_id: C00120, request_id: "r-7c3d…", status: paid, hidden: true}
+                - name: "shop.order_items (kesit: campaign_id = flash-1031)"
+                  cols: [order_id, qty, campaign_id]
+                  rows:
+                    - {order_id: O-90411, qty: 1, campaign_id: flash-1031, hidden: true}
+                    - {order_id: O-90418, qty: 1, campaign_id: flash-1031, hidden: true}
+                    - {order_id: O-90423, qty: 1, campaign_id: flash-1031, hidden: true}
+                    - {order_id: O-90430, qty: 1, campaign_id: flash-1031, hidden: true}
+                    - {order_id: O-90436, qty: 1, campaign_id: flash-1031, hidden: true}
+                    - {order_id: O-90441, qty: 1, campaign_id: flash-1031, hidden: true}
+            - id: scheduler
+              row: helpers
+            - id: dealjob
+              row: helpers
+              tables:
+                - name: "son kontrol (Shop/Deal)"
+                  cols: [ölçü, değer]
+                  rows:
+                    - {key: at, ölçü: "kontrol", değer: "—", hidden: true}
+                    - {key: sold, ölçü: "satılan (Aurora)", değer: "—", hidden: true}
+                    - {key: left, ölçü: "sayaç (bellek)", değer: "—", hidden: true}
+                    - {key: drift, ölçü: "StockDrift", değer: "—", hidden: true}
+                    - {key: over, ölçü: "Oversold", değer: "—", hidden: true}
+                    - {key: rep, ölçü: "RepeatBuyers", değer: "—", hidden: true}
+            - id: monitor
+              row: helpers
+              tables:
+                - name: "fırsat alarmları"
+                  cols: [alarm, durum]
+                  rows:
+                    - {key: a1, alarm: "firsat-fazla-satis", durum: OK, hidden: true}
+                    - {key: a2, alarm: "firsat-sayac-farki", durum: OK, hidden: true}
+                    - {key: a3, alarm: "firsat-tekrar-alici", durum: OK, hidden: true}
+          frames:
+            - phase: 2
+              who: aurora
+              lit: [aurora]
+              packet: {at: aurora, text: "30 Eki · ALTER TABLE orders ADD COLUMN request_id text · CREATE UNIQUE INDEX orders_request_id ON orders (request_id)"}
+              note: {aurora: "henüz kampanya siparişi yok", cache: "fırsat anahtarı yok"}
+              say: >-
+                30 Eki, kampanyadan bir gün önce. Ekip Aurora'daki sipariş tablosuna bir sütun ekledi: request_id, siparişi
+                yaratan tıklamanın numarası. Üstüne bir UNIQUE index: aynı numarayla ikinci bir sipariş yazılmak istenirse
+                Aurora onu reddeder. Bellekte henüz fırsat yok.
+            - phase: 2
+              who: monitor
+              lit: [monitor, dealjob]
+              packet: {at: monitor, text: "31 Eki 09:30 · put-metric-alarm × 3 · Oversold >= 1 (1 kontrol) · ABS(StockDrift) > 0 (2 kontrolün 2'si) · RepeatBuyers >= 1"}
+              show: {monitor: [a1, a2, a3]}
+              note: {aurora: "", cache: "", monitor: "üç alarm hazır · henüz ölçü yok"}
+              say: >-
+                31 Eki 09:30. Ekip ilk satıştan önce üç alarm kurdu. Fazla satış: 50'den fazla satılırsa ilk kontrolde. Sayaç
+                farkı: bellekteki sayaç, siparişlerden beklenen değerden iki kontrol üst üste farklıysa. Tekrar alan müşteri:
+                bir müşterinin bu kampanyadan ikinci satırı olursa. Sayıları kampanya işi her dakika yazacak.
+            - phase: 2
+              who: dealjob
+              lit: [scheduler, dealjob, cache]
+              packet: {at: dealjob, text: "10:00 · SET lm:deal:stock 50 NX · HSET lm:deal … · EXPIREAT <16:00> (Adım 2)"}
+              show: {cache: [stock, deal]}
+              fresh: {cache: [stock, deal]}
+              note: {monitor: "", cache: "sayaç 50 · alıcı anahtarı yok"}
+              say: >-
+                10:00. Zamanlayıcı kampanya işini çalıştırdı; iş önce sayacı (50), sonra kartı yazdı ve ikisine 16:00'yı koydu
+                (Adım 2'de ayrıntısıyla). Kesitteki iki anahtar hazır. Henüz kimse almadı: alıcı anahtarı yok.
+            - phase: 3
+              who: page
+              lit: [page, web]
+              packet: {at: page, text: "10:03 · C00017 tıkladı · istek numarası r-1a7c… · buton kapandı · POST /elasticache/api/deal/buy · Idempotency-Key: r-1a7c…"}
+              note: {cache: "", page: "buton kapalı: cevap bekleniyor"}
+              say: >-
+                10:03. Bir müşteri (C00017) fırsatlar sayfasında "Buy one now" butonuna bastı. Sayfa bu tıklamaya bir numara
+                verdi (r-1a7c…), butonu cevap gelene kadar kapattı ve isteği numarasıyla Uygulama'ya gönderdi.
+            - phase: 3
+              who: web
+              lit: [web, cache]
+              packet: {at: web, text: "SET lm:deal:buyer:C00017 r-1a7c… NX EX 120 → OK"}
+              show: {cache: [b1]}
+              fresh: {cache: [b1]}
+              note: {page: "", web: "müşteri: C00017 (oturumdan) · ön kayıt OK"}
+              say: >-
+                Uygulama müşteri numarasını oturumdan aldı ve önce alıcı anahtarını yazdı: "C00017 bu fırsattan alıyor, istek
+                r-1a7c…". NX sayesinde anahtar yoksa yazılır; OK geldi, yani bu müşterinin ilk denemesi. Ömür şimdilik 120
+                saniye: bir ön kayıt.
+            - phase: 3
+              who: web
+              lit: [web, cache]
+              packet: {at: web, text: "DECR lm:deal:stock → 49"}
+              set: {cache: {stock: {değer: "49"}}}
+              fresh: {cache: [stock]}
+              note: {web: "DECR → 49 (≥ 0): bir parça C00017'nin"}
+              say: >-
+                Sonra tek komut: DECR. Valkey'in ana iş parçacığı bu komutu tek başına çalıştırdı: 50'yi okudu, 49 yazdı, 49'u
+                cevap olarak verdi. O sırada başka bir alıcının DECR'i gelseydi sırada beklerdi ve 48 alırdı. 49, 0 ya da üstü:
+                bir parça bu müşteriye ayrıldı.
+            - phase: 3
+              who: web
+              lit: [web, aurora]
+              packet: {at: aurora, text: "BEGIN · INSERT orders (O-90411, C00017, request_id 'r-1a7c…', paid) · INSERT order_items (O-90411, qty 1, 'flash-1031') · COMMIT"}
+              show: {aurora: [O-90411]}
+              fresh: {aurora: [O-90411]}
+              note: {web: "sipariş yazılıyor"}
+              say: >-
+                Uygulama siparişi Aurora'ya tek bir transaction ile yazdı: sipariş (istek numarasıyla) ve satırı (kampanya
+                numarasıyla) birlikte. Satışın asıl kaydı bu satır; sayaç sadece kapıdaki hızlı karardı.
+            - phase: 3
+              who: web
+              lit: [web, cache, page]
+              packet: {at: web, text: "EXPIREAT lm:deal:buyer:C00017 <16:00> · cevap → {\"won\": true, \"stock\": 49}"}
+              set: {cache: {b1: {ömür: "16:00'ya kadar"}}}
+              fresh: {cache: [b1]}
+              note: {web: "", page: "\"You got one. 49 pieces left\""}
+              say: >-
+                Sipariş yazılınca alıcı anahtarının ömrü kampanyanın bitişine (16:00) uzatıldı: C00017 bu fırsattan bir daha
+                alamaz. Cevap sayfaya döndü; sayfa "You got one" yazdı ve butonu yeniden açtı.
+            - phase: 3
+              who: dealjob
+              lit: [scheduler, dealjob, aurora, cache, monitor]
+              packet: {at: dealjob, text: "10:04 · SUM(qty) → 1 · GET lm:deal:stock → 49 · 50 − 1 = 49 · tekrar alan 0"}
+              show: {dealjob: [at, sold, left, drift, over, rep]}
+              set: {dealjob: {at: {değer: "10:04"}, sold: {değer: "1"}, left: {değer: "49"}, drift: {değer: "0"}, over: {değer: "0"}, rep: {değer: "0"}}}
+              fresh: {dealjob: [at, sold, left, drift, over, rep]}
+              note: {page: "", monitor: "10:04 · üç ölçü 0 · üç alarm OK"}
+              say: >-
+                10:04. Zamanlayıcı kontrol görevini çalıştırdı. Kampanya işi Aurora'da bu kampanyanın satılanlarını saydı (1) ve
+                sayacı okudu (49): 50 − 1 = 49, fark yok. 50'yi aşan satış yok, iki kez alan müşteri yok. Üç sayı da CloudWatch'a
+                yazıldı.
+            - phase: 3
+              who: web
+              lit: [page, web, cache, aurora]
+              packet: {at: web, text: "10:05–10:08 · 4 alıcı · her biri: SET buyer … NX EX 120 → OK · DECR → 48, 47, 46, 45 · COMMIT · EXPIREAT <16:00>"}
+              set: {cache: {stock: {değer: "45"}}}
+              show: {cache: [b2, b3, b4, b5], aurora: [O-90418, O-90423, O-90430, O-90436]}
+              fresh: {cache: [stock, b2, b3, b4, b5], aurora: [O-90418, O-90423, O-90430, O-90436]}
+              note: {monitor: "", web: "4 alım · DECR 48, 47, 46, 45 · 4 sipariş"}
+              say: >-
+                10:05–10:08. Dört müşteri daha aldı (C00042, C00058, C00073, C00091). Her birinde aynı sıra: alıcı anahtarı,
+                DECR, sipariş, ömrü 16:00'ya uzatma. Her DECR farklı bir sayı döndürdü: 48, 47, 46, 45. Alıcı anahtarları farklı
+                slotlarda, birbirini beklemez; hepsinin ortak tek anahtarı sayaç.
+            - phase: 3
+              who: dealjob
+              lit: [scheduler, dealjob, aurora, cache, monitor]
+              packet: {at: dealjob, text: "10:09 · SUM(qty) → 5 · GET lm:deal:stock → 45 · 50 − 5 = 45 · tekrar alan 0"}
+              set: {dealjob: {at: {değer: "10:09"}, sold: {değer: "5"}, left: {değer: "45"}}}
+              fresh: {dealjob: [at, sold, left]}
+              note: {web: "", monitor: "10:09 · StockDrift 0 · Oversold 0 · RepeatBuyers 0 · üç alarm OK"}
+              say: >-
+                10:09 kontrolü: Aurora'da 5 satır, sayaç 45; 50 − 5 = 45, fark yok. Fazla satış ve tekrar alan müşteri yok.
+            - phase: 4
+              who: page
+              lit: [page, web, cache, aurora]
+              packet: {at: web, text: "10:08 · 2 sn sonra aynı istek r-5e6a… yeniden geldi · SET lm:deal:buyer:C00091 … NX → (nil) · GET → r-5e6a… (aynı) · SELECT … WHERE request_id = 'r-5e6a…' → O-90436 · DECR yok"}
+              mark: {cache: {b5: fix}, aurora: {O-90436: fix}}
+              note: {monitor: "", page: "bağlantı koptu · aynı numarayla bir kez daha", web: "aynı tıklama: önceki cevap"}
+              say: >-
+                Örnek durum (10:08'deki alıma geri dönüyoruz): C00091'in telefonunda bağlantı, cevap gelirken koptu; sayfa 2 saniye
+                sonra aynı isteği aynı numarayla (r-5e6a…) bir kez daha gönderdi. Alıcı anahtarı yazılamadı (nil); içindeki numara aynı, demek ki bu aynı tıklama. Uygulama
+                DECR göndermedi; siparişi Aurora'da istek numarasıyla buldu (O-90436) ve aynı cevabı verdi. Sayaç 45'te kaldı.
+            - phase: 4
+              who: web
+              lit: [page, web, cache]
+              packet: {at: web, text: "10:10 · C00058 yeni tıklama r-9f31… · SET lm:deal:buyer:C00058 … NX → (nil) · GET → r-3b90… (başka) · \"bir müşteriye bir tane\" · DECR yok"}
+              mark: {cache: {b5: "", b3: fix}, aurora: {O-90436: ""}}
+              note: {page: "\"Bu fırsattan zaten aldın\"", web: "farklı numara: ikinci alım reddedildi"}
+              say: >-
+                Örnek durum: C00058 ikinci bir parça için yeniden bastı; bu yeni bir tıklama (r-9f31…). Alıcı anahtarı yine
+                yazılamadı ve içinde başka bir numara var (r-3b90…, ilk alımı). Uygulama "bu fırsattan zaten aldın" dedi; DECR
+                gönderilmedi, sayaçtan parça gitmedi.
+            - phase: 4
+              who: web
+              lit: [page, web, cache]
+              packet: {at: web, text: "10:11 · C00105 · SET lm:deal:buyer:C00105 r-6a90… NX EX 120 → OK · DECR lm:deal:stock → 44"}
+              show: {cache: [b6]}
+              set: {cache: {stock: {değer: "44"}}}
+              mark: {cache: {b3: ""}}
+              fresh: {cache: [b6, stock]}
+              note: {page: "", web: "DECR → 44: bir parça C00105'in · ödeme alınıyor"}
+              say: >-
+                Örnek durum: yeni bir müşteri (C00105) bastı. Ön kayıt OK, DECR 44 verdi; bir parça bu müşteriye ayrıldı ve
+                Uygulama siparişi yazmaya başladı.
+            - phase: 4
+              who: web
+              lit: [web, aurora, cache, page]
+              packet: {at: aurora, text: "BEGIN · INSERT … · ödeme reddedildi → ROLLBACK · INCR lm:deal:stock → 45 · DEL lm:deal:buyer:C00105"}
+              hide: {cache: [b6]}
+              set: {cache: {stock: {değer: "45"}}}
+              mark: {cache: {stock: fix}}
+              fresh: {cache: [stock]}
+              note: {web: "sipariş: yazılan 0 · geri verilen 1", page: "\"Ödeme alınamadı\""}
+              say: >-
+                Ödeme reddedildi. Transaction ROLLBACK ile geri alındı; Aurora'ya satır yazılmadı. Uygulama parçayı INCR ile
+                sayaca geri verdi (45) ve alıcı anahtarını sildi: C00105 başka bir kartla yeniden deneyebilir. Satılan (5) ile
+                sayaç (45) hâlâ uyuşuyor.
+            - phase: 4
+              who: cache
+              lit: [web, cache]
+              packet: {at: cache, text: "olsaydı: sayaç 0 · iki alıcı aynı anda · DECR → −1 (C00140) · DECR → −2 (C00141) · INCR → −1 · INCR → 0 · iki alıcı anahtarı silinir"}
+              set: {cache: {stock: {değer: "olsaydı: 0 → −1 → −2 → −1 → 0"}}}
+              mark: {cache: {stock: fix}}
+              note: {page: "", web: "olsaydı: iki cevap \"tükendi\"", cache: "olsaydı: sayaç bir an eksi", aurora: "olsaydı: 50 satış olurdu; tablo gerçek durumu (5) gösteriyor", dealjob: "olsaydı: gerçek son kontrol (10:09) gösteriliyor"}
+              say: >-
+                Olsaydı: sayaç 0'a inmiş olsaydı ve iki müşteri aynı anda bassaydı. Komutlar yine birer birer: biri −1, diğeri −2
+                alır; ikisi de 0'ın altında, Uygulama ikisine "tükendi" der ve INCR ile geri verir; sayaç 0'a döner. Fazla satış
+                olmaz, ama sayaç bir an eksidir. Kontrol eden bir Lua betiği olsaydı betik sayacı 0'da görür ve azaltmazdı; sayaç hiç eksiye inmezdi.
+            - phase: 4
+              who: cache
+              lit: [web, cache, aurora]
+              packet: {at: cache, text: "olsaydı: 10:12 · C00120 · ön kayıt OK · DECR → 44 · COMMIT O-90441 · EXPIREAT · hemen ardından yük devri: son yazmalar yeni kopyaya ulaşmadı → sayaç 45, alıcı anahtarı yok"}
+              set: {cache: {stock: {değer: "45 (olsaydı: son DECR kayboldu)"}}}
+              show: {aurora: [O-90441]}
+              mark: {aurora: {O-90441: fix}}
+              fresh: {aurora: [O-90441]}
+              note: {web: "olsaydı: C00120'ye \"aldın\" dendi", cache: "olsaydı: yük devri · son DECR yok", aurora: "olsaydı: 6. satır yazıldı", dealjob: ""}
+              say: >-
+                Olsaydı (ayrı bir durum): 10:12'de C00120 aldı: DECR 44 verdi, sipariş O-90441 Aurora'ya yazıldı. Hemen ardından
+                belleğin işi yapan kopyası çöktü ve başka bir kopya devraldı. "Tamam" denmiş son birkaç yazma yeni kopyaya
+                ulaşmamış olabilir: burada DECR ve alıcı anahtarı kayboldu. Sayaç 45 diyor, ama satılan 6: sayaç 1 fazla.
+            - phase: 4
+              who: dealjob
+              lit: [scheduler, dealjob, aurora, cache, monitor]
+              packet: {at: dealjob, text: "olsaydı: 10:13 ve 10:14 · SUM(qty) → 6 · GET → 45 · beklenen 50 − 6 = 44 · StockDrift −1 (2 kontrol) → ALARM · Ekip: DECRBY lm:deal:stock 1 → 44"}
+              set: {cache: {stock: {değer: "44 (olsaydı: Ekip DECRBY ile düzeltti)"}}, dealjob: {at: {değer: "olsaydı: 10:14"}, sold: {değer: "6"}, drift: {değer: "−1"}}, monitor: {a2: {durum: ALARM}}}
+              mark: {dealjob: {drift: fix}, monitor: {a2: fix}}
+              fresh: {dealjob: [at, sold, drift]}
+              note: {web: "", cache: "", aurora: "", monitor: "olsaydı: firsat-sayac-farki ALARM (10:14)"}
+              say: >-
+                Olsaydı: kontrol işi 10:13'te farkı gördü: Aurora'da 6 satış, beklenen sayaç 44, bellekte 45; StockDrift −1. 10:14'te
+                yine −1: alarm. Ekip sayacı DECRBY ile 1 azaltır. Sayaç 1 fazla olduğu için son parçada bir fazla satış mümkündü;
+                olsaydı Oversold alarmı ilk kontrolde çalardı. C00120'nin alıcı anahtarı da kayboldu; ikinci kez alırsa
+                RepeatBuyers alarmı çalar.
+            - phase: 4
+              who: web
+              lit: [web, cache, aurora, dealjob, monitor]
+              packet: {at: web, text: "olsaydı: 10:12 · C00130 · SET buyer … NX EX 120 → OK · DECR → 44 · Uygulama sunucusu çöktü (COMMIT yok) · 2 dk sonra alıcı anahtarı silinir · StockDrift +1 → ALARM · Ekip: INCRBY 1 → 45"}
+              hide: {aurora: [O-90441]}
+              show: {cache: [b7]}
+              set: {cache: {stock: {değer: "44 (olsaydı: sipariş yazılmadı)"}, b7: {ömür: "olsaydı: 10:12 + 120 sn → 10:14'te silindi"}}, dealjob: {at: {değer: "olsaydı: 10:14"}, sold: {değer: "5"}, left: {değer: "44"}, drift: {değer: "+1"}}}
+              mark: {aurora: {O-90441: ""}, cache: {stock: fix, b7: fix}, dealjob: {drift: fix}}
+              fresh: {cache: [b7]}
+              note: {web: "olsaydı: 10:12'de DECR'den sonra çöktü", cache: "olsaydı: ön kayıt 120 sn sonra silinir", monitor: "olsaydı: firsat-sayac-farki ALARM"}
+              say: >-
+                Olsaydı (ayrı bir durum; önceki "Olsaydı" yok sayılır): 10:12'de C00130'un ön kaydı yazıldı ve DECR 44 verdi, ama Uygulama
+                sunucusu siparişi yazmadan çöktü. Ön kayıt 120 saniye sonra (10:14) kendiliğinden silinir: müşteri yeniden deneyebilir.
+                Sayaç 1 eksik kalır (44, satılan 5): iki kontrol üst üste StockDrift +1, alarm; Ekip INCRBY ile 1 ekler. Ön kaydın
+                silinmesi parçayı kendiliğinden geri vermez: silinen anahtar DECR'in gönderilip gönderilmediğini bilmez.
+            - phase: 4
+              who: cache
+              lit: [page, web, cache, aurora, scheduler, dealjob, monitor]
+              hide: {cache: [b7]}
+              set: {cache: {stock: {değer: "45"}}, dealjob: {at: {değer: "10:14"}, sold: {değer: "5"}, left: {değer: "45"}, drift: {değer: "0"}}, monitor: {a2: {durum: OK}}}
+              mark: {cache: {stock: "", b7: ""}, dealjob: {drift: ""}, monitor: {a2: ""}}
+              note: {web: "", cache: "kesit: 2 anahtar · sayaç 45", aurora: "5 sipariş", page: "", monitor: "üç alarm OK", dealjob: "10:14 · 5 satılan · sayaç 45 · fark 0"}
+              say: >-
+                Hazır. "Olsaydı" kareleri yaşanmadı. 10:14 kontrolü: 5 satış, sayaç 45, üç ölçü 0, üç alarm OK. Bellekte kesitin
+                2 anahtarı (lm:deal ve 45'teki sayaç) ve 5 alıcı anahtarı var. t0'da sen (C00001) basınca Uygulama'nın
+                gönderdiği DECR 45'i 44 yapacak.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Önce satın almanın sorusu yazılır, sonra neden tek bir komutun güvenli olduğu, eksiye inen sayacın nasıl geri
+              verildiği ve bir betiğin neyi değiştireceği. Sonra iki kural: bir müşteriye bir tane ve aynı tıklamanın bir kez
+              sayılması. En sonda sayacın neyi garanti etmediği ve fazla satışın nasıl izlendiği. Kural baştan: sayaç hızlı bir
+              karardır; satışın asıl kaydı Aurora'daki siparişlerdir.
+            cards:
+              - title: "Satın almanın sorusu: kaldı mı, kaldıysa benim mi?"
+                text: >-
+                  Her "Buy one now" tıklaması tek bir soru sorar: "Bir parça kaldıysa bana ayır, kalmadıysa söyle." Cevap
+                  milisaniyeler içinde gelmeli ve aynı anda basan iki kişiye aynı parça verilmemeli. Cevapta kalan adet de olmalı
+                  ki sayfa güncellensin.
+                code:
+                  - {code: "DECR lm:deal:stock   → 49", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Tek komut: bir azalt, yeni değeri söyle."}
+                  - {code: "won = left >= 0", tag: Uygulamanın içinde, say: "0 ya da üstü: parça senin; eksi: kalmamış."}
+              - title: "Neden tek komut güvenli: sıra tek gişede"
+                text: >-
+                  Valkey'de ağdan gelen istekleri birkaç yardımcı iş parçacığı okur, ama komutları tek bir ana iş parçacığı
+                  sırayla, birer birer çalıştırır (AWS bunu ElastiCache for Valkey için böyle anlatır). DECR okuma, bir çıkarma ve
+                  yazmayı tek komutta yapar; arasına başka bir komut giremez. Bin kişi aynı saniyede bassa da DECR'ler sıraya
+                  girer ve her biri farklı bir sayı alır: 49, 48, 47… En çok 50 parça satılır. Güvensiz yol iki
+                  komuttur: önce GET, sonra SET; iki alıcı arada aynı 45'i okuyabilir (Adım 18–19). Sayaç tek bir anahtar
+                  olduğu için tek bir slotta, belleğin tek bir bölümünde (shard) durur: bütün alıcılar aynı gişeye gelir; DECR çok kısa olduğu için
+                  kuyruk hızlı akar.
+                code:
+                  - {code: "DECR lm:deal:stock", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Tek komut: oku, azalt, yaz; arada kimse yok."}
+                  - {code: "GET lm:deal:stock → 45   …   SET lm:deal:stock 44", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "İki komut: arasına başka bir alıcının komutu girebilir."}
+              - title: "DECR, sonra gerekirse INCR — ya da kontrol eden bir betik?"
+                text: >-
+                  DECR sıfırın altına da iner. Mağaza en basit yolu seçer: sonuç eksiyse Uygulama "tükendi" der ve INCR ile
+                  parçayı geri verir; sayfaya eksi değil 0 yazar. Bedeli: sayaç bir an eksidir. Örnek sıra: sayaç 0, bir alıcının DECR'i −1 yapar; tam o
+                  an reddedilen bir ödemenin INCR'ı gelir (−1 → 0); ardından gelen başka bir alıcı DECR ile yine −1 alır ve
+                  "tükendi" görür, oysa geri verilen bir parça vardı. Fazla satış olmaz; parça bir sonraki alıcıya gider. Kontrol ve
+                  azaltma bir Lua betiğinde tek adımda yapılabilir: betik sayacı 0'da görür ve azaltmaz, sayaç hiç eksiye inmez.
+                  Betiğin bedelleri: çalışırken o bölümdeki (shard) her komut bekler (kısa tutulmalı), biraz daha fazla ECPU
+                  harcar ve betik bir anahtardan fazlasına dokunacaksa hepsi aynı slotta olmalı. Örneğin betik alıcı anahtarını da
+                  yazsaydı, iki anahtarın adına aynı {deal} etiketi konurdu (lm:{deal}:stock ve lm:{deal}:buyer:C00017, ikisi
+                  13961); mağaza anahtar adlarını değiştirmemek ve sayacı kısa tek komutla tutmak için bunu seçmedi. Valkey
+                  functions bu ElastiCache türünde yok.
+                map:
+                  cols: [Yol, Komut, Artısı ve bedeli]
+                  rows:
+                    - ["DECR + INCR", "DECR · eksiyse INCR", "Tek kısa komut. Sayaç bir an eksi; fazla satış yok."]
+                    - ["Lua betiği", "EVALSHA <özet> 1 lm:deal:stock", "Sayaç hiç eksiye inmez. Çalışırken bölümü (shard) bekletir; anahtarları tek slotta."]
+                    - ["Valkey functions", "FUNCTION LOAD · FCALL", "Betik sunucuda adıyla durur. ElastiCache Serverless'ta kullanılamaz."]
+                code:
+                  - {code: "local v = tonumber(redis.call('GET', KEYS[1]))", tag: ElastiCache'in içinde, say: "Betiğin içinde sayacı oku."}
+                  - {code: "if v and v > 0 then return redis.call('DECR', KEYS[1]) end", tag: ElastiCache'in içinde, say: "0'dan büyükse azalt, yeni değeri döndür."}
+                  - {code: "return -1", tag: ElastiCache'in içinde, say: "Kalmadıysa dokunma; −1 \"tükendi\" demek."}
+                  - {code: "EVALSHA <betiğin özeti> 1 lm:deal:stock", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Mağaza bunu değil, DECR + INCR'ı seçti."}
+              - title: "Bir müşteriye bir tane: alıcı anahtarı"
+                text: >-
+                  Kural: her müşteri bu fırsattan bir tane alır. Uygulama DECR'den önce alıcı anahtarını NX ile yazar; OK gelirse
+                  devam eder, boş (nil) gelirse DECR göndermez: reddedilen bir istek sayaçtan parça götürmez. Anahtar önce 120
+                  saniyelik bir ön kayıttır; sipariş yazılınca ömrü 16:00'ya uzatılır. Uygulama arada çökerse ön kayıt 2 dakikada
+                  silinir ve müşteri kilitli kalmaz. Alıcı anahtarı başka bir slotta (lm:deal:buyer:C00017 4546, sayaç 1725), bu
+                  yüzden sayaçla tek bir pakette değil, ayrı bir komutla yazılır; ikisi de tek başına atomiktir.
+                code:
+                  - {code: "SET lm:deal:buyer:C00017 r-1a7c… NX EX 120   → OK", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "İlk deneme: 2 dakikalık ön kayıt."}
+                  - {code: "SET lm:deal:buyer:C00017 r-9f31… NX EX 120   → (nil)", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Anahtar var: DECR gönderilmez."}
+                  - {code: "EXPIREAT lm:deal:buyer:C00017 <16:00>", tag: Uygulama → ElastiCache, say: "Sipariş yazılınca: kampanya bitene kadar."}
+              - title: "Aynı tıklama iki kez gelirse: istek numarası"
+                text: >-
+                  Bağlantı cevap gelirken koparsa sayfa isteği yeniden gönderir; bu yeni bir alım değildir. Sayfa her tıklamaya
+                  bir numara verir ve yeniden denemede aynısını kullanır; butonu da cevap gelene kadar kapatır. Uygulama numarayı
+                  alıcı anahtarına yazar. Yeniden gelen istekte anahtar yazılamaz; içindeki numara aynıysa bu aynı tıklamadır:
+                  DECR gönderilmez, sipariş Aurora'da numarasıyla bulunur ve aynı cevap verilir. Numara aynı ama Aurora'da henüz
+                  sipariş yoksa ilk istek hâlâ sürüyordur: "işleniyor, birazdan siparişlerinde görünür" denir. Son emniyet Aurora'da: request_id UNIQUE, aynı numarayla ikinci sipariş yazılamaz.
+                code:
+                  - {code: "fetch('/elasticache/api/deal/buy', {method: 'POST', headers: {'Idempotency-Key': rid}})", tag: Tarayıcı → Uygulama, say: "Her tıklamaya bir numara; yeniden denemede aynısı."}
+                  - {code: "GET lm:deal:buyer:C00091   → r-5e6a…", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Aynı numara: aynı tıklama."}
+                  - {code: "SELECT order_id FROM orders WHERE request_id = 'r-5e6a…'", tag: [Uygulama → Aurora, Aurora → Uygulama], say: "Önceki cevap asıl kayıttan: O-90436."}
+              - title: "Sayaç neyi garanti etmez?"
+                text: >-
+                  Sayaç "sana bir parça ayrıldı" der; "satıldı" demez. Ödeme reddedilebilir, Uygulama DECR'den sonra çökebilir,
+                  bellek yük devrinde son birkaç yazmayı kaybedebilir. Bu yüzden satılan adedin doğru değeri hep Aurora'dan
+                  sayılır (iptaller hariç, kampanya numarasıyla) ve sayaç her dakika ona göre denetlenir (Adım 2).
+                map:
+                  cols: ["Ne oldu?", Sayaç, Asıl kayıt ve onarım]
+                  rows:
+                    - ["ödeme reddedildi", "DECR, sonra INCR", "Satır yok; Uygulama ROLLBACK + INCR + alıcı anahtarını siler."]
+                    - ["DECR'den sonra Uygulama çöktü", "1 eksik", "Satır yok; StockDrift +1, Ekip INCRBY ile ekler."]
+                    - ["yük devri, son DECR kayboldu", "1 fazla", "Satır var; StockDrift −1, Ekip DECRBY ile çıkarır."]
+              - title: "Ölçü ve alarm: fazla satışın bekçisi"
+                text: >-
+                  Kampanya işi her dakikalık kontrolde üç sayı yazar. StockDrift: (50 − satılan) − sayaç; normalde 0 (Adım 2).
+                  Oversold: 50'yi aşan satış; 0 olmalı. RepeatBuyers: bu kampanyadan birden fazla satırı olan müşteri sayısı; 0
+                  olmalı. Bunlar oran değil sayıdır; bir tane bile sorundur. Yalnız StockDrift'te o an yolda olan bir satış (DECR
+                  yapılmış, sipariş henüz yazılmamış) bir kontrollük geçici fark yaratabilir; bu yüzden onun alarmı iki kontrol
+                  üst üste bekler. Kampanya işi farkı kendisi düzeltmez: tek bir kontrolde yolda olan bir satışla gerçek bir
+                  kaybı ayıramaz; yanlış bir "düzeltme" yolda olan bir satışı ikinci kez sayardı. Sebebe Ekip bakar.
+                code:
+                  - {code: "put_metric_data(Namespace='Shop/Deal', MetricData=[StockDrift, Oversold, RepeatBuyers])", tag: Kampanya işi → CloudWatch, say: "Her dakika üç sayı."}
+                  - {code: "Oversold >= 1   # 1 kontrol", tag: CloudWatch'ın içinde, say: "Tek bir fazla satış bile alarm."}
+                  - {code: "ABS(StockDrift) > 0   # 2 kontrolün 2'si", tag: CloudWatch'ın içinde, say: "Fark iki kontrol sürerse alarm."}
+                  - {code: "RepeatBuyers >= 1   # 1 kontrol", tag: CloudWatch'ın içinde, say: "Bir müşteri iki kez aldıysa alarm."}
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              Kampanyadan önce Aurora'ya istek numarası sütunu ve üç alarm hazırlanır. 10:00'da kampanya işi sayacı 50 ile
+              kurar (Adım 2). İlk satın almadan önce bellekte alıcı anahtarı yoktur.
+            cards:
+              - title: "Siparişlere istek numarası (bir gün önce)"
+                text: >-
+                  Ekip sipariş tablosuna request_id sütununu ve onun UNIQUE index'ini ekler. Eski siparişlerde bu sütun boştur;
+                  PostgreSQL'de boş değerler birbirine eşit sayılmaz, index onları engellemez.
+                code:
+                  - {code: "ALTER TABLE orders ADD COLUMN request_id text;", tag: Ekip → Aurora, say: "Siparişi yaratan tıklamanın numarası."}
+                  - {code: "CREATE UNIQUE INDEX orders_request_id ON orders (request_id);", tag: Ekip → Aurora, say: "Aynı numarayla ikinci sipariş reddedilir."}
+              - title: "Alarmlar ilk satıştan önce (09:30)"
+                text: >-
+                  Üç alarm ilk satıştan önce kurulur; kampanya işi ölçüleri ilk kontrolden (10:01) itibaren her dakika yazar.
+                  Aşağıda birincisi; diğer ikisi aynı komutla kurulur (StockDrift için iki kontrolün ikisi, RepeatBuyers için bir
+                  kontrol).
+                code:
+                  - {code: "aws cloudwatch put-metric-alarm --alarm-name firsat-fazla-satis --namespace Shop/Deal --metric-name Oversold \\", tag: Ekip → CloudWatch, say: "Fazla satış alarmı…"}
+                  - {code: "  --statistic Maximum --period 60 --threshold 1 --comparison-operator GreaterThanOrEqualToThreshold --evaluation-periods 1", tag: CloudWatch'ın içinde, say: "…ilk kontrolde."}
+              - title: "Sayaç 50 ile başlar (10:00, Adım 2)"
+                text: >-
+                  Zamanlayıcı kampanya işini çalıştırır; iş önce sayacı NX ile, sonra kartı yazar ve ikisine bitiş saatini koyar.
+                  Ekip ilk çalışmadan sonra sayacı ve ömrünü okur.
+                code:
+                  - {code: "SET lm:deal:stock 50 NX · EXPIREAT lm:deal:stock <16:00>", tag: Kampanya işi → ElastiCache, say: "Sayaç: yoksa 50, 16:00'ya kadar."}
+                  - {code: "GET lm:deal:stock → 50 · TTL lm:deal:stock → 21600", tag: [Ekip → ElastiCache, ElastiCache → Ekip], say: "50 ve 6 saatlik ömür (saniye)."}
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              Kampanya başladıktan sonra sayacı her satın almada Uygulama değiştirir: önce alıcı anahtarı, sonra DECR, sonra
+              Aurora'da sipariş. Her dakika kampanya işi satılanları sayar ve üç ölçüyü yazar. 10:09'da 5 satış, sayaç 45.
+            cards:
+              - title: "Bir satın alma, baştan sona"
+                text: >-
+                  10:03, C00017. Altı adım. Ödeme 4. adımın içinde alınır: Uygulama transaction açıkken ödeme servisine sorar (bu
+                  sayfanın konusu değil); onay gelirse siparişi paid (ödendi) durumuyla yazar ve COMMIT eder, ret gelirse ROLLBACK. Uygulama karar verirken hep ElastiCache'in döndürdüğü
+                  cevaba bakar: OK mi nil mi, sayı 0 ya da üstü mü.
+                code:
+                  - {code: "POST /elasticache/api/deal/buy   Idempotency-Key: r-1a7c…", tag: Tarayıcı → Uygulama, say: "Tıklama, numarasıyla."}
+                  - {code: "r.set('lm:deal:buyer:C00017', 'r-1a7c…', nx=True, ex=120)   # OK", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Ön kayıt: ilk deneme."}
+                  - {code: "left = r.decr('lm:deal:stock')   # 49", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Parça ayrıldı."}
+                  - {code: "db.execute(\"BEGIN; INSERT INTO orders … 'r-1a7c…'; INSERT INTO order_items … 'flash-1031'; COMMIT;\")", tag: Uygulama → Aurora, say: "Sipariş ve satırı birlikte."}
+                  - {code: "r.expireat('lm:deal:buyer:C00017', bitis)", tag: Uygulama → ElastiCache, say: "Alıcı anahtarı 16:00'ya kadar."}
+                  - {code: "→ {\"won\": true, \"stock\": 49}", tag: Uygulama → Tarayıcı, say: "\"You got one. 49 pieces left\"."}
+              - title: "Aynı anda birçok alıcı"
+                text: >-
+                  10:05–10:08'de dört müşteri daha aldı; DECR sırayla 48, 47, 46, 45 döndürdü. Gerçek bir kampanyada aynı saniyede
+                  yüzlerce kişi basabilir: alıcı anahtarları her müşteride farklı ve farklı slotlarda, birbirini beklemez; hepsinin
+                  paylaştığı tek anahtar sayaçtır ve onun DECR'leri sırayla çalışır. 50. DECR 0 verir; 51. −1 alır, Uygulama ona
+                  "tükendi" der ve INCR ile geri verir.
+              - title: "Her dakika kontrol: sayılar"
+                text: >-
+                  Kampanya işi her kontrolde Aurora'da iki şey sayar: kampanyanın satılan adedi (Adım 2'deki SUM(qty) sorgusu) ve
+                  birden fazla satırı olan müşteriler. 10:04: satılan 1, sayaç 49, StockDrift 0, Oversold 0, RepeatBuyers 0.
+                  10:09: satılan 5, sayaç 45, üçü de 0. Aurora tablosu bu kampanyanın 5 siparişinin hepsini gösteriyor. Kontrol her dakika çalışır; simülasyon sadece bazılarını gösteriyor.
+                code:
+                  - {code: "SELECT o.customer_id FROM orders o JOIN order_items i USING (order_id)", tag: [Kampanya işi → Aurora, Aurora → Kampanya işi], say: "Siparişleri satırlarıyla eşle…"}
+                  - {code: "  WHERE i.campaign_id = 'flash-1031' AND o.status <> 'cancelled'", tag: Aurora'nın içinde, say: "…bu kampanya, iptaller hariç…"}
+                  - {code: "  GROUP BY o.customer_id HAVING COUNT(*) > 1   -- kaç tane: RepeatBuyers", tag: Aurora'nın içinde, say: "…iki kez alan müşteriler (10:09'da 0)."}
+                  - {code: "sayac = int(r.get('lm:deal:stock')); oversold = max(0, sold - 50); drift = (50 - sold) - sayac", tag: [Kampanya işi → ElastiCache, ElastiCache → Kampanya işi], say: "10:09: sayaç 45, ikisi de 0."}
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              Aynı tıklama iki kez gelirse, aynı müşteri yeniden basarsa, ödeme reddedilirse, son parçada iki kişi basarsa,
+              Uygulama çökerse, bellek yük devri yaparsa ya da kampanya biterse ne olur? İlk üçü "Örnek durum", sonraki üçü
+              "Olsaydı", sonuncusu kampanyanın normal bitişi. Her biri için zincirde bir kural ya da bir parça var; ne zaman çalıştığı, neyi yakalamadığı ve onarımı
+              aşağıda.
+            cards:
+              - title: "Aynı tıklama iki kez gelirse"
+                text: >-
+                  Ne zaman: her istekte, DECR'den önce; alıcı anahtarındaki numara gelen numarayla aynıysa DECR gönderilmez ve
+                  önceki cevap verilir. Yakalamadığı: alıcı anahtarı bir yük devrinde kaybolursa yeniden gelen istek yeni bir alım
+                  gibi işlenebilir. Onarım: Aurora'daki UNIQUE index aynı numarayla ikinci siparişi reddeder; Uygulama o zaman
+                  INCR ile parçayı geri verir ve ilk siparişi döndürür.
+              - title: "Aynı müşteri ikinci kez basarsa"
+                text: >-
+                  Ne zaman: her istekte; alıcı anahtarında başka bir numara varsa "bu fırsattan zaten aldın" denir, DECR
+                  gönderilmez. Yakalamadığı: kaybolan bir alıcı anahtarı (yük devri) ya da başka bir müşteri numarasıyla gelen
+                  aynı kişi. Onarım: RepeatBuyers alarmı ilk kontrolde çalar; Ekip ikinci siparişi iptal eder, iptal akışı parçayı
+                  INCR ile sayaca geri verir (Adım 2).
+              - title: "Ödeme reddedilirse"
+                text: >-
+                  Ne zaman: hemen, aynı istekte. Transaction ROLLBACK ile geri alınır, parça INCR ile geri verilir, alıcı anahtarı
+                  silinir. Yakalamadığı: Uygulama ROLLBACK ile INCR arasında çökerse parça geri verilmez. Onarım: StockDrift +1 iki
+                  kontrol üst üste sürer, alarm çalar, Ekip INCRBY ile ekler; ön kayıt 2 dakikada kendiliğinden silinir.
+                code:
+                  - {code: "except OdemeHatasi: db.rollback(); r.incr('lm:deal:stock'); r.delete('lm:deal:buyer:C00105')", tag: [Uygulama → Aurora, Uygulama → ElastiCache], say: "Sipariş yok; parça ve müşteri serbest."}
+              - title: "Son parçada iki kişi basarsa"
+                text: >-
+                  Ne zaman: her DECR'de; eksi sonuç "tükendi" demektir, Uygulama INCR ile geri verir. Yakalamadığı: sayaç bir an
+                  eksidir; tam o an bir parça geri verilirse (reddedilen ödeme) bir alıcı haksız yere "tükendi" görebilir. Fazla
+                  satış olmaz. Onarım: gerekmez; parça bir sonraki alıcıya gider. Eksi hiç görünmesin denirse kontrol eden Lua
+                  betiği kullanılır (t-1 · 1).
+              - title: "Bellek yük devri yaparsa"
+                text: >-
+                  ElastiCache Serverless veriyi birden fazla Availability Zone'da tutar ve çöken kopyanın işini kendiliğinden
+                  başka bir kopyaya verir. AWS belgeleri serverless için bir yazmanın kopyalara "tamam" cevabından önce mi sonra mı
+                  ulaştığını söylemiyor; node-based kümelerde bu kopyalama genelde cevaptan sonradır. Bu yüzden zincir, son birkaç
+                  DECR'in ve alıcı anahtarının kaybolabileceğini varsayar. Ne zaman: bir sonraki kontrol (en geç 1 dakika) farkı
+                  görür; StockDrift −1 iki kontrol sürerse alarm. Yakalamadığı: o iki dakikada sayaç 1 fazla; son parçalardaysa
+                  bir fazla satış olabilir. Onarım: Ekip DECRBY ile düzeltir; fazla satış olduysa Oversold alarmı ilk kontrolde
+                  çalar ve Ekip fazla siparişin müşterisiyle konuşur (iptal ve özür). Anahtarlar tümden kaybolursa kontrol onları
+                  asıl kayıtlardan yeniden kurar (Adım 2).
+                code:
+                  - {code: "DECRBY lm:deal:stock 1", tag: Ekip → ElastiCache, say: "Sayaç 1 fazlaydı: 45 → 44."}
+              - title: "Kampanya bitince"
+                text: >-
+                  16:00'da sayaç ve kart kendiliğinden silinir (Adım 2); alıcı anahtarlarının ömrü de 16:00'ya kurulduğu için
+                  onlar da aynı anda gider. Silme için ayrı bir iş yazılmaz. Siparişler ve istek numaraları Aurora'da kalır;
+                  raporlar oradan okunur.
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
