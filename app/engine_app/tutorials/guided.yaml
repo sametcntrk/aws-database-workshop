@@ -8500,6 +8500,7 @@ steps:
           lines:
             - {match: '@bp.post("/api/events")', say: "Tarayıcıdan gelen \"bu ürüne baktım\" isteği buraya gelir.", tag: [Tarayıcı → Uygulama]}
             - {match: 'cql = f"INSERT INTO', say: Keyspaces'e gidecek INSERT komutu hazırlanır., tag: [Uygulamanın içinde]}
+            - {match: 'if body.get("type") == "purchase" and order_id:', say: "Satın almaysa başka yol: her ürün için bir satır, bu tarayıcının ve müşterinin partition'ına, sipariş ve üründen çıkan aynı event_id ile (Adım 25). Bu istek \"baktım\", bu yüzden aşağıdaki satıra geçer.", tag: [Uygulamanın içinde]}
             - {match: 's().execute(s().prepare(cql)', say: "Komut Keyspaces'e gider; soru işaretlerinin yerine senin kimliğin, şu anki zaman ve ürün konur. Keyspaces \"yazıldı\" diye cevap verir.", tag: [Uygulama → Keyspaces, Keyspaces → Uygulama], hl: insert}
             - {match: 'return jsonify(trace.payload({"stored": True}))', say: "Tarayıcıya \"kaydedildi\" cevabı döner.", tag: [Uygulama → Tarayıcı]}
         - file: engines/keyspaces.py
@@ -9403,7 +9404,7 @@ steps:
           - who: Sonra
             text: >-
               Yeni bir sipariş grafa BOUGHT kenarı olarak eklendiği anda bir sonraki öneri değişir; grafı baştan hesaplamaya
-              gerek yoktur.
+              gerek yoktur. Kenar sipariş numarasıyla MERGE edilir ve gerçek adeti taşır (Adım 25); aynı sipariş ikinci bir kenar açmaz.
       remember: >-
         İlişkiler üzerinden giden sorularda ("benim gibi alanlar ne aldı?") graf veritabanı yolu doğrudan takip eder.
         Bir hop eklemek sorguya bir parça eklemek kadar kolaydır.
@@ -15090,6 +15091,7 @@ steps:
           - [TTL, "Bir anahtarın kalan ömrü (saniye). Sıfır olunca anahtar silinir."]
           - [HSET, "Bir hash'in alanlarını yazar: persona, last_page, seen_at."]
           - [EXPIRE, "Bir anahtara saniye cinsinden yaşam süresi verir."]
+          - ["MULTI … EXEC", "Arasındaki komutları tek paket yapar: komutlar önce sıraya girer (QUEUED), EXEC gelince araya başka komut girmeden birlikte çalışır. Paketin bütün anahtarları aynı slotta olmalı."]
           - [Sorted set (ZADD), "Her üyesinin bir puanı olan, puana göre sıralı küme. Burada üye ziyaretçi, puan son görülme zamanı."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
       t1:
@@ -15852,8 +15854,8 @@ steps:
               Bir önceki adımda TTL listesinden "30 seconds"u seçtin. Bu sadece sayfadaki bir seçimdi; istek gitmedi.
           - text: >-
               "Refresh the session" butonuna bastın. Tarayıcın uygulamaya "oturumumu 30 saniyelik süreyle yaz" dedi; uygulama
-              ElastiCache'e üç komut gönderdi: HSET (alanlar), EXPIRE (süre), ZADD (aktif ziyaretçiler kümesi). Simülasyon bu
-              komutları gösteriyor.
+              ElastiCache'e önce tek paket gönderdi: MULTI, HSET (alanlar), EXPIRE (süre), EXEC. Ardından ayrı bir komut: ZADD
+              (aktif ziyaretçiler kümesi). Simülasyon bu komutları gösteriyor.
             engines: [elasticache]
           - text: >-
               Hemen ardından sayfa oturumu okudu (HGETALL ve TTL); kutuda oturumun alanları ve kalan süre (30 civarı) göründü.
@@ -15863,28 +15865,44 @@ steps:
         kind: kv
         title: "ElastiCache (Valkey) belleği: oturum anahtarları"
         caption: >-
-          Oturumla ilgili iki anahtar (kimlik kısaltıldı). Önce yazma isteğinin üç komutu, sonra okuma isteğinin iki komutu
-          oynuyor. Değerler senin denemenle aynı biçimde.
+          Oturumla ilgili iki anahtar (kimlik kısaltıldı). Önce yazma isteğinin komutları (MULTI … EXEC paketi ve ZADD), sonra
+          okuma isteğinin iki komutu oynuyor. Değerler senin denemenle aynı biçimde.
         keys:
           - {key: "lm:session:7f3a…", type: hash, value: "persona C00001, last_page /deals, seen_at … (TTL 1800 sn)", slot: "…"}
           - {key: "lm:active", type: sorted set, value: "7f3a… → 1793394900, c41e… → 1793394600, …", slot: 542}
         commands:
+          - cmd: MULTI
+            key: "lm:session:7f3a…"
+            returns: OK
+            say_send: '"Refresh the session"a bastın. Uygulama paketi açıyor: MULTI. Bundan sonraki komutlar hemen çalışmaz, sıraya girer.'
+            say_find: "Uygulama oturum anahtarının slotunu hesapladı ve paketi o slotun sunucusuna gönderiyor."
+            say_back: Paket açıldı; henüz hiçbir şey yazılmadı.
           - cmd: HSET
             key: "lm:session:7f3a…"
-            returns: "0 (alanlar güncellendi)"
-            set: "persona C00001, last_page /deals, seen_at 1793395000 (TTL 1800 sn)"
-            say_send: '"Refresh the session"a bastın. Uygulama ilk komutu gönderiyor: HSET, oturumun alanlarını yaz.'
+            returns: QUEUED
+            say_send: "Paketin ilk komutu: HSET, oturumun alanlarını yaz."
+            say_find: Komut oturum anahtarının sırasına girdi.
+            say_back: "Cevap QUEUED: sıraya girdi, değer henüz değişmedi."
           - cmd: EXPIRE
             key: "lm:session:7f3a…"
-            returns: "1 (süre verildi)"
+            returns: QUEUED
+            say_send: "Paketin ikinci komutu: EXPIRE … 30, yani bu anahtar 30 saniye sonra silinsin."
+            say_find: Komut oturum anahtarının sırasına girdi.
+            say_back: "Cevap yine QUEUED: süre de henüz verilmedi."
+          - cmd: EXEC
+            key: "lm:session:7f3a…"
+            returns: "[0, 1]"
             set: "persona C00001, last_page /deals, seen_at 1793395000 (TTL 30 sn)"
-            say_send: "Uygulama ikinci komutu gönderiyor: EXPIRE … 30, yani bu anahtar 30 saniye sonra silinsin."
-            say_back: Anahtarın süresi 30 saniyeye ayarlandı; ElastiCache onu zamanı gelince kendisi silecek.
+            say_send: "Uygulama paketi kapatıyor: EXEC, sıradakileri çalıştır."
+            say_find: ElastiCache iki komutu araya başka komut girmeden çalıştırıyor.
+            say_back: >-
+              Alanlar yazıldı ve süre 30 saniyeye ayarlandı; ikisi birlikte oldu, oturum hiçbir an süresiz kalmadı. ElastiCache
+              anahtarı zamanı gelince kendisi silecek.
           - cmd: ZADD
             key: lm:active
             returns: "0 (üyenin puanı güncellendi)"
             set: "7f3a… → 1793395000, c41e… → 1793394600, …"
-            say_send: "Üçüncü komut: ZADD lm:active <şimdi> <ziyaretçi>; aktif ziyaretçiler kümesinde senin zamanın güncellenir."
+            say_send: "Paket bitti. Ayrı bir komut: ZADD lm:active <şimdi> <ziyaretçi>. lm:active başka bir slotta olduğu için pakete giremez."
           - cmd: TTL
             key: "lm:session:7f3a…"
             returns: "30"
@@ -15893,7 +15911,7 @@ steps:
         back: >-
           Uygulama sonuçları tarayıcına gönderdi; kutuda oturumun alanları ve kalan süre görünecek.
         summary: >-
-          Yazma, süre ve aktiflik üç ayrı komutla gitti; silme için hiçbir komut gönderilmeyecek. 30 saniye sonra ElastiCache
+          Alanlar ve süre tek pakette, aktiflik ayrı bir komutla gitti; silme için hiçbir komut gönderilmeyecek. 30 saniye sonra ElastiCache
           oturumu kendisi silecek.
       wire:
         what: >-
@@ -15903,12 +15921,14 @@ steps:
           ElastiCache Serverless'ın adresi. Bu ad, VPC'nin içindeki uç noktaya çözülür; cache internete kapalıdır.
         rows:
           - [Şifreleme, TLS, gerçek, ElastiCache Serverless sadece şifreli bağlantı kabul eder.]
-          - [Protokol, RESP (Redis/Valkey protokolü), gerçek, "Her komut kısa bir metin çerçevesidir; üç komut art arda gider."]
+          - [Protokol, RESP (Redis/Valkey protokolü), gerçek, "Her komut kısa bir metin çerçevesidir; MULTI … EXEC paketi tek seferde, ZADD ondan sonra gider."]
           - [Kimlik, "ACL kullanıcısı + şifre, bağlantı açılırken", gerçek, "Şifre kodda yazmaz; uygulama onu çalışırken AWS Secrets Manager'dan alır."]
         body_label: Komutlar ve cevaplar (okunur hâle getirilmiş)
         body: |-
-          HSET   lm:session:7f3a… persona C00001 last_page /deals seen_at 1793395000   → (integer) 0
-          EXPIRE lm:session:7f3a… 30                                                   → (integer) 1
+          MULTI                                                                        → OK
+          HSET   lm:session:7f3a… persona C00001 last_page /deals seen_at 1793395000   → QUEUED
+          EXPIRE lm:session:7f3a… 30                                                   → QUEUED
+          EXEC                                                                         → 1) (integer) 0  2) (integer) 1
           ZADD   lm:active 1793395000 7f3a…                                            → (integer) 0
       code_intro: >-
         Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Süreyi seçmek ve
@@ -15922,20 +15942,22 @@ steps:
             - {match: '@bp.post("/api/session")', say: "Oturum yazma isteği buraya gelir; adres süreyi (ttl) taşır.", tag: Tarayıcı → Uygulama}
             - {match: 'ttl = max(10, min(int(body.get("ttl", 1800)), 86400))', say: "Süreyi 10 saniye ile 1 gün arasında tutar; verilmezse 30 dakika.", tag: Uygulamanın içinde}
             - {match: 'key = f"lm:session:{visitor_id()}"', say: "Anahtar adını kurar: lm:session: + bu tarayıcının kimliği.", tag: Uygulamanın içinde, hl: key}
-            - {match: 'cmd("HSET"', say: "Birinci komut: oturumun alanlarını yazar (persona, son sayfa, zaman).", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], hl: key}
-            - {match: 'cmd("EXPIRE"', say: "İkinci komut: anahtara yaşam süresi verir.", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], hl: key}
-            - {match: 'cmd("ZADD"', say: "Üçüncü komut: aktif ziyaretçiler kümesinde senin zamanını günceller.", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], hl: key}
+            - {match: '.pipeline(transaction=True)', say: "Anahtarın slotundaki sunucu için bir MULTI … EXEC paketi hazırlar.", tag: Uygulamanın içinde, hl: key}
+            - {match: 'p.hset(key, mapping=', say: "Pakete oturumun alanlarını koyar (persona, son sayfa, zaman).", tag: Uygulamanın içinde, hl: key}
+            - {match: 'p.expire(key, ttl)', say: "Pakete anahtarın yaşam süresini koyar.", tag: Uygulamanın içinde, hl: key}
+            - {match: 'return p.execute()', say: "Paketi gönderir; iki komut birlikte çalışır, iki cevap birlikte döner.", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], hl: key}
+            - {match: 'cmd("ZADD"', say: "Paketten sonra ayrı komut: aktif ziyaretçiler kümesinde senin zamanını günceller.", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], hl: key}
             - {match: 'return jsonify(trace.payload({"ttl": ttl}))', say: Verilen süreyi tarayıcıya söyler., tag: Uygulama → Tarayıcı}
       live:
         title: Gerçek bellekte ne oldu?
         intro: >-
-          Senin tıklamanla giden yazma isteği: üç komut ve her birinin süresi.
+          Senin tıklamanla giden yazma isteği: MULTI … EXEC paketi ve ZADD, her birinin süresi.
         runs:
           - label: Yazma (senin tıklaman)
             trigger: true
-            metrics: [[HSET, ms], [EXPIRE, e1.ms], [ZADD, e2.ms], [Verilen süre (sn), data.ttl]]
+            metrics: [["MULTI … EXEC paketi", ms], [ZADD, e1.ms], [Verilen süre (sn), data.ttl]]
         reading: >-
-          Her komut yaklaşık bir milisaniye sürdü; süreler her istekte biraz değişir. Mağaza sekmesindeki kutuda kalan süre
+          Paket ve ZADD yaklaşık birer milisaniye sürdü; süreler her istekte biraz değişir. Mağaza sekmesindeki kutuda kalan süre
           verdiğin süreye çok yakındır; "Read the session"a sonra basarsan azaldığını görürsün. Süre bitince HGETALL boş döner ve TTL -2 olur
           (anahtar yok).
       query:
@@ -15944,8 +15966,14 @@ steps:
           İki sütun: senin tıklamanla giden yazma komutları ve hemen ardından giden okuma komutları.
         cards_title: Parça parça
         parts:
+          - id: mu
+            say: Bir paket aç;
+            code: "MULTI"
+            name: Birlikte mi?
+            note: Bundan sonraki komutlar sıraya girer; EXEC gelene kadar çalışmaz.
+            hl: key
           - id: hs
-            say: Bu tarayıcının oturumuna persona, son sayfa ve zamanı yaz,
+            say: bu tarayıcının oturumuna persona, son sayfa ve zamanı yaz,
             code: "HSET lm:session:7f3a… persona C00001 last_page /deals seen_at 1793395000"
             name: Ne yazılsın?
             note: Hash'in alanları. Anahtar yoksa oluşur; varsa alanlar güncellenir.
@@ -15956,8 +15984,14 @@ steps:
             name: Ne kadar yaşasın?
             note: Saniye cinsinden süre. Her yeni EXPIRE süreyi baştan başlatır.
             hl: key
+          - id: xc
+            say: ikisini birlikte çalıştır;
+            code: "EXEC"
+            name: Ne zaman çalışsın?
+            note: Sıradaki iki komut araya başka komut girmeden çalışır. Aynı anahtarda oldukları için aynı slottadır.
+            hl: key
           - id: za
-            say: ve aktif ziyaretçiler kümesinde zamanımı güncelle.
+            say: sonra aktif ziyaretçiler kümesinde zamanımı güncelle.
             code: "ZADD lm:active 1793395000 7f3a…"
             name: Kim aktif?
             note: Puan son görülme zamanı (saniye). "Son 5 dakikada kaç kişi?" sorusu bu kümeden puan aralığıyla cevaplanır.
@@ -15977,22 +16011,22 @@ steps:
         columns:
           - label: Yaz (senin tıklaman)
             sub: '"Refresh the session" ile giden komutlar.'
-            via: Uygulama bu komutları redis-py kütüphanesinin hset(), expire() ve zadd() metotlarıyla, art arda gönderir.
-            parts: [hs, ex, za]
+            via: Uygulama paketi redis-py kütüphanesinin pipeline(transaction=True), hset(), expire() ve execute() metotlarıyla, ZADD'i ayrı bir zadd() ile gönderir.
+            parts: [mu, hs, ex, xc, za]
           - label: Oku (hemen ardından)
             sub: Sayfanın kendiliğinden gönderdiği okuma.
             via: Uygulama bu komutları redis-py'nin hgetall() ve ttl() metotlarıyla gönderir.
             parts: [hg, tt]
         note: >-
           Dikkat: hiçbir yerde "sil" komutu yok. Silme işini EXPIRE'ın verdiği süre yapar; ElastiCache zamanı gelince anahtarı
-          kendisi kaldırır.
+          kendisi kaldırır. ZADD pakette değil: lm:active başka bir slotta, aynı pakete konsaydı ElastiCache paketi reddederdi (CROSSSLOT).
       back:
         title: Cevap dönünce ne oldu?
         intro: >-
           ElastiCache'in işi cevapları verince bitti. Bundan sonrası uygulamada ve tarayıcında oluyor.
         steps:
           - who: ElastiCache → Uygulama
-            text: Üç komutun her birine kısa bir sayı cevabı geldi (kaç alan eklendi, süre verildi mi, üye eklendi mi).
+            text: EXEC'in cevabında iki sayı birlikte geldi (kaç alan eklendi, süre verildi mi); ZADD'e de bir sayı döndü (üye eklendi mi).
           - who: Uygulama → Tarayıcın
             text: Verilen süreyi gönderdi.
           - who: Tarayıcın → Uygulama → ElastiCache
@@ -16068,6 +16102,8 @@ steps:
           - [COMMIT, "Transaction'daki bütün değişiklikleri kalıcı ve herkese görünür yapar."]
           - [ROLLBACK, "Transaction'daki bütün değişiklikleri geri alır; hiçbir şey olmamış gibi."]
           - [Satır kilidi (row lock), "UPDATE edilen satırı transaction bitene kadar başka yazmalara kapatır; iki ödeme aynı son parçayı satamaz."]
+          - [İstek numarası (request_id), "Ödeme sayfasının her tıklamaya verdiği tek numara. Cevap kaybolup aynı tıklama yeniden gelirse uygulama bu numarayla eski siparişi bulur; ikinci sipariş yazılmaz. orders tablosunda UNIQUE: aynı numara iki kez yazılamaz."]
+          - [Outbox, "Siparişle aynı transaction'da yazılan \"sipariş verildi\" satırının tablosu. Transaction geri alınırsa bu satır da hiç olmaz."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
       t1:
         title: Önceden ne vardı? Stok Aurora'ya nereden geldi, sipariş paketi nasıl kuruldu?
@@ -17073,12 +17109,15 @@ steps:
           - text: >-
               Bir önceki adımda "Make the payment fail" kutusunu işaretledin. Bu sadece sayfadaki bir seçimdi; istek gitmedi.
           - text: >-
-              "Place the order" butonuna bastın. Tarayıcın uygulamaya sepetteki ürünleri ve "ödeme başarısız olsun" bilgisini
-              gönderdi. Uygulama Aurora'ya bir bağlantı açtı ve transaction'ı başlattı (BEGIN).
+              "Place the order" butonuna bastın. Tarayıcın uygulamaya sepetteki ürünleri, "ödeme başarısız olsun" bilgisini ve bu
+              tıklamanın istek numarasını (request_id) gönderdi. Uygulama Aurora'ya bir bağlantı açtı, önce bu numarayla bir
+              sipariş var mı diye baktı (yoktu) ve transaction'ı başlattı (BEGIN).
             engines: [aurora]
           - text: >-
-              Stok düşürüldü (UPDATE); satır kilitlendi. Tam o anda deneme gereği ödeme başarısız oldu ve uygulama ROLLBACK
-              gönderdi. Stok eski hâline döndü, sipariş satırı hiç yazılmadı. Simülasyonun sol şeridi bu istek.
+              Stok düşürüldü (UPDATE); satır kilitlendi. Sepette birden çok ürün varsa uygulama onları ürün numarası sırasıyla
+              düşürür, böylece iki sipariş birbirinin kilidini beklerken takılmaz. Tam o anda deneme gereği ödeme başarısız oldu ve
+              uygulama ROLLBACK gönderdi. Stok eski hâline döndü; sipariş satırı da "sipariş verildi" satırı (outbox) da hiç
+              yazılmadı. Simülasyonun sol şeridi bu istek.
             engines: [aurora]
           - text: >-
               Sipariş olmadığı için diğer veritabanlarına hiçbir şey gönderilmedi; sepetin DynamoDB'de olduğu gibi kaldı. Sayfada
@@ -17087,17 +17126,19 @@ steps:
       sim:
         kind: txn
         caption: >-
-          Aurora'daki iki tablodan küçük bir kesit (stok değeri örnek). Solda senin denemen: ödeme stok düştükten sonra
+          Aurora'daki üç tablodan küçük bir kesit (stok değeri örnek). Solda senin denemen: ödeme stok düştükten sonra
           başarısız oluyor. Sağda olsaydı: ödeme başarılı olsaydı; bunu Adım 25'te gerçekten yapacaksın.
         tables:
           products: {key: product_id, cols: [product_id, name, stock], rows: [{product_id: P0001, name: Alpen Kablosuz Kulaklık 1, stock: 128}]}
           orders: {key: order_id, cols: [order_id, customer_id, status, total], rows: [{order_id: W17933…a1, customer_id: C00002, status: delivered, total: 1299.90}]}
+          outbox: {key: order_id, cols: [order_id, type], rows: []}
         lanes:
           - id: fail
             title: "Senin denemen · Ödeme başarısız → ROLLBACK"
             send: >-
               "Place the order"a bastın. Uygulama Aurora'ya bir bağlantı açtı ve komutları sırayla gönderiyor.
             ops:
+              - {do: lookup, sql: "SELECT order_id, total FROM orders WHERE request_id = 'r-4b1e…';", say: "Bu tıklama daha önce sipariş oldu mu? Satır yok; yeni bir deneme. Satır olsaydı uygulama aynı siparişi döndürür, hiçbir şey yazmazdı."}
               - {do: begin, sql: "BEGIN;", say: "Transaction başladı. Bundan sonraki değişiklikleri sadece bu transaction görür."}
               - {do: update, table: products, key: P0001, set: {stock: 127}, sql: "UPDATE products SET stock = stock - 1 WHERE product_id = 'P0001' AND stock >= 1;", say: "Stok 128'den 127'ye düştü ama henüz kalıcı değil; satır kilitlendi. Başka bir ödeme bu satırı bekler."}
               - {do: fail, sql: "-- ödeme adımı: HATA", say: "Deneme gereği ödeme başarısız oldu. Uygulama devam etmiyor; sipariş satırı yazılmayacak."}
@@ -17109,10 +17150,12 @@ steps:
             title: "Olsaydı · Ödeme başarılı → COMMIT (Adım 25)"
             send: Olsaydı - uygulama aynı transaction'ı başlatırdı.
             ops:
+              - {do: lookup, sql: "SELECT order_id, total FROM orders WHERE request_id = 'r-4b1e…';", say: "Bu numarayla sipariş yok; devam."}
               - {do: begin, sql: "BEGIN;", say: Transaction başladı.}
               - {do: update, table: products, key: P0001, set: {stock: 127}, sql: "UPDATE products SET stock = stock - 1 WHERE … AND stock >= 1;", say: "Stok 127 oldu (beklemede)."}
-              - {do: insert, table: orders, row: {order_id: W17933…7c, customer_id: C00001, status: processing, total: 3373.84}, sql: "INSERT INTO orders VALUES ('W17933…7c', 'C00001', …, 'processing', 3373.84);", say: Sipariş satırı yazıldı (beklemede).}
-              - {do: commit, sql: "COMMIT;", say: "COMMIT: stok ve sipariş birlikte kalıcı oldu ve herkese göründü."}
+              - {do: insert, table: orders, row: {order_id: W17933…7c, customer_id: C00001, status: processing, total: 3373.84}, sql: "INSERT INTO orders (…, request_id) VALUES ('W17933…7c', 'C00001', …, 'processing', 3373.84, 'r-4b1e…');", say: Sipariş satırı istek numarasıyla yazıldı (beklemede).}
+              - {do: insert, table: outbox, row: {order_id: W17933…7c, type: order_placed}, sql: "INSERT INTO outbox (event_id, order_id, type, payload, created_at) VALUES (…, 'W17933…7c', 'order_placed', …);", say: "\"Sipariş verildi\" satırı aynı transaction'da yazıldı (beklemede). Bu kurulumda bu tabloyu okuyan bir program yok."}
+              - {do: commit, sql: "COMMIT;", say: "COMMIT: stok, sipariş ve outbox satırı birlikte kalıcı oldu ve herkese göründü."}
             end_say: İkisi birlikte kalıcı oldu.
             back: Uygulama sipariş numarasını tarayıcına gönderirdi; sayfa diğer beş veritabanını güncellemeye başlardı.
         summary: >-
@@ -17132,6 +17175,7 @@ steps:
           - [Kimlik, "Kullanıcı adı + şifre, bağlantı açılırken", gerçek, "Şifre kodda yazmaz; uygulama onu AWS Secrets Manager'dan alır."]
         body_label: Bu bağlantı üzerinden giden komutlar (sırasıyla)
         body: |-
+          SELECT order_id, total FROM orders WHERE request_id = 'r-4b1e…';                   → 0 satır
           BEGIN;
           UPDATE products SET stock = stock - 1 WHERE product_id = 'P0001' AND stock >= 1;   → UPDATE 1
           -- ödeme adımı başarısız
@@ -17146,11 +17190,14 @@ steps:
           sub: Senin tıklamanla gelen istek.
           lines:
             - {match: '@bp.post("/api/orders")', say: "Sipariş isteği buraya gelir: ürünler, adetler, fiyatlar ve \"ödeme başarısız olsun\" seçimi.", tag: Tarayıcı → Uygulama}
-            - {match: 'with conn() as c, c.cursor() as cur:', say: "Aurora'ya yeni bir bağlantı açar (TLS + kullanıcı adı/şifre).", tag: [Uygulama → Aurora, Aurora → Uygulama]}
+            - {match: 'items = sorted(body.get("items", [])', say: "Ürünleri ürün numarasına göre sıralar: bütün siparişler satırları aynı sırayla kilitler, birbirini beklerken takılmaz.", tag: Uygulamanın içinde}
+            - {match: 'placed = placed_order(cur, request_id)', say: "BEGIN'den önce istek numarasını arar. Bu tıklama sipariş olduysa aynı siparişi döndürür, hiçbir şey yazmaz.", tag: [Uygulama → Aurora, Aurora → Uygulama], hl: sql}
             - {match: 'sql(cur, "BEGIN", "BEGIN;"', say: "Transaction'ı başlatır.", tag: [Uygulama → Aurora, Aurora → Uygulama], hl: sql}
             - {match: 'sql(cur, "UPDATE (stock)"', say: "Her ürünün stoğunu, yetiyorsa, tek komutta düşürür.", tag: [Uygulama → Aurora, Aurora → Uygulama], hl: sql}
             - {match: 'if cur.rowcount == 0:', say: "Komut hiçbir satırı değiştirmediyse stok yetmemiştir: hata.", tag: Uygulamanın içinde}
             - {match: 'raise RuntimeError("Experiment: the payment step failed after the stock update.")', say: "Deneme seçiliyse ödeme adımı burada başarısız olur.", tag: Uygulamanın içinde}
+            - {match: 'sql(cur, "INSERT (outbox)"', say: "Ödeme geçerse siparişle aynı transaction'da \"sipariş verildi\" satırını yazar. Senin denemende buraya gelinmedi.", tag: [Uygulama → Aurora, Aurora → Uygulama], hl: sql}
+            - {match: 'except psycopg.errors.UniqueViolation as e:', say: "Aynı tıklamanın başka bir denemesi önce bittiyse Aurora ikinci numarayı reddeder; uygulama geri alır ve o siparişi döndürür.", tag: Uygulamanın içinde}
             - {match: 'sql(cur, "ROLLBACK", "ROLLBACK;",', say: "Herhangi bir hatada ROLLBACK gönderir; Aurora bütün değişiklikleri geri alır.", tag: [Uygulama → Aurora, Aurora → Uygulama], hl: sql}
             - {match: 'return jsonify(trace.payload({"order_id": order_id if result == "committed" else None', say: "Sonucu (\"committed\" ya da \"rolled back\") tarayıcıya gönderir.", tag: Uygulama → Tarayıcı}
       live:
@@ -17159,19 +17206,25 @@ steps:
         runs:
           - label: Sipariş denemesi (senin tıklaman)
             trigger: true
-            metrics: [[Sonuç, data.result], ["BEGIN", ms], ["UPDATE (değişen satır)", e1.items], ["UPDATE süresi", e1.ms], ["ROLLBACK", e2.ms]]
+            metrics: [[Sonuç, data.result], ["İstek numarası araması", ms], ["BEGIN", e1.ms], ["UPDATE (değişen satır)", e2.items], ["UPDATE süresi", e2.ms], ["ROLLBACK", e3.ms]]
         reading: >-
-          UPDATE 1 satırı değiştirdi (stok yetiyordu), ardından ROLLBACK geldi ve değişiklik geri alındı. Sipariş numarası yok,
+          Önce istek numarası arandı ve sipariş bulunmadı. UPDATE 1 satırı değiştirdi (stok yetiyordu), ardından ROLLBACK geldi ve değişiklik geri alındı. Sipariş numarası yok,
           stok değişmedi. Komutların her biri birkaç milisaniye sürer; bağlantı her istekte yeniden açıldığı için isteğin toplam
           süresi komutların toplamından uzundur. Sepetin boşsa sipariş verilemez; önce Adım 12'de bir ürün ekle.
       query:
         title: Uygulama Aurora'ya ne dedi?
         intro: >-
-          Senin denemende sırayla giden üç SQL komutu. Bir parçanın üzerine gelince cümlede, kodda ve açıklamada aynı yer parlar.
+          Senin denemende sırayla giden dört SQL komutu. Bir parçanın üzerine gelince cümlede, kodda ve açıklamada aynı yer parlar.
         cards_title: Parça parça
         parts:
+          - id: rq
+            say: Bu tıklamanın siparişi var mı diye bak;
+            code: "SELECT order_id, total FROM orders WHERE request_id = 'r-4b1e…';"
+            name: Daha önce oldu mu?
+            note: Tarayıcının bu tıklamaya verdiği numara. Sipariş varsa aynı cevap döner ve aşağıdaki komutların hiçbiri gitmez.
+            hl: sql
           - id: bg
-            say: Bir transaction başlat;
+            say: yoksa bir transaction başlat;
             code: "BEGIN;"
             name: Ne zaman başlasın?
             note: Bundan sonraki komutlar tek bir işin parçası; değişiklikleri sadece bu bağlantı görür.
@@ -17180,7 +17233,7 @@ steps:
             say: P0001'in stoğunu 1 azalt,
             code: "UPDATE products SET stock = stock - 1"
             name: Ne değişsin?
-            note: Stoğu okuyup yazmaz; düşürmeyi tek komutta yapar. Satır transaction bitene kadar kilitlenir.
+            note: Stoğu okuyup yazmaz; düşürmeyi tek komutta yapar. Satır transaction bitene kadar kilitlenir. Birden çok ürün ürün numarası sırasıyla gider.
             hl: sql
           - id: wh
             say: ama sadece stok yetiyorsa;
@@ -17199,10 +17252,11 @@ steps:
           - label: Senin denemen
             sub: Senin "Place the order" tıklamanla giden komutlar ("Make the payment fail" işaretli).
             via: Uygulama bu komutları psycopg kütüphanesinin cursor.execute() metoduyla, aynı bağlantı üzerinden sırayla gönderir.
-            parts: [bg, up, wh, rb]
+            parts: [rq, bg, up, wh, rb]
         note: >-
           Dikkat: ROLLBACK'te "stoğu geri artır" diye bir komut yok. Geri almayı veritabanı kendisi yapar; uygulama sadece
-          "vazgeçtim" der. Bu yüzden yarım kalan bir sipariş hiçbir zaman başkalarına görünmez.
+          "vazgeçtim" der. Bu yüzden yarım kalan bir sipariş hiçbir zaman başkalarına görünmez. Sipariş ve outbox satırının INSERT'leri
+          bu denemede hiç gitmedi; ödeme geçseydi ikisi de COMMIT'ten önce aynı transaction'da giderdi.
       back:
         title: Cevap dönünce ne oldu?
         intro: >-
@@ -17282,7 +17336,7 @@ steps:
         terms:
           - [Asıl kayıt (source of truth), "Bir bilginin doğru kabul edilen tek yeri. Sipariş için Aurora."]
           - [Fan-out, "Bir olayın birden fazla sisteme yayılması."]
-          - [Outbox, "Siparişle aynı transaction'da yazılan \"haber verilecek olaylar\" tablosu; bir program onu okuyup dağıtır."]
+          - [Outbox, "Siparişle aynı transaction'da yazılan \"haber verilecek olaylar\" tablosu; bir program onu okuyup dağıtır. Bu kurulumda satır yazılıyor ama okuyan program yok: haber vermeyi tarayıcıdaki sayfa yapıyor."]
           - [Uygulama, "Mağazanın arka uç programı. Her veritabanı için ayrı bir uygulama sunucusu var; tarayıcı her birine ayrı istek gönderir."]
       t1:
         title: Önceden ne vardı? Bir sipariş beş depoya nasıl yayılıyor, depolar bu sabahki hâllerine nasıl geldi?
@@ -18401,13 +18455,15 @@ steps:
               işaretini kaldırdın.
             engines: [dynamodb]
           - text: >-
-              "Place the order" butonuna bastın. Tarayıcın sepetteki ürünleri Aurora'nın uygulama sunucusuna gönderdi; Aurora
-              stoğu düşürüp siparişi ve kalemlerini tek transaction'da yazdı ve COMMIT etti. Sipariş numarası geldi.
+              "Place the order" butonuna bastın. Tarayıcın sepetteki ürünleri ve bu tıklamanın istek numarasını Aurora'nın uygulama
+              sunucusuna gönderdi; Aurora stoğu düşürüp siparişi, kalemlerini ve "sipariş verildi" satırını (outbox) tek transaction'da
+              yazdı ve COMMIT etti. Sipariş numarası geldi.
             engines: [aurora]
           - text: >-
               Sipariş kesinleşince tarayıcıdaki sayfa beş isteği sırayla gönderdi; her biri o veritabanının kendi uygulama
-              sunucusuna gitti: sepeti boşalt, sıralamaya tutarı ekle, satın alma olayını yaz, siparişi say, BOUGHT kenarlarını
-              ekle.
+              sunucusuna gitti: sepeti boşalt, sıralamaya tutarı ekle (bu sipariş daha önce eklenmediyse), her ürün için satın alma
+              olayını iki partition'a yaz (bu tarayıcının ve persona'nın), siparişi tek nokta olarak say, BOUGHT kenarlarını gerçek
+              adetlerle yaz. Dördü sipariş numarasını taşır: aynı istek ikinci kez gelse hiçbir şey çoğalmaz.
             engines: [dynamodb, elasticache, keyspaces, influxdb, neptune]
           - text: >-
               Sayfadaki listede her satır sırayla yeşile döndü. Yaklaşık yarım dakika içinde Redshift de siparişi Aurora'dan zero-ETL
@@ -18424,9 +18480,9 @@ steps:
         steps:
           - engine: aurora
             label: Aurora PostgreSQL
-            cmd: "BEGIN; UPDATE products …; INSERT INTO orders …; INSERT INTO order_items …; COMMIT;"
+            cmd: "SELECT … WHERE request_id = …; BEGIN; UPDATE products … (ürün sırasıyla); INSERT INTO orders …; INSERT INTO order_items …; INSERT INTO outbox …; COMMIT;"
             say_send: '"Place the order"a bastın. Sayfa siparişi Aurora''nın uygulama sunucusuna gönderiyor.'
-            say_done: "Aurora tek transaction'da stoğu düşürdü, siparişi ve kalemleri yazdı ve COMMIT etti. Asıl kayıt hazır."
+            say_done: "Aurora bu istek numarasıyla sipariş bulmadı; tek transaction'da stoğu düşürdü, siparişi, kalemleri ve outbox satırını yazdı ve COMMIT etti. Asıl kayıt hazır."
           - engine: dynamodb
             label: DynamoDB
             cmd: "BatchWriteItem: sepetteki her item için DeleteItem"
@@ -18434,24 +18490,24 @@ steps:
             say_done: DynamoDB sepetin item'larını sildi.
           - engine: elasticache
             label: ElastiCache
-            cmd: "ZINCRBY lm:leaderboard <tutar> <müşteri>;  INCR lm:orders:today"
+            cmd: "SET processed:<sipariş> 1 NX EX 604800;  ZINCRBY lm:leaderboard <tutar> <müşteri>;  INCR lm:orders:today"
             say_send: Üçüncü istek - canlı sıralamaya tutarı ekle.
-            say_done: ElastiCache sıralamada müşterinin puanını artırdı ve bugünün sipariş sayacını bir artırdı.
+            say_done: "İşaret ilk kez kondu; ElastiCache müşterinin puanını ve bugünün sipariş sayacını artırdı. Aynı sipariş yeniden gelse işaret zaten var: iki kez eklenmez."
           - engine: keyspaces
             label: Keyspaces
-            cmd: "INSERT INTO activity_by_user (…, event_type) VALUES (…, 'purchase')"
-            say_send: Dördüncü istek - alışveriş geçmişine bir satın alma olayı yaz.
-            say_done: Keyspaces senin partition'ına bir "purchase" satırı ekledi.
+            cmd: "INSERT INTO activity_by_user (…, event_id, event_type, …) VALUES (…, uuid5(sipariş/ürün), 'purchase', …)  × ürün × 2 partition"
+            say_send: Dördüncü istek - alışveriş geçmişine her ürün için bir satın alma olayı yaz.
+            say_done: "Keyspaces her ürün için iki \"purchase\" satırı yazdı: bu tarayıcının ve persona'nın partition'ına, aynı event_id ile. Aynı olay yeniden gelse aynı satırların üzerine yazılır."
           - engine: influxdb
             label: Timestream for InfluxDB
-            cmd: "orders,channel=workshop count=1i <zaman>"
+            cmd: "orders,channel=web count=1i <sipariş zamanı + birkaç ns>"
             say_send: Beşinci istek - operasyon grafiği için siparişi say.
-            say_done: InfluxDB zaman damgalı bir nokta yazdı (count = 1).
+            say_done: "InfluxDB bu sipariş için tek bir nokta yazdı (count = 1). Damga sipariş numarasından gelir; aynı sipariş yeniden gelse aynı noktanın üzerine yazılır."
           - engine: neptune
             label: Neptune
-            cmd: "UNWIND $rows … CREATE (c)-[:BOUGHT {order_id, qty}]->(p)"
-            say_send: Altıncı istek - önerilerin bilmesi için BOUGHT kenarlarını ekle.
-            say_done: Neptune müşteriden her ürüne bir BOUGHT kenarı ekledi; bir sonraki öneri bunu bilir.
+            cmd: "UNWIND $rows … MERGE (c)-[b:BOUGHT {order_id}]->(p) ON CREATE SET b.qty = r.q"
+            say_send: Altıncı istek - önerilerin bilmesi için BOUGHT kenarlarını yaz.
+            say_done: "Neptune müşteriden her ürüne, bu sipariş numarasıyla ve gerçek adetle bir BOUGHT kenarı yazdı (MERGE: varsa bulur, yoksa oluşturur). Bir sonraki öneri bunu bilir."
         back: >-
           Altı istek de bitti; sayfa "Order … is placed" (sipariş verildi) yazdı. Biri başarısız olsaydı listede kırmızı görünürdü
           ama sipariş yine geçerli olurdu - asıl kayıt Aurora'da.
@@ -18487,13 +18543,14 @@ steps:
           title: '"Siparişi ver" düğmesinin kodu (tarayıcıda)'
           sub: Altı isteği sırayla gönderen kod.
           lines:
+            - {match: 'requestId = requestId || lm.uuid();', say: "Bu tıklamaya bir istek numarası verir. Cevap gelmeden bağlantı koparsa bir sonraki tıklama aynı numarayı kullanır.", tag: Tarayıcının içinde}
             - {match: 'order = await api("/aurora/api/orders"', say: "Önce siparişi Aurora'nın uygulama sunucusuna gönderir ve cevabı bekler.", tag: [Tarayıcı → Uygulama (Aurora), Uygulama (Aurora) → Tarayıcı]}
             - {match: 'if (order.result !== "committed") {', say: "Aurora geri aldıysa burada durur; diğer veritabanlarına hiçbir şey gitmez.", tag: Tarayıcının içinde}
             - {match: '["dynamodb", () => api("/dynamodb/api/cart", { method: "DELETE"', say: Sepeti boşaltma isteği., tag: Tarayıcı → Uygulama (DynamoDB)}
-            - {match: '["elasticache", () => api("/elasticache/api/leaderboard/add"', say: Sıralamaya tutar ekleme isteği., tag: Tarayıcı → Uygulama (ElastiCache)}
-            - {match: '["keyspaces", () => api("/keyspaces/api/events", { body: { type: "purchase"', say: Satın alma olayı isteği., tag: Tarayıcı → Uygulama (Keyspaces)}
-            - {match: '["influxdb", () => api("/influxdb/api/orders-metric"', say: Siparişi sayma isteği., tag: Tarayıcı → Uygulama (InfluxDB)}
-            - {match: '["neptune", () => api("/neptune/api/purchase"', say: BOUGHT kenarları isteği., tag: Tarayıcı → Uygulama (Neptune)}
+            - {match: '["elasticache", () => api("/elasticache/api/leaderboard/add"', say: "Sıralamaya tutar ekleme isteği; sipariş numarasını taşır, aynı sipariş iki kez eklenmez.", tag: Tarayıcı → Uygulama (ElastiCache)}
+            - {match: '["keyspaces", () => api("/keyspaces/api/events", { body: { type: "purchase"', say: "Satın alma olayı isteği: sipariş numarası ve bütün ürünler.", tag: Tarayıcı → Uygulama (Keyspaces)}
+            - {match: '["influxdb", () => api("/influxdb/api/orders-metric"', say: "Siparişi sayma isteği; sipariş numarasından tek bir nokta çıkar.", tag: Tarayıcı → Uygulama (InfluxDB)}
+            - {match: '["neptune", () => api("/neptune/api/purchase"', say: "BOUGHT kenarları isteği: sipariş numarası, ürünler ve her ürünün adedi.", tag: Tarayıcı → Uygulama (Neptune)}
             - {match: 'try { await fn(); mark(step, true, "done"); } catch (e) { mark(step, false, "failed"); }', say: "Hepsini sırayla çalıştırır; biri başarısız olursa satırı kırmızı yapar ve devam eder.", tag: Tarayıcının içinde}
       live:
         title: Gerçek sistemde ne oldu?
@@ -18508,7 +18565,7 @@ steps:
             metrics: [[Silinen item, items], [Süre, ms]]
           - label: ElastiCache (sıralama)
             page_call: {path: /elasticache/api/leaderboard/add}
-            metrics: [[ZINCRBY, ms], [INCR, e1.ms]]
+            metrics: [[SET NX, ms], [ZINCRBY, e1.ms], [INCR, e2.ms]]
           - label: Keyspaces (olay)
             page_call: {path: /keyspaces/api/events}
             metrics: [[Yazılan satır, items], [Süre, ms]]
@@ -18517,10 +18574,11 @@ steps:
             metrics: [[Yazılan nokta, items], [Süre, ms]]
           - label: Neptune (kenarlar)
             trigger: true
-            metrics: [[Eklenen kenar, items], [Süre, ms]]
+            metrics: [[Yazılan kenar, items], [Süre, ms]]
         reading: >-
-          Aurora siparişi "committed" olarak yazdı; ardından beş istek sırayla bitti. Süreler veritabanından veritabanına ve
-          istekten isteğe değişir. Ödeme sayfası açılırken sepet de okunmuştu; DynamoDB kutusu boşsa sepet boş olabilir.
+          Aurora siparişi "committed" olarak yazdı; ardından beş istek sırayla bitti. Keyspaces'in yazdığı satır sayısı ürün sayısının
+          iki katıdır (iki partition). Süreler veritabanından veritabanına ve istekten isteğe değişir. Ödeme sayfası açılırken sepet
+          de okunmuştu; DynamoDB kutusu boşsa sepet boş olabilir.
       query:
         title: Sayfa veritabanlarına ne dedi?
         intro: >-
@@ -18530,9 +18588,9 @@ steps:
         parts:
           - id: au
             say: Aurora'da siparişi tek transaction'da yaz,
-            code: "BEGIN; UPDATE products …; INSERT INTO orders …; INSERT INTO order_items …; COMMIT;"
+            code: "SELECT … WHERE request_id = …; BEGIN; UPDATE products …; INSERT INTO orders …; INSERT INTO order_items …; INSERT INTO outbox …; COMMIT;"
             name: 1. Asıl kayıt
-            note: Stok, sipariş ve kalemler birlikte; ya hepsi ya hiçbiri (Adım 23).
+            note: "Önce bu tıklamanın siparişi aranır. Stok (ürün numarası sırasıyla), sipariş, kalemler ve outbox satırı birlikte: ya hepsi ya hiçbiri (Adım 23). Outbox'ı bu kurulumda okuyan program yok."
             hl: app
           - id: dd
             say: DynamoDB'de sepeti boşalt,
@@ -18542,27 +18600,27 @@ steps:
             hl: app
           - id: ec
             say: ElastiCache'te sıralamaya tutarı ekle,
-            code: "ZINCRBY lm:leaderboard <tutar> <müşteri>; INCR lm:orders:today"
+            code: "SET processed:<sipariş> 1 NX EX 604800; ZINCRBY lm:leaderboard <tutar> <müşteri>; INCR lm:orders:today"
             name: 3. Canlı sıralama
-            note: Sorted set'te müşterinin puanı artar; sıralama her yazmada hazır kalır (Adım 33).
+            note: "Önce işaret: NX \"yoksa koy\" demek, EX 7 gün yaşatır. İşaret yeni konduysa puan ve sayaç artar; varsa ikisine de dokunulmaz (Adım 33)."
             hl: app
           - id: ks
             say: Keyspaces'e satın alma olayını yaz,
-            code: "INSERT INTO activity_by_user (…) VALUES (…, 'purchase', …)"
+            code: "INSERT INTO activity_by_user (…) VALUES (…, uuid5(sipariş/ürün), 'purchase', …)  × ürün × 2 partition"
             name: 4. Geçmiş
-            note: Senin partition'ına yeni bir satır (Adım 10, 27).
+            note: "Her ürün için tarayıcının ve persona'nın partition'ına birer satır. event_id ve event_time sipariş ve üründen çıkar; aynı olay aynı satırın üzerine yazılır (Adım 10, 27)."
             hl: app
           - id: ix
             say: InfluxDB'de siparişi say,
-            code: "orders,channel=workshop count=1i <zaman>"
+            code: "orders,channel=web count=1i <sipariş zamanı + birkaç ns>"
             name: 5. Ölçüm
-            note: Line protocol; ölçüm adı, etiket, alan ve zaman damgası (Adım 34).
+            note: "Line protocol; ölçüm adı, etiket, alan ve zaman damgası (Adım 34). Sipariş başına tek nokta: aynı etiket ve aynı damga aynı noktanın üzerine yazar."
             hl: app
           - id: np
             say: ve Neptune'a BOUGHT kenarlarını ekle.
-            code: "UNWIND $rows AS r MATCH (c {~id: r.c}) MATCH (p {~id: r.p}) CREATE (c)-[:BOUGHT {order_id: r.o, qty: 1}]->(p)"
+            code: "UNWIND $rows AS r MATCH (c {~id: r.c}) MATCH (p {~id: r.p}) MERGE (c)-[b:BOUGHT {order_id: r.o}]->(p) ON CREATE SET b.qty = r.q"
             name: 6. Öneriler
-            note: Her ürün için bir kenar; bir sonraki öneri hemen değişir (Adım 11).
+            note: "Her ürün için sipariş numarasıyla aranan tek kenar; yoksa gerçek adetle oluşur. Bir sonraki öneri hemen değişir (Adım 11)."
             hl: app
         columns:
           - label: Bir sipariş, altı istek
@@ -18573,7 +18631,8 @@ steps:
             parts: [au, dd, ec, ks, ix, np]
         note: >-
           Dikkat: veritabanları birbirine hiç konuşmuyor; hiçbiri diğerinden veri çekmiyor. Her birine haber veren tarayıcıdaki
-          sayfa. Tek istisna analiz tarafı: Redshift siparişi Aurora'dan zero-ETL ile kendisi alır.
+          sayfa. Tek istisna analiz tarafı: Redshift siparişi Aurora'dan zero-ETL ile kendisi alır. Sayfa aynı isteği yeniden
+          gönderse sipariş, puan, olay, nokta ve kenar çoğalmaz.
       back:
         title: Cevap dönünce ne oldu?
         intro: >-
@@ -18590,7 +18649,7 @@ steps:
               workshop'taki tek motor-motor bağlantısı.
           - who: Sonra
             text: >-
-              Siparişin "Orders" sayfasında (Aurora, Adım 26), "My activity"de (Keyspaces), canlı sıralamada (ElastiCache) ve
+              Siparişin "Orders" sayfasında (Aurora, Adım 26), "My activity"nin iki sekmesinde (Keyspaces), canlı sıralamada (ElastiCache) ve
               önerilerde (Neptune) göründüğünü görebilirsin.
       remember: >-
         Siparişin tek bir asıl kaydı var ve o önce kesinleşir. Diğer sistemler ondan türeyen bilgiyi sonra alır. Gerçek bir
@@ -20452,7 +20511,8 @@ steps:
             engines: [keyspaces]
           - text: >-
               Liste müşterinin geçmişiyle doldu: aramalar, istek listesine eklemeler, sepetten çıkarmalar, satın almalar; en yenisi
-              üstte.
+              üstte. Adım 25'teki siparişini bu müşteri olarak verdiysen onun satın alma satırları da burada: sipariş her ürünü iki
+              partition'a yazar.
             engines: [keyspaces]
       sim:
         kind: partition
@@ -20541,7 +20601,7 @@ steps:
             metrics: [[Okunan satır, items], [Süre, ms]]
         reading: >-
           Bu tarayıcının partition'ında sadece senin bu oturumdaki hareketlerin var; persona'nın partition'ında kurulumdan gelen
-          uzun bir geçmiş var ve okuma 20 satırda durdu. Persona'nın örnek geçmişi 7 gün sonra TTL ile silinir; o zaman liste
+          uzun bir geçmiş ve bu müşteriyle verilen siparişlerin satın alma satırları var, okuma 20 satırda durdu. Persona'nın örnek geçmişi 7 gün sonra TTL ile silinir; o zaman liste
           kısalır. Süre her istekte biraz değişir.
       query:
         title: Uygulama Keyspaces'e ne dedi?
@@ -21692,9 +21752,9 @@ steps:
         apply_say: "Değişiklik Redshift'e yaklaşık yarım dakika sonra uygulandı; kopyadaki en yeni sipariş artık 10:25:41."
         send: Sayfa açılırken uygulama Redshift'e svv_integration'ı ve kopyadaki en yeni siparişin zamanını soruyor.
         query_say: >-
-          Redshift cevap verdi: durum CdcRefreshState, 4 tablo kopyalanıyor, 0 hata; en yeni sipariş 10:25:41. Şimdiki zamanla farkı
+          Redshift cevap verdi: durum CdcRefreshState, 5 tablo kopyalanıyor, 0 hata; en yeni sipariş 10:25:41. Şimdiki zamanla farkı
           "kaç saniye önce" olarak hesaplandı.
-        out: [[durum, CdcRefreshState], [kopyalanan tablo, "4 · hata 0"], [en yeni sipariş, "10:25:41"]]
+        out: [[durum, CdcRefreshState], [kopyalanan tablo, "5 · hata 0"], [en yeni sipariş, "10:25:41"]]
         back: Uygulama durumu tarayıcına gönderdi; kutu güncellenecek.
         summary: >-
           Kopya sağlıklıysa durum CdcRefreshState ve hata sayısı 0'dır. "Kaç saniye önce", en yeni siparişten bu yana geçen süredir;
@@ -21738,7 +21798,7 @@ steps:
             trigger: true
             metrics: [[Durum, data.integration.state], [Kopyalanan tablo, data.integration.total_tables_replicated], [Hata veren tablo, data.integration.total_tables_failed], [En yeni sipariş (sn önce), data.newest_visitor_order.seconds_ago]]
         reading: >-
-          Durum CdcRefreshState ise kopya değişiklikleri sürekli uyguluyor; 4 tablo (siparişler, kalemler, ürünler, müşteriler)
+          Durum CdcRefreshState ise kopya değişiklikleri sürekli uyguluyor; 5 tablo (siparişler, kalemler, ürünler, müşteriler, outbox)
           kopyalanıyor. "Sn önce", kopyadaki en yeni ziyaretçi siparişinden bu yana geçen süre: siparişini birkaç dakika önce
           verdiysen o kadar dakikadır; gecikmeyi görmek için yeni bir sipariş verip hemen tekrar bak.
       query:
@@ -22502,8 +22562,9 @@ steps:
           veritabanları var.
         steps:
           - text: >-
-              Adım 25'te sipariş verdiğinde, sayfa ElastiCache'e senin persona'nın puanına sipariş tutarını ekletmişti (ZINCRBY) ve
-              bugünkü sipariş sayacını bir artırmıştı (INCR).
+              Adım 25'te sipariş verdiğinde, sayfa ElastiCache'e önce o sipariş için bir işaret koydurmuştu (SET processed:<sipariş> NX).
+              İşaret yeni konduğu için senin persona'nın puanına sipariş tutarı eklenmiş (ZINCRBY) ve bugünkü sipariş sayacı bir artmıştı
+              (INCR). Aynı sipariş yeniden gelse işaret zaten vardır ve ikisi de çalışmaz.
             engines: [elasticache]
           - text: >-
               Şimdi canlı ekranı açtın. Sayfa liderlik tablosunu istedi; uygulama ElastiCache'e üç komut gönderdi: ZREVRANGE (ilk 10),
@@ -22534,7 +22595,7 @@ steps:
         incr:
           id: C00001
           by: 3373.84
-          say: "Adım 25: sipariş verildi ve sayfa ZINCRBY lm:leaderboard 3373.84 C00001 gönderdi. Ayşe'nin puanı arttı ve yeri yazarken güncellendi."
+          say: "Adım 25: sipariş verildi; bu sipariş için işaret ilk kez kondu (SET processed:<sipariş> NX) ve ZINCRBY lm:leaderboard 3373.84 C00001 gitti. Ayşe'nin puanı arttı ve yeri yazarken güncellendi."
         send: Canlı ekranı açtın. Uygulama ZREVRANGE lm:leaderboard 0 9 WITHSCORES gönderiyor.
         read_say: ElastiCache kümenin başından 10 üyeyi puanlarıyla verdi; sıralama zaten hazırdı.
         names_say: >-
@@ -22603,7 +22664,7 @@ steps:
             say: bugünkü sipariş sayısını getir,
             code: "GET lm:orders:today"
             name: Kaç sipariş?
-            note: Her siparişte INCR ile artan sayaç.
+            note: Her siparişte bir kez INCR ile artan sayaç (işaret yeni konduysa).
             hl: member
           - id: zc
             say: son 5 dakikada görülen ziyaretçileri say,
@@ -22830,7 +22891,8 @@ steps:
         reading: >-
           Dönen nokta sayısı, seçili aralıkta veri olan pencere sayısı ve depo sayısının çarpımıdır. Bu kurulumda sensör verisi bir
           kez yüklendi ve zamanla eskidi; son 24 saatte sensör noktası yoksa grafik boş ve dönen nokta 0 olur. Bu durumda Flux
-          sorgusu yine çalıştı, sadece aralıkta nokta bulamadı. Süre her istekte değişir.
+          sorgusu yine çalıştı, sadece aralıkta nokta bulamadı. Sipariş grafiği aynı seriden (channel=web) okur: mağazadaki her sipariş
+          bu seriye tek bir nokta yazar, pencere toplamı o noktayı da sayar. Süre her istekte değişir.
       query:
         title: Uygulama InfluxDB'ye ne dedi?
         intro: >-
