@@ -14081,58 +14081,734 @@ steps:
           - [DECR, "Sayacı 1 azaltır ve yeni değeri döndürür. Okuma ve yazma tek komut."]
           - [ElastiCache (Valkey), "Veriyi bellekte tutan, mikrosaniyeler içinde cevap veren anahtar-değer veritabanı."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde fırsat stoğu için hazırlık
+      t1:
+        title: Önceden ne vardı? "Önce oku, sonra yaz" hatası canlıya çıkmadan nasıl yakalanır?
         intro: >-
-          İzdiham başlamadan önce, kampanya için bellekte bir sayaç ve bir fırsat kartı hazırlanır. Aşağıdaki beş adım bu
-          hazırlığın sırasıdır.
-        text:
-          - title: Önce sayfanın soruları yazılır
-            text: >-
-              Fırsat sayfasının iki işi var: "kaç parça kaldı?" (çok sık okunur) ve "bir tane al" (çok sayıda kişi aynı anda,
-              aynı değere yazar). İkisi de tek bir anahtar üzerinde, bellekte, milisaniyenin altında cevaplanmalıdır.
-            code: |-
-              GET  lm:deal:stock    → kaç parça kaldı
-              DECR lm:deal:stock    → bir tane al, yeni değeri söyle
-          - title: Kampanya başlamadan sayaç kurulur
-            text: >-
-              Fırsat kartı (ürün no, ad, indirimli fiyat) katalogdan kopyalanıp bir hash olarak, kalan adet de asıl stok
-              kaydından alınıp bir tamsayı olarak belleğe yazılır. Satış sırasında katalog ya da stok veritabanı sorulmaz.
-            code: |-
-              HSET lm:deal product_id P0021 name "Akıllı Saat" price 1199.94
-              SET  lm:deal:stock 50
-          - title: Paylaşılan değer tek bir atomik komutla değişir
-            text: >-
-              "Önce oku, sonra yaz" yapılmaz. DECR sayacı tek hamlede azaltır; sonuç eksiye düşerse parça kalmamıştır ve INCR
-              ile geri verilir. Birden fazla şey birlikte kontrol edilecekse (ör. stok ve "kişi başı en fazla 1") hepsi tek bir
-              Lua betiğinde, yine tek hamlede çalışır.
-            code: |-
-              EVAL "if tonumber(redis.call('GET', KEYS[1])) > 0 then return redis.call('DECR', KEYS[1]) else return -1 end" 1 lm:deal:stock
-          - title: Sayaç kapıdaki ilk elemedir
-            text: >-
-              Asıl satış kaydı (sipariş, ödeme) ilişkisel bir veritabanına transaction ile yazılır. Ödeme başarısız olursa sayaç
-              INCR ile geri artırılır. Satış bitince satılan adetler siparişlerle karşılaştırılır; sayaç kaybolursa asıl
-              kayıttan yeniden kurulur.
-          - title: Tek anahtar tek bir parçadadır
-            text: >-
-              ElastiCache yüke göre büyür ve anahtarları parçalara (shard) dağıtır, ama tek bir sayaç her zaman tek bir
-              parçadadır. Çok büyük kampanyalarda stok birkaç anahtara bölünür (ör. lm:deal:stock:1 … :4) ve alıcılar bu
-              anahtarlara dağıtılır.
-      feed:
-        title: Veri nereden geliyor?
-        writes: >-
-          Satış başlarken sayacı asıl stok kaydından kuran bir iş; satış sırasında her alıcının isteğiyle uygulama (DECR).
-        reads: Uygulama, fırsat sayfasındaki "kalan adet" için.
-        kind: >-
-          Uygulama orkestrasyonu. ElastiCache başka bir veritabanından kendiliğinden veri çekmez; içine ne yazılırsa onu
-          tutar.
-        with: >-
-          Fırsat sayfası ElastiCache'in yanında başka veritabanlarına dayanır: fırsat kartındaki ürün adı ve fiyat kampanya
-          başlarken katalogdan (DocumentDB) kopyalanır; görsel nesne deposundan (S3, büyük sistemlerde bir CDN ile) gelir;
-          satın almanın asıl kaydı sipariş veritabanına (Aurora) yazılır.
-        best: >-
-          Asıl gerçek her zaman veritabanındadır. Satış bitince satılan adetler veritabanındaki siparişlerle karşılaştırılır.
-          Sayaç kaybolursa (ör. bir bakım sırasında) asıl kayıttan yeniden kurulur.
+          Sen "Start the rush" butonuna basmadan önce mağazanın satın alma kodu fırsat sayacını tek bir komutla (DECR)
+          azaltıyor ve canlı bellekte senin denemen için henüz bir anahtar yok. Satın alma yolunun nasıl kurulduğunu Adım
+          17, kampanya provasını Adım 16 anlattı. Bu bölüm başka bir soruyu anlatıyor: bir geliştirici bir gün sayacı yine
+          "önce oku, sonra yaz" diye değiştirirse bu hata canlıya çıkmadan nasıl yakalanır? Tek kişiyle denendiğinde bu kod
+          kusursuz çalışır; hata sadece çok kişi aynı anda bastığında görünür. Bu yüzden zincirde dört emniyet var: kod
+          incelemesi kuralı, her değişiklikte çalışan bir eşzamanlılık testi, kampanyadan önceki provada fazla satış
+          sorusu ve canlıda fazla satış alarmı. Testin kendi anahtarları da ayrı bir adla ve kısa ömürle yazılır; t0'daki
+          deneme aynı kalıbı kullanır. Adım 17'deki diğer parçalar (Fırsatlar sayfası, Aurora'daki siparişler,
+          EventBridge Scheduler) çalışmaya devam ediyor; burada sadece bu soruya dokundukları yerde anılıyorlar. Önce
+          zincirin bileşenleri, sonra bir simülasyon, sonra dört aşama (tasarım, ilk yükleme, sürekli besleme, tutarlılık
+          ve onarım).
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1, t0 ve saatler", "t0: senin \"Start the rush\" tıklaman; bu bölümde 31 Eki 10:20 (temsilî). t-1: ondan önceki zaman. Kampanya 31 Eki 10:00–16:00 (Adım 2, 17). Saatler Türkiye saatidir. Derleme, pull request ve sürüm numaraları, ziyaretçi kimlikleri ve test sayıları temsilîdir."]
+          - ["Ekip ve geliştirici", "Ekip: mağazanın sistemini kuran ve işleten mühendisler; alarmlara onlar bakar. Geliştirici: Ekip'te kodu değiştiren kişi."]
+          - ["Önce oku, sonra yaz (read-then-write)", "Sayacı GET ile okuyup bir eksiğini SET ile yazmak: iki ayrı komut. Arada başka alıcıların komutları çalışabilir; iki kişi aynı 10'u okur, ikisi de 9 yazar, bir parça iki kez satılır. Tek kişiyle denendiğinde hiç hata vermez; bu yüzden ayrı bir test ister."]
+          - ["Pull request, kod incelemesi ve inceleme listesi", "Pull request: geliştiricinin \"şu değişikliği ana koda ekleyelim\" isteği. Kod incelemesi: başka bir mühendisin değişikliği okuyup onaylaması; bir yazının basılmadan önce editörden geçmesi gibi. İnceleme listesi: her incelemede bakılan kurallar."]
+          - ["Birleştirme ve yayın", "Birleştirme (merge): onaylanan değişikliğin ana koda girmesi. Yayın (deploy): ana kodun yeni sürümünün Uygulama sunucularına çıkması. Sürüm: v41, v42 gibi numaralı bir kod hâli."]
+          - ["Derleme hattı ve AWS CodeBuild", "Derleme hattı (CI): her pull request'te kodu kendiliğinden hazırlayıp testleri çalıştıran sistem; fabrika bandının sonundaki kalite kontrol gibi. AWS CodeBuild: bu işi yapan AWS servisi; her derleme kısa ömürlü bir kapta (container: içinde sadece o derlemenin programları olan, iş bitince atılan geçici bir bilgisayar ortamı) çalışır ve biter. Her derlemenin bir numarası var (ör. b1842). Sonuç yeşil (bütün testler geçti) ya da kırmızı (bir test kaldı). Depo (repository): kodun bütün sürümleriyle durduğu yer; kırmızı bir değişikliğin birleştirilmesine izin vermez."]
+          - ["Atomik komut, INCRBY ve Lua betiği", "Atomik: bölünemez; okuma ve yazma tek komutta, arasına başka bir komut giremez (DECR, INCR; Adım 17). INCRBY: sayaca birden fazla ekler. Lua betiği: belleğe gönderilen küçük bir program; Valkey onu tek hamlede, bölünmeden çalıştırır (Adım 17)."]
+          - ["VPC, subnet ve security group", "VPC: bir AWS hesabının kendi kapalı ağı; mağazanın binası gibi. Subnet: o ağın bir bölümü (bir kat). Security group: kimin kime hangi kapıdan bağlanabileceğini söyleyen kural listesi (kapıdaki görevli). Bellekler internete kapalıdır; onlara sadece aynı VPC'nin içinden ulaşılır."]
+          - ["AWS Secrets Manager", "Şifreleri kodun içine yazmadan saklayan AWS servisi; Uygulama bağlanırken şifreyi oradan ister. Kimin hangi şifreyi okuyabileceği izinle belirlenir."]
+          - ["Otomatik kural kontrolü (lint)", "Kodu çalıştırmadan, yazılışına bakarak bilinen hatalı kalıpları arayan küçük bir program. Burada: fırsat sayacının adı geçen bir satırda get( ya da set( var mı? Yazım denetimi gibi: bildiği hataları bulur, anlamı anlamaz."]
+          - ["Eşzamanlılık testi ve assert", "Eşzamanlılık testi (concurrency test): satın alma kodunu yüzlerce sahte alıcıyla aynı anda çalıştırıp sonucu kontrol eden test. assert: testin \"bu doğru olmalı\" satırı; doğru değilse test kalır ve derleme kırmızı olur."]
+          - ["İş parçacığı (thread)", "Aynı programın içinde aynı anda çalışan kollar. Test 300 alıcıyı 48 iş parçacığına böler; bir markette aynı anda açık 48 kasa gibi. t0'daki deneme de 48 kullanır."]
+          - ["Test hesabı, test belleği ve test ortamı", "Test hesabı: canlı sistemden ayrı bir AWS hesabı (Adım 16); gerçek müşteriler oraya gitmez. Test belleği: o hesapta ayrı bir ElastiCache Serverless (dbws-cache-test); eşzamanlılık testi ona yazar. Test ortamı: aynı hesapta mağazanın provalık kopyası (Uygulama'nın aynı sürümü, kendi geçici belleği ve bir Aurora kopyası); prova bitince silinir. Provanın belleği test belleğinden ayrıdır: canlıdaki gibi lm:deal:… anahtarlarını kullanır ve canlıdaki gibi bir kullanıcıyla bağlanır; lm-test'in dar izni sadece eşzamanlılık testi içindir."]
+          - ["Anahtar ön eki, ömür ve temizlik", "Ön ek: anahtar adının başı; testin her anahtarı lm:test:<derleme>: ile başlar (ör. lm:test:b1842:stock). Böylece aynı anda koşan iki derleme birbirinin anahtarına dokunmaz. EX 600: anahtar 600 saniye (10 dakika) sonra kendiliğinden silinir; otoparkta saatli bilet gibi. DEL: anahtarı hemen sil; test her durumda en sonda siler, EX 600 test yarıda kesilirse diye yedektir."]
+          - ["ACL kullanıcısı ve erişim dizesi", "ElastiCache'te her bağlantı bir kullanıcıyla açılır (ACL kullanıcısı). Erişim dizesi (access string) kullanıcının hangi anahtarlara ve hangi komutlara dokunabileceğini söyler: on (açık), ~lm:test:* (sadece lm:test: ile başlayan anahtarlar), -@all (önce bütün komutlar kapalı), +@read +@write (okuma ve yazma komutları açık), -@dangerous (bütün belleği silen gibi tehlikeli komutlar kapalı). İzin dışı bir anahtara yazmak isteyen komut NOPERM (izin yok) hatasıyla geri döner."]
+          - ["Prova ve Distributed Load Testing on AWS", "Prova: kampanyadan önceki gece test ortamında aynı dalgayı göndermek (Adım 16, 31 Eki 01:00). Distributed Load Testing on AWS: AWS'in hazır yük testi çözümü; sahte alıcıları gönderir. Bu bölümde provaya bir soru eklenir: test kampanyasında stoktan fazla satıldı mı?"]
+          - ["Kampanya işi, Oversold ve firsat-fazla-satis", "Kampanya işi: AWS Lambda'da çalışan kodumuz; her dakika Aurora'da kampanyanın satılanlarını sayar, sayaçla karşılaştırır ve üç sayıyı CloudWatch'a yazar: StockDrift (sayaç farkı), Oversold, RepeatBuyers (iki kez alan müşteri) (Adım 17). Oversold: 50'yi aşan satış; normalde 0. firsat-fazla-satis: Oversold 1 ya da üstü olunca ilk kontrolde çalan alarm. Diğer iki alarm (firsat-sayac-farki, firsat-tekrar-alici) Adım 17'deki gibi çalışır."]
+          - ["Fırsat denemesi (lm:sim:<kimlik>)", "Fırsatlar sayfasındaki \"Start the rush\" denemesi: aynı test kalıbının ziyaretçiye açık hâli. Her ziyaretçiye ayrı bir anahtar (lm:sim:<tarayıcının kimliği>, ör. lm:sim:7f3a…), yazılan stok (10), 600 saniyelik ömür; bitince DEL. Gerçek sayaca (lm:deal:stock) dokunmaz; bir ziyaretçi saatte en fazla 3 deneme yapabilir."]
+          - ["Valkey, ElastiCache Serverless ve Uygulama", "Valkey: ElastiCache'in kullandığı, Redis ile aynı komutları anlayan bellek veritabanı; komutları birer birer çalıştırır (Adım 17). Serverless: sunucu sayısını AWS'in kendisinin ayarladığı ElastiCache türü. Uygulama: mağazanın arka uç programı (EC2 sunucularında); tarayıcıdan gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
+          - ["Kesit, temsilî, Örnek durum ve Olsaydı", "Kesit: simülasyonda gösterilen kayıtlar (canlı bellekte t0'da önemli olan anahtarlar: fırsat sayacı ve deneme anahtarları). Canlı bellekte başka anahtarlar da var (fırsat kartı, alıcı anahtarları, oturumlar). Temsilî: canlı sistemden gelmeyen, anlatım için seçilmiş değer. \"Örnek durum\" kareleri zincirin bir aksiliğe nasıl cevap verdiğini gösterir; \"Olsaydı\" kareleri yaşanmadı, her biri ayrı bir durumdur ve birbirine eklenmez."]
+          - ["Kod kartlarındaki sözcükler", "r: belleğe bağlantı; redis-py, Python'un Redis/Valkey kütüphanesi (Valkey, Redis'in komutlarını anlar). r.set(k, 10, ex=600): k anahtarına 10 yaz, 600 saniye ömürle. r.get / r.decr / r.delete: GET, DECR, DEL. int(…): metni sayıya çevir. k: testin sayaç anahtarının adı. satin_al: Uygulama'nın satın alma fonksiyonu (Adım 17'deki yol: alıcı anahtarı, DECR, gerekirse INCR); testte sipariş yazma kısmı sahte bir kayıt defterine gider. ThreadPoolExecutor(48): 48 iş parçacığı; pool.map(…, 300 alıcı): 300 alıcıyı onlara dağıt. satilan: \"aldın\" cevabı alan alıcı sayısı. for tur in range(5): aynı testi 5 kez çalıştır. try … finally: ne olursa olsun en sonda şunu yap. pytest: Python'un test çalıştırıcısı. buildspec: CodeBuild'in \"bu derlemede şu komutları çalıştır\" dosyası; phases: build: derleme adımı. aws elasticache create-serverless-cache / create-user / create-user-group: bellek, kullanıcı ve kullanıcı grubu kur. --vpc-config: CodeBuild'in derlemeyi test hesabının ağında çalıştırması. SELECT SUM(qty) … WHERE campaign_id = 'prova-1031': test kampanyasının satılan adedi. COUNT(DISTINCT customer_id): kaç farklı müşteri. stok_oku / stok_yaz: hatalı sürümdeki iki yardımcı fonksiyon (içlerinde GET ve SET). kalan: DECR'in döndürdüğü sayı; son5: \"son 5 parça\" yazısı gösterilsin mi (0 ≤ kalan < 5). f'lm:test:{derleme}:stock': adın içine derleme numarasını koy. alici_anahtarlari: testin 300 sahte alıcısının anahtarları. AssertionError: assert satırı tutmadı. max(0, …): eksiyse 0 say. (error) NOPERM: Valkey'in \"bu kullanıcının buna izni yok\" cevabı. # ve -- sonrası açıklama. … kısaltılmış kısım."]
+          - ["Diğer adlar", "\"Adım 16\", \"Adım 17\" gibi adlar bu görevin (mağazadaki 37 adımın) adımlarıdır; simülasyonun sayacındaki \"Adım 1 / 20\" ise simülasyonun karesidir. PR #412: bir pull request'in numarası. T001…T300: testin sahte alıcıları."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra"
+          sütunu işi kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim kodumuz" etiketli
+          parçaları mağazanın ekibi yazar. Bir kod değişikliği önce kod incelemesinden, sonra derleme hattından geçer; derleme
+          hattı eşzamanlılık testini test belleğine karşı çalıştırır. Kampanyadan önceki gece yük testi aracı test ortamında
+          provayı yapar. Canlıda Uygulama sayacı ElastiCache'te değiştirir; kampanya işi her dakika fazla satışı sayar,
+          CloudWatch alarm verir. Aynı parçalar aşağıdaki simülasyonda birer kutu: üstte değişikliğin yolu, ortada test
+          hesabı, altta canlı sistem ve yandaki işler.
+        inventory:
+          - id: review
+            name: Kod incelemesi (pull request)
+            kind: code
+            what: ekibin inceleme listesi ve otomatik kural kontrolü
+            does: >-
+              Her değişikliği başka bir mühendis okur. İnceleme listesinde bir kural var: paylaşılan bir sayaçta "önce oku,
+              sonra yaz" yok; sayaç sadece DECR, INCR ya da tek bir betikle değişir (Adım 17). Otomatik kural kontrolü (lint)
+              sayacın adının geçtiği satırlarda get( ve set( arar. Derleme yeşil olmadan değişiklik birleştirilemez.
+            box: "Kural: paylaşılan sayaçta önce oku, sonra yaz yok."
+            phases: [1, 2, 3, 4]
+            before: Geliştirici (değişiklik)
+            after: ci
+          - id: ci
+            name: Derleme hattı (AWS CodeBuild)
+            kind: aws
+            what: AWS'in derleme ve test servisi, test hesabında
+            does: >-
+              Her pull request'te kendiliğinden bir derleme başlatır; testleri test hesabının ağında (VPC) çalıştırır, böylece
+              test belleğine ulaşır. Bir test kalırsa derleme kırmızıdır ve depo değişikliğin birleştirilmesine izin vermez.
+            box: "Her pull request'te testleri çalıştırır; kırmızıysa birleştirme yok."
+            phases: [2, 3, 4]
+            before: review
+            after: [racetest, review]
+          - id: racetest
+            name: Eşzamanlılık testi
+            kind: code
+            what: test kodumuz (pytest), derlemenin içinde
+            does: >-
+              Kendi ön ekiyle bir test sayacı kurar (stok 10, 600 sn ömür), Uygulama'nın satın alma fonksiyonunu 300 sahte
+              alıcıyla 48 iş parçacığında aynı anda çalıştırır ve sayar: satılan stoktan fazla olmamalı, tam stok kadar
+              olmalı, sayaç sonunda 0 olmalı. Şansa bırakmamak için 5 tur. En sonda anahtarlarını siler.
+            box: "300 alıcı aynı anda; satılan ≤ stok mu? 5 tur."
+            phases: [1, 2, 3, 4]
+            before: ci
+            after: [testcache, web, ci]
+          - id: testcache
+            name: "Test belleği (ElastiCache Serverless, dbws-cache-test)"
+            kind: aws
+            what: test hesabında ayrı bir bellek veritabanı
+            does: >-
+              Testlerin sayaçlarını tutar. Testin kullanıcısı (lm-test) sadece lm:test: ile başlayan anahtarlara okuyup
+              yazabilir. Her derlemenin anahtarları ayrıdır ve 600 saniyede kendiliğinden silinir. Canlı bellekle ağı ve
+              kullanıcıları ayrıdır.
+            box: "lm:test:<derleme>:… anahtarları; 600 sn ömür."
+            phases: [1, 2, 3, 4]
+            before: racetest
+            after: racetest
+          - id: loadgen
+            name: Yük testi aracı (Distributed Load Testing on AWS)
+            kind: aws
+            what: AWS'in hazır yük testi çözümü, test hesabında
+            does: >-
+              Kampanyadan önceki gece (Adım 16) test ortamına sahte alıcı dalgası gönderir. Bu provada fırsat da denenir:
+              3.000 sahte alıcı, test kampanyasında 50 parça.
+            box: "Provada 3.000 sahte alıcı, test stoğu 50."
+            phases: [1, 3]
+            before: Ekip (test senaryosu)
+            after: staging
+          - id: staging
+            name: Test ortamı (provalık kopya)
+            kind: aws
+            what: test hesabında mağazanın kopyası
+            does: >-
+              Uygulama'nın canlıya çıkacak sürümü, provaya özel geçici bir bellek (canlıdaki anahtar adlarıyla) ve Aurora'nın
+              bir kopyası. Prova bitince Ekip'in kontrolü
+              test Aurora'sında sayar: satılan 50'yi geçti mi, bir müşteri iki kez aldı mı? Sonra ortam silinir.
+            box: "Prova sonunda sayar: satılan ≤ 50 mü?"
+            phases: [1, 3]
+            before: loadgen
+            after: Ekip (prova raporu)
+          - id: web
+            name: Uygulama (satın alma kodu)
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucularında)
+            does: >-
+              Satın alma fonksiyonu: alıcı anahtarı, DECR, gerekirse INCR, sonra sipariş (Adım 17). Test bu fonksiyonun
+              kendisini çalıştırır; canlıda aynı fonksiyon müşterilere hizmet verir. Aynı programdaki ayrı bir gösteri kodu
+              Fırsatlar sayfasındaki denemeyi çalıştırır: ziyaretçiye ayrı bir anahtar (lm:sim:…) kurar, 300 alıcıyı koşturur
+              ve anahtarı siler; satın alma fonksiyonunu kullanmaz, gerçek sayaca dokunmaz.
+            box: "Satın alma: DECR (v41, v42). Testte ve canlıda aynı kod; deneme ayrı kod."
+            phases: [1, 2, 3, 4]
+            before: [racetest, "Tarayıcı (Fırsatlar sayfası)"]
+            after: cache
+          - id: cache
+            name: ElastiCache (Valkey, canlı)
+            kind: aws
+            what: mağazanın canlı bellek veritabanı
+            does: >-
+              Fırsat sayacı (lm:deal:stock) ve ziyaretçilerin deneme anahtarları (lm:sim:<kimlik>). Komutları birer birer
+              çalıştırır; DECR'ler bu yüzden hiç aynı sayıyı görmez (Adım 17).
+            box: "Sayaç lm:deal:stock; deneme anahtarları lm:sim:…"
+            phases: [3, 4]
+            before: web
+            after: [dealjob, "Fırsatlar sayfası (t0)"]
+          - id: dealjob
+            name: Kampanya işi (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod
+            does: >-
+              Her dakika Aurora'da kampanyanın satılanlarını sayar, bellekteki sayaçla karşılaştırır ve üç sayıyı
+              CloudWatch'a yazar: StockDrift, Oversold (50'yi aşan satış), RepeatBuyers (Adım 17). Bu bölümün konusu Oversold. Testlerin kaçırdığı bir fazla satış en geç bir dakika sonra
+              burada görünür.
+            box: "Her dakika satılanları sayar; Oversold'u yazar."
+            phases: [3, 4]
+            before: ["EventBridge Scheduler (her dakika)", "Aurora (shop.orders)", cache]
+            after: monitor
+          - id: monitor
+            name: CloudWatch alarmları
+            kind: aws
+            what: AWS'in izleme servisi
+            does: >-
+              Son emniyet: firsat-fazla-satis, Oversold 1 ya da üstü olunca ilk kontrolde çalar ve Ekip'e haber verir. Diğer iki
+              fırsat alarmı Adım 17'deki gibi.
+            box: "firsat-fazla-satis: Oversold ≥ 1, ilk kontrolde."
+            phases: [1, 3, 4]
+            before: dealjob
+            after: Ekip (alarm)
+        sim_title: "Simülasyon: bir \"önce oku, sonra yaz\" değişikliği nasıl yakalandı, canlı sistem t0'a nasıl geldi?"
+        sim:
+          kind: pipeline
+          title: İnceleme → derleme hattı → eşzamanlılık testi → test belleği; gece prova; canlıda Uygulama → ElastiCache, yanda her dakikalık kontrol
+          caption: >-
+            Canlı ElastiCache'teki tablo kesit: t0'da önemli olan anahtarlar (fırsat sayacı ve deneme anahtarları); canlı
+            bellekteki diğer anahtarlar gösterilmiyor. Test belleğinin tablosu ise bütün anahtarlarını gösteriyor. Önce test
+            belleğinin ve derleme hattının kurulması, sonra bir değişikliğin kırmızı yanması ve düzeltmesi, kampanya provası
+            ve kampanya sabahı, sonra "Örnek durum" kareleri (yarıda kesilen test, aynı anda koşan iki derleme), en sonda
+            "Olsaydı" kareleri (şansla geçen test, yanlış belleğe bağlanan test, canlıya kaçan hata); "Olsaydı" kareleri
+            yaşanmadı, her biri ayrı bir durum. Canlı sistemden: anahtar adları, 300 alıcı, 48 iş parçacığı, stok 10 ve 600
+            saniyelik ömür (t0'daki denemeyle aynı). Temsilî: tarihler, saatler, derleme ve sürüm numaraları, satılan
+            sayıları, ziyaretçi kimlikleri. Son karede her şey senin tıklamandan (t0) hemen önceki hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım}
+          rows:
+            - {id: code, title: "Değişikliğin yolu: inceleme → derleme hattı → eşzamanlılık testi", flow: true}
+            - {id: test, title: "Test hesabı: test belleği ve kampanyadan önceki prova"}
+            - {id: live, title: "Canlı sistem: Uygulama → ElastiCache", flow: true}
+            - {id: helpers, title: "Yandaki işler: her dakikalık kontrol ve alarmlar", side: true}
+          summary: >-
+            Ekim'de test hesabında bir test belleği, sadece lm:test: anahtarlarına dokunabilen bir kullanıcı ve her pull
+            request'te çalışan bir derleme hattı kuruldu; eşzamanlılık testi canlıdaki kodu (v41) yeşil buldu. 28 Eki'de "önce
+            oku, sonra yaz" kullanan bir değişiklik incelemeden geçti ama test 10 parçalık stokta 23 satış saydı: kırmızı,
+            birleştirme yok. DECR ile düzeltilen sürüm (v42) 5 turda tam 10 sattı ve yayına çıktı. Provada 50 parçalık test
+            kampanyasında tam 50 satıldı. Kampanyada 10:19 kontrolü: 6 satış, sayaç 44, Oversold 0. Son durum: test belleği
+            boş, canlı kesitte sadece sayaç (44); senin deneme anahtarın yok, t0'da kurulacak.
+          boxes:
+            - id: review
+              row: code
+            - id: ci
+              row: code
+              tables:
+                - name: "derlemeler"
+                  cols: [derleme, sürüm, sonuç]
+                  rows:
+                    - {key: b1801, derleme: b1801, sürüm: v41, sonuç: "—", hidden: true}
+                    - {key: b1802, derleme: b1802, sürüm: "bilerek hatalı kopya", sonuç: "—", hidden: true}
+                    - {key: b1842, derleme: b1842, sürüm: "v42-a (PR #412)", sonuç: "—", hidden: true}
+                    - {key: b1843, derleme: b1843, sürüm: "v42 (PR #412)", sonuç: "—", hidden: true}
+                    - {key: b1844, derleme: b1844, sürüm: "PR #415", sonuç: "—", hidden: true}
+                    - {key: b1845, derleme: b1845, sürüm: "PR #416", sonuç: "—", hidden: true}
+                    - {key: b1846, derleme: b1846, sürüm: "PR #417", sonuç: "—", hidden: true}
+            - id: racetest
+              row: code
+              tables:
+                - name: "son koşu"
+                  cols: [ölçü, değer]
+                  rows:
+                    - {key: run, ölçü: derleme, değer: "—", hidden: true}
+                    - {key: buyers, ölçü: "alıcı (aynı anda)", değer: "300 (48 iş parçacığı)", hidden: true}
+                    - {key: stock, ölçü: "stok", değer: "10", hidden: true}
+                    - {key: sold, ölçü: "satılan (her tur)", değer: "—", hidden: true}
+                    - {key: left, ölçü: "sayaç sonu", değer: "—", hidden: true}
+                    - {key: verdict, ölçü: "sonuç", değer: "—", hidden: true}
+            - id: testcache
+              row: test
+              tables:
+                - name: "anahtarlar (dbws-cache-test)"
+                  cols: [anahtar, değer, ömür]
+                  rows:
+                    - {key: k1801, anahtar: "lm:test:b1801:stock", değer: "0", ömür: "600 sn", hidden: true}
+                    - {key: k1801b, anahtar: "lm:test:b1801:buyer:T001…T300", değer: "300 anahtar", ömür: "600 sn", hidden: true}
+                    - {key: k1842, anahtar: "lm:test:b1842:stock", değer: "10", ömür: "600 sn", hidden: true}
+                    - {key: k1842b, anahtar: "lm:test:b1842:buyer:T001…T300", değer: "300 anahtar", ömür: "600 sn", hidden: true}
+                    - {key: k1843, anahtar: "lm:test:b1843:stock", değer: "10", ömür: "600 sn", hidden: true}
+                    - {key: k1844, anahtar: "lm:test:b1844:stock", değer: "4", ömür: "600 sn", hidden: true}
+                    - {key: k1844b, anahtar: "lm:test:b1844:buyer:…", değer: "6 anahtar (yarım tur)", ömür: "600 sn → 13:12'de silindi", hidden: true}
+                    - {key: k1845, anahtar: "lm:test:b1845:stock", değer: "10", ömür: "600 sn", hidden: true}
+                    - {key: k1846, anahtar: "lm:test:b1846:stock", değer: "10", ömür: "600 sn", hidden: true}
+            - id: loadgen
+              row: test
+              tables:
+                - name: "prova senaryosu"
+                  cols: [ayar, değer]
+                  rows:
+                    - {key: who, ayar: "sahte alıcı", değer: "3.000", hidden: true}
+                    - {key: camp, ayar: "test kampanyası", değer: "prova-1031 · 50 parça", hidden: true}
+            - id: staging
+              row: test
+              tables:
+                - name: "prova sonucu (test Aurora)"
+                  cols: [ölçü, değer]
+                  rows:
+                    - {key: sold, ölçü: "satılan", değer: "—", hidden: true}
+                    - {key: over, ölçü: "50'yi aşan", değer: "—", hidden: true}
+                    - {key: rep, ölçü: "iki kez alan", değer: "—", hidden: true}
+            - id: web
+              row: live
+              tables:
+                - name: "sürümler"
+                  cols: [sürüm, satın alma, durum]
+                  rows:
+                    - {key: v41, sürüm: v41, satın alma: "DECR", durum: "canlıda", hidden: true}
+                    - {key: v42a, sürüm: v42-a, satın alma: "GET … SET", durum: "inceleniyor", hidden: true}
+                    - {key: v42, sürüm: v42, satın alma: "DECR + \"son 5 parça\"", durum: "inceleniyor", hidden: true}
+            - id: cache
+              row: live
+              tables:
+                - name: "anahtarlar (kesit: sayaç ve denemeler)"
+                  cols: [anahtar, değer, ömür]
+                  rows:
+                    - {key: stock, anahtar: "lm:deal:stock", değer: "50", ömür: "16:00'ya kadar", hidden: true}
+                    - {key: simc, anahtar: "lm:sim:c2d9…", değer: "10", ömür: "600 sn", hidden: true}
+            - id: dealjob
+              row: helpers
+              tables:
+                - name: "son kontrol (Shop/Deal)"
+                  cols: [ölçü, değer]
+                  rows:
+                    - {key: at, ölçü: "kontrol", değer: "—", hidden: true}
+                    - {key: sold, ölçü: "satılan (Aurora)", değer: "—", hidden: true}
+                    - {key: left, ölçü: "sayaç (bellek)", değer: "—", hidden: true}
+                    - {key: over, ölçü: "Oversold", değer: "—", hidden: true}
+            - id: monitor
+              row: helpers
+              tables:
+                - name: "fırsat alarmları"
+                  cols: [alarm, durum]
+                  rows:
+                    - {key: a1, alarm: "firsat-fazla-satis", durum: OK, hidden: true}
+                    - {key: a2, alarm: "firsat-sayac-farki", durum: OK, hidden: true}
+                    - {key: a3, alarm: "firsat-tekrar-alici", durum: OK, hidden: true}
+          frames:
+            - phase: 2
+              who: testcache
+              lit: [testcache]
+              packet: {at: testcache, text: "20 Eki · test hesabı · create-serverless-cache dbws-cache-test (valkey) · create-user lm-test \"on ~lm:test:* -@all +@read +@write -@dangerous\""}
+              note: {testcache: "boş · tek kullanıcı: lm-test", web: "canlıda v41 (DECR, Adım 17)"}
+              show: {web: [v41]}
+              say: >-
+                20 Eki (temsilî). Ekip test hesabında ayrı bir bellek kurdu: dbws-cache-test. Testlerin bağlanacağı tek
+                kullanıcı lm-test; erişim dizesi ona sadece lm:test: ile başlayan anahtarlara okuma ve yazma izni veriyor,
+                tehlikeli komutlar kapalı. Canlıda Uygulama'nın v41 sürümü var; sayacı DECR ile azaltıyor (Adım 17).
+            - phase: 2
+              who: review
+              lit: [review, ci]
+              packet: {at: ci, text: "21 Eki · CodeBuild projesi · --vpc-config (test hesabının ağı) · tetik: PULL_REQUEST_CREATED, PULL_REQUEST_UPDATED · depo kuralı: yeşil olmadan birleştirme yok"}
+              note: {testcache: "", web: "", review: "inceleme listesine yeni kural", ci: "her pull request'te çalışacak"}
+              say: >-
+                21 Eki. İnceleme listesine bir kural yazıldı: paylaşılan sayaçta "önce oku, sonra yaz" yok. Derleme hattı
+                kuruldu: her pull request açıldığında ya da güncellendiğinde CodeBuild bir derleme başlatır, testleri test
+                hesabının ağında çalıştırır. Depo, kırmızı bir değişikliğin birleştirilmesine izin vermeyecek.
+            - phase: 2
+              who: racetest
+              lit: [ci, racetest, testcache, web]
+              packet: {at: racetest, text: "b1801 · SET lm:test:b1801:stock 10 EX 600 · 300 alıcı × v41 satin_al() · 5 tur · DEL"}
+              show: {ci: [b1801], racetest: [run, buyers, stock, sold, left, verdict], testcache: [k1801, k1801b]}
+              set: {racetest: {run: {değer: b1801}, sold: {değer: "10, 10, 10, 10, 10"}, left: {değer: "0"}, verdict: {değer: "geçti"}}, ci: {b1801: {sonuç: yeşil}}}
+              fresh: {testcache: [k1801, k1801b], racetest: [sold, left, verdict], ci: [b1801]}
+              note: {review: "", ci: "ilk koşu: canlıdaki kod", racetest: "5 turda 10 satış", testcache: "b1801'in anahtarları: son turdan sonra sayaç 0"}
+              say: >-
+                Aynı gün eşzamanlılık testi ilk kez çalıştı; denenen kod canlıdaki v41. Test kendi sayacını kurdu (10 parça,
+                600 saniye), Uygulama'nın satın alma fonksiyonunu 300 sahte alıcıyla aynı anda çalıştırdı. 5 turun hepsinde
+                tam 10 satış, sayaç sonunda 0: geçti, derleme yeşil.
+            - phase: 2
+              who: racetest
+              lit: [racetest, testcache, ci]
+              packet: {at: testcache, text: "finally · DEL lm:test:b1801:stock lm:test:b1801:buyer:… → silindi · b1802 (bilerek GET … SET) → 1. turda 19 satış → kırmızı"}
+              hide: {testcache: [k1801, k1801b]}
+              show: {ci: [b1802]}
+              set: {ci: {b1802: {sonuç: "kırmızı (beklenen)"}}}
+              fresh: {ci: [b1802]}
+              note: {ci: "", racetest: "temizlik: kendi anahtarları", testcache: "boş"}
+              say: >-
+                Test bitince kendi anahtarlarını sildi. Test belleği yine boş; 600 saniyelik ömür sadece test yarıda kalırsa
+                diye bir yedek. Ekip bir kez de bilerek "önce oku, sonra yaz" yazılmış bir kopyayı denedi (b1802): test ilk
+                turda 10 parçada 19 satış saydı ve kaldı. Test hem doğru kodu geçiriyor hem hatalı kodu yakalıyor.
+            - phase: 3
+              who: review
+              lit: [review, web]
+              packet: {at: review, text: "28 Eki 14:10 · PR #412 \"son 5 parça\" yazısı · stok = stok_oku() … stok_yaz(stok - 1) · lint: get( / set( yok → geçti · inceleme: onay"}
+              show: {web: [v42a]}
+              fresh: {web: [v42a]}
+              note: {racetest: "", testcache: "", review: "lint ve inceleyen kaçırdı", web: "v42-a: GET … SET (yardımcı fonksiyonlarda)"}
+              say: >-
+                28 Eki 14:10. Bir geliştirici fırsat sayfasına "son 5 parça" yazısı için satın almayı yeniden yazdı: önce
+                stoğu okuyan, sonra bir eksiğini yazan iki yardımcı fonksiyon. Komutlar yardımcıların içinde olduğu için
+                lint sayacın adının geçtiği satırda get( ya da set( görmedi; inceleyen mühendis de kaçırdı.
+            - phase: 3
+              who: ci
+              lit: [ci, racetest, testcache]
+              packet: {at: racetest, text: "b1842 · SET lm:test:b1842:stock 10 EX 600 → OK"}
+              show: {ci: [b1842], testcache: [k1842]}
+              set: {racetest: {run: {değer: b1842}, sold: {değer: "—"}, left: {değer: "—"}, verdict: {değer: "çalışıyor"}}}
+              fresh: {testcache: [k1842], racetest: [run, verdict]}
+              note: {review: "", web: "", ci: "PR #412 için derleme", testcache: "b1842'nin sayacı: 10"}
+              say: >-
+                Pull request açılınca derleme hattı b1842'yi başlattı. Eşzamanlılık testi kendi ön ekiyle bir sayaç kurdu:
+                lm:test:b1842:stock = 10, 600 saniye ömür. Başka hiçbir derleme bu anahtara dokunmaz.
+            - phase: 3
+              who: racetest
+              lit: [racetest, testcache, web]
+              packet: {at: testcache, text: "1. tur · 300 alıcı, 48 iş parçacığı · GET → 10, 10, 9, 9, 9 … · SET 9, 9, 8, 8 … · \"aldın\" 23 kez · sayaç sonu 0"}
+              show: {testcache: [k1842b]}
+              set: {racetest: {sold: {değer: "23 (stok 10)"}, left: {değer: "0"}, verdict: {değer: "kaldı: 23 > 10"}}, testcache: {k1842: {değer: "0"}}}
+              mark: {racetest: {sold: fix, verdict: fix}}
+              fresh: {testcache: [k1842, k1842b], racetest: [sold, left, verdict]}
+              note: {ci: "", web: "denenen: v42-a satin_al()", racetest: "assert satilan <= 10 tutmadı", testcache: "300 alıcı anahtarı · sayaç 0"}
+              say: >-
+                300 alıcı aynı anda v42-a'nın satın alma fonksiyonunu çağırdı. Birçok alıcı aynı değeri okudu ve aynı değeri
+                yazdı: 10 parçalık stokta 23 kişiye "aldın" dendi. Sayaç yine de 0'da durdu, çünkü her SET okuduğu değerin
+                bir eksiğini yazdı; satışları sayan şey sayaç değil, "aldın" cevapları. Testin ilk assert satırı (satılan ≤ stok) tutmadı; test
+                ilk turda kaldı. Sayı temsilî; t0'daki denemede olduğu gibi her koşuda değişir.
+            - phase: 3
+              who: ci
+              lit: [ci, racetest, testcache, review]
+              packet: {at: ci, text: "finally · DEL lm:test:b1842:… · b1842 → kırmızı · PR #412: birleştirme kapalı"}
+              hide: {testcache: [k1842, k1842b]}
+              set: {ci: {b1842: {sonuç: kırmızı}}, web: {v42a: {durum: "birleştirilmedi"}}}
+              mark: {racetest: {sold: "", verdict: ""}, ci: {b1842: fix}}
+              fresh: {ci: [b1842]}
+              note: {web: "", racetest: "", testcache: "boş", ci: "kırmızı: test kaldı", review: "geliştiriciye: 23 > 10"}
+              say: >-
+                Test kalsa da en sonda kendi anahtarlarını sildi. Derleme kırmızı oldu; depo PR #412'nin birleştirilmesine
+                izin vermedi. Hatalı kod canlıya gitmedi; geliştirici test raporunda "10 parçada 23 satış" gördü.
+            - phase: 3
+              who: racetest
+              lit: [review, ci, racetest, testcache, web]
+              packet: {at: racetest, text: "29 Eki 11:00 · b1843 · kalan = DECR … (\"son 5 parça\" dönen sayıdan) · 5 tur × 300 alıcı → 10, 10, 10, 10, 10 · sayaç sonu 0 · DEL"}
+              show: {ci: [b1843], web: [v42]}
+              set: {ci: {b1843: {sonuç: yeşil}}, racetest: {run: {değer: b1843}, sold: {değer: "10, 10, 10, 10, 10"}, left: {değer: "0"}, verdict: {değer: "geçti"}}}
+              mark: {ci: {b1842: ""}}
+              fresh: {ci: [b1843], racetest: [run, sold, left, verdict], web: [v42]}
+              note: {review: "aynı PR, düzeltilmiş", ci: "yeşil", racetest: "5 turda tam 10", testcache: "kuruldu, sınandı, silindi", web: "v42: DECR; \"son 5 parça\" DECR'in döndürdüğü sayıdan"}
+              say: >-
+                29 Eki 11:00. Geliştirici sayacı yine tek komutla (DECR) azaltan bir sürüm yazdı; "son 5 parça" yazısı DECR'in
+                döndürdüğü sayıdan çıkıyor, ayrı bir okuma yok. Derleme b1843: 5 turun hepsinde tam 10 satış, sayaç sonunda
+                0. Yeşil. Test anahtarlarını sildi; test belleği yine boş.
+            - phase: 3
+              who: review
+              lit: [review, web]
+              packet: {at: web, text: "29 Eki 11:30 · inceleme: onay · birleştirme · 16:00 · yayın: v42 canlıda"}
+              set: {web: {v42: {durum: "canlıda"}, v41: {durum: "önceki sürüm"}, v42a: {durum: "birleştirilmedi"}}}
+              fresh: {web: [v42, v41]}
+              note: {ci: "", racetest: "", testcache: "", review: "onaylandı · birleştirildi", web: "29 Eki 16:00: v42 canlıda"}
+              say: >-
+                İnceleyen mühendis düzeltmeyi onayladı; derleme yeşil olduğu için değişiklik birleştirildi. 16:00'da v42
+                yayına çıktı. Canlıda satın alma yine DECR ile çalışıyor.
+            - phase: 3
+              who: loadgen
+              lit: [loadgen, staging]
+              packet: {at: loadgen, text: "31 Eki 01:00 · prova (Adım 16) · test ortamında v42 · test kampanyası prova-1031: 50 parça · 3.000 sahte alıcı · POST /elasticache/api/deal/buy"}
+              show: {loadgen: [who, camp]}
+              fresh: {loadgen: [who, camp]}
+              note: {review: "", web: "", loadgen: "kampanyadan 9 saat önce", staging: "v42 · provalık bellek · Aurora kopyası"}
+              say: >-
+                31 Eki 01:00, kampanyadan önceki gece. Adım 16'daki provada fırsat da denendi: test ortamında v42, 50 parçalık
+                bir test kampanyası (prova-1031) ve 3.000 sahte alıcı. Bu kez yol eksiksiz: sayfa isteği, Uygulama, alıcı
+                anahtarı, DECR, test Aurora'sında sipariş.
+            - phase: 3
+              who: staging
+              lit: [staging]
+              packet: {at: staging, text: "prova sonrası · SELECT SUM(qty) … campaign_id = 'prova-1031' → 50 · 50'yi aşan 0 · iki kez alan 0 · test ortamı silindi"}
+              show: {staging: [sold, over, rep]}
+              set: {staging: {sold: {değer: "50"}, over: {değer: "0"}, rep: {değer: "0"}}}
+              fresh: {staging: [sold, over, rep]}
+              note: {loadgen: "", staging: "assert: satılan ≤ 50 · tuttu"}
+              say: >-
+                Prova bitince Ekip'in kontrolü test Aurora'sında saydı: tam 50 satış, 50'yi aşan yok, iki kez alan müşteri
+                yok; 2.950 sahte alıcı "tükendi" gördü. Fazla satış sorusu bu kez siparişlerin asıl kaydında soruldu. Sonra test
+                ortamı silindi.
+            - phase: 3
+              who: web
+              lit: [web, cache]
+              packet: {at: cache, text: "10:16 · ziyaretçi c2d9… · SET lm:sim:c2d9… 10 EX 600 · 300 alıcı · DEL lm:sim:c2d9…"}
+              show: {cache: [stock, simc]}
+              set: {cache: {stock: {değer: "45"}}}
+              fresh: {cache: [simc]}
+              note: {staging: "", web: "fırsat denemesi: aynı test kalıbı", cache: "lm:deal:stock'a dokunulmadı"}
+              say: >-
+                31 Eki 10:16. Kampanya 10:00'da başladı (Adım 17); sayaç 50'den 45'e indi. Başka bir ziyaretçi (c2d9…)
+                fırsatlar sayfasında denemeyi başlattı. Uygulama aynı test kalıbını kullandı: o ziyaretçiye ayrı bir anahtar
+                (lm:sim:c2d9…), 10 parça, 600 saniye ömür. Gerçek sayaç 45'te kaldı.
+            - phase: 3
+              who: dealjob
+              lit: [web, cache, dealjob, monitor]
+              packet: {at: dealjob, text: "10:19 · SUM(qty) → 6 · GET lm:deal:stock → 44 · Oversold = max(0, 6 − 50) = 0"}
+              hide: {cache: [simc]}
+              set: {cache: {stock: {değer: "44"}}, dealjob: {at: {değer: "10:19"}, sold: {değer: "6"}, left: {değer: "44"}, over: {değer: "0"}}}
+              show: {dealjob: [at, sold, left, over], monitor: [a1, a2, a3]}
+              fresh: {cache: [stock], dealjob: [at, sold, left, over]}
+              note: {web: "", cache: "deneme anahtarı silindi · sayaç 44", dealjob: "6 satış · sayaç 44", monitor: "üç alarm OK"}
+              say: >-
+                Deneme bitince anahtar silindi. Bu arada bir müşteri daha aldı (Adım 17'de senin aldığın parça): sayaç 44. 10:19
+                kontrolü: Aurora'da 6 satış, sayaç 44, 50'yi aşan satış yok: Oversold 0, üç alarm OK. Canlıdaki son emniyet her
+                dakika bakıyor.
+            - phase: 4
+              who: racetest
+              lit: [ci, racetest, testcache]
+              packet: {at: testcache, text: "29 Eki 13:02 · b1844 · SET lm:test:b1844:stock 10 EX 600 · 2. turda derleme kabı durdu · DEL çalışmadı → 13:12'de ömür bitti, silindi"}
+              show: {ci: [b1844], testcache: [k1844, k1844b]}
+              set: {ci: {b1844: {sonuç: "yarıda kesildi"}}, testcache: {k1844: {ömür: "600 sn → 13:12'de silindi"}}, racetest: {run: {değer: b1844}, sold: {değer: "10, —"}, left: {değer: "—"}, verdict: {değer: "yarıda kesildi"}}}
+              mark: {testcache: {k1844: fix, k1844b: fix}}
+              fresh: {testcache: [k1844, k1844b], ci: [b1844], racetest: [run, sold, left, verdict]}
+              note: {web: "", cache: "tablo gerçek son durumu (31 Eki) gösteriyor", dealjob: "tablo gerçek son kontrolü (31 Eki 10:19) gösteriyor", monitor: "", ci: "b1844 yeniden başlatılır", racetest: "finally çalışamadı", testcache: "sahipsiz anahtar: 4 (yarım tur)"}
+              say: >-
+                Örnek durum (29 Eki'ye dönüyoruz; canlı kutular ve prova kutuları gerçek son durumu gösteriyor): b1844'ün kabı testin ikinci turunda durdu. En sondaki DEL hiç çalışmadı;
+                sayaç 4'te, o turun 6 alıcı anahtarıyla yarım kaldı. Anahtarlar sonsuza kadar kalmaz: 600 saniyelik ömürleri 13:12'de bitti ve Valkey
+                onları kendiliğinden sildi. Derleme yeniden başlatılınca yeni bir derleme numarası, yeni bir anahtar adı alır.
+            - phase: 4
+              who: ci
+              lit: [ci, racetest, testcache]
+              packet: {at: testcache, text: "29 Eki 13:20 · b1845 ve b1846 aynı anda · lm:test:b1845:stock 10 · lm:test:b1846:stock 10 · DECR'ler kendi anahtarına"}
+              hide: {testcache: [k1844, k1844b]}
+              show: {ci: [b1845, b1846], testcache: [k1845, k1846]}
+              set: {testcache: {k1845: {değer: "0"}, k1846: {değer: "0"}}, ci: {b1845: {sonuç: yeşil}, b1846: {sonuç: yeşil}}, racetest: {run: {değer: "b1845, b1846"}, sold: {değer: "10 ve 10 (her tur)"}, left: {değer: "0 ve 0"}, verdict: {değer: "ikisi de geçti"}}}
+              mark: {testcache: {k1844: "", k1844b: "", k1845: fix, k1846: fix}}
+              fresh: {testcache: [k1845, k1846], ci: [b1845, b1846], racetest: [run, sold, left, verdict]}
+              note: {ci: "iki pull request, iki derleme", racetest: "", testcache: "iki ayrı ad: birbirine dokunmaz · son turdan sonra 0, sonra silinir", cache: "", dealjob: ""}
+              say: >-
+                Örnek durum: iki geliştiricinin pull request'i aynı anda derlendi. Sayaçlar aynı adı taşısaydı bir derlemenin
+                DECR'i ötekinin stoğunu azaltır, iki test de anlamsız sonuç verirdi. Ön ek ayrı olduğu için her test kendi
+                10'unu saydı; ikisi de yeşil. Sonra ikisi de kendi anahtarlarını sildi.
+            - phase: 4
+              who: racetest
+              lit: [racetest, testcache, web]
+              packet: {at: racetest, text: "olsaydı: v42-a, tek tur, 300 alıcı · 1. tur → \"aldın\" 10 (şans) · 5 tur olunca: 10, 12, 17, 10, 21 → kaldı"}
+              hide: {testcache: [k1845, k1846]}
+              set: {racetest: {run: {değer: "olsaydı: tek turluk test"}, sold: {değer: "10, 12, 17, 10, 21"}, left: {değer: "0"}, verdict: {değer: "olsaydı: 2. turda kaldı"}}}
+              mark: {testcache: {k1845: "", k1846: ""}, racetest: {sold: fix, verdict: fix}}
+              fresh: {racetest: [run, sold, verdict]}
+              note: {ci: "", testcache: "", web: "olsaydı: v42-a yine deneniyor", racetest: "olsaydı: tek tur yetmezdi"}
+              say: >-
+                Olsaydı: yarışın görünmesi şansa bağlıdır; alıcılar araya girmezse "önce oku, sonra yaz" da bir turda tam 10
+                satabilir. Test tek tur olsaydı v42-a bir gün yeşil geçebilirdi. Bu yüzden test 5 tur çalışır ve okuma ile
+                yazma arasında uygulamanın gerçek işi kadar (birkaç milisaniye) bekleme bırakır: hatalı kod 5 turun en az
+                birinde kalır. Sayılar temsilî.
+            - phase: 4
+              who: racetest
+              lit: [racetest, cache]
+              packet: {at: cache, text: "olsaydı: test canlı belleğin adresine bağlanmak isteseydi · test hesabından yol yok · olsaydı bile lm-test canlıda yok · olsaydı bile SET lm:deal:stock 10 → NOPERM"}
+              set: {racetest: {run: {değer: "olsaydı: yanlış adres"}, sold: {değer: "—"}, left: {değer: "—"}, verdict: {değer: "olsaydı: bağlanamadı"}}}
+              mark: {racetest: {sold: "", verdict: fix}, cache: {stock: fix}}
+              note: {web: "", racetest: "olsaydı: ayar dosyasında canlı adres", cache: "olsaydı: sayaç 44'te kalırdı"}
+              say: >-
+                Olsaydı: biri testin ayarına yanlışlıkla canlı belleğin adresini yazsaydı. Test hesabının ağından canlı belleğe
+                yol yok. Yol olsaydı bile canlıda lm-test diye bir kullanıcı yok. O da olsaydı, kullanıcı sadece lm:test:
+                anahtarlarına yazabilirdi: SET lm:deal:stock NOPERM ile geri dönerdi. Üç ayrı kilit, gerçek sayaç 44'te.
+            - phase: 4
+              who: dealjob
+              lit: [web, cache, dealjob, monitor]
+              packet: {at: dealjob, text: "olsaydı: v42-a canlıda · son parçalarda aynı anda basanlar · SUM(qty) → 53 · Oversold 3 → firsat-fazla-satis ALARM (ilk kontrol) · StockDrift −3 → firsat-sayac-farki ALARM (2. kontrol) · Ekip: v41'e geri al, 3 fazla siparişin müşterisiyle konuş"}
+              set: {web: {v42a: {durum: "olsaydı: canlıda"}}, cache: {stock: {değer: "olsaydı: 0"}}, dealjob: {at: {değer: "olsaydı: 15:31"}, sold: {değer: "53"}, left: {değer: "0"}, over: {değer: "3"}}, monitor: {a1: {durum: ALARM}, a2: {durum: "ALARM (2. kontrol)"}}, racetest: {run: {değer: b1846}, sold: {değer: "10, 10, 10, 10, 10"}, left: {değer: "0"}, verdict: {değer: "geçti"}}}
+              mark: {cache: {stock: ""}, racetest: {verdict: ""}, web: {v42a: fix}, dealjob: {over: fix}, monitor: {a1: fix, a2: fix}}
+              fresh: {dealjob: [at, sold, left, over]}
+              note: {racetest: "gerçek son koşu (b1846)", web: "olsaydı: önce oku, sonra yaz canlıda", cache: "olsaydı: son parçalarda yarış", dealjob: "olsaydı: 53 satış, 50 parça", monitor: "olsaydı: iki alarm ALARM"}
+              say: >-
+                Olsaydı (ayrı bir durum): ilk üç emniyet de kaçırsaydı ve v42-a canlıya çıksaydı. Yarış en çok son parçalarda, aynı anda
+                basanlarda olur: 50 parça için 53 sipariş; sayaç ise 0'da durur (her SET okuduğunun bir eksiğini yazdı). Bir
+                sonraki dakikalık kontrol Oversold 3 yazar, fazla satış alarmı ilk kontrolde çalar; beklenen sayaç (50 − 53 =
+                −3) bellekteki 0'dan farklı olduğu için sayaç farkı alarmı da ikinci kontrolde çalar (o alarm, yolda olan bir
+                satışın bir kontrollük geçici farkında çalmasın diye iki kontrol bekler; Adım 17). Alarm zararı önlemez, en geç bir dakikada haber verir. Ekip sürümü v41'e geri alır, 3 fazla siparişin
+                müşterileriyle konuşur (iptal ve özür) ve bu yolu yakalayan bir test ekler.
+            - phase: 4
+              who: cache
+              lit: [review, ci, racetest, testcache, web, cache, dealjob, monitor]
+              set: {web: {v42a: {durum: "birleştirilmedi"}}, cache: {stock: {değer: "44"}}, dealjob: {at: {değer: "10:19"}, sold: {değer: "6"}, left: {değer: "44"}, over: {değer: "0"}}, monitor: {a1: {durum: OK}, a2: {durum: OK}}, racetest: {run: {değer: b1846}, sold: {değer: "10, 10, 10, 10, 10"}, left: {değer: "0"}, verdict: {değer: "geçti"}}}
+              mark: {web: {v42a: ""}, dealjob: {over: ""}, monitor: {a1: "", a2: ""}, cache: {stock: ""}}
+              fresh: {cache: [stock]}
+              note: {review: "kural listede", ci: "son derlemeler yeşil", racetest: "", testcache: "boş: her test kendi anahtarını sildi", web: "canlıda v42 (DECR)", cache: "kesit: sayaç 44 · lm:sim:7f3a… yok", dealjob: "10:19 · 6 satış · Oversold 0", monitor: "üç alarm OK"}
+              say: >-
+                Hazır. "Olsaydı" kareleri yaşanmadı. Canlıda v42 sayacı DECR ile azaltıyor; sayaç 44, Oversold 0, üç alarm OK.
+                Test belleği boş. Canlı bellekte senin deneme anahtarın (lm:sim:7f3a…) henüz yok: t0'da "Start the rush"
+                deyince Uygulama onu 10 ve 600 saniyelik ömürle kuracak, önce "önce oku, sonra yaz" ile sonra DECR ile 300
+                alıcıyı koşturacak ve en sonda silecek. Bu deneme satın alma kodu değil, ayrı bir gösteri kodu: "önce oku,
+                sonra yaz" sadece lm:sim: anahtarında, bilerek çalışır. Gerçek sayaç 44'te kalacak.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Önce hatanın neden kendiliğinden görünmediği, sonra onu yakalayan dört emniyet: kod incelemesi kuralı, eşzamanlılık
+              testi, provada fazla satış sorusu, canlıda fazla satış alarmı. Arada testin kendi anahtarlarının kuralları: ayrı
+              ad, kısa ömür, temizlik, dar izin. Kural baştan: hata ne kadar erken yakalanırsa o kadar ucuzdur; canlıdaki
+              alarm son emniyettir, ilk değil.
+            cards:
+              - title: "Hata neden kendiliğinden görünmez?"
+                text: >-
+                  "Önce oku, sonra yaz" yolu tek bir alıcıyla her seferinde doğru çalışır: 10 okur, 9 yazar. Geliştiricinin
+                  kendi denemesi de, tek tek çalışan testler de yeşil geçer. Hata sadece iki alıcının komutları arasına bir
+                  başkası girdiğinde çıkar; bu da aynı anda çok kişi bastığında, en çok son parçalarda olur. Bu yüzden zincir
+                  hatayı "çok kişi aynı anda" durumunu bilerek kurarak arar.
+                code:
+                  - {code: "v = r.get('lm:deal:stock')   → '10'", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Oku. Bu cevap hemen eskiyebilir: o sırada başkası sayacı değiştirebilir."}
+                  - {code: "r.set('lm:deal:stock', int(v) - 1)", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Yaz. Arada başkası da 10 okuduysa ikisi de 9 yazar."}
+              - title: "Birinci emniyet: inceleme kuralı ve lint"
+                text: >-
+                  İnceleme listesindeki kural: paylaşılan bir sayaç (fırsat stoğu gibi) sadece tek bir atomik komutla
+                  değişir: DECR, INCR, INCRBY ya da tek bir Lua betiği (Adım 17). Değeri okuyup ona göre yazmak yok; bir
+                  karar gerekiyorsa DECR'in döndürdüğü sayıya bakılır. Lint sayacın adının geçtiği satırlarda get( ve set(
+                  arar. Ne zaman: kod yazılırken ve incelemede, en ucuz an. Yakalamadığı: komutlar yardımcı fonksiyonların
+                  içine saklanırsa ne lint ne yorgun bir göz görür. Bu yüzden ikinci emniyet, kodun yazılışına değil davranışına
+                  bakar.
+                code:
+                  - {code: "kural: lm:deal:stock → sadece decr / incr / incrby", tag: Derleme hattının içinde, say: "Lint bu satırları arar; get( ya da set( varsa uyarır."}
+                  - {code: "kalan = r.decr('lm:deal:stock'); son5 = 0 <= kalan < 5", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Doğru yol: kararı DECR'in cevabından ver."}
+              - title: "İkinci emniyet: eşzamanlılık testi"
+                text: >-
+                  Test, Uygulama'nın gerçek satın alma fonksiyonunu çalıştırır; sadece siparişi yazan kısım sahte bir kayıt
+                  defterine gider, çünkü bu testin konusu sayaç. 300 sahte alıcı, 48 iş parçacığı, stok 10. Üç soru: satılan
+                  stoktan fazla mı (fazla satış), satılan stoktan az mı (alıcı varken parça boşa kaldı mı), sayaç sonunda 0
+                  mı? Yarış şansa bağlı olduğu için test 5 tur çalışır; her tur başında sayacı yeniden 10'a kurar ve önceki turun
+                  alıcı anahtarlarını siler. Ne zaman: her pull request'te, birkaç saniye.
+                  Yakalamadığı: testin çalıştırmadığı bir kod yolu (ör. iade). Onarım: her yeni sayaç yolu kendi testiyle
+                  gelir (inceleme kuralı).
+                code:
+                  - {code: "for tur in range(5):", tag: Derleme hattının içinde, say: "Aynı testi 5 kez."}
+                  - {code: "    r.delete(*alici_anahtarlari); r.set(k, 10, ex=600)", tag: [Test → Test belleği, Test belleği → Test], say: "Önceki turun alıcılarını sil; sayaç yeniden 10, 600 sn."}
+                  - {code: "    satilan = sum(ThreadPoolExecutor(48).map(satin_al, 300 alıcı))", tag: [Test → Test belleği, Test belleği → Test], say: "300 alıcı aynı anda satın almayı dener."}
+                  - {code: "    assert satilan <= 10   # fazla satış yok", tag: Derleme hattının içinde, say: "Stoktan fazla satılmadı."}
+                  - {code: "    assert satilan == 10 and int(r.get(k)) == 0", tag: [Test → Test belleği, Test belleği → Test], say: "Eksik de yok; sayaç sonunda 0."}
+              - title: "Testin anahtarları: ayrı ad, kısa ömür, temizlik, dar izin"
+                text: >-
+                  Her derleme anahtarlarını kendi ön ekiyle yazar: lm:test:b1842:stock. Böylece aynı anda koşan iki derleme
+                  birbirinin sayacına dokunmaz. Her anahtar 600 saniyelik ömürle yazılır ve test en sonda, kalsa da geçse de,
+                  onları siler (try … finally). Ömür bir yedektir: test yarıda kesilirse anahtar 10 dakikada kendiliğinden
+                  gider. Test belleği canlı bellekten ayrıdır (ayrı hesap, ayrı ağ) ve testin kullanıcısı sadece lm:test:
+                  anahtarlarına dokunabilir. Fırsatlar sayfasındaki deneme aynı kalıbı kullanır: lm:sim:<kimlik>, yazılan
+                  stok, 600 saniye, sonunda DEL; t0'da bunu göreceksin.
+                map:
+                  cols: [Kural, Örnek, "Neyi önler?"]
+                  rows:
+                    - ["ön ek", "lm:test:b1842:…", "İki derleme aynı sayacı paylaşmaz."]
+                    - ["kısa ömür", "SET … EX 600", "Yarıda kalan test anahtar bırakmaz."]
+                    - ["temizlik", "finally: DEL …", "Bellek her testten sonra boş."]
+                    - ["dar izin", "~lm:test:* -@dangerous", "Test başka anahtara yazamaz, belleği silemez."]
+                code:
+                  - {code: "k = f'lm:test:{derleme}:stock'", tag: Testin içinde, say: "Bu derlemeye ait ad."}
+                  - {code: "finally: r.delete(k, *alici_anahtarlari)", tag: Test → Test belleği, say: "Ne olursa olsun en sonda sil."}
+              - title: "Üçüncü emniyet: provaya fazla satış sorusu"
+                text: >-
+                  Eşzamanlılık testi sayacı sınar; prova bütün yolu sınar: sayfa isteği, Uygulama, alıcı anahtarı, DECR, test
+                  Aurora'sında sipariş. Adım 16'daki prova kampanyadan önceki gece zaten yapılıyor; ona bir soru eklenir:
+                  test kampanyasında siparişlerin asıl kaydı stoktan fazla mı? Ne zaman: her kampanyadan önce bir kez.
+                  Yakalamadığı: provadan sonra yayına çıkan bir değişiklik. Onarım: kampanya günü yayın yapılmaz; zorunlu bir
+                  yayın olursa prova tekrarlanır.
+                code:
+                  - {code: "SELECT SUM(qty) FROM order_items WHERE campaign_id = 'prova-1031'   -- 50", tag: [Ekip → test Aurora, test Aurora → Ekip], say: "Satılanın doğru değeri: 50."}
+                  - {code: "assert satilan <= 50", tag: Ekip'in kontrolünün içinde, say: "Fazla satış yok."}
+              - title: "Son emniyet: canlıda fazla satış alarmı"
+                text: >-
+                  Kampanya işi her dakika Aurora'da satılanları sayar ve Oversold'u yazar; firsat-fazla-satis ilk kontrolde
+                  çalar (Adım 17). Ne zaman: fazla satıştan en geç bir dakika sonra. Yakalamadığı: zararı önlemez; alarm
+                  çaldığında fazla siparişler yazılmıştır. Onarım: Ekip sürümü geri alır, fazla siparişlerin müşterileriyle
+                  konuşur. Dört emniyetin her biri bir öncekinin kaçırdığını arar.
+                map:
+                  cols: [Emniyet, Ne zaman, Yakalamadığı]
+                  rows:
+                    - ["inceleme + lint", "kod yazılırken", "yardımcı fonksiyonda saklı komut"]
+                    - ["eşzamanlılık testi", "her pull request", "testin çalıştırmadığı kod yolu"]
+                    - ["prova", "kampanyadan önceki gece", "provadan sonraki yayın"]
+                    - ["Oversold alarmı", "canlıda her dakika", "zararı önlemez, haber verir"]
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              20–21 Eki'de test hesabında test belleği ve onun dar izinli kullanıcısı kurulur, derleme hattı her pull
+              request'e bağlanır, inceleme listesine kural yazılır. İlk koşuda test canlıdaki kodu (v41) dener: yeşil, ve
+              bellek yine boş.
+            cards:
+              - title: "Test belleği ve testin kullanıcısı (20 Eki)"
+                text: >-
+                  Test belleği, canlı belleğin türüyle aynı (ElastiCache Serverless, Valkey) ama ayrı hesapta ve ayrı ağda.
+                  Kullanıcısı lm-test; erişim dizesi ona sadece lm:test: anahtarlarında okuma ve yazma verir. Kullanıcı bir
+                  kullanıcı grubuna konur, grup belleğe bağlanır; serverless bir bellekte erişim bu yolla kontrol edilir.
+                code:
+                  - {code: "aws elasticache create-user --user-id lm-test --engine valkey --passwords … \\", tag: Ekip → ElastiCache (test hesabı), say: "Testin kullanıcısı…"}
+                  - {code: "  --access-string \"on ~lm:test:* -@all +@read +@write -@dangerous\"", tag: ElastiCache'in içinde, say: "…sadece lm:test: anahtarları."}
+                  - {code: "aws elasticache create-user-group --user-group-id testler --engine valkey --user-ids lm-test", tag: Ekip → ElastiCache (test hesabı), say: "Kullanıcı grubu."}
+                  - {code: "aws elasticache create-serverless-cache --serverless-cache-name dbws-cache-test --engine valkey --user-group-id testler …", tag: Ekip → ElastiCache (test hesabı), say: "Test belleği, bu grupla."}
+              - title: "Derleme hattı ve kural (21 Eki)"
+                text: >-
+                  CodeBuild projesi test hesabının ağında (VPC) çalışır; test belleği internete kapalı olduğu için derleme ona sadece
+                  bu ağdan ulaşır. Tetik: pull request açılınca ya da güncellenince. Depo ayarı, derleme yeşil olmadan
+                  birleştirmeye izin vermez. Aynı gün inceleme listesine "paylaşılan sayaçta önce oku, sonra yaz yok" kuralı
+                  yazıldı.
+                code:
+                  - {code: "tetik: PULL_REQUEST_CREATED, PULL_REQUEST_UPDATED", tag: Depo → CodeBuild, say: "Her pull request bir derleme başlatır."}
+                  - {code: "--vpc-config vpcId=…,subnets=…,securityGroupIds=…", tag: CodeBuild'in içinde, say: "Derleme test belleğinin ağında çalışır."}
+                  - {code: "buildspec · phases: build: pytest tests/test_yaris.py", tag: CodeBuild → Test belleği, say: "Eşzamanlılık testi her derlemede."}
+              - title: "İlk koşu: canlıdaki kod geçer mi?"
+                text: >-
+                  Yeni bir test önce bilinen doğru koda karşı çalıştırılır: v41, sayacı DECR ile azaltıyor. b1801: 5 tur, her
+                  turda 300 alıcıdan tam 10'u aldı, sayaç sonunda 0; yeşil. Test anahtarlarını sildi; bellek boş. Ekip bir
+                  kez de bilerek "önce oku, sonra yaz" yazılmış bir kopyayla denedi (b1802: 10 parçada 19 satış) ve testin kaldığını gördü: test hem doğru
+                  kodu geçirir hem hatalı kodu yakalar.
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              Her değişiklik aynı yoldan geçer: inceleme, derleme, eşzamanlılık testi. 28 Eki'de bir değişiklik kırmızı
+              yandı ve canlıya gitmedi; düzeltilen sürüm 29 Eki'de yayına çıktı. Kampanyadan önceki gece prova fazla satış
+              sorusunu siparişlerde sordu. Kampanyada her dakika Oversold 0; 10:19'da 6 satış, sayaç 44.
+            cards:
+              - title: "Bir değişiklik kırmızı yanar (28 Eki)"
+                text: >-
+                  PR #412 "son 5 parça" yazısı için satın almayı iki yardımcı fonksiyonla yeniden yazdı: biri stoğu okuyor,
+                  öteki bir eksiğini yazıyor. Lint ve inceleyen kaçırdı. Derleme b1842'de eşzamanlılık testi ilk turda 10
+                  parçalık stokta 23 satış saydı (temsilî). Assert tutmadı; derleme kırmızı, birleştirme kapalı. Test kalsa da
+                  anahtarlarını sildi.
+                code:
+                  - {code: "stok = stok_oku()            # içinde: GET lm:deal:stock", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Hatalı yol: önce oku…"}
+                  - {code: "if stok > 0: stok_yaz(stok - 1)   # içinde: SET", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "…sonra yaz."}
+                  - {code: "AssertionError: satilan = 23, stok = 10", tag: Derleme hattının içinde, say: "Test kaldı; derleme kırmızı."}
+              - title: "Düzeltme ve yayın (29 Eki)"
+                text: >-
+                  Geliştirici aynı pull request'i DECR ile düzeltti: "son 5 parça" yazısı DECR'in döndürdüğü sayıdan çıkıyor.
+                  b1843: 5 turda 10, 10, 10, 10, 10 satış, sayaç 0; yeşil. İnceleme onayladı, değişiklik birleştirildi, v42
+                  16:00'da canlıda.
+              - title: "Provada fazla satış sorusu (31 Eki 01:00)"
+                text: >-
+                  Adım 16'daki provada test ortamında v42 çalıştı. 50 parçalık test kampanyası (prova-1031), 3.000 sahte
+                  alıcı. Prova bitince test Aurora'sında: 50 satış, 50'yi aşan 0, iki kez alan müşteri 0; 2.950 alıcı
+                  "tükendi" gördü. Bu sayı sayaçtan değil siparişlerin asıl kaydından geldi. Sonra test ortamı silindi.
+                code:
+                  - {code: "SELECT SUM(qty), COUNT(DISTINCT customer_id) … WHERE campaign_id = 'prova-1031'", tag: [Ekip → test Aurora, test Aurora → Ekip], say: "50 satış, 50 farklı müşteri."}
+              - title: "Canlıda: deneme anahtarları ve her dakikalık kontrol"
+                text: >-
+                  Kampanya 10:00'da başladı (Adım 17). 10:16'da bir ziyaretçi (c2d9…) fırsatlar sayfasında denemeyi
+                  çalıştırdı; Uygulama testin kalıbıyla ona ayrı bir anahtar kurdu (lm:sim:c2d9…, 10 parça, 600 saniye) ve
+                  bitince sildi; gerçek sayaca dokunmadı. Bu deneme satın alma kodunun bir parçası değil: ayrı bir gösteri
+                  kodu, "önce oku, sonra yaz" yolunu bilerek ve sadece kendi lm:sim: anahtarında çalıştırır. 10:19 kontrolü: Aurora'da 6 satış, sayaç 44, Oversold 0, üç alarm
+                  OK. Kontrol her dakika çalışır; simülasyon birini gösteriyor.
+                code:
+                  - {code: "SET lm:sim:c2d9… 10 EX 600   …   DEL lm:sim:c2d9…", tag: [Uygulama → ElastiCache, ElastiCache → Uygulama], say: "Denemenin anahtarı: ayrı ad, kısa ömür, sonunda sil."}
+                  - {code: "oversold = max(0, sold - 50)   # 10:19: max(0, 6 - 50) = 0", tag: Kampanya işinin içinde, say: "Fazla satış yok."}
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              Test yarıda kesilirse, iki derleme aynı anda koşarsa, yarış bir turda şansla gizlenirse, test yanlış belleğe
+              bağlanırsa ya da hata yine de canlıya çıkarsa ne olur? İlk ikisi "Örnek durum", sonraki üçü "Olsaydı". Her biri
+              için zincirde bir kural ya da bir parça var; ne zaman çalıştığı, neyi yakalamadığı ve onarımı aşağıda.
+            cards:
+              - title: "Test yarıda kesilirse"
+                text: >-
+                  Ne zaman: anahtar yazıldığı anda 600 saniyelik ömrünü alır; test sonuna varamazsa ömür biter ve anahtar
+                  kendiliğinden silinir (b1844: 13:02'de yazıldı, 13:12'de silindi). Yakalamadığı: o 10 dakika boyunca anahtar
+                  bellekte durur; ama adı o derlemeye ait olduğu için başka bir test onu okumaz. Onarım: gerekmez; derleme
+                  yeniden başlatılınca yeni bir numara ve yeni bir anahtar adı alır.
+              - title: "İki derleme aynı anda koşarsa"
+                text: >-
+                  Ne zaman: her anahtar yazılırken; ön ek derleme numarasını taşır (lm:test:b1845:…, lm:test:b1846:…).
+                  Yakalamadığı: test kodu ön eki unutup sabit bir ad kullanırsa iki derleme aynı sayacı azaltır ve testler
+                  rastgele kalır. Onarım: anahtar adını üreten tek bir yardımcı var; inceleme listesi "test anahtarı ön ekli
+                  mi?" diye sorar.
+              - title: "Yarış bir turda şansla gizlenirse"
+                text: >-
+                  Ne zaman: her derlemede, 5 tur. Okuma ile yazma arasındaki gerçek iş (birkaç milisaniye) testte de durur;
+                  araya girme fırsatı böylece gerçek kadar olur. Yakalamadığı: çok seyrek çıkan bir yarış 5 turda da
+                  görünmeyebilir; test bir kanıt değil, bir emniyettir. Onarım: inceleme kuralı ve prova; canlıda Oversold alarmı.
+              - title: "Test yanlış belleğe bağlanırsa"
+                text: >-
+                  Ne zaman: bağlantı açılırken ve her komutta. Üç kilit: test hesabının ağından canlı belleğe yol yok; canlı
+                  bellekte lm-test kullanıcısı yok; kullanıcı sadece lm:test: anahtarlarına yazabilir (NOPERM). Yakalamadığı:
+                  biri teste canlı bir kullanıcının şifresini verirse kilitler aşılır. Onarım: canlı şifreler sadece canlı
+                  hesabın Secrets Manager'ında durur; derleme hattının oraya izni yoktur.
+                code:
+                  - {code: "SET lm:deal:stock 10   → (error) NOPERM", tag: [Test → ElastiCache, ElastiCache → Test], say: "İzin dışı anahtar: komut geri döner."}
+              - title: "Hata yine de canlıya çıkarsa"
+                text: >-
+                  Ne zaman: kampanya işinin bir sonraki kontrolünde, en geç bir dakika sonra; firsat-fazla-satis ilk kontrolde
+                  çalar; sayaç da siparişlerle uyuşmadığı için firsat-sayac-farki iki kontrol sonra çalar. Yakalamadığı: fazla
+                  siparişler yazılmıştır; alarm sadece haber verir. Onarım: Ekip sürümü bir önceki
+                  sürüme geri alır, fazla siparişlerin müşterileriyle konuşur (iptal, özür; iptal akışı parçayı geri verir,
+                  Adım 17), kaçan yol için bir test ekler ve inceleme listesini günceller.
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
