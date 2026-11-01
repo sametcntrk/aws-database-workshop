@@ -203,7 +203,7 @@ class CacheTest(unittest.TestCase):
         again = self.c.post("/api/leaderboard/add", json=body).get_json()
         self.assertEqual(self.cache.board, {"C00002": 100.5})
         self.assertEqual(self.cache.counter, 1)
-        self.assertEqual(self.cache.kv[f"processed:{ORDER}"], (1, 604800))
+        self.assertEqual(self.cache.kv[f"processed:{ORDER}"], (1, 86400))
         self.assertEqual(set(first), set(again))
         self.assertEqual(first["data"], {"added": 100.5})
         self.assertEqual(again["data"], {"added": 0})

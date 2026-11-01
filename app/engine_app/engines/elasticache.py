@@ -14,7 +14,7 @@ from . import table as result_table
 META = catalog.META["elasticache"]
 PAGES = catalog.PAGES["elasticache"]
 DEAL_STOCK = 50
-PROCESSED_TTL = 604800   # a repeat of an order is recognised for 7 days
+PROCESSED_TTL = 86400   # a repeat of an order is recognised for 24 hours
 
 _client = None
 
