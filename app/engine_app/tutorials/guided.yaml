@@ -691,7 +691,8 @@ steps:
             engines: [docdb]
           - text: >-
               Kutular çizildi: her kategori için ürün sayısı ve "from ₺…" fiyatı. Vitrin kartlarının adı ve fiyatı da
-              DocumentDB'den geldi; görselleri her kart için ayrı bir istekle S3'ten.
+              DocumentDB'den geldi; görselleri her kart için ayrı bir istekle (/s3/api/img/P0103 gibi) uygulama üzerinden
+              S3'ten: tarayıcın görseli uygulamadan istedi, uygulama dosyayı S3'ten okuyup geri verdi.
             engines: [docdb, s3]
           - text: >-
               Sayfanın üstündeki fırsat kutusu ayrı bir istekle bellekten (ElastiCache) geldi. Daha önce ürünlere baktıysan
@@ -705,7 +706,7 @@ steps:
           olurdu: bütün dokümanlar uygulamaya taşınıp orada sayılsaydı; o istek gönderilmedi. Üstteki etiketler o anda işi
           kimin yaptığını gösterir.
         labels:
-          server: "t0 · Sayfa açılınca · DocumentDB'de grupla ($group)"
+          server: "Sayfa açılınca · DocumentDB'de grupla ($group)"
           client: "Olsaydı · Hepsini uygulamaya çek, orada say"
         send_server: >-
           Ana sayfayı açtın. Tarayıcın "ana sayfanın verisini ver" dedi; uygulama DocumentDB'ye aggregation tarifini
@@ -852,10 +853,10 @@ steps:
             text: Kategorileri, vitrini ve isteğin kaydını tek bir JSON cevabında gönderdi.
           - who: Tarayıcın
             text: Her kategori satırını bir kutuya çevirdi ("40 products, from ₺…") ve vitrin kartlarını çizdi.
-          - who: Tarayıcın → S3
+          - who: Tarayıcın → Uygulama → S3
             text: >-
-              Vitrin kartlarının görsellerini ürün numarasından kurduğu adresle (/s3/api/img/P0103) ayrı ayrı istedi; görseller
-              S3'ten geldi. Kartta adı ve fiyatı (DocumentDB) görselle (S3) birleştiren tarayıcıdır.
+              Vitrin kartlarının görsellerini ürün numarasından kurduğu adresle (/s3/api/img/P0103) ayrı ayrı uygulamadan
+              istedi; uygulama her görseli S3'ten okuyup geri verdi. Kartta adı ve fiyatı (DocumentDB) görselle (S3) birleştiren tarayıcıdır.
           - who: Sonra
             text: >-
               Bir kategori kutusuna tıklarsan o kategorinin sayfası açılır; orada DocumentDB filtre ve index ile çalışır
@@ -2255,8 +2256,8 @@ steps:
           İki taraf aynı hızda adım atıyor: her adımda en fazla bir doküman okunuyor. Üstteki etiketler o anda işi kimin
           yaptığını gösterir: uygulama mı, DocumentDB mi.
         labels:
-          index: "t-1 · İstek 1 · Sayfa açılınca · Index ile"
-          scan: "t0 · İstek 2 · Senin tıklaman · Index olmadan (collection scan)"
+          index: "İstek 1 · Sayfa açılınca · Index ile"
+          scan: "İstek 2 · Senin tıklaman · Index olmadan (collection scan)"
         send_index: >-
           Elektronik kategorisine tıkladın. Tarayıcın "Elektronik ürünlerini, puanı yüksek olan önce" istedi; uygulama da
           DocumentDB'ye find komutunu gönderiyor. Komutta index adı yok: DocumentDB uygun index'i kendisi seçecek.
@@ -3150,9 +3151,16 @@ steps:
           veritabanları var.
         steps:
           - text: >-
-              Elektronik kategorisindesin. Sayfa yeniden açıldı (bir önceki adımda index'i kapatmıştın); "Use the index" yine seçili. Açılırken oturumun
-              güncellendi ve 40 ürün DocumentDB'den, görselleri S3'ten geldi.
-            engines: [elasticache, docdb, s3]
+              Elektronik kategorisindesin. Sayfa yeniden açıldı (bir önceki adımda index'i kapatmıştın); "Use the index" yine seçili.
+              Bu düğme isteğe index=on ekler: DocumentDB kısa yolu (index'i) kullanabilir. "Collection scan" seçili olsaydı
+              istek index=off ile gider, uygulama komuta "index'i kullanma" ekler, DocumentDB her dokümanı tek tek okurdu.
+              Açılırken 40 ürün DocumentDB'den, görselleri uygulama üzerinden S3'ten geldi.
+            engines: [docdb, s3]
+          - text: >-
+              Her sayfa açılışında tarayıcın arka planda ayrı bir istek daha gönderir: uygulama bu ziyaretçinin oturumunu (hangi
+              müşteri, hangi sayfa) ElastiCache'e, yani bellekteki hızlı depoya yazar. Bu yazma bu adımın konusu değil; sayfa
+              onsuz da aynı listeyi gösterir.
+            engines: [elasticache]
           - text: >-
               Renk listesindeki seçenekler de aynı istekte geldi: uygulama DocumentDB'ye "bu kategoride hangi renkler var?"
               diye ikinci bir komut (distinct) gönderdi.
@@ -3176,7 +3184,7 @@ steps:
         index_now: "{ category: 1, rating: -1 }"
         index_better: '{ category: 1, "attributes.renk": 1, rating: -1 }'
         labels:
-          now: "t0 · Senin seçimin · Gerçek plan: kategori index'i + renk filtresi"
+          now: "Senin seçimin · Gerçek plan: kategori index'i + renk filtresi"
           better: "Olsaydı · Aynı komut · Üç alanlı index"
         send_now: >-
           Renk listesinden siyahı seçtin. Tarayıcın listeyi color=siyah ile istedi; uygulama find komutunu gönderiyor:
@@ -3784,7 +3792,7 @@ steps:
           - {id: P0141, name: Anadolu Mekanik Klavye 141}
         lanes:
           - id: folded
-            title: "t-1 · İstek 1 · Sayfa açılınca · tr_folded"
+            title: "İstek 1 · Sayfa açılınca · tr_folded"
             field: name
             terms:
               - [kablosuz, [P0136, P0081, P0031, P0001, P0196]]
@@ -3808,7 +3816,7 @@ steps:
               İki kelimeyi de adında taşıyan 5 ürün skorlandı. Ad 3 kat önemli sayıldı; açıklamadaki eşleşmeler de skora eklendi.
             back: Uygulama 5 ürünü skorlarıyla tarayıcına gönderdi.
           - id: standard
-            title: "t0 · İstek 2 · Senin tıklaman · standard"
+            title: "İstek 2 · Senin tıklaman · standard"
             field: name.std
             terms:
               - [kablosuz, [P0136, P0081, P0031, P0001, P0196]]
@@ -4677,7 +4685,7 @@ steps:
           - {id: P0141, name: Anadolu Mekanik Klavye 141}
         lanes:
           - id: fuzzy
-            title: "t-1 · İstek 1 · Sayfa açılınca · Fuzziness AUTO"
+            title: "İstek 1 · Sayfa açılınca · Fuzziness AUTO"
             field: name
             terms:
               - [kablosuz, [P0136, P0081, P0031, P0001, P0196]]
@@ -4695,7 +4703,7 @@ steps:
             score_say: 5 kulaklık bulundu; bulanık eşleşme olduğu için skorlar birebir aramadakinden düşük.
             back: Uygulama 5 ürünü tarayıcına gönderdi.
           - id: exact
-            title: "t0 · İstek 2 · Senin tıklaman · Exact words"
+            title: "İstek 2 · Senin tıklaman · Exact words"
             field: name
             terms:
               - [kablosuz, [P0136, P0081, P0031, P0001, P0196]]
@@ -5590,8 +5598,8 @@ steps:
         filter: [category, Elektronik]
         ranges: [["0–500 ₺", null, 500], ["500–2000 ₺", 500, 2000], ["2000 ₺ +", 2000, null]]
         labels:
-          all: "t-1 · İstek 1 · Sayfa açılınca · Sadece arama"
-          filtered: "t0 · İstek 2 · Senin tıklaman · Arama + Elektronik filtresi"
+          all: "İstek 1 · Sayfa açılınca · Sadece arama"
+          filtered: "İstek 2 · Senin tıklaman · Arama + Elektronik filtresi"
         send_all: >-
           Arama sayfası "siyah" ile açıldı. Tarayıcın aramayı istedi; uygulama OpenSearch'e sorguyu iki aggregation'la birlikte
           gönderiyor: kategori sayıları ve fiyat aralıkları.
@@ -6510,7 +6518,7 @@ steps:
           - {id: S002, name: Ankara Mağaza 1, city: Ankara, lat: 39.82101, lon: 33.00533}
         lanes:
           - id: km25
-            title: "t-1 · İstek 1 · Sayfa açılınca · 25 km"
+            title: "İstek 1 · Sayfa açılınca · 25 km"
             km: 25
             window: 50
             send: >-
@@ -6518,7 +6526,7 @@ steps:
               geo_distance sorgusunu gönderiyor.
             back: Uygulama 3 mağazayı uzaklıklarıyla tarayıcına gönderdi; harita işaretleri çizilecek.
           - id: km100
-            title: "t0 · İstek 2 · Senin tıklaman · 100 km"
+            title: "İstek 2 · Senin tıklaman · 100 km"
             km: 100
             window: 200
             send: >-
@@ -7484,14 +7492,14 @@ steps:
           description: Alpen markalı siyah kablosuz kulaklık. Elektronik kategorisinde, şık bir ürün.
         lanes:
           - id: full
-            title: "t-1 · İstek 1 · Sayfa açılınca · Bütün doküman"
+            title: "İstek 1 · Sayfa açılınca · Bütün doküman"
             fields: null
             send: >-
               Ürün sayfasını açtın. Tarayıcın ürünü istedi; uygulama DocumentDB'ye find_one({ _id: "P0001" }) gönderiyor,
               projection yok.
             back: Uygulama bütün dokümanı tarayıcına gönderdi; sayfa adı, fiyatı, açıklamayı ve özellikleri çizecek.
           - id: card
-            title: "t0 · İstek 2 · Senin tıklaman · Sadece kart alanları"
+            title: "İstek 2 · Senin tıklaman · Sadece kart alanları"
             fields: [name, price, rating, category, brand, tags, stock]
             send: >-
               "Card fields only" butonuna bastın. Tarayıcın ürünü projection=card ile istedi; uygulama aynı okumayı yedi alanlık
@@ -8394,8 +8402,11 @@ steps:
           çalışan veritabanları var.
         steps:
           - text: >-
-              Mağazada bir müşteri olarak geziyorsun (ör. Ayşe Yılmaz). Şifreyle giriş yok: tarayıcın iki çerez taşıyor.
-              lm_visitor bu tarayıcının kimliği; Keyspaces'teki partition'ın da bu kimlik.
+              Mağazada bir müşteri olarak geziyorsun (ör. Ayşe Yılmaz). Bu ad sadece bir örnek: her müşterinin Keyspaces'te
+              kendi partition'ı var (Ayşe'ninki C00001). Şifreyle giriş yok: tarayıcın iki çerez taşıyor. lm_visitor bu
+              tarayıcının kimliği (ör. 7f3a…), lm_persona seçtiğin müşterinin numarası. Bu sayfadaki "baktım" satırını uygulama
+              bu tarayıcının partition'ına (lm_visitor) yazar. Bu tarayıcıdan bir satın alma olursa, o satır hem bu partition'a
+              hem de lm_persona'daki müşterinin partition'ına düşer (t-1'deki örnekte C00007).
           - text: >-
               Bir ürün kartına (Kablosuz Kulaklık) tıkladın ve /p/P0001 açıldı. Sayfa açılır açılmaz arka planda oturum
               kaydın güncellendi (30 dakikalık, bellekte).
@@ -9140,7 +9151,7 @@ steps:
           daha uzun ama sana özel: aldıklarını eler, sana en çok benzeyenlerin seçtiklerini öne çıkarır.
         lanes:
           - id: product
-            title: "t-1 · İstek 1 · Sayfa açılınca · Bu ürüne göre (2 hop)"
+            title: "İstek 1 · Sayfa açılınca · Bu ürüne göre (2 hop)"
             start: {id: P0001, label: Kablosuz Kulaklık, type: product}
             start_title: Bu ürün
             start_say: Yürüyüş bu sayfadaki ürünün düğümünden, Kablosuz Kulaklık'tan başlıyor.
@@ -9170,7 +9181,7 @@ steps:
               Her ürün kaç farklı müşteriden ulaşıldığına göre sayıldı. Powerbank 2 ile en üstte. Python ile Veri ve
               Toros Spor Çantası da listede, oysa Ayşe bunları zaten almış: bu yürüyüş kimin baktığını bilmez.
           - id: persona
-            title: "t0 · İstek 2 · Senin tıklaman · Sana göre (3 hop)"
+            title: "İstek 2 · Senin tıklaman · Sana göre (3 hop)"
             start: {id: C00001, label: Ayşe Yılmaz, type: me}
             start_title: Sen
             start_say: Yürüyüş senin seçtiğin müşterinin, Ayşe Yılmaz'ın düğümünden başlıyor.
@@ -10289,8 +10300,9 @@ steps:
         kind: ddb-items
         title: "DynamoDB tablosu: dbws-cart"
         caption: >-
-          Sepet tablosundan örnek bir kesit: üç ziyaretçinin sepeti (kimlikler kısaltıldı, satırlar örnek). Sepetin ilk kez bu
-          eklemeyle oluşuyorsa senin partition'ın boş başlar. Önce UpdateItem, sonra Query oynuyor.
+          Sepet tablosundan örnek bir kesit: üç ziyaretçinin sepeti (kimlikler kısaltıldı, satırlar örnek). Senin partition'ında
+          daha önce eklediğin bir ürün (Mekanik Klavye) var, Kablosuz Kulaklık henüz yok. Sepetin bu eklemeyle ilk kez
+          oluşsaydı partition'ın boş başlardı. Önce UpdateItem, sonra Query oynuyor.
         rows:
           - {pk: "CART#09bd…", sk: ITEM#P0105, name: Deri Ceket, qty: 1}
           - {pk: "CART#09bd…", sk: ITEM#P0176, name: Bluetooth Hoparlör, qty: 4}
@@ -10312,7 +10324,9 @@ steps:
           - op: query
             pk: "CART#7f3a… (sen)"
             say_send: Uygulama sepetin güncel hâli için Query gönderiyor - pk = senin sepetin, güçlü tutarlı okuma.
-            say_read: Senin partition'ındaki bütün item'lar sk sırasıyla okundu; başka partition'a dokunulmadı.
+            say_read: >-
+              Senin partition'ındaki bütün item'lar sk sırasıyla okundu; başka partition'a dokunulmadı. Silinme zamanı geçmiş
+              bir item olsaydı DynamoDB onu okur ama cevaba koymazdı.
         back: >-
           Uygulama sepeti tarayıcına gönderdi. Butonun altında "Added" yazacak, sepet sayacı artacak.
         summary: >-
@@ -10341,9 +10355,11 @@ steps:
             "UpdateExpression": "ADD qty :q SET #n = :n, unit_price = :p, expires_at = :e",
             "ConditionExpression": "attribute_not_exists(qty) OR qty <= :max",
             "ExpressionAttributeValues": { ":q": {"N": "1"}, ":max": {"N": "4"}, … },
-            "ReturnValues": "ALL_NEW", "ReturnConsumedCapacity": "TOTAL" }
+            "ReturnValues": "ALL_NEW", "ReturnValuesOnConditionCheckFailure": "ALL_OLD",
+            "ReturnConsumedCapacity": "TOTAL" }
 
-          Ardından: X-Amz-Target: DynamoDB_20120810.Query   { "KeyConditionExpression": "pk = :pk", "ConsistentRead": true, … }
+          Ardından: X-Amz-Target: DynamoDB_20120810.Query   { "KeyConditionExpression": "pk = :pk",
+                    "FilterExpression": "expires_at > :now", "ConsistentRead": true, … }
       code_intro: >-
         Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Mor etiketli
         satırda bir şey bir yerden bir yere gider; gri "Uygulamanın içinde" etiketli satırda iş uygulamanın kendi içinde
@@ -10360,7 +10376,7 @@ steps:
             - {match: 'kwargs["ConditionExpression"] = "attribute_not_exists(qty) OR qty <= :max"', say: "\"Limit\" kutusu işaretliyse en fazla 5 kuralını koşul olarak ekler (Adım 14).", tag: Uygulamanın içinde}
             - {match: 'resp = table().update_item(**kwargs)', say: "boto3 komutu gönderir; item yoksa oluşur, varsa adedi artar.", tag: [Uygulama → DynamoDB, DynamoDB → Uygulama], hl: add}
             - {match: 'units, cost = _units(resp, "Write")', say: Cevaptan harcanan yazma birimini okur (isteğin kaydı için)., tag: Uygulamanın içinde}
-            - {match: 'items = get_cart(True)', say: "Sepetin güncel hâlini almak için ikinci komut (Query) gider.", tag: [Uygulama → DynamoDB, DynamoDB → Uygulama], hl: key}
+            - {match: 'items = get_cart(True)', say: "Sepetin güncel hâlini almak için ikinci komut (Query) gider; silinme zamanı geçmiş satırlar cevaba girmez.", tag: [Uygulama → DynamoDB, DynamoDB → Uygulama], hl: key}
             - {match: 'return jsonify(trace.payload({"items": items, "refused": refused}))', say: Sepet tarayıcıya gider., tag: Uygulama → Tarayıcı}
       live:
         title: Gerçek tabloda ne oldu?
@@ -10410,6 +10426,15 @@ steps:
             name: Hangi item'lar?
             note: Query, bir partition'ın item'larını sk sırasıyla okur. Sadece senin sepetin okunur.
             hl: key
+          - id: flt
+            say: silinme zamanı henüz gelmemiş olanlarını,
+            code: "  FilterExpression=Attr('expires_at').gt(now),"
+            name: Hangileri dönsün?
+            note: >-
+              TTL zamanı geçen satırı hemen değil, genellikle birkaç gün içinde siler; o arada satır tabloda durur. Bu süzgeç
+              expires_at'i şu ana (now) eşit ya da ondan küçük olan satırı cevaptan çıkarır. Süzgeç okumadan sonra çalışır: süresi dolmuş satır
+              yine okunur ve okuma birimi harcar, sadece geri gönderilmez.
+            hl: key
           - id: cr
             say: en son yazılanı kesin görecek şekilde oku.
             code: "  ConsistentRead=True, ReturnConsumedCapacity='TOTAL')"
@@ -10424,7 +10449,7 @@ steps:
           - label: 2. Query
             sub: Hemen ardından, sepetin güncel hâli için giden komut.
             via: Uygulama bu komutu boto3'ün query() metoduyla gönderir.
-            parts: [q, cr]
+            parts: [q, flt, cr]
         note: >-
           Dikkat: UpdateItem'da "item var mı?" diye soran bir parça yok. ADD, olmayan bir item'ı kendisi oluşturur; bu yüzden
           önce okumaya gerek kalmaz.
@@ -11179,8 +11204,9 @@ steps:
               sol şeridi bu istek.
             engines: [dynamodb]
           - text: >-
-              Toplam 6 olacağı için DynamoDB yazmadı. Uygulama sepeti yeniden okudu ve butonun altında kırmızı "en fazla 5"
-              mesajı çıktı. Sepetinde hâlâ 1 adet var. Sağ şerit ise aynı istek koşulsuz gitseydi ne olacağını gösteriyor;
+              Toplam 6 olacağı için DynamoDB yazmadı; ret cevabında sepetindeki adedi (1) de gönderdi. Uygulama sepeti yeniden
+              okudu ve butonun altında kırmızı "en fazla 5; sepetinde 1 var, 4 daha ekleyebilirsin" mesajı çıktı. Sepetinde
+              hâlâ 1 adet var. Sağ şerit ise aynı istek koşulsuz gitseydi ne olacağını gösteriyor;
               o istek gönderilmedi.
             engines: [dynamodb]
       sim:
@@ -11236,9 +11262,11 @@ steps:
             "UpdateExpression": "ADD qty :q SET #n = :n, unit_price = :p, expires_at = :e",
             "ConditionExpression": "attribute_not_exists(qty) OR qty <= :max",
             "ExpressionAttributeValues": { ":q": {"N": "5"}, ":max": {"N": "0"}, … },
-            "ReturnValues": "ALL_NEW", "ReturnConsumedCapacity": "TOTAL" }
+            "ReturnValues": "ALL_NEW", "ReturnValuesOnConditionCheckFailure": "ALL_OLD",
+            "ReturnConsumedCapacity": "TOTAL" }
 
-          Koşul tutmazsa cevap: HTTP 400, "__type": "…#ConditionalCheckFailedException"
+          Koşul tutmazsa cevap: HTTP 400, "__type": "…#ConditionalCheckFailedException",
+            "Item": { "qty": {"N": "1"}, … }   (ALL_OLD: item'ın şimdiki hâli)
       code_intro: >-
         Kod bilmen gerekmiyor. Solda uygulamanın gerçek kodundan birkaç satır, sağda her satırın Türkçesi. Her satırın
         etiketi işin nerede olduğunu söyler: mor etiketli satırda bir şey bir yerden bir yere gider (tarayıcıdan uygulamaya,
@@ -11251,11 +11279,13 @@ steps:
           sub: Senin tıklamanla gelen istek.
           lines:
             - {match: '@bp.post("/api/cart/items")', say: "\"Sepete ekle\" isteği buraya gelir: ürün, adet (5) ve \"Limit\" kutusunun durumu.", tag: Tarayıcı → Uygulama}
-            - {match: 'UpdateExpression="ADD qty :q SET', say: "Ne yazılacağını hazırlar: adede 5 ekle; ad, fiyat ve silinme zamanını yaz.", tag: Uygulamanın içinde, hl: add}
+            - {match: 'if limit and qty > MAX_QTY:', say: "İstenen adet tek başına 5'i aşıyorsa (ör. 6) DynamoDB'ye hiç yazma gitmez; aynı ret mesajı döner. Sen 5 istedin, bu yüzden komut gitti.", tag: Uygulamanın içinde, hl: cond}
             - {match: 'kwargs["ConditionExpression"] = "attribute_not_exists(qty) OR qty <= :max"', say: "\"Limit\" kutusu işaretliyse komuta koşulu ekler.", tag: Uygulamanın içinde, hl: cond}
-            - {match: 'kwargs["ExpressionAttributeValues"][":max"] = MAX_QTY - qty', say: "Kuralı sayıya çevirir: :max = 5 − 5 = 0. Bu hesabı uygulama yapar, DynamoDB değil.", tag: Uygulamanın içinde, hl: cond}
+            - {match: 'kwargs["ExpressionAttributeValues"][":max"] = MAX_QTY - qty', say: "Kuralı sayıya çevirir: :max = 5 − 5 = 0. Bu hesabı uygulama yapar, DynamoDB değil. Burada 5 kodda sabit bir sayı (MAX_QTY); gerçek bir sistemde bu sayı bir ayar servisinden gelir (t-1'deki AppConfig), kod değişmeden değiştirilebilir.", tag: Uygulamanın içinde, hl: cond}
+            - {match: 'kwargs["ReturnValuesOnConditionCheckFailure"] = "ALL_OLD"', say: "Koşul tutmazsa DynamoDB'den item'ın şimdiki hâlini de cevaba koymasını ister.", tag: Uygulamanın içinde, hl: cond}
             - {match: 'resp = table().update_item(**kwargs)', say: "boto3 komutu gönderir. Koşul tutarsa DynamoDB yazar ve item'ın yeni hâlini döner.", tag: [Uygulama → DynamoDB, DynamoDB → Uygulama], hl: key}
-            - {match: 'except table().meta.client.exceptions.ConditionalCheckFailedException:', say: "Koşul tutmazsa DynamoDB bir hata döner; uygulama onu yakalar ve \"en fazla 5 adet\" mesajını hazırlar.", tag: Uygulamanın içinde, hl: cond}
+            - {match: 'except table().meta.client.exceptions.ConditionalCheckFailedException as e:', say: "Koşul tutmazsa DynamoDB bir hata döner; uygulama onu yakalar.", tag: [DynamoDB → Uygulama, Uygulamanın içinde], hl: cond}
+            - {match: 'now_qty = int((e.response.get("Item") or {}).get("qty", {}).get("N", 0))', say: "Sepetindeki adedi (1) hatanın içinden okur; DynamoDB'ye ayrıca sormaz. Sonra \"en fazla 5; sepetinde 1 var, 4 daha ekleyebilirsin\" mesajını hazırlar.", tag: Uygulamanın içinde, hl: cond}
             - {match: 'items = get_cart(True)', say: "Sepetin güncel hâlini almak için DynamoDB'ye ikinci bir komut (Query) gider.", tag: [Uygulama → DynamoDB, DynamoDB → Uygulama]}
             - {match: 'return jsonify(trace.payload({"items": items, "refused": refused}))', say: Sepet ve varsa ret mesajı tarayıcıya gider., tag: Uygulama → Tarayıcı}
       live:
@@ -11302,6 +11332,16 @@ steps:
             hl: cond
             indent: 2
             tag: sadece soldaki komutta var
+          - id: old
+            say: "koşul tutmazsa item'ın şimdiki hâlini de geri ver"
+            code: "ReturnValuesOnConditionCheckFailure='ALL_OLD',"
+            name: Ret olursa?
+            note: >-
+              Ret cevabına item'ın o anki hâlini (qty = 1) koyar. Uygulama "sepetinde kaç var?" diye ikinci bir okuma yapmadan
+              mesajı yazar. Bu parça olmasa ret cevabı sadece "koşul tutmadı" derdi.
+            hl: cond
+            indent: 2
+            tag: sadece soldaki komutta var
           - id: cap
             say: ve ne kadar kapasite harcandığını da söyle.
             code: "ReturnConsumedCapacity='TOTAL')"
@@ -11315,8 +11355,8 @@ steps:
             via: >-
               Uygulama bu komutu boto3 kütüphanesinin update_item() metoduyla gönderir. :max değerini (5 − 5 = 0) hesaplayıp
               koyan da uygulamadır.
-            parts: [key, upd, cond, cap]
-            mark: [cond]
+            parts: [key, upd, cond, old, cap]
+            mark: [cond, old]
           - label: Koşulsuz
             sub: '"Limit 5 per product" kutusu kapalıyken gidecek komut.'
             via: Aynı update_item() çağrısı, ConditionExpression olmadan.
@@ -11324,7 +11364,7 @@ steps:
         note: >-
           Dikkat: kural "en fazla 5" ama komutta 5 yazmıyor, 0 yazıyor. Uygulama koşulu "şimdiki adet + eklenecek ≤ 5"
           yerine "şimdiki adet ≤ 5 − eklenecek" olarak gönderiyor, çünkü DynamoDB koşulda item'ın şimdiki değerine bakar.
-          Sağdaki komutun tek farkı ConditionExpression parçasının olmaması: DynamoDB bu durumda hiçbir şeyi kontrol etmez.
+          Sağdaki komutta ConditionExpression parçası (ve ona bağlı ALL_OLD isteği) yok: DynamoDB bu durumda hiçbir şeyi kontrol etmez.
       back:
         title: Cevap dönünce ne oldu?
         intro: >-
@@ -11336,8 +11376,9 @@ steps:
               harcadı. (Sepetinde bu üründen hiç yoksa koşul tutar ve 5 adet yazılır.)
           - who: Uygulama
             text: >-
-              Hatayı yakaladı ve "en fazla 5 adet" mesajını hazırladı. Sonra sepetin güncel hâlini okumak için DynamoDB'ye
-              ikinci bir komut (Query) gönderdi.
+              Hatayı yakaladı, sepetindeki adedi (1) hatanın içinden okudu ve "en fazla 5; sepetinde 1 var, 4 daha
+              ekleyebilirsin" mesajını hazırladı. Sonra sayfaya göndereceği sepetin güncel hâli için DynamoDB'ye ikinci bir
+              komut (Query) gönderdi.
           - who: Uygulama → Tarayıcın
             text: Sepeti ve ret mesajını tek bir JSON cevabında gönderdi.
           - who: Tarayıcın
@@ -12071,7 +12112,9 @@ steps:
             engines: [elasticache]
           - text: >-
               Sayfa sepeti istedi; "Strongly consistent" (güçlü tutarlı) seçiliydi. Uygulama DynamoDB'ye güçlü tutarlı bir Query
-              gönderdi; 1 okuma birimi harcandı. Simülasyonun sol şeridi bu istek.
+              gönderdi; 1 okuma birimi harcandı. Simülasyonun sol şeridi bu istek. Bu mağazada okuma türünü sayfadaki düğme
+              seçiyor; t-1'deki gerçek sistemde ise sepet sayfası sonunda tutarlı okur, sadece son 5 saniye içinde sepete
+              yazdıysan (lm_cart_w çerezi istekle geldiyse) güçlü okur.
             engines: [dynamodb]
           - text: >-
               Sepetin listelendi: ürün adları ve fiyatlar item'ların içinden (sepete eklerken katalogdan kopyalanan bilgiler).
@@ -12098,7 +12141,7 @@ steps:
           Adedi 2 yapan yazma ana kopyaya ve ikinci kopyaya ulaştı; üçüncü kopyada hâlâ eski değer (1) var.
         lanes:
           - id: strong
-            title: "t-1 · İstek 1 · Sayfa açılınca · Güçlü tutarlı"
+            title: "İstek 1 · Sayfa açılınca · Güçlü tutarlı"
             reads: [a]
             cost: 1 RRU
             send: >-
@@ -12107,7 +12150,7 @@ steps:
             got_say: "Cevap: qty = 2, en son değer. Bedeli 1 okuma birimi."
             back: Uygulama sepeti tarayıcına gönderdi.
           - id: eventual
-            title: "t0 · İstek 2 · Senin tıklaman · Sonunda tutarlı"
+            title: "İstek 2 · Senin tıklaman · Sonunda tutarlı"
             reads: [c]
             cost: 0,5 RRU
             send: >-
@@ -12158,7 +12201,8 @@ steps:
           sub: Sepet sayfası, ekleme sonrası ve ödeme aynı fonksiyonu kullanır.
           lines:
             - {match: 'pk = f"CART#{visitor_id()}"', say: "Senin sepetinin anahtarını kurar.", tag: Uygulamanın içinde}
-            - {match: 'resp = table().query(KeyConditionExpression=Key("pk").eq(pk), ConsistentRead=consistent,', say: "Query DynamoDB'ye gider; okuma türü bu satırda seçilir.", tag: [Uygulama → DynamoDB, DynamoDB → Uygulama], hl: node}
+            - {match: 'resp = table().query(KeyConditionExpression=Key("pk").eq(pk), FilterExpression=Attr("expires_at").gt(now),', say: "Query DynamoDB'ye gider: senin sepetinin satırları, silinme zamanı geçmiş olanlar hariç.", tag: [Uygulama → DynamoDB, DynamoDB → Uygulama], hl: node}
+            - {match: 'ConsistentRead=consistent, ReturnConsumedCapacity="TOTAL")', say: "Okuma türü bu satırda seçilir: güçlü ya da sonunda tutarlı.", tag: Uygulamanın içinde, hl: node}
             - {match: 'units, cost = _units(resp, "Read")', say: Harcanan okuma birimini cevaptan okur., tag: Uygulamanın içinde}
             - {match: 'items = [{"product_id": it["sk"].split("#", 1)[1]', say: "Item'ları sayfanın beklediği şekle çevirir (ITEM#P0001 → P0001).", tag: Uygulamanın içinde}
       live:
@@ -13065,7 +13109,7 @@ steps:
         per_wave: 16
         limit: 4
         labels:
-          spread: "t0 · Senin denemen · 200 alıcı, dağınık anahtarlar"
+          spread: "Senin denemen · 200 alıcı, dağınık anahtarlar"
           hot: "Olsaydı · Aynı yazmalar · Tek anahtar (sıcak partition)"
         send_spread: >-
           "Start the simulation"a bastın. Uygulama PutItem'ları aynı anda gönderiyor; her alıcının anahtarı farklı.
@@ -13902,7 +13946,9 @@ steps:
             engines: [elasticache, s3]
           - text: >-
               "Buy one now" butonuna bastın. Tarayıcın uygulamaya "bir tane al" dedi; uygulama ElastiCache'e tek bir komut
-              gönderdi: DECR lm:deal:stock. Simülasyon bu komutu gösteriyor.
+              gönderdi: DECR lm:deal:stock. Simülasyon bu komutu gösteriyor. Gerçek bir mağazada (t-1) bu tıklama daha fazlasını
+              yapar: uygulama DECR'den önce alıcı anahtarını (lm:deal:buyer:<müşteri>) tıklamanın istek numarasıyla yazar,
+              DECR'den sonra siparişi Aurora'ya yazar; bu mağazanın kodu ve simülasyon sadece sayaç kısmını gösteriyor.
             engines: [elasticache]
           - text: >-
               Cevap gelen yeni değer oldu (ör. 44). Uygulama "0 veya üstü, satın aldın" dedi; sayfada "You got one" (bir tane
@@ -14732,7 +14778,7 @@ steps:
           orders: {key: order_id, cols: [order_id, customer_id, status, total], rows: [{order_id: W17933…a1, customer_id: C00002, status: delivered, total: 1299.90}]}
         lanes:
           - id: fail
-            title: "t0 · Senin denemen · Ödeme başarısız → ROLLBACK"
+            title: "Senin denemen · Ödeme başarısız → ROLLBACK"
             send: >-
               "Place the order"a bastın. Uygulama Aurora'ya bir bağlantı açtı ve komutları sırayla gönderiyor.
             ops:
@@ -15547,12 +15593,12 @@ steps:
           - partition: "7f3a… (bu tarayıcı)"
             limit: 20
             say_send: >-
-              "My activity" sayfasını açtın. Uygulama SELECT … WHERE user_id = '7f3a…' LIMIT 20 gönderiyor (t-1, İstek 1).
+              "My activity" sayfasını açtın. Uygulama SELECT … WHERE user_id = '7f3a…' LIMIT 20 gönderiyor (İstek 1).
             say_read: Keyspaces sadece bu tarayıcının partition'ını açtı ve 2 satırı baştan okudu.
           - partition: C00001 · Ayşe
             limit: 20
             say_send: >-
-              "My persona" butonuna bastın. Uygulama aynı SELECT'i user_id = 'C00001' ile gönderiyor (t0, İstek 2).
+              "My persona" butonuna bastın. Uygulama aynı SELECT'i user_id = 'C00001' ile gönderiyor (İstek 2).
             say_read: >-
               Keyspaces sadece C00001'in partition'ını açtı ve satırları baştan okudu; en yeni olay en üstte. Gerçek tabloda 20.
               satırda durur (LIMIT 20).
@@ -15785,7 +15831,7 @@ steps:
           Yeni olay (view P0021) iki kopyaya yazıldı ve onaylandı; üçüncü kopya onu birazdan alacak.
         lanes:
           - id: quorum
-            title: "t-1 · İstek 1 · Önceki okuma · LOCAL_QUORUM"
+            title: "İstek 1 · Önceki okuma · LOCAL_QUORUM"
             reads: [b, c]
             pick: newest
             cost: "1 okuma birimi"
@@ -15794,7 +15840,7 @@ steps:
             got_say: "Cevap: view P0021, en yeni olay. İki kopyadan biri güncel olduğu için kaçırılmadı."
             back: Uygulama listeyi tarayıcına gönderdi.
           - id: one
-            title: "t0 · İstek 2 · Senin tıklaman · LOCAL_ONE"
+            title: "İstek 2 · Senin tıklaman · LOCAL_ONE"
             reads: [c]
             cost: "0,5 okuma birimi"
             send: '"LOCAL_ONE"a bastın. Uygulama aynı SELECT''i LOCAL_ONE ile gönderiyor.'
@@ -16025,7 +16071,7 @@ steps:
         sum: amount
         result_title: "Şehre göre ciro (₺)"
         labels:
-          col: "t0 · Senin tıklaman · Sütun bazlı (Redshift)"
+          col: "Senin tıklaman · Sütun bazlı (Redshift)"
           row: "Olsaydı · Aynı sorgu · Satır bazlı veritabanı"
         send_col: >-
           "City"ye bastın. Uygulama Redshift'e GROUP BY city sorgusunu gönderiyor.
@@ -17837,12 +17883,12 @@ steps:
           - {t: "10:55", v: 23.3}
         lanes:
           - id: w15
-            title: "t-1 · İstek 1 · Sayfa açılınca · 15 dakikalık pencere"
+            title: "İstek 1 · Sayfa açılınca · 15 dakikalık pencere"
             window: 15
             send: Ops ekranını açtın. Uygulama Flux sorgusunu aggregateWindow(every 15m) ile gönderiyor.
             back: Uygulama 4 noktayı tarayıcına gönderdi.
           - id: w60
-            title: "t0 · İstek 2 · Senin tıklaman · 1 saatlik pencere"
+            title: "İstek 2 · Senin tıklaman · 1 saatlik pencere"
             window: 60
             send: '"1 hour"a bastın. Uygulama aynı sorguyu aggregateWindow(every 1h) ile gönderiyor.'
             back: Uygulama tek noktayı tarayıcına gönderdi; grafik sadeleşecek.
@@ -18080,7 +18126,7 @@ steps:
           sorgu bunların çok küçük bir kısmını okudu.
         lanes:
           - id: lukas
-            title: "t0 · Senin seçimin · Lukas Weber'in çevresi (2 hop)"
+            title: "Senin seçimin · Lukas Weber'in çevresi (2 hop)"
             start: {id: C00004, label: Lukas Weber, type: me}
             start_title: Seçilen müşteri
             start_say: Yürüyüş Lukas Weber'in düğümünden başlıyor.
@@ -18339,7 +18385,7 @@ steps:
               - {who: Uygulama, label: Uygulama → Tarayıcı, cmd: "48 KB, image/jpeg", say: "Uygulama aynı byte'ları tarayıcıya aktardı."}
             back: Görsel geldi; ama dosya uygulama sunucusundan geçti. Büyük dosyalarda sunucu darboğaz olur.
           - id: presign
-            title: "t0 · Senin tıklaman · İmzalı adres, doğrudan S3"
+            title: "Senin tıklaman · İmzalı adres, doğrudan S3"
             steps:
               - {who: Tarayıcı, label: Tarayıcı → Uygulama, cmd: "GET /s3/api/presign/P0001", say: "Tarayıcı uygulamadan bir adres istedi."}
               - {who: Uygulama, label: Uygulama (imzalar), cmd: "generate_presigned_url(…, ExpiresIn=300)", say: "Uygulama adresi kendi kimliğiyle imzaladı. S3'e istek gitmedi; hesap uygulamanın içinde yapıldı."}

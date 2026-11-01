@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 
 import boto3
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 from flask import jsonify, request
 
 from .. import catalog, simlimit, trace
@@ -36,11 +36,13 @@ def _units(resp, kind):
 
 def get_cart(consistent):
     pk = f"CART#{visitor_id()}"
+    now = int(time.time())
     req = (f"table.query(\n  KeyConditionExpression=Key('pk').eq('{pk}'),\n"
+           f"  FilterExpression=Attr('expires_at').gt({now}),\n"
            f"  ConsistentRead={consistent}, ReturnConsumedCapacity='TOTAL')")
     with trace.call("Query", req, {"pk": pk, "ConsistentRead": consistent}) as t:
-        resp = table().query(KeyConditionExpression=Key("pk").eq(pk), ConsistentRead=consistent,
-                             ReturnConsumedCapacity="TOTAL")
+        resp = table().query(KeyConditionExpression=Key("pk").eq(pk), FilterExpression=Attr("expires_at").gt(now),
+                             ConsistentRead=consistent, ReturnConsumedCapacity="TOTAL")
         units, cost = _units(resp, "Read")
         t.result(items=resp["Count"], capacity=units, cost=cost,
                  note=("Strongly consistent read: you see your last write. It costs 2x an eventually consistent read."
@@ -63,6 +65,8 @@ def register(bp):
         pid, limit = body["product_id"], body.get("limit", True)
         pk, sk = f"CART#{visitor_id()}", f"ITEM#{pid}"
         qty = int(body.get("qty", 1))
+        if limit and qty > MAX_QTY:  # the request alone breaks the rule: no write is sent
+            return jsonify(trace.payload({"items": get_cart(True), "refused": f"You can add at most {MAX_QTY} pieces of one product."}))
         expires = int(time.time()) + CART_TTL
         kwargs = dict(Key={"pk": pk, "sk": sk},
                       UpdateExpression="ADD qty :q SET #n = :n, unit_price = :p, expires_at = :e",
@@ -73,8 +77,10 @@ def register(bp):
         if limit:
             kwargs["ConditionExpression"] = "attribute_not_exists(qty) OR qty <= :max"
             kwargs["ExpressionAttributeValues"][":max"] = MAX_QTY - qty
+            kwargs["ReturnValuesOnConditionCheckFailure"] = "ALL_OLD"
         req = ("table.update_item(\n  Key={'pk': '%s', 'sk': '%s'},\n  UpdateExpression='ADD qty :q SET #n = :n, unit_price = :p, expires_at = :e',%s\n"
-               "  ReturnConsumedCapacity='TOTAL')" % (pk, sk, "\n  ConditionExpression='attribute_not_exists(qty) OR qty <= :max'," if limit else ""))
+               "  ReturnConsumedCapacity='TOTAL')" % (pk, sk, "\n  ConditionExpression='attribute_not_exists(qty) OR qty <= :max',"
+                                                    "\n  ReturnValuesOnConditionCheckFailure='ALL_OLD'," if limit else ""))
         refused = None
         with trace.call("UpdateItem", req, {"qty": qty, "expires_at": expires, "limit": f"{MAX_QTY} per product" if limit else "off"}) as t:
             try:
@@ -82,8 +88,10 @@ def register(bp):
                 units, cost = _units(resp, "Write")
                 t.result(capacity=units, cost=cost, note="ADD is atomic: two tabs can add at the same time and no update is lost. "
                          "expires_at makes DynamoDB delete the item after 24 hours (TTL), with no cost.")
-            except table().meta.client.exceptions.ConditionalCheckFailedException:
-                refused = f"You can add at most {MAX_QTY} pieces of one product."
+            except table().meta.client.exceptions.ConditionalCheckFailedException as e:
+                now_qty = int((e.response.get("Item") or {}).get("qty", {}).get("N", 0))  # ALL_OLD: the item as it is now
+                refused = (f"You can add at most {MAX_QTY} pieces of one product. Your cart has {now_qty}; "
+                           f"you can add {max(0, MAX_QTY - now_qty)} more.")
                 t.result(note="The ConditionExpression was false, so DynamoDB did not write. The check and the write are one atomic step.",
                          capacity="1 WRU (a failed conditional write also costs)")
         items = get_cart(True)
