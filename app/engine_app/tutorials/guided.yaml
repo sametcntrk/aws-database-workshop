@@ -16069,56 +16069,997 @@ steps:
           - [ROLLBACK, "Transaction'daki bütün değişiklikleri geri alır; hiçbir şey olmamış gibi."]
           - [Satır kilidi (row lock), "UPDATE edilen satırı transaction bitene kadar başka yazmalara kapatır; iki ödeme aynı son parçayı satamaz."]
           - [Uygulama, "Mağazanın arka uç programı (EC2 sunucusunda). Tarayıcından gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar."]
-      prior:
-        title: Gerçek bir sistemde sipariş veritabanı için hazırlık
+      t1:
+        title: Önceden ne vardı? Stok Aurora'ya nereden geldi, sipariş paketi nasıl kuruldu?
         intro: >-
-          Sipariş butonuna hiç basılmadan, tablolar, kurallar ve bağlantı düzeni hazırlanır. Aşağıdaki beş adım bu hazırlığın
-          sırasıdır.
-        text:
-          - title: Önce siparişin adımları yazılır
-            text: >-
-              "Sipariş ver" şu demektir: her ürünün stoğunu düşür (yeterliyse), bir sipariş satırı yaz, her ürün için bir
-              sipariş kalemi yaz. Hepsi tek bir transaction'da; biri bile başarısız olursa hiçbiri olmaz.
-            code: |-
-              BEGIN;
-                UPDATE products SET stock = stock - :qty WHERE product_id = :pid AND stock >= :qty;
-                INSERT INTO orders …;  INSERT INTO order_items …;
-              COMMIT;   -- ya da hata olursa ROLLBACK;
-          - title: Kurallar tabloya yazılır
-            text: >-
-              Stok eksiye düşemez (CHECK), her sipariş kalemi var olan bir siparişe ve ürüne bağlıdır (FOREIGN KEY). Kurallar
-              veritabanında olunca hangi uygulama yazarsa yazsın bozulmaz.
-            code: |-
-              CREATE TABLE products (product_id text PRIMARY KEY, …, stock int NOT NULL CHECK (stock >= 0));
-              CREATE TABLE order_items (order_id text REFERENCES orders ON DELETE CASCADE,
-                                        product_id text REFERENCES products, qty int, unit_price numeric(10,2),
-                                        PRIMARY KEY (order_id, product_id));
-          - title: Stok güncellemesi koşulla yazılır
-            text: >-
-              "Önce oku, sonra düşür" yapılmaz; düşürme koşulla tek komutta yapılır (AND stock >= qty). Komut 0 satır
-              etkilediyse stok yetmemiştir ve transaction geri alınır. UPDATE satırı kilitler; aynı anda gelen ikinci ödeme o
-              satırı bekler.
-          - title: Bağlantılar havuzdan kullanılır
-            text: >-
-              Her istekte yeni bağlantı açmak (TLS + kimlik doğrulama) pahalıdır ve ani yükte veritabanının bağlantı sınırını
-              doldurur. Uygulama bir bağlantı havuzu kullanır ya da araya Amazon RDS Proxy konur; bağlantılar yeniden kullanılır.
-          - title: Yazma ve okuma uç noktaları ayrılır
-            text: >-
-              Aurora'nın bir yazma (writer) ve bir okuma (reader) uç noktası vardır. Siparişler yazma ucuna, raporlar ve
-              listeler okuma ucuna gider. Veri tek bir paylaşılan depolamada, üç Availability Zone'da altı kopya olarak tutulur.
-      feed:
-        title: Veri nereden geliyor?
-        writes: Uygulama, ödeme adımında (sipariş ve stok). Stok ayrıca depo ve tedarik sistemlerinden güncellenir.
-        reads: Uygulama, sipariş geçmişi ve sipariş detayı için; raporlar okuma ucundan.
-        kind: >-
-          Uygulama orkestrasyonu. Aurora siparişin asıl kaydıdır. Kendi değişikliklerini dışarı verebilir: zero-ETL ile analiz
-          veritabanına (Redshift) kısa bir gecikmeyle kopyalanır (bu workshop'ta ölçülen: yaklaşık 30 saniye).
-        with: >-
-          Ödeme sayfası sepeti DynamoDB'den güçlü tutarlı okur. Sipariş Aurora'da onaylanınca (COMMIT) beş veritabanı daha
-          güncellenir (Adım 25). Sipariş geri alınırsa (ROLLBACK) onlara hiçbir şey gönderilmez ve sepet olduğu gibi kalır.
-        best: >-
-          Asıl sipariş tek bir ilişkisel veritabanında, tek transaction'da yazılır. Diğer sistemlere sadece COMMIT'ten sonra
-          ve olay olarak (kuyruk ya da outbox) haber verilir; böylece geri alınan bir sipariş başka hiçbir yerde iz bırakmaz.
+          Sen "Place the order" butonuna basmadan önce Aurora'daki products tablosunda Alpen Kablosuz Kulaklık 1'in (P0001)
+          stoğu 128 yazıyor; orders tablosunda da başka müşterilerin siparişleri duruyor (ör. C00002'nin W17933…a1 siparişi).
+          Bu 128 nereden geldi? İlk sayıyı depo sistemi bir kez dosyayla verdi; sonra depoya giren her mal bir "stok hareketi"
+          olarak kuyruktan geldi, her sipariş de stoğu kendi paketinde düşürdü. Bu bölüm bunu ve siparişin paketini anlatıyor:
+          tablolar ve kuralları (CHECK, FOREIGN KEY, UNIQUE); paketin sırası (BEGIN, koşullu UPDATE, INSERT'ler, outbox,
+          COMMIT); aynı anda gelen iki ödemenin nasıl sıraya girdiği (satır kilidi, kilit sırası, kilitlenme); ödemenin paketin
+          neresinde durduğu; ROLLBACK'in neyi geri aldığı ve neyi alamadığı (onaylanmış bir ödeme); bağlantı havuzu (RDS
+          Proxy) ve yazma sunucusu çökerse ne olduğu; yedekten geri dönüş (PITR) ve izleme. Sepetin DynamoDB'den okunması ve
+          satırların silinmesi (Adım 12), fiyatın katalogdan yeniden okunması (Adım 12), sepet kuralının ödemede yeniden
+          kontrolü (Adım 14), siparişin Redshift'e kopyalanması (Adım 30) ve olayın akıştan tüketicilere gitmesi (Adım 33)
+          çalışmaya devam ediyor; bu sorunun parçası olmadıkları için burada sadece anılıyorlar. Önce zincirin bileşenleri,
+          sonra bir simülasyon, sonra dört aşama (tasarım, ilk yükleme, sürekli besleme, tutarlılık ve onarım).
+        terms_title: Bu bölümün terimleri
+        terms:
+          - ["t-1, t0 ve saatler", "t0: senin \"Place the order\" tıklaman; 30 Eki'den sonraki bir gün (sen mağazaya o gün geldin). t-1: ondan önceki zaman. Mağaza 1 Eki'de bu sistemle açıldı; simülasyonun günü 30 Eki. Saatler Türkiye saatidir. Müşteriler (C00057, C00079 …), saatler, adetler, istek, sipariş ve hareket numaraları temsilîdir; ürün, fiyatı (3.373,84 TL) ve 200 ürünlük katalog canlı sistemden."]
+          - ["Ekip", "Mağazanın sistemini kuran ve işleten mühendisler. Bir kez çalışan kurulum komutlarını onlar gönderir, alarmlara onlar bakar."]
+          - ["Depo sistemi", "Deponun kendi programı (ERP: kurumsal kaynak planlama, ya da WMS: depo yönetim sistemi denir): rafta ne var, hangi mal geldi, hangi koli çıktı. Mağazanın kodu değildir; mağazaya stok bilgisini o verir. Mağaza da ona siparişleri olay olarak bildirir, depo siparişi hazırlar. Hareket numaraları (M-…) bütün ürünler için tek sırada artar; bir ayda binlerce hareket olur."]
+          - ["Stok (satılabilir stok)", "products.stock: \"bu üründen şu an kaç tane daha satabiliriz?\" Sipariş verilince hemen düşer; koli depodan daha çıkmamış olsa da o parça artık satılamaz. Raftaki fiziksel sayıyı depo sistemi tutar."]
+          - ["Stok hareketi", "Stoğu değiştiren tek bir olay: mal kabul (depoya mal girdi, +), iade (müşteri ürünü geri yolladı, +), sayım farkı (sayımda eksik ya da fazla çıktı, − ya da +). Her hareketin depo sisteminin verdiği tek bir numarası vardır (ör. M-30481). Bir banka hesabının hareket dökümü gibi: bakiye, hareketlerin toplamıdır."]
+          - ["S3 ve aws_s3", "S3: AWS'in dosya deposu. aws_s3: Aurora PostgreSQL'e eklenen bir uzantı (eklenti); table_import_from_s3 komutuyla S3'teki bir dosyayı doğrudan bir tabloya okur."]
+          - ["SQS, en az bir kez ve idempotent", "SQS: AWS'in mesaj kuyruğu servisi; biri mesaj koyar, diğeri kendi hızında alır ve işini bitirince siler. En az bir kez (at-least-once): bir mesaj kaybolmaz ama bazen iki kez teslim edilir. Idempotent: aynı mesaj iki kez işlense de sonuç bir kez işlenmiş gibi olur; asansör butonuna iki kez basmak gibi."]
+          - ["Lambda ve hata kuyruğu (DLQ)", "AWS Lambda: bir olay gelince kısa bir kodu çalıştıran AWS servisi; sunucuyu AWS yönetir. Hata kuyruğu (dead-letter queue, DLQ): birkaç denemede işlenemeyen mesajın bırakıldığı ikinci kuyruk; asıl kuyruk tıkanmaz, Ekip ona sonra bakar."]
+          - ["Transaction (iş paketi), BEGIN, COMMIT ve ROLLBACK", "Birlikte olması gereken yazmaların paketi. BEGIN paketi açar; COMMIT hepsini birden kalıcı ve herkese görünür yapar; ROLLBACK hepsini birden geri alır. COMMIT gelmeyen bir paket hiçbir zaman kalıcı olmaz."]
+          - ["Koşullu UPDATE", "UPDATE products SET stock = stock - 2 WHERE product_id = 'P0001' AND stock >= 2: \"yetiyorsa düşür\" tek komutta. Stok yetmezse komut 0 satır değiştirir (UPDATE 0); Uygulama buna bakıp siparişi durdurur."]
+          - ["CHECK, FOREIGN KEY, PRIMARY KEY ve UNIQUE", "Tabloya yazılan kurallar; hangi program yazarsa yazsın veritabanı kendisi uygular. CHECK (stock >= 0): stok eksiye inemez. FOREIGN KEY (REFERENCES): bir satır var olan bir satıra bağlı olmalı (sipariş kalemi var olan bir ürüne). PRIMARY KEY: satırın tek adı. UNIQUE: bir sütunda aynı değer iki kez olamaz (request_id, Adım 17)."]
+          - ["Satır kilidi, READ COMMITTED ve kilitlenme (deadlock)", "Satır kilidi: UPDATE edilen satır, paket bitene kadar başka yazmalara kapalıdır; ikinci yazma sırada bekler. READ COMMITTED: PostgreSQL'in (ve Aurora PostgreSQL'in) varsayılan yalıtım düzeyi; her komut, o ana kadar COMMIT edilmiş veriyi görür. REPEATABLE READ: paketin bütün komutları paketin başındaki aynı anın fotoğrafını görür. Kilitlenme: iki paketin her biri ötekinin tuttuğu satırı beklerse; iki arabanın dar bir köprüde karşılaşması gibi. PostgreSQL bunu fark edip birini iptal eder (hata kodu 40P01)."]
+          - ["Outbox, WAL, DMS ve Kinesis", "Outbox: siparişle aynı pakette yazılan \"sipariş verildi\" satırı. WAL: Aurora'nın COMMIT edilen her değişikliği sırayla yazdığı değişiklik kaydı. AWS DMS (Database Migration Service) bu kayıttan outbox satırlarını okuyup Kinesis Data Streams'teki lm-order-events akışına koyar; buna CDC (change data capture, değişikliği yakalama) denir. Tüketiciler (akıştan okuyan küçük programlar) oradan alır: Sepet tüketicisi ödenen satırları sepetten siler (Adım 12), canlı sıralama en çok harcayanlar listesini günceller (Adım 33), depoya bildiren iş siparişi depo sistemine iletir. zero-ETL: aynı kaydı okuyup tabloları Redshift'e (rapor veritabanı) kopyalayan AWS özelliği (Adım 30). Geri alınan bir paketin outbox satırı kayda hiç girmez. visitor_id: siparişi veren tarayıcının kimliği (sepeti bulmak için)."]
+          - ["Ödeme sağlayıcısı, yetkilendirme ve iptal", "Ödeme sağlayıcısı: kartı bankayla konuşarak onaylayan dış servis; mağazanın kodu değildir. Yetkilendirme (authorize): \"bu tutarı müşterinin kartında ayır\"; para henüz çekilmez, kart limitinde bekler. Onayın sağlayıcıdaki numarası au-… ile başlar (temsilî). Çekim (capture): parayı gerçekten almak; koli kargoya verilince yapılır (bu sayfanın konusu değil). İptal (void): ayrılmış tutarı serbest bırakmak; para hiç çekilmediği için iade gerekmez."]
+          - ["İstek numarası ve Idempotency-Key", "İstek numarası (request_id): ödeme sayfasının her \"Place the order\" tıklamasına verdiği tek numara (ör. r-7d21…); bağlantı koparsa aynı tıklama aynı numarayla yeniden gönderilir (Adım 17'deki gibi). Idempotency-Key: bu numaranın ödeme sağlayıcısına giden istekteki adı; sağlayıcı aynı anahtarla gelen ikinci isteğe yeni bir ayırma yapmaz, ilk cevabı verir."]
+          - ["Telafi (compensation)", "Veritabanının geri alamadığı, dışarıda yapılmış bir işi elle tersine çevirmek: onaylanmış bir yetkilendirmeyi iptal etmek gibi. ROLLBACK sadece Aurora'nın içini geri alır; ödeme sağlayıcısında olanı telafi geri alır."]
+          - ["RDS Proxy ve bağlantı havuzu", "Bağlantı: Uygulama ile veritabanı arasındaki açık hat; her yeni hat için şifreleme (TLS) ve kimlik doğrulama gerekir, bu pahalıdır. Bağlantı havuzu: açılmış hatları saklayıp yeniden kullanmak; taksi durağı gibi, her müşteri için yeni taksi çağrılmaz. RDS Proxy: bu havuzu tutan AWS servisi; çok sayıda istemci bağlantısını az sayıda veritabanı bağlantısına paylaştırır. Sabitleme (pinning): istemci oturumun ayarını değiştirirse (SET), proxy o veritabanı bağlantısını başkasıyla paylaşamaz ve havuzun faydası azalır. AWS Secrets Manager: şifreleri saklayan AWS servisi; proxy şifreyi oradan alır, kodda şifre yazmaz."]
+          - ["Yazma sunucusu, okuma sunucusu ve yük devri (failover)", "Aurora cluster'ında yazmaları yapan bir yazma sunucusu (writer) ve sadece okuyan okuma sunucuları (reader) vardır; veri hepsinin paylaştığı depolamada, üç Availability Zone'da (ayrı veri merkezleri) altı kopya olarak durur. Yük devri: yazma sunucusu çökerse bir okuma sunucusunun yazma sunucusu yapılması."]
+          - ["PITR (belirli bir ana geri dönüş)", "Point-in-time recovery: Aurora'nın sürekli yedeğinden, saklama süresi içindeki herhangi bir saniyenin hâlini yeni bir cluster olarak açmak. Saklama süresi 1–35 gün arasında seçilir (burada 14 gün, temsilî)."]
+          - ["EventBridge Scheduler, CloudWatch, ölçü ve alarm", "EventBridge Scheduler: işleri belli saatlerde çalıştıran AWS zamanlayıcısı. CloudWatch: AWS'in ölçüm ve alarm servisi. Ölçü (metric): belli aralıklarla yazılan bir sayı; alarm: sayı bir koşulu sağlarsa Ekip'e haber. Maximum: pencerenin en büyük değeri. ApproximateNumberOfMessagesVisible: SQS'in \"kuyrukta bekleyen mesaj sayısı\" ölçüsü. Aurora'nın kendi ölçüsü Deadlocks (saniyedeki ortalama kilitlenme); bizim ölçülerimiz (Shop/Order, Shop/Stock): SiparisDenemesi, SiparisHatasi, AskidaOdemeIptal, StockDrift."]
+          - ["Kesit, temsilî, Örnek durum ve Olsaydı", "Kesit: simülasyonda gösterilen ve t0'daki simülasyonun başladığı kayıtlar: P0001'in products satırı ve W17933…a1 siparişi. Gerçekte 200 ürün ve binlerce sipariş var; P0001'in o günkü diğer siparişleri, outbox ve stok hareketleri \"kesitin dışında\" tablolarında. Temsilî: canlı sistemden gelmeyen, anlatım için seçilmiş değer. \"Örnek durum\" kareleri sistemin bir aksiliğe nasıl cevap verdiğini gösterir; \"Olsaydı\" kareleri yaşanmadı, her biri ayrı bir durumdur ve birbirine eklenmez."]
+          - ["Kod kartlarındaki sözcükler", "SQL sözcükleri: CREATE TABLE tablo kur; int tam sayı, text metin, numeric(10,2) iki kuruşlu tutar; NOT NULL boş olamaz; REFERENCES başka tablonun satırına bağlı; ON DELETE CASCADE sipariş silinirse kalemleri de silinir; SELECT oku; INSERT INTO … VALUES satır ekle; ON CONFLICT … DO NOTHING aynı numara varsa hiçbir şey yapma; UPDATE … SET değiştir; WHERE hangi satır; FOR UPDATE okunan satırı paket bitene kadar kilitle; ORDER BY sırala; sum(…) topla; count(*) satır say; JOIN … USING (order_id) iki tabloyu aynı sütunla eşle; LEFT JOIN eşi olmasa da sol tablodaki satırı tut (eşi yoksa p IS NULL: \"eşi yok\"); ANY(%s) listedekilerden biri; BEGIN ISOLATION LEVEL REPEATABLE READ paketi aynı anın fotoğrafıyla aç; '(format csv, header true)' dosya virgülle ayrılmış, ilk satır başlık; deadlock_timeout PostgreSQL'in kilitlenmeye bakmadan önce beklediği süre (varsayılan 1 sn); coalesce(x, 0) hiç yoksa 0; <> eşit değil; ALTER ROLE … SET Uygulama'nın veritabanı kullanıcısına ayar koy; lock_timeout kilidi en çok bu kadar bekle; idle_in_transaction_session_timeout açık paket bu kadar boş kalırsa oturumu kapat. %s ve :qty gibi işaretler komuta ayrıca verilen değerin yeri. Hata kodları: 23505 UNIQUE ihlali, 23503 FOREIGN KEY ihlali, 23514 CHECK ihlali, 40P01 kilitlenme. Python sözcükleri: cur.execute(…) Aurora'ya SQL gönder; cur.rowcount komutun değiştirdiği satır sayısı; sorted(…, key=…) ürün numarasına göre sırala; for … in … her biri için; raise hatayı yükselt (paket ROLLBACK'e gider); except … hatayı yakala; Kilitlenme, KilitZamanAsimi: 40P01 ve kilit zaman aşımı hatalarının kısa adları (temsilî); tekrar_dene(…): aynı numarayla paketi baştan dene (Uygulama'nın yardımcısı); odeme.authorize / odeme.void ödeme sağlayıcısına ayır / iptal et; idempotency_key isteğin numarası; timeout=3 en çok 3 saniye bekle; put_metric_data CloudWatch'a ölçü yaz. AWS komutları: aws rds create-db-proxy proxy kur; aws rds restore-db-cluster-to-point-in-time belirli bir anın kopyasını yeni cluster olarak aç (--restore-to-time hangi an); aws cloudwatch put-metric-alarm alarm kur; IF(…, a, b) koşul doğruysa a değilse b. # ve -- sonrası açıklama; … kısaltılmış kısım."]
+          - ["Diğer adlar", "Uygulama: mağazanın arka uç programı (EC2 sunucularında: AWS'in kiralık sanal sunucuları); tarayıcıdan gelen isteği alır, veritabanına komutu o gönderir, cevabı o hazırlar; Aurora'ya psycopg kütüphanesiyle konuşur. shop_app: Uygulama'nın Aurora'daki kullanıcı adı. POST /aurora/api/orders: ödeme sayfasının Uygulama'ya gönderdiği \"sipariş ver\" isteğinin adresi. customers tablosu: müşteriler; satırını müşteri hesabı açılınca Uygulama yazar (bu sayfanın konusu değil). Katalog yönetim servisi: katalog ekibinin ürün ve fiyat ekranlarının arka ucu (Adım 1, 9, 12). Adım 14'teki kural: \"bir kampanyadan müşteri başına en çok N adet\" gibi sepet kuralları ödemede bu müşterinin önceki siparişleriyle yeniden sayılır; aynı müşterinin iki ödemesi aynı anda sayılmasın diye müşterinin satırı paket boyunca kilitlenir. status (siparişin durumu): processing ödemesi onaylandı, depoda hazırlanıyor; delivered teslim edildi (bunu kargo teslim edince teslimat zinciri yazar, bu sayfanın konusu değil); cancelled iptal. \"Adım 12\", \"Adım 17\" gibi adlar bu görevin (mağazadaki 37 adımın) adımlarıdır; simülasyonun sayacındaki \"Adım 1 / 27\" ise simülasyonun karesidir."]
+        inventory_title: Zincirin bileşenleri
+        inventory_intro: >-
+          İş yapan her parça bir satır. "Aşama" sütunu parçanın aşağıdaki hangi aşamada (t-1 · 1–4) çalıştığını, "Önce → Sonra"
+          sütunu bilgiyi ya da isteği kimden alıp kime verdiğini söyler. "AWS" etiketli parçaları AWS çalıştırır; "bizim
+          kodumuz" etiketli parçaları mağazanın ekibi yazar. Ürün satırını katalog yönetim servisi stok 0 ile yazar. Stok Aurora'ya iki yoldan girer: bir kez dosyayla (S3, ilk
+          yükleme işi), sonra her hareketle (SQS, stok tüketicisi). Sipariş tarayıcıdaki ödeme sayfasından Uygulama'ya, RDS
+          Proxy üzerinden Aurora'ya gider; COMMIT'ten sonra olayı değişiklik kaydı, DMS ve Kinesis taşır. Yanda hata kuyruğu,
+          iki kontrol işi, yedek ve alarmlar. Aynı parçalar aşağıdaki simülasyonda birer kutu.
+        inventory:
+          - id: admin
+            name: Katalog yönetim servisi
+            kind: code
+            what: arka ofis programı (ürün ve fiyat ekranlarının arka ucu)
+            does: >-
+              Ürünü kataloğa ekleyen servis (Adım 1, 9). Aurora'ya ürünün satırını yazar (numara, ad, kategori, fiyat), stoğu
+              0 ile. Stoğa bir daha dokunmaz; stok depo sisteminden gelir.
+            box: "Ürün satırlarını stok 0 ile yazar; stoğa dokunmaz."
+            phases: [1, 2]
+            before: Katalog ekibi
+            after: aurora
+          - id: s3
+            name: S3 (stok dosyası)
+            kind: aws
+            what: AWS'in dosya deposu
+            does: >-
+              Depo sisteminin açılış gecesi bıraktığı tam stok dosyasını (200 ürün, her biri bir satır) saklar. İlk yükleme işi
+              dosyayı buradan okur.
+            box: "Açılış gecesinin stok dosyası: 200 satır."
+            phases: [1, 2]
+            before: Depo sistemi (açılış gecesi dosyası)
+            after: loader
+          - id: loader
+            name: İlk yükleme işi
+            kind: code
+            what: bir kez çalışan program
+            does: >-
+              Dosyayı aws_s3 ile bir ara tabloya okur, satırları sayar ve kontrol eder (eksi stok, katalogda olmayan ürün),
+              sonra tek bir pakette products'taki 200 satırın stoğunu günceller ve stock_movements'a her ürün için bir "ilk
+              yükleme" hareketi yazar.
+            box: "Dosyayı ara tabloya okur, kontrol eder, tek pakette yazar."
+            phases: [1, 2]
+            before: s3
+            after: aurora
+          - id: queue
+            name: SQS kuyruğu (stok-hareketleri)
+            kind: aws
+            what: AWS'in mesaj kuyruğu
+            does: >-
+              Depo sisteminin gönderdiği her stok hareketini (mal kabul, iade, sayım farkı) bir mesaj olarak tutar. Bir mesajı
+              en az bir kez teslim eder; bazen iki kez. 5 denemede işlenemeyen mesajı hata kuyruğuna taşır.
+            box: "Her stok hareketi bir mesaj; en az bir kez teslim."
+            phases: [1, 3, 4]
+            before: Depo sistemi (her hareket)
+            after: [stockcons, dlq]
+          - id: stockcons
+            name: Stok tüketicisi (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod
+            does: >-
+              Her mesaj için tek bir paket: önce hareketi numarasıyla stock_movements'a yazar (aynı numara varsa hiçbir şey
+              yapmaz), yazıldıysa stoğu hareket kadar artırır ya da azaltır. Stoğun üzerine asla yeni bir sayı yazmaz.
+            box: "Hareketi numarasıyla yazar, sonra stoğa ekler; aynı hareket iki kez sayılmaz."
+            phases: [1, 3, 4]
+            before: queue
+            after: [proxy, aurora]
+          - id: page
+            name: Ödeme sayfası (tarayıcıdaki kod)
+            kind: code
+            what: sayfanın tarayıcında çalışan kodu
+            does: >-
+              "Place the order" tıklamasına bir istek numarası verir, butonu cevap gelene kadar kapatır ve isteği numarasıyla
+              Uygulama'ya gönderir. Bağlantı koparsa aynı numarayla yeniden dener; cevabı yazar.
+            box: "Her tıklamaya bir istek numarası; yeniden denemede aynısı."
+            phases: [1, 3, 4]
+            before: Müşteri ("Place the order" butonu)
+            after: web
+          - id: web
+            name: Uygulama (ödeme isteği)
+            kind: code
+            what: mağazanın arka uç programı (EC2 sunucularında)
+            does: >-
+              Önce istek numarasıyla siparişe bakar (varsa aynı cevabı verir). Sonra tek pakette: ürünleri numara sırasıyla
+              koşullu UPDATE ile düşürür, ödeme sağlayıcısından tutarı ayırır, siparişi, kalemlerini ve outbox satırını yazar,
+              COMMIT eder. Bir hata olursa ROLLBACK gönderir; ayrılmış bir tutar varsa iptal eder.
+            box: "Tek paket: stok, ödeme onayı, sipariş, outbox, COMMIT; hata olursa ROLLBACK ve iptal."
+            phases: [1, 3, 4]
+            before: [page, Ödeme sağlayıcısı (onay ya da ret)]
+            after: [proxy, Ödeme sağlayıcısı (ayır, iptal), page]
+          - id: proxy
+            name: RDS Proxy
+            kind: aws
+            what: AWS'in bağlantı havuzu servisi
+            does: >-
+              Uygulama sunucularının ve Lambda'ların çok sayıda bağlantısını, Aurora'nın yazma sunucusuna açık tuttuğu az
+              sayıda bağlantıya paylaştırır. Yazma sunucusu değişirse (yük devri) istemci bağlantılarını açık tutar ve yeni
+              yazma sunucusuna kendisi bağlanır.
+            box: "Çok istemci bağlantısı → az veritabanı bağlantısı; yük devrinde yeni yazma sunucusuna geçer."
+            phases: [1, 2, 3, 4]
+            before: [web, stockcons]
+            after: aurora
+          - id: aurora
+            name: Aurora PostgreSQL (shop)
+            kind: aws
+            what: işlemsel (sipariş) veritabanı
+            does: >-
+              Stoğun ve siparişlerin asıl kaydı: products, orders, order_items, outbox, stock_movements. Kuralları kendisi
+              uygular (stok eksiye inemez, kalem var olan ürüne bağlı, istek numarası tek). Satır kilitleriyle aynı ürüne gelen
+              yazmaları sıraya koyar; ROLLBACK'te paketin bütün değişikliklerini geri alır.
+            box: "Stok ve siparişlerin asıl kaydı; kurallar, kilitler, COMMIT ve ROLLBACK burada."
+            phases: [1, 2, 3, 4]
+            before: [admin, loader, proxy]
+            after: [wal, recon, sweeper, "Uygulama (t0'daki senin paketin)"]
+          - id: wal
+            name: Aurora'nın değişiklik kaydı (WAL)
+            kind: aws
+            what: Aurora'nın içinde, bir ayarla açılır
+            does: COMMIT edilen her değişikliği sırayla yazar. DMS (ve Redshift'e kopyalayan zero-ETL, Adım 30) bu kaydı okur.
+            box: "Her COMMIT'i sırayla yazar; geri alınan paket buraya girmez."
+            phases: [3]
+            before: aurora
+            after: dms
+          - id: dms
+            name: AWS DMS (CDC görevi)
+            kind: aws
+            what: AWS'in değişiklik yakalama servisi
+            does: Değişiklik kaydından outbox'a eklenen satırları okur ve her birini Kinesis akışına bir kayıt olarak koyar (Adım 12, 33).
+            box: "Outbox'a eklenen her satırı akışa koyar."
+            phases: [3]
+            before: wal
+            after: kinesis
+          - id: kinesis
+            name: Kinesis Data Streams (lm-order-events)
+            kind: aws
+            what: olay akışı
+            does: >-
+              Sipariş olaylarını sırayla saklar (24 saat). Tüketiciler (sepeti silen Sepet tüketicisi, canlı sıralama, depo
+              sistemine siparişi bildiren iş …) her biri kendi hızında okur.
+            box: "Sipariş olaylarını sırayla saklar; tüketiciler kendi hızında okur."
+            phases: [3]
+            before: dms
+            after: "Tüketiciler (Adım 12, 33) ve depo sistemi"
+          - id: dlq
+            name: Hata kuyruğu (SQS DLQ)
+            kind: aws
+            what: Amazon SQS kuyruğu
+            does: Stok tüketicisinin 5 denemede işleyemediği hareketi saklar; asıl kuyruk durmaz, Ekip mesajı inceler ve yeniden gönderir.
+            box: "İşlenemeyen stok hareketi burada bekler; kuyruk durmaz."
+            phases: [4]
+            before: queue
+            after: [monitor, Ekip (inceler, yeniden gönderir)]
+          - id: scheduler
+            name: EventBridge Scheduler
+            kind: aws
+            what: AWS'in zamanlayıcı servisi
+            does: Askıdaki ödeme kontrolünü her 5 dakikada, gece stok kontrolünü her gece 23:30'da çalıştırır.
+            box: "5 dakikada bir ödeme kontrolü, gece 23:30'da stok kontrolü."
+            phases: [3, 4]
+            before: Ekip (bir kez kurar)
+            after: [sweeper, recon]
+          - id: sweeper
+            name: Askıdaki ödeme kontrolü (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod
+            does: >-
+              Ödeme sağlayıcısından son 30 dakikada ayrılmış ama çekilmemiş tutarların listesini ister; istek numarası
+              Aurora'da bir siparişe ait olmayan ve 10 dakikadan eski olanları iptal eder; iptal sayısını CloudWatch'a yazar.
+            box: "Siparişi olmayan ayrılmış tutarı bulur ve iptal eder."
+            phases: [1, 3, 4]
+            before: [scheduler, Ödeme sağlayıcısı (liste), aurora]
+            after: [Ödeme sağlayıcısı (iptal), monitor]
+          - id: recon
+            name: Gece stok kontrolü (Lambda)
+            kind: code
+            what: AWS Lambda'da çalışan kod
+            does: >-
+              Her ürün için hareketlerin toplamından satılan adedi çıkarır ve products'taki stokla karşılaştırır. Farkı
+              (StockDrift) CloudWatch'a yazar; stoğu kendisi düzeltmez.
+            box: "Hareketler − satılan = stok mu? Farkı yazar, düzeltmez."
+            phases: [1, 4]
+            before: [scheduler, aurora]
+            after: monitor
+          - id: pitr
+            name: Aurora sürekli yedeği (PITR)
+            kind: aws
+            what: Aurora'nın kendi yedeği (kapatılamaz)
+            does: >-
+              Cluster'ın değişikliklerini sürekli yedekler; saklama süresi (14 gün) içindeki herhangi bir saniyenin hâlini yeni
+              bir cluster olarak açar.
+            box: "14 gün içindeki herhangi bir saniyeye yeni cluster olarak döner."
+            phases: [1, 4]
+            before: aurora
+            after: Ekip (doğru değerleri okur)
+          - id: monitor
+            name: CloudWatch alarmları
+            kind: aws
+            what: AWS'in izleme servisi
+            does: >-
+              Beş alarm: kilitlenme (Aurora'nın Deadlocks ölçüsü), beklenmeyen hata oranı (pay ve payda, 5 dakika, en az 20
+              deneme), stok farkı (gece kontrolü), hata kuyruğunda mesaj, iptal edilen askıda ödeme.
+            box: "Beş alarm: kilitlenme, hata oranı, stok farkı, hata kuyruğu, askıda ödeme."
+            phases: [1, 2, 3, 4]
+            before: [aurora, web, recon, dlq, sweeper]
+            after: Ekip (alarm)
+        sim_title: "Simülasyon: stok 128'e nasıl geldi, her siparişte ne oldu?"
+        sim:
+          kind: pipeline
+          title: Katalog / depo sistemi → S3 / SQS → Aurora; ödeme sayfası → Uygulama → RDS Proxy → Aurora → WAL → DMS → Kinesis; yanda kontroller
+          caption: >-
+            Aurora kutusundaki ilk iki tablo kesit: t0'daki simülasyonun başladığı iki satır (P0001 ve W17933…a1). P0001'in o
+            günkü siparişleri, outbox ve stok hareketleri kesitin dışında, ayrı tablolarda. Önce açılıştan önceki kurulum ve
+            açılış gecesinin ilk yüklemesi, sonra ayın özeti, sonra 30 Eki'de bir mal kabulünün ve bir siparişin bütün
+            kutulardan geçişi, sonra "Örnek durum" kareleri (aynı hareketin iki kez gelmesi, reddedilen ödeme, aynı tıklamanın
+            iki kez gelmesi), sonra "Olsaydı" kareleri (kilitlenme, Uygulama'nın çökmesi, yazma sunucusunun çökmesi,
+            bilinmeyen ürün, hatalı toplu güncelleme), en sonda gece kontrolü. "Olsaydı" kareleri yaşanmadı; her biri ayrı bir
+            durum. Canlı sistemden: ürün, fiyatı ve 200 ürünlük katalog. Temsilî: saatler, müşteriler, adetler ve numaralar;
+            t0'daki stok değeri (128) de bir örnek, canlı stok satıldıkça değişir. Son karede her şey senin tıklamandan (t0)
+            hemen önceki hâlde.
+          tick_ms: 2800
+          phases: {2: İlk yükleme, 3: Sürekli besleme, 4: Tutarlılık ve onarım}
+          rows:
+            - {id: stock, title: "Ürünün ve stoğun yolu: katalog servisi (ürün satırı) · depo sistemi → S3 (bir kez) ya da SQS (her hareket) → Aurora", flow: true}
+            - {id: order, title: "Siparişin yolu: ödeme sayfası → Uygulama → RDS Proxy → Aurora", flow: true}
+            - {id: store, title: "Asıl kayıt: Aurora PostgreSQL"}
+            - {id: chain, title: "COMMIT'ten sonra: sipariş olayı akışa (Adım 12, 33)", flow: true}
+            - {id: helpers, title: "Yandaki işler: hata kuyruğu, iki kontrol, yedek ve alarmlar", side: true}
+          summary: >-
+            Açılıştan önce tablolar kurallarıyla, RDS Proxy ve beş alarm kuruldu; katalog yönetim servisi 200 ürünü stok 0 ile
+            yazdı, açılış gecesi ilk yükleme işi P0001'in stoğunu 96 yaptı. Ay boyunca stok sadece iki yoldan değişti: hareketler (+) ve siparişler (−); 29 Eki sonunda 116. 30 Eki'de mal
+            kabulü 136, C00057'nin siparişi 134, altı sipariş daha 128 yaptı. Aynı hareket ikinci kez sayılmadı, reddedilen
+            ödeme ROLLBACK ile hiç iz bırakmadı, aynı tıklama ikinci siparişe dönmedi. Gece kontrolü 96 + 520 + 20 − 508 = 128 buldu;
+            beş alarm OK. Son durum: kesitte P0001 128 ve W17933…a1; t0 buradan başlar.
+          boxes:
+            - id: admin
+              row: stock
+            - id: s3
+              row: stock
+              tables:
+                - name: "stok-acilis.csv (depo sisteminden)"
+                  cols: [product_id, stock]
+                  rows:
+                    - {key: f1, product_id: P0001, stock: "96", hidden: true}
+                    - {key: f2, product_id: "… 199 satır daha", stock: "…", hidden: true}
+            - id: loader
+              row: stock
+              tables:
+                - name: "son çalışma"
+                  cols: [ölçü, değer]
+                  rows:
+                    - {key: l1, ölçü: "dosyadaki satır", değer: "200", hidden: true}
+                    - {key: l2, ölçü: "eksi stok / katalogda yok", değer: "0 / 0", hidden: true}
+                    - {key: l3, ölçü: "güncellenen ürün", değer: "200", hidden: true}
+            - id: queue
+              row: stock
+              tables:
+                - name: "bekleyen mesajlar"
+                  cols: [movement_id, product_id, qty]
+                  rows:
+                    - {key: q1, movement_id: M-30481, product_id: P0001, qty: "+20", hidden: true}
+                    - {key: q2, movement_id: M-30990, product_id: P9999, qty: "+5", hidden: true}
+            - id: stockcons
+              row: stock
+            - id: page
+              row: order
+            - id: web
+              row: order
+            - id: proxy
+              row: order
+              tables:
+                - name: "bağlantılar (temsilî)"
+                  cols: [ölçü, değer]
+                  rows:
+                    - {key: p1, ölçü: "istemciden gelen", değer: "—", hidden: true}
+                    - {key: p2, ölçü: "Aurora'ya açık", değer: "—", hidden: true}
+            - id: aurora
+              row: store
+              tables:
+                - name: "products (kesit: t0'daki ürün)"
+                  cols: [product_id, name, stock]
+                  rows:
+                    - {product_id: P0001, name: Alpen Kablosuz Kulaklık 1, stock: "0", hidden: true}
+                - name: "orders (kesit: t0'daki sipariş)"
+                  cols: [order_id, customer_id, status, total]
+                  money: [total]
+                  rows:
+                    - {key: a1, order_id: "W17933…a1", customer_id: C00002, status: processing, total: 1299.90, hidden: true}
+                - name: "kesitin dışında: P0001'li siparişler (30 Eki)"
+                  cols: [order_id, customer_id, request_id, total]
+                  money: [total]
+                  rows:
+                    - {key: o1, order_id: "W17933…3e", customer_id: C00057, request_id: "r-7d21…", total: 6747.68, hidden: true}
+                    - {key: o2, order_id: "5 sipariş (10:05–17:10)", customer_id: "5 müşteri", request_id: "…", total: "her biri 1 adet", hidden: true}
+                    - {key: o3, order_id: "W17933…9b", customer_id: C00079, request_id: "r-5c88…", total: 3373.84, hidden: true}
+                - name: "kesitin dışında: outbox"
+                  cols: [order_id, type]
+                  rows:
+                    - {key: e1, order_id: "W17933…3e", type: order_placed, hidden: true}
+                    - {key: e2, order_id: "6 sipariş daha", type: order_placed, hidden: true}
+                - name: "kesitin dışında: stock_movements (P0001)"
+                  cols: [movement_id, qty, reason]
+                  rows:
+                    - {key: m0, movement_id: ILK-P0001, qty: "+96", reason: ilk yükleme, hidden: true}
+                    - {key: m1, movement_id: "1–29 Eki · 26 hareket", qty: "+520", reason: "mal kabul, iade, sayım", hidden: true}
+                    - {key: m2, movement_id: M-30481, qty: "+20", reason: mal kabul, hidden: true}
+            - id: wal
+              row: chain
+            - id: dms
+              row: chain
+            - id: kinesis
+              row: chain
+              tables:
+                - name: "son olaylar"
+                  cols: [order_id, type]
+                  rows:
+                    - {key: k1, order_id: "W17933…3e", type: order_placed, hidden: true}
+                    - {key: k2, order_id: "6 sipariş daha", type: order_placed, hidden: true}
+            - id: dlq
+              row: helpers
+              tables:
+                - name: "bekleyen"
+                  cols: [movement_id, hata]
+                  rows:
+                    - {key: d1, movement_id: M-30990, hata: "P9999 yok (23503)", hidden: true}
+            - id: scheduler
+              row: helpers
+            - id: sweeper
+              row: helpers
+              tables:
+                - name: "son çalışma"
+                  cols: [ölçü, değer]
+                  rows:
+                    - {key: s1, ölçü: "çalışma", değer: "—", hidden: true}
+                    - {key: s2, ölçü: "ayrılmış tutar (30 dk)", değer: "—", hidden: true}
+                    - {key: s3, ölçü: "siparişi olmayan", değer: "—", hidden: true}
+                    - {key: s4, ölçü: "iptal edilen", değer: "—", hidden: true}
+            - id: recon
+              row: helpers
+              tables:
+                - name: "son kontrol (P0001)"
+                  cols: [ölçü, değer]
+                  rows:
+                    - {key: r1, ölçü: "çalışma", değer: "—", hidden: true}
+                    - {key: r2, ölçü: "hareketler toplamı", değer: "—", hidden: true}
+                    - {key: r3, ölçü: "satılan (iptal hariç)", değer: "—", hidden: true}
+                    - {key: r4, ölçü: "beklenen / products", değer: "—", hidden: true}
+                    - {key: r5, ölçü: "StockDrift", değer: "—", hidden: true}
+            - id: pitr
+              row: helpers
+              tables:
+                - name: "geri dönüş"
+                  cols: [ölçü, değer]
+                  rows:
+                    - {key: t1, ölçü: "saklama", değer: "14 gün", hidden: true}
+                    - {key: t2, ölçü: "en yeni an", değer: "birkaç dk önce", hidden: true}
+            - id: monitor
+              row: helpers
+              tables:
+                - name: "sipariş ve stok alarmları"
+                  cols: [alarm, durum]
+                  rows:
+                    - {key: a1, alarm: siparis-kilitlenme, durum: OK, hidden: true}
+                    - {key: a2, alarm: siparis-hata-orani, durum: OK, hidden: true}
+                    - {key: a3, alarm: stok-farki, durum: OK, hidden: true}
+                    - {key: a4, alarm: stok-hata-kuyrugu, durum: OK, hidden: true}
+                    - {key: a5, alarm: askida-odeme, durum: OK, hidden: true}
+          frames:
+            - phase: 2
+              who: aurora
+              lit: [aurora]
+              packet: {at: aurora, text: "28 Eyl · CREATE TABLE customers · products (… stock int NOT NULL DEFAULT 0 CHECK (stock >= 0)) · orders (… request_id UNIQUE) · order_items (REFERENCES) · outbox · stock_movements (movement_id PRIMARY KEY)"}
+              note: {aurora: "tablolar kuruldu · hepsi boş"}
+              say: >-
+                28 Eyl, açılıştan üç gün önce. Ekip Aurora'da altı tabloyu kurallarıyla kurdu: stok eksiye inemez, her sipariş
+                kalemi var olan bir ürüne bağlı, bir istek numarasıyla tek sipariş, her stok hareketi numarasıyla tek. Tablolar
+                boş. (Müşteri satırlarını hesap açılınca Uygulama yazar; bu sayfanın konusu değil.)
+            - phase: 2
+              who: proxy
+              lit: [proxy, aurora, monitor]
+              packet: {at: proxy, text: "29 Eyl · aws rds create-db-proxy … · ALTER ROLE shop_app SET lock_timeout = '5s' · idle_in_transaction_session_timeout = '10s' · put-metric-alarm × 5"}
+              show: {monitor: [a1, a2, a3, a4, a5]}
+              note: {aurora: "", proxy: "proxy hazır · henüz bağlantı yok", monitor: "beş alarm hazır · henüz ölçü yok"}
+              say: >-
+                29 Eyl. Ekip Aurora'nın önüne RDS Proxy'yi kurdu ve Uygulama'nın veritabanı kullanıcısına (shop_app) iki süre
+                koydu: bir kilidi en çok 5 saniye bekle; açık paket 10 saniye boş kalırsa oturumu kapat. Beş alarm da ilk
+                siparişten önce kuruldu. Kuyruklar, Lambda'lar, DMS görevi, akış ve zamanlayıcılar da bu günlerde kuruldu.
+            - phase: 2
+              who: admin
+              lit: [admin, aurora]
+              packet: {at: admin, text: "30 Eyl · katalog: 200 ürün · INSERT INTO products (product_id, name, category, price) VALUES ('P0001', 'Alpen Kablosuz Kulaklık 1', 'Elektronik', 3373.84) … · stock = 0"}
+              show: {aurora: [P0001]}
+              fresh: {aurora: [P0001]}
+              note: {proxy: "", monitor: "", aurora: "200 ürün · hepsinin stoğu 0"}
+              say: >-
+                30 Eyl. Katalog ekibi ürünleri kataloğa ekledi; katalog yönetim servisi her ürün için Aurora'ya bir satır yazdı:
+                numara, ad, kategori, fiyat. Stok 0: mağaza henüz hiçbir şey satamaz. Stoğu depo sistemi verecek.
+            - phase: 2
+              who: s3
+              lit: [s3]
+              packet: {at: s3, text: "1 Eki 03:00 · depo kapalı · depo sistemi → s3://…/stok-acilis.csv · 200 satır · son hareket M-10233"}
+              show: {s3: [f1, f2]}
+              fresh: {s3: [f1, f2]}
+              note: {admin: "", aurora: "", s3: "açılış dosyası: 200 ürün"}
+              say: >-
+                1 Eki 03:00, açılış gecesi. Depo gece kapalı, raflarda hareket yok. Depo sistemi her ürünün stoğunu tek bir
+                dosyaya yazıp S3'e bıraktı: 200 satır, P0001 için 96. Dosyanın başında içine giren son hareketin numarası
+                (M-10233) da yazılı. Depo sistemi bundan sonraki hareketleri (M-10234'ten başlayarak) kuyruğa gönderecek.
+            - phase: 2
+              who: loader
+              lit: [s3, loader, aurora]
+              packet: {at: loader, text: "aws_s3.table_import_from_s3('stok_acilis', …) → 200 satır · kontrol: eksi 0, katalogda yok 0 · BEGIN · UPDATE products SET stock = 96 WHERE product_id = 'P0001' … · INSERT stock_movements ('ILK-P0001', +96) … · COMMIT"}
+              show: {loader: [l1, l2, l3], aurora: [m0]}
+              set: {aurora: {P0001: {stock: "96"}}}
+              fresh: {loader: [l1, l2, l3], aurora: [P0001, m0]}
+              note: {s3: "", loader: "200 okundu · 200 yazıldı", aurora: "P0001 = 96 · bir ilk yükleme hareketi"}
+              say: >-
+                İlk yükleme işi dosyayı aws_s3 ile önce bir ara tabloya okudu ve kontrol etti: 200 satır, eksi stok yok,
+                katalogda olmayan ürün yok. Sonra tek pakette 200 ürünün stoğunu 0'dan dosyadaki sayıya güncelledi ve her ürün
+                için bir "ilk yükleme" hareketi ekledi (P0001: +96). Paket ya bütün dosyayı yazar ya hiçbirini. 03:00–09:00
+                arasında depoda bir hareket olursa kuyrukta bekler; tüketici açılıştan önce onu da işler.
+            - phase: 2
+              who: proxy
+              lit: [proxy, aurora]
+              packet: {at: proxy, text: "1 Eki 09:00 · açılış · Uygulama sunucuları ve Lambda'lar proxy'ye bağlandı · 120 istemci bağlantısı → Aurora'ya 18 bağlantı"}
+              show: {proxy: [p1, p2]}
+              set: {proxy: {p1: {değer: "120"}, p2: {değer: "18"}}}
+              fresh: {proxy: [p1, p2]}
+              note: {loader: "", aurora: "", proxy: "120 → 18: bağlantılar paylaşılıyor"}
+              say: >-
+                1 Eki 09:00, mağaza açıldı. Uygulama sunucuları ve Lambda'lar Aurora'ya değil RDS Proxy'ye bağlandı. Proxy 120
+                istemci bağlantısını Aurora'ya açık tuttuğu 18 bağlantıyla taşıyor: bir paket bitince o bağlantı bir sonraki
+                pakete verilir.
+            - phase: 3
+              who: web
+              lit: [queue, stockcons, page, web, proxy, aurora, wal, dms, kinesis]
+              packet: {at: aurora, text: "1–29 Eki · P0001: 26 hareket (+520) · siparişlerle −500 · 96 + 520 − 500 = 116"}
+              show: {aurora: [m1]}
+              set: {aurora: {P0001: {stock: "116"}}}
+              fresh: {aurora: [P0001, m1]}
+              note: {proxy: "", aurora: "29 Eki sonu: P0001 = 116"}
+              say: >-
+                1–29 Eki, ayın özeti. Stok her gün sadece iki yoldan değişti: depodan gelen hareketler kuyruktan (P0001 için 26
+                hareket, toplam +520) ve siparişler ödeme paketinden (toplam −500). Kimse stoğun üzerine elle bir sayı yazmadı.
+                29 Eki sonunda 96 + 520 − 500 = 116.
+            - phase: 3
+              who: queue
+              lit: [queue]
+              packet: {at: queue, text: "30 Eki 08:10 · depo sistemi → SQS · {movement_id: M-30481, product_id: P0001, qty: +20, reason: mal kabul}"}
+              show: {queue: [q1]}
+              fresh: {queue: [q1]}
+              note: {aurora: "", queue: "1 mesaj bekliyor"}
+              say: >-
+                30 Eki 08:10. Depoya 20 kulaklık geldi; depo görevlisi kolileri sayıp depo sistemine girdi. Depo sistemi bunu
+                M-30481 numaralı bir mal kabul hareketi olarak SQS kuyruğuna koydu.
+            - phase: 3
+              who: stockcons
+              lit: [queue, stockcons, proxy, aurora]
+              packet: {at: stockcons, text: "BEGIN · INSERT INTO stock_movements VALUES ('M-30481', 'P0001', 20, …) ON CONFLICT DO NOTHING → 1 · UPDATE products SET stock = stock + 20 WHERE product_id = 'P0001' → 136 · COMMIT · mesaj silindi"}
+              hide: {queue: [q1]}
+              show: {aurora: [m2]}
+              set: {aurora: {P0001: {stock: "136"}}}
+              fresh: {aurora: [P0001, m2]}
+              note: {queue: "kuyruk boş", stockcons: "hareket yazıldı → stok +20"}
+              say: >-
+                Stok tüketicisi mesajı aldı ve tek bir paket açtı: önce hareketi numarasıyla yazdı (1 satır: bu numara ilk kez
+                geliyor), sonra stoğa 20 ekledi: 116 → 136. COMMIT'ten sonra mesajı kuyruktan sildi. Stoğa "136 yaz" demedi;
+                "20 ekle" dedi.
+            - phase: 3
+              who: page
+              lit: [page, web]
+              packet: {at: page, text: "10:02 · C00057 · istek numarası r-7d21… · buton kapandı · POST /aurora/api/orders · Idempotency-Key: r-7d21… · P0001 × 2"}
+              note: {queue: "", stockcons: "", aurora: "", page: "buton kapalı: cevap bekleniyor"}
+              say: >-
+                10:02. Bir müşteri (C00057) sepetinde 2 kulaklıkla "Place the order" butonuna bastı. Ödeme sayfası bu tıklamaya
+                bir numara verdi (r-7d21…), butonu kapattı ve isteği numarasıyla Uygulama'ya gönderdi.
+            - phase: 3
+              who: web
+              lit: [web, proxy, aurora]
+              packet: {at: aurora, text: "SELECT … WHERE request_id = 'r-7d21…' → yok · BEGIN · SELECT … customers … FOR UPDATE (Adım 14) · UPDATE products SET stock = stock - 2 WHERE product_id = 'P0001' AND stock >= 2 → UPDATE 1"}
+              set: {aurora: {P0001: {stock: "136 (paketin içinde 134)"}}}
+              fresh: {aurora: [P0001]}
+              note: {page: "", web: "bu numarayla sipariş yok → paket açıldı", aurora: "P0001 satırı kilitli (paket bitene kadar)"}
+              say: >-
+                Uygulama önce bu numarayla bir sipariş var mı diye baktı: yok, ilk deneme. Paketi açtı; Adım 14'teki kontrol
+                için müşterinin satırını kilitledi, sonra stoğu koşulla düşürdü: 136 ≥ 2, UPDATE 1. Paketin içinde stok 134, ama
+                COMMIT gelene kadar herkes 136 görüyor; P0001'e başka bir yazma gelirse bu paket bitene kadar bekler.
+            - phase: 3
+              who: web
+              lit: [web]
+              packet: {at: web, text: "→ ödeme sağlayıcısı: authorize 6.747,68 TL · Idempotency-Key: r-7d21… · timeout 3 sn → onay (au-55f1…)"}
+              note: {web: "ödeme onayı geldi (0,4 sn, temsilî)"}
+              say: >-
+                Paket açıkken Uygulama ödeme sağlayıcısına sordu: "C00057'nin kartında 6.747,68 TL ayır" (2 × 3.373,84).
+                İsteğin numarası Idempotency-Key olarak gitti; en çok 3 saniye bekler. Onay geldi: tutar kartta ayrıldı, para
+                henüz çekilmedi.
+            - phase: 3
+              who: web
+              lit: [web, proxy, aurora]
+              packet: {at: aurora, text: "INSERT orders ('W17933…3e', 'C00057', …, 'processing', 6747.68, request_id 'r-7d21…') · INSERT order_items ('W17933…3e', 'P0001', 2, 3373.84) · INSERT outbox (order_placed) · COMMIT"}
+              show: {aurora: [o1, e1]}
+              set: {aurora: {P0001: {stock: "134"}}}
+              fresh: {aurora: [P0001, o1, e1]}
+              note: {web: "COMMIT tamam", aurora: "P0001 = 134 · kilit kalktı"}
+              say: >-
+                Uygulama siparişi (istek numarasıyla), kalemini (ödeme anındaki fiyatla) ve "sipariş verildi" satırını (outbox)
+                aynı pakete yazdı ve COMMIT gönderdi. Dört değişiklik birlikte kalıcı oldu ve herkese göründü: stok 134. Kilit
+                kalktı; bekleyen yazma artık 134'ü görür.
+            - phase: 3
+              who: dms
+              lit: [aurora, wal, dms, kinesis]
+              packet: {at: dms, text: "WAL: COMMIT (products, orders, order_items, outbox) · DMS: outbox satırı → lm-order-events {order_id: W17933…3e, visitor_id …, items …}"}
+              show: {kinesis: [k1]}
+              fresh: {kinesis: [k1]}
+              note: {web: "", aurora: "", kinesis: "tüketiciler: sepet silinir, depo hazırlar …"}
+              say: >-
+                COMMIT değişiklik kaydına (WAL) girdi. DMS kayıttan sadece outbox'a eklenen satırı aldı ve Kinesis akışına koydu.
+                Akıştan Sepet tüketicisi sepetteki satırları siler (Adım 12), depo sistemine bildiren iş siparişi depoya iletir,
+                canlı sıralama güncellenir (Adım 33).
+            - phase: 3
+              who: web
+              lit: [web, page]
+              packet: {at: web, text: "→ {\"order_id\": \"W17933…3e\", \"result\": \"committed\"}"}
+              note: {kinesis: "", page: "\"Sipariş verildi\" · buton açık"}
+              say: >-
+                Uygulama cevabı sayfaya gönderdi; sayfa siparişin verildiğini yazdı ve butonu açtı. Bütün iş yaklaşık yarım
+                saniye sürdü (temsilî).
+            - phase: 3
+              who: sweeper
+              lit: [scheduler, sweeper, aurora, monitor]
+              packet: {at: sweeper, text: "10:05 · ödeme sağlayıcısı: son 30 dk ayrılmış, çekilmemiş → 9 (biri r-7d21…) · Aurora: 9 request_id → 9 sipariş · siparişsiz 0 · AskidaOdemeIptal 0"}
+              show: {sweeper: [s1, s2, s3, s4]}
+              set: {sweeper: {s1: {değer: "10:05"}, s2: {değer: "9"}, s3: {değer: "0"}, s4: {değer: "0"}}}
+              fresh: {sweeper: [s1, s2, s3, s4]}
+              note: {page: "", monitor: "10:05 · AskidaOdemeIptal 0 · beş alarm OK"}
+              say: >-
+                10:05. Zamanlayıcı askıdaki ödeme kontrolünü çalıştırdı. Son 30 dakikada bütün mağazada 9 tutar ayrılmış, biri
+                C00057'nin (r-7d21…); 9 numaranın hepsinin Aurora'da bir siparişi var. Siparişi olmayan ayrılmış tutar 0; iptal
+                edilecek bir şey yok.
+            - phase: 3
+              who: web
+              lit: [page, web, proxy, aurora, wal, dms, kinesis, monitor]
+              packet: {at: web, text: "10:05–17:40 · P0001'li 6 sipariş (her biri 1 adet) · her biri: BEGIN · SELECT … customers FOR UPDATE · UPDATE … AND stock >= 1 · authorize · INSERT … · COMMIT · 134 → 128"}
+              show: {aurora: [a1, o2, o3, e2], kinesis: [k2]}
+              set: {aurora: {P0001: {stock: "128"}}}
+              fresh: {aurora: [P0001, a1, o2, o3, e2], kinesis: [k2]}
+              note: {monitor: "30 Eki 17:40'a kadar: SiparisDenemesi 412 · SiparisHatasi 0 (temsilî)", aurora: "P0001 = 128"}
+              say: >-
+                10:05–17:40. Altı müşteri daha birer kulaklık aldı; sonuncusu 17:40'ta C00079 (W17933…9b). Her biri aynı paketle;
+                stok 134 → 128. O gün başka ürünlerin siparişleri de yazıldı; kesitteki C00002'nin W17933…a1 siparişi
+                (1.299,90 TL, içinde P0001 yok) onlardan biri. Uygulama her denemeyi ve her beklenmeyen hatayı saydı.
+            - phase: 4
+              who: stockcons
+              lit: [queue, stockcons, proxy, aurora]
+              packet: {at: stockcons, text: "08:11 · aynı mesaj (M-30481) ikinci kez teslim edildi · BEGIN · INSERT … ON CONFLICT (movement_id) DO NOTHING → 0 satır · UPDATE yok · COMMIT · mesaj silindi"}
+              show: {queue: [q1]}
+              mark: {aurora: {m2: fix}}
+              note: {web: "", monitor: "", queue: "aynı mesaj ikinci kez", stockcons: "0 satır → stoğa dokunulmadı", aurora: "08:11'e dönüş: tablo gerçek son hâli (128) gösteriyor"}
+              say: >-
+                Örnek durum (08:11'e geri dönüyoruz): SQS aynı mesajı (M-30481) bir dakika sonra bir kez daha teslim etti; bu
+                kuyruğun bilinen hâli (en az bir kez). Stok tüketicisi hareketi yazmayı denedi; bu numara zaten var, 0 satır.
+                Hiçbir şey eklenmedi; stok 20 fazla olmadı.
+            - phase: 4
+              who: web
+              lit: [page, web, proxy, aurora]
+              packet: {at: aurora, text: "18:05 · C00088 · r-2b6f… · BEGIN · UPDATE … P0001 AND stock >= 1 → UPDATE 1 (paketin içinde 127) · authorize → RET · ROLLBACK"}
+              hide: {queue: [q1]}
+              set: {aurora: {P0001: {stock: "128 (127 geri alındı)"}}}
+              mark: {aurora: {m2: "", P0001: fix}}
+              note: {queue: "", stockcons: "", page: "\"Ödeme alınamadı\"", web: "ret → ROLLBACK · geri alma nedeni: ödeme reddi", aurora: "sipariş yok · outbox satırı yok · kilit kalktı", dms: "18:05: akışa bir şey gitmedi", monitor: "ödeme reddi müşterinin kartından: hata oranına girmez"}
+              say: >-
+                Örnek durum (18:05): C00088 bir kulaklık için butona bastı. Stok paketin içinde 127'ye indi; ödeme sağlayıcısı
+                kartı reddetti. Uygulama ROLLBACK gönderdi: stok 128, sipariş yok, outbox satırı yok; değişiklik kaydına hiçbir
+                şey girmediği için akışa ve tüketicilere de bir şey gitmedi. t0'daki senin denemen de bu yolu izleyecek; orada
+                ödemeyi işaretlediğin "Make the payment fail" kutusu başarısız yapıyor.
+            - phase: 4
+              who: web
+              lit: [page, web, proxy, aurora]
+              packet: {at: web, text: "17:40 + 3 sn · aynı istek r-5c88… yeniden geldi · SELECT order_id FROM orders WHERE request_id = 'r-5c88…' → W17933…9b · BEGIN yok · aynı cevap"}
+              set: {aurora: {P0001: {stock: "128"}}}
+              mark: {aurora: {P0001: "", o3: fix}}
+              note: {page: "bağlantı koptu · aynı numarayla bir kez daha", web: "aynı tıklama: önceki cevap", aurora: "17:40'a dönüş: tablo gerçek son hâli gösteriyor", dms: "", monitor: ""}
+              say: >-
+                Örnek durum (17:40'a geri dönüyoruz): C00079'un telefonunda bağlantı, cevap gelirken koptu; sayfa 3 saniye sonra
+                aynı isteği aynı numarayla (r-5c88…) yeniden gönderdi. Uygulama numarayla siparişi buldu (W17933…9b) ve aynı
+                cevabı verdi; paket açılmadı, stok bir daha düşmedi.
+            - phase: 4
+              who: aurora
+              lit: [web, proxy, aurora, monitor]
+              packet: {at: aurora, text: "olsaydı: X: P0001 kilitli → P0002 bekliyor · Y: P0002 kilitli → P0001 bekliyor · 1 sn sonra PostgreSQL Y'yi iptal eder (40P01) · Y ROLLBACK · aynı numarayla yeniden → başarılı"}
+              set: {monitor: {a1: {durum: ALARM}}}
+              mark: {aurora: {o3: ""}, monitor: {a1: fix}}
+              note: {page: "", web: "olsaydı: Y yeniden denendi (aynı request_id)", aurora: "olsaydı · tablolar gerçek durumu gösteriyor", monitor: "olsaydı: Deadlocks > 0 → siparis-kilitlenme ALARM"}
+              say: >-
+                Olsaydı: Uygulama ürünleri sıralamasaydı. X siparişi P0001'i, aynı anda Y siparişi P0002'yi kilitler; sonra X
+                P0002'yi, Y P0001'i bekler: kimse ilerleyemez. PostgreSQL bunu yaklaşık 1 saniyede fark eder ve Y'yi iptal eder;
+                Y'nin bütün değişiklikleri geri alınır, Uygulama aynı numarayla yeniden dener. Alarm Ekip'e sıralanmayan kodu
+                aratır. Sıralı olunca Y de önce P0001'i ister ve sadece bekler.
+            - phase: 4
+              who: sweeper
+              lit: [web, proxy, aurora, scheduler, sweeper, monitor]
+              packet: {at: sweeper, text: "olsaydı: 18:20 · C00090 · r-8e14… · UPDATE (paket) · authorize → onay · Uygulama sunucusu çöktü · Aurora paketi geri aldı · 18:35 kontrol: r-8e14…'in siparişi yok → void · AskidaOdemeIptal 1"}
+              set: {monitor: {a1: {durum: OK}, a5: {durum: ALARM}}, sweeper: {s1: {değer: "olsaydı: 18:35"}, s2: {değer: "11"}, s3: {değer: "1 (r-8e14…)"}, s4: {değer: "1"}}}
+              mark: {monitor: {a1: "", a5: fix}, sweeper: {s3: fix}}
+              fresh: {sweeper: [s1, s2, s3, s4]}
+              note: {web: "olsaydı: ödeme onayından sonra çöktü", aurora: "olsaydı: COMMIT yok → stok 128 kaldı", sweeper: "olsaydı: siparişsiz ayrılmış tutar iptal edildi", monitor: "olsaydı: askida-odeme ALARM"}
+              say: >-
+                Olsaydı (ayrı bir durum; önceki "Olsaydı" yok sayılır): 18:20'de C00090'ın ödemesi onaylandı, ama Uygulama sunucusu
+                siparişi yazmadan çöktü. COMMIT gelmeyen paket kalıcı olmaz: açık paket en geç 10 saniye boş kalınca Aurora
+                oturumu kapatır ve paketi geri alır; stok 128. Kartta ayrılmış tutarı ise ROLLBACK geri alamaz. 18:25'teki
+                kontrolde tutar henüz 10 dakikalık değildi; 18:35'teki kontrol bu numaranın siparişini bulamadı ve tutarı iptal
+                etti; alarm Ekip'e çöküşü haber verdi.
+            - phase: 4
+              who: proxy
+              lit: [page, web, proxy, aurora, monitor]
+              packet: {at: proxy, text: "olsaydı: 18:40 · C00091 · COMMIT gönderildi, cevap gelmedi: yazma sunucusu çöktü · okuma sunucusu yazma sunucusu oldu · proxy yeni sunucuya bağlandı · Uygulama: SELECT … request_id 'r-9a02…' → var mı?"}
+              set: {monitor: {a5: {durum: OK}}, sweeper: {s1: {değer: "10:05"}, s2: {değer: "9"}, s3: {değer: "0"}, s4: {değer: "0"}}}
+              mark: {monitor: {a5: ""}, sweeper: {s3: ""}}
+              note: {sweeper: "", page: "olsaydı: \"işleniyor\" · aynı numarayla yeniden", web: "olsaydı: sonuç bilinmiyor → numarayla bak", proxy: "olsaydı: istemci bağlantıları açık kaldı", aurora: "olsaydı: COMMIT olduysa sipariş var; olmadıysa hiçbir şey", monitor: "olsaydı: yük devri olayı → Ekip'e bilgi"}
+              say: >-
+                Olsaydı (ayrı bir durum): 18:40'ta Uygulama C00091'in COMMIT'ini gönderdi ve tam o an yazma sunucusu çöktü; cevap
+                gelmedi. Aurora bir okuma sunucusunu yazma sunucusu yaptı; RDS Proxy bağlantıları açık tuttu ve yeni sunucuya
+                geçti. Uygulama COMMIT'in olup olmadığını bilmiyor; aynı numarayla siparişe bakar: varsa aynı cevabı verir,
+                yoksa siparişi baştan yazar. Ödeme aynı anahtarla gittiği için ikinci kez ayrılmaz.
+            - phase: 4
+              who: stockcons
+              lit: [queue, stockcons, proxy, aurora, dlq, monitor]
+              packet: {at: stockcons, text: "olsaydı: 19:10 · M-30990 · P9999 · +5 · INSERT stock_movements → 23503 (FOREIGN KEY: böyle ürün yok) · ROLLBACK · 5 deneme → hata kuyruğu"}
+              show: {dlq: [d1]}
+              set: {monitor: {a4: {durum: ALARM}}}
+              mark: {monitor: {a4: fix}, dlq: {d1: fix}}
+              fresh: {dlq: [d1]}
+              note: {page: "", web: "", proxy: "", aurora: "olsaydı: hiçbir stok değişmedi", stockcons: "olsaydı: 5 denemede de 23503", dlq: "olsaydı: 1 mesaj", monitor: "olsaydı: stok-hata-kuyrugu ALARM"}
+              say: >-
+                Olsaydı (ayrı bir durum): depo sistemi katalogda olmayan bir ürün için (P9999) hareket gönderseydi. Hareket
+                satırı var olan bir ürüne bağlı olmak zorunda; Aurora 23503 hatasıyla reddeder, paket geri alınır. Kuyruk mesajı
+                5 kez dener, sonra hata kuyruğuna taşır; asıl kuyruk akmaya devam eder. Ekip ürünü kataloğa ekletir ve mesajı
+                yeniden gönderir.
+            - phase: 4
+              who: pitr
+              lit: [pitr, aurora, monitor]
+              packet: {at: pitr, text: "olsaydı: 19:30 · hatalı komut: UPDATE products SET stock = 0 WHERE category = 'Elektronik' · stok defterden yeniden hesaplanır: hareketler − satılan → 128 · defter de bozulduysa: restore-db-cluster-to-point-in-time --restore-to-time 19:29 → yeni cluster"}
+              hide: {dlq: [d1]}
+              show: {pitr: [t1, t2]}
+              set: {monitor: {a4: {durum: OK}}, aurora: {P0001: {stock: "olsaydı: 0 → defterden 128"}}}
+              mark: {monitor: {a4: ""}, dlq: {d1: ""}, aurora: {P0001: fix}}
+              fresh: {pitr: [t1, t2]}
+              note: {queue: "", stockcons: "", dlq: "", pitr: "olsaydı: gerekirse 19:29'un kopyası yeni bir cluster'da", aurora: "olsaydı: Elektronik stokları sıfırlandı", monitor: ""}
+              say: >-
+                Olsaydı (ayrı bir durum): Ekip'ten biri 19:30'da yanlış bir komutla bütün Elektronik stoklarını 0 yapsaydı.
+                ROLLBACK artık işe yaramaz; komut COMMIT olmuştur. Hatalı komut bir hareket değildi; defter (hareketler ve
+                satılanlar) sağlam. Ekip her ürünün stoğunu defterden yeniden hesaplar ve geri yazar (P0001: 636 − 508 = 128);
+                bu, o ana kadarki siparişleri de içerir. Defterin kendisi de bozulsaydı (ör. silinen satırlar) Ekip sürekli
+                yedekten 19:29'un hâlini yeni bir cluster olarak açar ve kaybolan satırları oradan alırdı; asıl cluster
+                çalışmaya devam eder.
+            - phase: 4
+              who: recon
+              lit: [scheduler, recon, aurora, monitor]
+              packet: {at: recon, text: "23:30 · REPEATABLE READ · sum(stock_movements.qty) → 636 · sum(order_items.qty, iptal hariç) → 508 · 636 − 508 = 128 · products.stock → 128 · StockDrift 0"}
+              show: {recon: [r1, r2, r3, r4, r5]}
+              set: {aurora: {P0001: {stock: "128"}}, recon: {r1: {değer: "30 Eki 23:30"}, r2: {değer: "636 (96 + 520 + 20)"}, r3: {değer: "508 (500 + 2 + 6)"}, r4: {değer: "128 / 128"}, r5: {değer: "0"}}, sweeper: {s1: {değer: "23:25"}, s2: {değer: "4"}, s3: {değer: "0"}}}
+              mark: {aurora: {P0001: ""}}
+              fresh: {recon: [r1, r2, r3, r4, r5]}
+              note: {pitr: "", aurora: "", recon: "beklenen = gerçek · 200 üründe fark 0", monitor: "23:30 · StockDrift 0 (200 ürün) · beş alarm OK"}
+              say: >-
+                23:30, gerçek gece kontrolü. Zamanlayıcı gece stok kontrolünü çalıştırdı. İş üç toplamı tek bir REPEATABLE READ
+                paketinde, aynı anın fotoğrafından okudu: P0001'in hareketleri 96 + 520 + 20 = 636, satılan 500 + 2 + 6 = 508,
+                beklenen 128; products'ta da 128. Reddedilen ödeme ve ikinci kez gelen hareket hiçbir yere girmedi. 200 üründe
+                fark 0.
+            - phase: 4
+              who: aurora
+              lit: [aurora, monitor]
+              set: {aurora: {a1: {status: delivered}}}
+              fresh: {aurora: [a1]}
+              note: {recon: "", aurora: "kesit: P0001 128 · W17933…a1 (31 Eki: teslim edildi)", monitor: "beş alarm OK"}
+              say: >-
+                Hazır. "Olsaydı" kareleri yaşanmadı. Ertesi gün (31 Eki) kargo C00002'nin W17933…a1 siparişini teslim etti;
+                durumunu teslimat zinciri delivered yaptı. Kesitte P0001'in stoğu 128 ve bu sipariş var. t0'da senin "Place the
+                order" tıklaman bu tabloyla başlıyor: senin paketin de stoğu 128'den düşürecek; "Make the payment fail" kutusu
+                işaretli olduğu için ödeme başarısız olacak ve ROLLBACK stoğu 128'e döndürecek.
+        phases:
+          - n: 1
+            title: Tasarım
+            intro: >-
+              Önce stoğun sorusu: kim yazar, nasıl yazar? Sonra tablolar ve kuralları, siparişin paketi ve sırası, ödemenin
+              paketteki yeri, aynı anda gelen ödemeler (kilit ve sıra), ROLLBACK'in sınırı, bağlantılar ve yük devri, izleme.
+              Kural baştan: stoğa kimse "şu sayı" yazmaz; herkes "şu kadar ekle" ya da "yetiyorsa şu kadar düş" der.
+            cards:
+              - title: "Stoğu kim yazar? İki yazar, ikisi de fark yazar"
+                text: >-
+                  Stoğu iki taraf değiştirir. Depo sistemi depoya giren ve çıkan malı bilir: mal kabul, iade, sayım farkı. Mağaza
+                  satışı bilir: sipariş. İkisi de stoğun üzerine yeni bir sayı yazmaz; farkı yazar. Depo sistemi "136 yap"
+                  deseydi, o sırada verilen bir siparişin düşüşü silinirdi. Depo sistemi satışları geri göndermez: siparişi zaten
+                  akıştan öğreniyor, geri gönderseydi aynı satış iki kez düşerdi. Her hareketin bir numarası vardır; numara
+                  hareketin "bir kez sayıldı" kanıtıdır.
+                map:
+                  cols: [Yazan, Komut, "Ne zaman?"]
+                  rows:
+                    - ["Katalog yönetim servisi", "INSERT products (…, stock 0)", "Ürün kataloğa girince; stoğa dokunmaz."]
+                    - ["İlk yükleme işi", "UPDATE products SET stock = 96", "Bir kez, açılış gecesi (depo dosyasından)."]
+                    - ["Stok tüketicisi", "stock = stock + 20", "Her depo hareketinde (SQS)."]
+                    - ["Uygulama", "stock = stock - 2 … AND stock >= 2", "Her siparişte, ödeme paketinin içinde."]
+              - title: "Tablolar ve kurallar: hangi program yazarsa yazsın"
+                text: >-
+                  Kurallar tabloya yazılır ki bir kod hatası onları bozamasın. Stok eksiye inemez (CHECK); bir sipariş kalemi var
+                  olan bir siparişe ve ürüne bağlıdır (FOREIGN KEY); bir istek numarasıyla tek sipariş olur (UNIQUE, Adım 17);
+                  bir hareket numarası bir kez yazılır (PRIMARY KEY). Kural bozulursa Aurora komutu hata koduyla reddeder ve paket
+                  geri alınır.
+                code:
+                  - {code: "products (product_id text PRIMARY KEY, …, stock int NOT NULL DEFAULT 0 CHECK (stock >= 0))", tag: Ekip → Aurora, say: "Stok 0'dan başlar, eksiye inemez (23514)."}
+                  - {code: "orders (order_id text PRIMARY KEY, customer_id … REFERENCES customers, request_id text UNIQUE, status, total)", tag: Ekip → Aurora, say: "Bir tıklama, tek sipariş (23505)."}
+                  - {code: "order_items (order_id REFERENCES orders, product_id REFERENCES products, qty, unit_price)", tag: Ekip → Aurora, say: "Kalem var olan ürüne bağlı (23503)."}
+                  - {code: "stock_movements (movement_id text PRIMARY KEY, product_id REFERENCES products, qty int, reason)", tag: Ekip → Aurora, say: "Her hareket bir kez."}
+                  - {code: "outbox (event_id …, order_id, type, payload)", tag: Ekip → Aurora, say: "\"Sipariş verildi\" satırı (Adım 33)."}
+              - title: "Siparişin paketi: hangi sırayla?"
+                text: >-
+                  Bir sipariş tek bir pakettir. Paketten önce Uygulama istek numarasıyla siparişe bakar; varsa yeniden gelen bir
+                  tıklamadır. Paketin içinde önce müşterinin satırı kilitlenir (Adım 14'teki kural kontrolü için), sonra ürünler
+                  numara sırasıyla koşulla düşürülür, sonra ödeme onayı alınır, en sonda sipariş, kalemler ve outbox yazılır.
+                  Stok yetmezse UPDATE 0 satır değiştirir; Uygulama hata yükseltir ve paket ROLLBACK ile biter.
+                code:
+                  - {code: "SELECT order_id FROM orders WHERE request_id = %s", tag: [Uygulama → Aurora, Aurora → Uygulama], say: "Bu tıklama daha önce sipariş oldu mu?"}
+                  - {code: "BEGIN; SELECT 1 FROM customers WHERE customer_id = %s FOR UPDATE;", tag: Uygulama → Aurora, say: "Paket açılır; müşteri satırı kilitlenir (Adım 14)."}
+                  - {code: "for i in sorted(items, key=lambda i: i['product_id']):", tag: Uygulamanın içinde, say: "Ürünler numara sırasıyla."}
+                  - {code: "  UPDATE products SET stock = stock - %s WHERE product_id = %s AND stock >= %s", tag: [Uygulama → Aurora, Aurora → Uygulama], say: "Yetiyorsa düş; 0 satırsa stok yok."}
+                  - {code: "odeme.authorize(tutar, idempotency_key=request_id, timeout=3)", tag: [Uygulama → Ödeme sağlayıcısı, Ödeme sağlayıcısı → Uygulama], say: "Tutar kartta ayrılır."}
+                  - {code: "INSERT orders …, order_items …, outbox …; COMMIT;", tag: Uygulama → Aurora, say: "Hepsi birlikte kalıcı olur."}
+              - title: "Ödeme paketin içinde mi, dışında mı?"
+                text: >-
+                  Mağaza ödemeyi paketin içinde, stok düştükten sonra alır (Adım 17'deki gibi): onay gelirse sipariş yazılır ve
+                  COMMIT, ret gelirse ROLLBACK. Artısı basitlik: stok ancak ödeme onaylanırsa kalıcı olarak düşer; ayrı bir
+                  "rezerve" durumu ve onu temizleyen bir iş gerekmez. Bedeli: ödeme sağlayıcısı cevap verene kadar ürünün satırı
+                  kilitli kalır ve aynı ürüne gelen ödemeler bekler. Bu yüzden sağlayıcıya en çok 3 saniye beklenir; bir kilit en
+                  çok 5 saniye beklenir (öndeki paketin ödeme beklemesinden uzun, sıradaki boşuna düşmesin); boş kalan paket 10
+                  saniyede kapatılır (değerler temsilî). Binlerce kişinin aynı anda bastığı bir fırsatta bu sıra çok uzardı;
+                  orada ilk kararı bellekteki sayaç verir (Adım 17) ve bu pakete sadece sayaçtan parça alan alıcı gelir.
+                map:
+                  cols: [Yol, Sıra, Artısı ve bedeli]
+                  rows:
+                    - ["Paketin içinde (seçilen)", "BEGIN · UPDATE · authorize · INSERT · COMMIT", "Tek paket, tek karar. Onay beklenirken ürün satırı kilitli."]
+                    - ["Paketin dışında, önce rezerve", "1. paket: rezerve · authorize · 2. paket: sipariş", "Kilit kısa. Ama rezerve durumu, süresi ve onu bırakan bir iş gerekir."]
+              - title: "Aynı anda iki ödeme: kilit, yalıtım ve sıra"
+                text: >-
+                  Aurora PostgreSQL varsayılan olarak READ COMMITTED çalışır. İki paket aynı anda P0001'i düşürmek isterse, önce
+                  gelen satırı kilitler; ikincinin UPDATE'i bekler. Birincisi COMMIT edince PostgreSQL ikincinin koşulunu
+                  satırın yeni değeriyle yeniden kontrol eder (stock >= qty): son parçayı iki kişi alamaz. Birincisi ROLLBACK
+                  ederse ikincisi eski değeri görür. Kilitlenmeyi önlemek için her paket satırları aynı sırayla kilitler: önce
+                  müşteri, sonra ürünler numara sırasıyla. Yine de olursa PostgreSQL yaklaşık 1 saniyede (deadlock_timeout)
+                  birini iptal eder; Uygulama aynı numarayla yeniden dener.
+                code:
+                  - {code: "ALTER ROLE shop_app SET lock_timeout = '5s';", tag: Ekip → Aurora, say: "Bir kilit en çok 5 saniye beklenir."}
+                  - {code: "ALTER ROLE shop_app SET idle_in_transaction_session_timeout = '10s';", tag: Ekip → Aurora, say: "Boş kalan paket 10 saniyede kapanır."}
+                  - {code: "except (Kilitlenme, KilitZamanAsimi): tekrar_dene(request_id)", tag: Uygulamanın içinde, say: "40P01 ve zaman aşımında: aynı numarayla bir kez daha."}
+              - title: "ROLLBACK neyi geri alır, neyi alamaz?"
+                text: >-
+                  ROLLBACK, BEGIN'den beri pakette yapılan her şeyi geri alır: stok, sipariş, kalemler, outbox satırı; kilitler
+                  kalkar. Outbox satırı hiç COMMIT olmadığı için değişiklik kaydına girmez; akış, sepet ve depo hiçbir şey duymaz.
+                  ROLLBACK Aurora'nın dışında olanı geri alamaz: ödeme sağlayıcısında ayrılmış bir tutar. Ödeme onaylandıktan
+                  sonra paket geri alınırsa (ör. INSERT bir kurala takıldı) Uygulama aynı numarayla iptal (void) gönderir; buna
+                  telafi denir. Tek istisna: hata aynı numaralı bir siparişin zaten var olmasıysa (23505), o tutar ilk siparişe
+                  aittir; iptal edilmez.
+                code:
+                  - {code: "except Exception: cur.execute('ROLLBACK')", tag: Uygulama → Aurora, say: "Pakette ne varsa geri."}
+                  - {code: "if onay and not ayni_siparis_var: odeme.void(idempotency_key=request_id)", tag: Uygulama → Ödeme sağlayıcısı, say: "Kartta ayrılan tutar serbest."}
+              - title: "Bağlantılar: RDS Proxy"
+                text: >-
+                  Her istekte yeni bağlantı açmak (TLS ve kimlik doğrulama) zaman alır ve ani yükte Aurora'nın bağlantı sınırını
+                  doldurur; Lambda'lar binlerce kopya açabildiği için daha da tehlikelidir. RDS Proxy bağlantıları havuzda tutar;
+                  bir paket bitince o veritabanı bağlantısı başka bir istemciye verilir. Proxy'nin paylaştıramadığı bir durum
+                  vardır: oturum ayarı değiştiren komutlar (SET gibi) bağlantıyı o istemciye bağlar (pinning). Bu yüzden süreler
+                  koddan SET ile değil, kullanıcıya ALTER ROLE ile konur. Proxy, şifreyi AWS Secrets Manager'dan alır.
+                code:
+                  - {code: "aws rds create-db-proxy --db-proxy-name shop-proxy --engine-family POSTGRESQL --auth SecretArn=…", tag: Ekip → RDS Proxy, say: "Havuz kurulur; şifre Secrets Manager'da."}
+                  - {code: "aws rds register-db-proxy-targets --db-proxy-name shop-proxy --db-cluster-identifiers shop", tag: Ekip → RDS Proxy, say: "Arkasında Aurora cluster'ı."}
+              - title: "Yazma sunucusu çökerse: aynı numarayla yeniden"
+                text: >-
+                  Cluster'da yazma sunucusunun yanında başka bir Availability Zone'da en az bir okuma sunucusu durur. Yazma sunucusu
+                  çökerse Aurora bir okuma sunucusunu yazma sunucusu yapar; AWS'e göre hizmet genellikle 60 saniyeden kısa sürede
+                  döner. COMMIT edilmiş her şey paylaşılan depolamadadır, kaybolmaz; yarım paketler geri alınır. RDS Proxy istemci
+                  bağlantılarını açık tutar ve yeni sunucuya kendisi geçer. Zor an, COMMIT'in gönderilip cevabın gelmediği andır:
+                  Uygulama sonucu bilmez. Bu yüzden yeniden denemeden önce istek numarasıyla siparişe bakar; UNIQUE da ikinci
+                  siparişi engeller.
+              - title: "İzleme: beş alarm"
+                text: >-
+                  Kilitlenme: Aurora'nın Deadlocks ölçüsü 5 dakikada 0'dan büyükse; sıralanmayan bir kod yolu var demektir.
+                  Beklenmeyen hata oranı: Uygulama her denemeyi (SiparisDenemesi) ve müşteriden kaynaklanmayan her ROLLBACK'i
+                  (SiparisHatasi: kilitlenme, zaman aşımı, bağlantı) sayar; ret ve stok yok sayılmaz. Oran 5 dakikalık pencerede,
+                  en az 20 denemeyle hesaplanır (az denemede tek hata %100 görünmesin); eşik %2, iki pencere üst üste. Stok farkı:
+                  gece kontrolünün StockDrift'i 0 değilse. Hata kuyruğu: 1 mesaj bile. Askıda ödeme: kontrol 1 tutar bile iptal
+                  ettiyse.
+                code:
+                  - {code: "put_metric_data(Namespace='Shop/Order', MetricData=[SiparisDenemesi, SiparisHatasi])", tag: Uygulama → CloudWatch, say: "Her denemede pay ve payda."}
+                  - {code: "IF(deneme >= 20, 100 * hata / deneme, 0) > 2   # 5 dk · 2 pencerenin 2'si", tag: CloudWatch'ın içinde, say: "Az denemede alarm çalmaz."}
+                  - {code: "Deadlocks (AWS/RDS) Maximum > 0   # 5 dk", tag: CloudWatch'ın içinde, say: "Bir kilitlenme bile."}
+                  - {code: "StockDrift ≠ 0 · ApproximateNumberOfMessagesVisible (DLQ) ≥ 1 · AskidaOdemeIptal ≥ 1", tag: CloudWatch'ın içinde, say: "Bir tane bile Ekip'e haber."}
+          - n: 2
+            title: İlk yükleme
+            intro: >-
+              Açılıştan önce tablolar, proxy ve alarmlar kurulur; katalog yönetim servisi ürün satırlarını stok 0 ile yazar. Açılış gecesi depo kapalıyken depo sistemi tam stoğu bir dosyaya
+              yazar; ilk yükleme işi dosyayı kontrol edip tek pakette Aurora'ya yazar. İlk yüklemeden sonraki her değişiklik
+              kuyruktan gelir.
+            cards:
+              - title: "Açılış gecesi: depo kapalıyken tam dosya"
+                text: >-
+                  İlk sayı depo sisteminin kendisinden gelir; elle yazılmaz. Depo gece kapalıyken (raflarda hareket yokken) depo
+                  sistemi her ürünün stoğunu tek bir dosyaya yazar ve dosyanın başına içine giren son hareketin numarasını koyar
+                  (M-10233). Depo sistemi kuyruğa sadece bu numaradan sonraki hareketleri gönderir (M-10234 ve sonrası); gece
+                  03:00 ile açılış arasında bir hareket olursa kuyrukta bekler ve açılıştan önce işlenir. Böylece bir hareket ne
+                  iki kez sayılır ne kaybolur. Ürün satırları (ad, fiyat) bundan önce katalog yönetim servisinden stok 0 ile
+                  gelmiştir; dosya sadece stoğu getirir.
+                code:
+                  - {code: "s3://…/stok-acilis.csv   # son hareket: M-10233", tag: Depo sistemi → S3, say: "200 satır: product_id, stock."}
+              - title: "Dosyayı Aurora'ya almak: önce ara tablo"
+                text: >-
+                  Dosya önce bir ara tabloya okunur; asıl tabloya dokunmadan kontrol edilir: satır sayısı, eksi stok, katalogda
+                  olmayan ürün. Sonra tek pakette products'a ve stock_movements'a yazılır. Bir satır bile hatalıysa paket geri
+                  alınır ve hiçbir stok yazılmaz; yarım yüklenmiş bir katalogla mağaza açılmaz.
+                code:
+                  - {code: "SELECT aws_s3.table_import_from_s3('stok_acilis', '', '(format csv, header true)', :s3_uri);", tag: [S3 → Aurora, İlk yükleme işi → Aurora], say: "Dosya ara tabloya (200 satır)."}
+                  - {code: "SELECT count(*) FROM stok_acilis s LEFT JOIN products p USING (product_id) WHERE p IS NULL OR s.stock < 0;", tag: [İlk yükleme işi → Aurora, Aurora → İlk yükleme işi], say: "Bilinmeyen ürün ya da eksi stok: 0 olmalı."}
+                  - {code: "BEGIN; UPDATE products p SET stock = s.stock FROM stok_acilis s WHERE p.product_id = s.product_id;", tag: İlk yükleme işi → Aurora, say: "200 ürünün stoğu 0'dan dosyadakine (P0001: 96)."}
+                  - {code: "INSERT INTO stock_movements SELECT 'ILK-' || product_id, product_id, stock, 'ilk yükleme' FROM stok_acilis; COMMIT;", tag: İlk yükleme işi → Aurora, say: "Her ürüne bir başlangıç hareketi."}
+              - title: "Yüklemeden sonra: sayılar tutuyor mu?"
+                text: >-
+                  Ekip yüklemeden sonra iki toplamı karşılaştırır: dosyadaki stokların toplamı ile products'taki toplam; ilk
+                  yükleme hareketlerinin toplamı da aynı olmalı. Gece kontrolü ilk gece de aynı hesabı yapar (t-1 · 4).
+                code:
+                  - {code: "SELECT sum(stock) FROM products;   -- = dosyanın toplamı", tag: [Ekip → Aurora, Aurora → Ekip], say: "Toplamlar eşit: yükleme tam."}
+          - n: 3
+            title: Sürekli besleme
+            intro: >-
+              Açılıştan sonra stok iki yoldan değişir: depo hareketleri kuyruktan (stok tüketicisi ekler) ve siparişler ödeme
+              paketinden (Uygulama düşer). COMMIT edilen siparişin olayını değişiklik kaydı, DMS ve Kinesis taşır. Her 5 dakikada
+              askıdaki ödemeler kontrol edilir. 30 Eki sonunda P0001 128.
+            cards:
+              - title: "Bir mal kabulü, baştan sona"
+                text: >-
+                  08:10. Depo sistemi M-30481'i (+20) kuyruğa koyar. Stok tüketicisi her mesaj için tek bir paket açar: önce
+                  hareketi yazar, yazılabildiyse stoğa ekler. İkisi aynı pakette olduğu için "hareket yazıldı ama stok artmadı"
+                  ya da tersi hiç olmaz. Mesaj ancak COMMIT'ten sonra kuyruktan silinir; Lambda arada çökerse mesaj yeniden gelir
+                  ve hareket numarası onu ikinci kez saydırmaz.
+                code:
+                  - {code: "BEGIN; INSERT INTO stock_movements VALUES ('M-30481', 'P0001', 20, 'mal kabul') ON CONFLICT DO NOTHING;", tag: [Stok tüketicisi → Aurora, Aurora → Stok tüketicisi], say: "1 satır: ilk kez geliyor."}
+                  - {code: "UPDATE products SET stock = stock + 20 WHERE product_id = 'P0001';   -- sadece 1 satır yazıldıysa", tag: Stok tüketicisi → Aurora, say: "116 → 136."}
+                  - {code: "COMMIT;   → mesaj kuyruktan silinir", tag: [Stok tüketicisi → Aurora, Stok tüketicisi → SQS], say: "Hareket ve stok birlikte."}
+              - title: "Bir sipariş, baştan sona"
+                text: >-
+                  10:02, C00057, 2 adet. Paket yaklaşık yarım saniye sürer (temsilî); P0001'in satırı bu sürede kilitlidir.
+                  Sepetin okunması ve ödeme anındaki fiyat Adım 12'deki gibidir; burada stok ve paket.
+                code:
+                  - {code: "POST /aurora/api/orders   Idempotency-Key: r-7d21…", tag: Tarayıcı → Uygulama, say: "Tıklama, numarasıyla."}
+                  - {code: "BEGIN; UPDATE products SET stock = stock - 2 WHERE product_id = 'P0001' AND stock >= 2;   → UPDATE 1", tag: [Uygulama → RDS Proxy → Aurora, Aurora → Uygulama], say: "136 ≥ 2: paketin içinde 134."}
+                  - {code: "odeme.authorize(6747.68, idempotency_key='r-7d21…')   # onay", tag: [Uygulama → Ödeme sağlayıcısı, Ödeme sağlayıcısı → Uygulama], say: "Tutar kartta ayrıldı."}
+                  - {code: "INSERT orders ('W17933…3e', …, 'r-7d21…'), order_items (…, 2, 3373.84), outbox (order_placed); COMMIT;", tag: Uygulama → RDS Proxy → Aurora, say: "Stok 134, sipariş ve olay birlikte."}
+                  - {code: "→ {\"order_id\": \"W17933…3e\", \"result\": \"committed\"}", tag: Uygulama → Tarayıcı, say: "Sayfa: sipariş verildi."}
+              - title: "COMMIT'ten sonra: olay akışa"
+                text: >-
+                  Uygulama başka hiçbir sisteme kendisi haber vermez. COMMIT değişiklik kaydına girer; DMS outbox satırını alıp
+                  lm-order-events akışına koyar (Adım 33). Sepet tüketicisi sepet satırlarını siler (Adım 12), depoya bildiren iş
+                  siparişi depo sistemine iletir; depo kolinin hazırlanmasıyla rafı azaltır. Siparişi zero-ETL Redshift'e de
+                  kopyalar (Adım 30). Hepsi COMMIT'ten sonra olduğu için geri alınan bir paket hiçbirine ulaşmaz.
+              - title: "Gün boyunca: sayılar"
+                text: >-
+                  30 Eki: P0001 için bir hareket (+20) ve yedi sipariş (2 + 6 = 8 adet): 116 + 20 − 8 = 128. Uygulama o gün 412
+                  ödeme denemesi saydı, beklenmeyen hata 0 (temsilî); hiçbir 5 dakikalık pencerede oran eşiğe gelmedi. Askıdaki
+                  ödeme kontrolü her 5 dakikada çalıştı; simülasyon 10:05'tekini gösteriyor: son 30 dakikada 9 ayrılmış tutar,
+                  hepsinin siparişi var.
+                code:
+                  - {code: "SELECT count(*) FROM orders WHERE request_id = ANY(%s)   -- sağlayıcının listesindeki numaralar", tag: [Askıdaki ödeme kontrolü → Aurora, Aurora → Askıdaki ödeme kontrolü], say: "10:05: 9 numara, 9 sipariş."}
+          - n: 4
+            title: Tutarlılık ve onarım
+            intro: >-
+              Aynı hareket iki kez gelirse, ödeme reddedilirse, aynı tıklama iki kez gelirse, iki paket birbirini beklerse,
+              Uygulama ödeme onayından sonra çökerse, yazma sunucusu çökerse, bilinmeyen bir ürün gelirse ya da yanlış bir komut
+              stokları bozarsa ne olur? İlk üçü "Örnek durum", sonraki beşi "Olsaydı", sonuncusu gerçek gece kontrolü. Her biri
+              için zincirde bir kural ya da bir parça (emniyet) var; ne zaman çalıştığı, neyi yakalamadığı ve onarımı aşağıda.
+            cards:
+              - title: "Aynı hareket iki kez gelirse"
+                text: >-
+                  Ne zaman: her mesajda, stoğa dokunmadan önce; hareket numarası zaten varsa 0 satır yazılır, stok değişmez.
+                  Yakalamadığı: depo sistemi aynı malı iki farklı numarayla gönderirse (ör. görevli iki kez girerse), iki hareket
+                  sayılır. Onarım: depodaki sayım farkı ortaya çıkarır; depo sistemi bir sayım farkı hareketi (−20) gönderir, gece
+                  kontrolü yine 0 bulur.
+                code:
+                  - {code: "INSERT … ON CONFLICT (movement_id) DO NOTHING   → 0", tag: [Stok tüketicisi → Aurora, Aurora → Stok tüketicisi], say: "Aynı numara: hiçbir şey."}
+              - title: "Ödeme reddedilirse"
+                text: >-
+                  Ne zaman: hemen, aynı istekte; Uygulama ROLLBACK gönderir, stok, sipariş ve outbox hiç olmamış gibi olur.
+                  Yakalamadığı: ret değil, cevap gelmezse (sağlayıcı 3 saniyede susarsa) Uygulama tutarın ayrılıp ayrılmadığını
+                  bilmez. Onarım: ROLLBACK ve aynı numarayla iptal; o da ulaşmazsa askıdaki ödeme kontrolü en geç 15 dakika içinde
+                  (5 dakikada bir çalışır, 10 dakikadan eski tutarlara bakar) tutarı bulur ve iptal eder. Senin t0'daki denemen
+                  bu emniyetin ilk yarısı (ROLLBACK); orada ödeme onaylanmadığı için iptal edilecek bir tutar yok.
+              - title: "Aynı tıklama iki kez gelirse"
+                text: >-
+                  Ne zaman: paketten önce; istek numarasıyla sipariş bulunursa paket açılmaz, aynı cevap verilir. Yakalamadığı:
+                  ilk istek hâlâ sürerken gelen ikinci istek siparişi bulamaz, paket açar ve P0001'in kilidini bekler. Onarım:
+                  ilk paket COMMIT edince ikincinin UPDATE'i devam eder, ödeme aynı anahtarla aynı onayı döner, sipariş INSERT'i
+                  UNIQUE'e takılır (23505): ikinci paket ROLLBACK ile biter, stok geri gelir, tutar iptal edilmez (ilk siparişin)
+                  ve ilk sipariş döndürülür.
+                code:
+                  - {code: "INSERT INTO orders … 'r-5c88…'   → 23505 (UNIQUE)", tag: [Uygulama → Aurora, Aurora → Uygulama], say: "Bu numarayla zaten bir sipariş var."}
+              - title: "İki paket birbirini beklerse (kilitlenme)"
+                text: >-
+                  Ne zaman: her pakette; satırlar hep aynı sırayla (müşteri, sonra ürün numarası) kilitlendiği için iki paket
+                  birbirini çapraz beklemez, sadece sıraya girer. Yakalamadığı: sırayı bozan yeni bir kod yolu (ör. bir iade
+                  ekranı ürünleri ters sırayla günceller). Onarım: PostgreSQL yaklaşık 1 saniyede birini iptal eder (40P01),
+                  Uygulama aynı numarayla yeniden dener; siparis-kilitlenme alarmı Ekip'e o kod yolunu aratır.
+              - title: "Uygulama ödeme onayından sonra çökerse"
+                text: >-
+                  Ne zaman: hemen; COMMIT gelmeyen paket kalıcı olmaz, en geç 10 saniye boş kalınca Aurora oturumu kapatır, paketi
+                  geri alır ve kilit kalkar. Yakalamadığı: kartta ayrılmış tutar; Aurora onu bilmez. Onarım: askıdaki ödeme
+                  kontrolü 5 dakikada bir çalışır, 10 dakikadan eski ve siparişi olmayan tutarı iptal eder; askida-odeme alarmı
+                  çöküşü Ekip'e haber verir. Müşteri bu arada aynı numarayla yeniden denerse sipariş normal yazılır ve tutar
+                  siparişe bağlanır, iptal edilmez.
+                code:
+                  - {code: "odeme.void(idempotency_key='r-8e14…')   # siparişi yok, 10 dk'dan eski", tag: Askıdaki ödeme kontrolü → Ödeme sağlayıcısı, say: "Ayrılan tutar serbest."}
+              - title: "Yazma sunucusu çökerse"
+                text: >-
+                  Ne zaman: Aurora kendiliğinden bir okuma sunucusunu yazma sunucusu yapar; AWS'e göre hizmet genellikle 60
+                  saniyeden kısa sürede döner, RDS Proxy bu süreyi kısaltır. COMMIT edilenler kaybolmaz (altı kopyalı paylaşılan
+                  depolama). Yakalamadığı: o sırada açık paketler geri alınır; COMMIT'i gönderilip cevabı gelmeyen bir siparişin
+                  sonucu bilinmez. Onarım: Uygulama aynı numarayla siparişe bakar; varsa aynı cevap, yoksa baştan. Ödeme aynı
+                  anahtarla ikinci kez ayrılmaz.
+              - title: "Bilinmeyen bir ürün gelirse"
+                text: >-
+                  Ne zaman: her harekette; FOREIGN KEY katalogda olmayan bir ürünün hareketini reddeder (23503). Yakalamadığı:
+                  katalogda olan ama yanlış ürün numarasıyla girilmiş bir hareket; kural onu yanlış ürüne yazar. Onarım: mesaj 5
+                  denemeden sonra hata kuyruğuna gider ve alarm çalar; Ekip ürünü ekletir ve mesajı yeniden gönderir. Yanlış
+                  ürüne yazılanı depo sayımı ortaya çıkarır; düzeltme bir sayım farkı hareketiyle yapılır.
+              - title: "Yanlış bir komut stokları bozarsa (PITR)"
+                text: >-
+                  Ne zaman: Ekip fark ettiğinde; ROLLBACK işe yaramaz, komut COMMIT olmuştur. Stok için ilk onarım defterdir:
+                  hareketler ve satılanlar sağlamsa her ürünün stoğu "hareketler − satılan" olarak yeniden hesaplanıp geri
+                  yazılır (gece kontrolünün hesabı). Defterin kendisi bozulduysa (silinen sipariş ya da hareket satırları) PITR
+                  gerekir: Aurora'nın yedeği kapatılamaz ve saklama süresi içindeki her saniyeye döner (burada 14 gün; 1–35 gün
+                  seçilebilir). Geri dönüş asıl cluster'ın üzerine değil, yeni bir cluster'a yapılır. Yakalamadığı: geri dönülen
+                  andan sonraki satırlar o kopyada yoktur. Onarım: Ekip kopyadan sadece kaybolan satırları alıp asıl cluster'a
+                  geri yazar; asıl cluster ve aradaki siparişler yerinde kalır.
+                code:
+                  - {code: "aws rds restore-db-cluster-to-point-in-time --source-db-cluster-identifier shop --db-cluster-identifier shop-1929 --restore-to-time 2026-10-30T16:29:00Z", tag: Ekip → Aurora, say: "19:29'un hâli yeni bir cluster'da (saat UTC: 16:29)."}
+              - title: "Her gece: hareketler ve satışlar stoğu tutuyor mu?"
+                text: >-
+                  Ne zaman: her gece 23:30. Gece kontrolü her ürün için hareketlerin toplamından satılanı (iptaller hariç)
+                  çıkarır ve stokla karşılaştırır. Üç toplamı tek bir REPEATABLE READ paketinde okur; o sırada verilen bir sipariş
+                  hesabı kaydırmaz. İptal (henüz gönderilmemiş bir siparişte) stoğu kendi paketinde geri artırır ve sipariş
+                  satılandan düşer; hesap yine tutar. Teslim edilmiş bir siparişin iadesi ise iptal değildir: sipariş satılan
+                  olarak kalır, ürün depoya dönünce depo sistemi bir iade hareketi (+) gönderir; hesap yine tutar. Yakalamadığı: depoda gerçekten olan ama sisteme hiç girmemiş bir fark (çalınan bir koli); onu depo sayımı
+                  yakalar. Onarım: StockDrift 0 değilse alarm; iş stoğu kendisi düzeltmez, çünkü hangi tarafın yanlış olduğunu
+                  bilemez. Ekip sebebi bulur ve farkı bir hareketle yazar.
+                code:
+                  - {code: "BEGIN ISOLATION LEVEL REPEATABLE READ;", tag: Gece stok kontrolü → Aurora, say: "Üç toplam aynı anın fotoğrafından."}
+                  - {code: "SELECT sum(qty) FROM stock_movements WHERE product_id = 'P0001';   → 636", tag: [Gece stok kontrolü → Aurora, Aurora → Gece stok kontrolü], say: "96 + 520 + 20."}
+                  - {code: "SELECT coalesce(sum(i.qty), 0) FROM order_items i JOIN orders o USING (order_id) WHERE i.product_id = 'P0001' AND o.status <> 'cancelled';   → 508", tag: [Gece stok kontrolü → Aurora, Aurora → Gece stok kontrolü], say: "500 + 2 + 6."}
+                  - {code: "drift = (636 - 508) - 128   # 0 → put_metric_data(StockDrift)", tag: Gece stok kontrolü → CloudWatch, say: "Fark 0: alarm OK."}
       scenario:
         title: Ne oldu? Senin gözünden
         intro: >-
